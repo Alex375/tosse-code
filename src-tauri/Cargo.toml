@@ -1,0 +1,32 @@
+[package]
+name = "tosse-code"
+version = "0.1.0"
+description = "Tosse Code — desktop app to pilot Claude Code"
+authors = ["Tosse"]
+edition = "2021"
+
+# The library is what mobile entry points and the binary share (Tauri 2).
+[lib]
+name = "tosse_code_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Typed IPC (Rust -> TS). RC versions: pin EXACTLY with "=".
+tauri-specta = { version = "=2.0.0-rc.21", features = ["derive", "typescript"] }
+specta = { version = "=2.0.0-rc.22", features = ["derive"] }
+specta-typescript = "=0.0.9"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

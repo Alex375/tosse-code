@@ -1,0 +1,24 @@
+# === Node / pnpm ===
+node_modules/
+.pnpm-store/
+
+# === Frontend build ===
+dist/
+dist-ssr/
+*.local
+
+# === Rust / Cargo ===
+src-tauri/target/
+target/
+
+# === Tauri generated artifacts ===
+src-tauri/gen/
+
+# === IDE / OS ===
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# === tauri-specta bindings: COMMITTED on purpose, do NOT ignore ===
+# src/ipc/bindings.ts
