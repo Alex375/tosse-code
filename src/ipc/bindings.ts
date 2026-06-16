@@ -8,6 +8,73 @@
 export const commands = {
 async ping(msg: string) : Promise<Pong> {
     return await TAURI_INVOKE("ping", { msg });
+},
+/**
+ * Start a new `claude` session rooted at `repo_path`. Returns our session id;
+ * conversation/state/permission events are emitted on the Tauri event bus.
+ */
+async spawnSession(repoPath: string, resume: string | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("spawn_session", { repoPath, resume }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Send a user turn to a session.
+ */
+async sendMessage(session: string, text: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("send_message", { session, text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Answer a pending `can_use_tool` permission prompt (allow / deny).
+ */
+async answerPermission(session: string, requestId: string, decision: PermissionDecision) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("answer_permission", { session, requestId, decision }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Switch the session's permission mode at runtime.
+ */
+async setPermissionMode(session: string, mode: PermissionMode) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_permission_mode", { session, mode }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Interrupt the current turn (without killing the process).
+ */
+async interruptSession(session: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("interrupt_session", { session }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Tear a session down and remove it from the registry.
+ */
+async stopSession(session: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("stop_session", { session }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -15,8 +82,14 @@ async ping(msg: string) : Promise<Pong> {
 
 
 export const events = __makeEvents__<{
+sessionMessageEvent: SessionMessageEvent,
+sessionPermissionEvent: SessionPermissionEvent,
+sessionStateEvent: SessionStateEvent,
 tickEvent: TickEvent
 }>({
+sessionMessageEvent: "session-message-event",
+sessionPermissionEvent: "session-permission-event",
+sessionStateEvent: "session-state-event",
 tickEvent: "tick-event"
 })
 
@@ -27,9 +100,128 @@ tickEvent: "tick-event"
 /** user-defined types **/
 
 /**
+ * A normalized conversation event the UI applies incrementally. Tagged on
+ * `kind` so the TS side is a simple discriminated union.
+ */
+export type ConversationItem = 
+/**
+ * An assistant turn began (from `stream_event/message_start`).
+ */
+{ kind: "message_started"; id: string; role: string; parent_tool_use_id: string | null } | 
+/**
+ * Live assistant text token(s) (from `content_block_delta/text_delta`).
+ */
+{ kind: "text_delta"; message_id: string | null; text: string } | 
+/**
+ * Live extended-thinking token(s).
+ */
+{ kind: "thinking_delta"; message_id: string | null; text: string } | 
+/**
+ * The authoritative assembled assistant message (text + tool_use blocks).
+ * Carries the same `id` as the streamed `message_start` — the UI reconciles.
+ */
+{ kind: "assistant_message"; id: string; blocks: NormalizedBlock[]; parent_tool_use_id: string | null } | 
+/**
+ * A tool result, delivered by the CLI as a `user` message.
+ */
+{ kind: "tool_result"; tool_use_id: string; content: JsonValue; is_error: boolean; parent_tool_use_id: string | null } | 
+/**
+ * End of a turn (`result`).
+ */
+{ kind: "turn_result"; subtype: string; is_error: boolean; result: JsonValue | null; total_cost_usd: number | null; num_turns: number | null; duration_ms: number | null } | 
+/**
+ * A non-conversational system notice (compact boundary, sub-agent task
+ * lifecycle, …) surfaced raw for now.
+ */
+{ kind: "notice"; subtype: string; detail: JsonValue }
+export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
+/**
+ * One authoritative content block of an assistant message.
+ */
+export type NormalizedBlock = { type: "text"; text: string } | { type: "thinking"; text: string } | { type: "tool_use"; id: string; name: string; input: JsonValue } | 
+/**
+ * Any block kind we do not specialize (images, documents, …) kept raw.
+ */
+{ type: "other"; raw: JsonValue }
+/**
+ * A UI decision for a `can_use_tool` prompt (the `answer_permission` command
+ * input). Tagged on `behavior` to mirror the protocol's result shape.
+ */
+export type PermissionDecision = 
+/**
+ * Allow the tool. `updated_input` optionally rewrites the tool input;
+ * `None` echoes the original input unchanged.
+ */
+{ behavior: "allow"; updated_input: JsonValue | null } | 
+/**
+ * Deny the tool with a human-readable reason.
+ */
+{ behavior: "deny"; message: string }
+/**
+ * Permission mode, switched at runtime via `set_permission_mode` (spec §4.5).
+ * The wire tokens are exactly these camelCase strings.
+ */
+export type PermissionMode = "acceptEdits" | "auto" | "bypassPermissions" | "default" | "dontAsk" | "plan"
+/**
+ * A `can_use_tool` permission prompt surfaced to the UI. The UI answers it via
+ * the `answer_permission` command, echoing `request_id`.
+ */
+export type PermissionRequestPayload = { request_id: string; tool_name: string; tool_use_id: string; input: JsonValue; title: string | null; description: string | null; 
+/**
+ * CLI-provided suggestions (kept raw).
+ */
+suggestions: JsonValue }
+/**
  * Typed return value of `ping`. Proves React -> Rust (typed command).
  */
 export type Pong = { ok: boolean; echo: string; at_ms: number }
+/**
+ * A normalized conversation item to render (text delta, assistant message,
+ * tool result, turn result, …).
+ */
+export type SessionMessageEvent = { session: string; item: ConversationItem }
+/**
+ * A `can_use_tool` permission prompt awaiting a decision.
+ */
+export type SessionPermissionEvent = { session: string; request: PermissionRequestPayload }
+/**
+ * A session's lifecycle / identity changed.
+ */
+export type SessionStateEvent = { session: string; state: SessionStatePayload }
+/**
+ * Coarse lifecycle + identity of a session, emitted whenever it changes.
+ */
+export type SessionStatePayload = { 
+/**
+ * `true` while a turn is in flight (between a user message and its `result`).
+ */
+busy: boolean; 
+/**
+ * The CLI-assigned conversation id (from `system/init`); enables `--resume`.
+ */
+session_id: string | null; 
+/**
+ * Current model id (from `system/init`).
+ */
+model: string | null; 
+/**
+ * Current permission mode (from `system/init` / `set_permission_mode`).
+ */
+permission_mode: string | null; 
+/**
+ * Fine-grained activity hint from `system/status` (e.g. `"requesting"`).
+ */
+activity: string | null; 
+/**
+ * `true` while waiting on the user to answer a permission prompt.
+ */
+awaiting_permission: boolean; 
+/**
+ * `true` once the session has ended (the `claude` process exited or was
+ * stopped). A final state event with this set lets the UI mark the session
+ * dead instead of showing it as live forever.
+ */
+ended: boolean }
 /**
  * Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
  */
