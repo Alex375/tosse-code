@@ -55,6 +55,21 @@ pub fn load_history(session_id: &str) -> Vec<ConversationItem> {
     }
 }
 
+/// The mtime (Unix ms) of `session_id`'s transcript file, or `None` if it can't
+/// be located/stat'd. Claude rewrites the transcript on every message, so its
+/// mtime is a reliable proxy for "time of the last message" — used to backfill
+/// `last_activity_at` for conversations that predate that column (see
+/// [`crate::store::Store::backfill_last_activity`]).
+pub fn transcript_mtime_ms(session_id: &str) -> Option<i64> {
+    let path = find_transcript(&claude_config_dir()?, session_id)?;
+    let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let ms = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some(ms as i64)
+}
+
 /// [`load_history`] against an explicit config dir — the testable core (no env).
 fn load_history_in(config_dir: &Path, session_id: &str) -> Vec<ConversationItem> {
     match find_transcript(config_dir, session_id) {

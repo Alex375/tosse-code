@@ -9,6 +9,7 @@ import {
   useConversationsStore,
   useRepos,
   type Conversation,
+  type Repo,
 } from "../../store/conversationsStore";
 import { useSessionState } from "../../store/conversationStore";
 import { SettingsPanel } from "../settings/SettingsPanel";
@@ -129,14 +130,22 @@ export function ConductorSidebar() {
   const activeId = useActiveConversationId();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Group conversations by their repo (stable, ordered by when the repo was added).
+  // Group conversations by their repo, then order everything by recency: within a
+  // repo the most recently active conversation comes first, and repos are ordered
+  // by their most recent conversation (an empty repo falls back to when it was
+  // added). So the conversation with the latest message — sent or received — sits
+  // at the very top.
   const byRepo = new Map<string, Conversation[]>();
   for (const c of conversations) {
     const arr = byRepo.get(c.repoId) ?? [];
     arr.push(c);
     byRepo.set(c.repoId, arr);
   }
-  const ordered = [...repos].sort((a, b) => a.addedAt - b.addedAt);
+  for (const arr of byRepo.values()) {
+    arr.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  }
+  const repoRecency = (r: Repo) => byRepo.get(r.id)?.[0]?.lastActivityAt ?? r.addedAt;
+  const ordered = [...repos].sort((a, b) => repoRecency(b) - repoRecency(a));
 
   return (
     <div

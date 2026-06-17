@@ -297,6 +297,14 @@ cwd: string;
  */
 created_at: number; 
 /**
+ * Unix ms timestamp of the conversation's last activity — the last message
+ * sent OR received. Drives the sidebar's most-recent-first ordering. Bumped
+ * by the UI on each user send and turn result; pre-existing rows (created
+ * before this column) are backfilled from the transcript mtime at boot (see
+ * [`super::db::Store::backfill_last_activity`]).
+ */
+last_activity_at: number; 
+/**
  * Claude's own session UUID (from system/init) — used for `--resume`.
  */
 session_id: string | null }

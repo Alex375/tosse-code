@@ -74,6 +74,17 @@ export function useGlobalSessionEvents(): void {
       const item = payload.item;
       ensureOnce(session);
 
+      // Recency: only the COMPLETION of a turn counts as activity — `turn_result`
+      // is the single `result` message that ends Claude's whole agentic loop for a
+      // user turn. We deliberately do NOT bump on the many intermediate messages
+      // (message_started / assistant_message / tool_result) it emits while working:
+      // otherwise the conversation would keep jumping to the top during a run. So a
+      // conversation that's drifted down floats back up exactly once, when Claude
+      // finishes. Persisted since it's rare/terminal.
+      if (item.kind === "turn_result") {
+        useConversationsStore.getState().noteActivity(session, { persist: true });
+      }
+
       if (item.kind === "text_delta" || item.kind === "thinking_delta") {
         const msgId = item.message_id ?? currentMsgId.get(session);
         if (!msgId) return;

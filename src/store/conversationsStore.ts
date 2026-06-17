@@ -47,6 +47,11 @@ export interface Conversation {
   /** Absolute path the session was spawned in (== repo.path at creation). */
   cwd: string;
   createdAt: number;
+  /**
+   * Unix ms timestamp of the last activity — the last message sent OR received.
+   * Drives the sidebar's most-recent-first ordering; bumped by `noteActivity`.
+   */
+  lastActivityAt: number;
   /** Claude's own session_id from system/init — used for --resume on restart. */
   sessionId: string | null;
   /**
@@ -90,6 +95,7 @@ const convToRecord = (c: Conversation): ConversationRecord => ({
   repo_id: c.repoId,
   cwd: c.cwd,
   created_at: c.createdAt,
+  last_activity_at: c.lastActivityAt,
   session_id: c.sessionId,
 });
 
@@ -105,6 +111,7 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   repoId: c.repo_id,
   cwd: c.cwd,
   createdAt: c.created_at,
+  lastActivityAt: c.last_activity_at,
   sessionId: c.session_id,
   handle: null,
 });
@@ -141,6 +148,16 @@ interface ConversationsState {
   noteSessionId: (id: string, sessionId: string) => void;
   /** Bind a conversation (by stable id) to its live Rust session handle. In-memory only. */
   setHandle: (id: string, handle: string | null) => void;
+  /**
+   * Mark a conversation active "now" — bumps `lastActivityAt`, which re-sorts the
+   * sidebar (most recent first). Activity is the three meaningful edits to a
+   * conversation: it is created, the user sends a message, or Claude FINISHES a
+   * turn (`turn_result` — the end of its agentic loop, NOT each intermediate
+   * message it emits while working). `persist` mirrors the new timestamp to the
+   * core; we pass it on all three since they're rare/terminal, so the recency
+   * order survives a restart.
+   */
+  noteActivity: (id: string, opts?: { persist?: boolean }) => void;
 }
 
 export const useConversationsStore = create<ConversationsState>()((set, get) => ({
@@ -249,6 +266,20 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     set((s) => ({
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, handle } : c)),
     })),
+
+  noteActivity: (id, opts) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv) return;
+    const updated = { ...conv, lastActivityAt: Date.now() };
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === id ? updated : c)),
+    }));
+    if (opts?.persist) {
+      syncToCore("upsertConversation(activity)", () =>
+        commands.upsertConversation(convToRecord(updated)),
+      );
+    }
+  },
 }));
 
 /**
@@ -262,12 +293,15 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
 export function createConversationInRepo(repoPath: string): string {
   const repo = useConversationsStore.getState().addRepo(repoPath);
   const id = uid();
+  const now = Date.now();
   useConversationsStore.getState().addConversation({
     id,
     name: DEFAULT_CONV_NAME,
     repoId: repo.id,
     cwd: repoPath,
-    createdAt: Date.now(),
+    createdAt: now,
+    // A brand-new conversation is the most recent activity → top of the list.
+    lastActivityAt: now,
     sessionId: null,
     handle: null, // no live process until the first message
   });

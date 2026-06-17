@@ -93,6 +93,17 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir).expect("failed to create app data dir");
             let store = store::Store::open(&data_dir.join("tosse.db"))
                 .expect("failed to open the persistence store");
+            // Backfill activity timestamps for conversations created before the
+            // `last_activity_at` column existed, so the sidebar's recency order is
+            // correct for historical conversations on first launch. The transcript
+            // mtime is the proxy for "last message"; created_at is the fallback.
+            // No-op once every row is filled (best-effort: a failure here must not
+            // block startup — the sidebar simply keeps the unbackfilled order).
+            if let Err(e) =
+                store.backfill_last_activity(supervisor::history::transcript_mtime_ms)
+            {
+                eprintln!("last_activity_at backfill failed: {e}");
+            }
             app.manage(store);
 
             // Rust timer: emit a TickEvent every second (Rust -> React) — kept as
