@@ -133,6 +133,8 @@ interface ConversationsState {
   addConversation: (c: Conversation) => void;
   selectConversation: (id: string) => void;
   removeConversation: (id: string) => void;
+  /** Rename a conversation to a user-chosen title. Blank or unchanged names are ignored. */
+  renameConversation: (id: string, name: string) => void;
   /** Name an untitled conversation from its first user message (keyed by stable id). */
   noteFirstMessage: (id: string, text: string) => void;
   /** Store Claude's session_id on the conversation for --resume (keyed by stable id). */
@@ -203,6 +205,20 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     useConversationStore.getState().dropSession(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
+  },
+
+  renameConversation: (id, name) => {
+    const trimmed = name.trim().replace(/\s+/g, " ");
+    const conv = get().conversations.find((c) => c.id === id);
+    // Ignore a blank or unchanged title — an empty name would leave an unlabeled row.
+    if (!conv || !trimmed || trimmed === conv.name) return;
+    const updated = { ...conv, name: trimmed };
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === conv.id ? updated : c)),
+    }));
+    syncToCore("upsertConversation(rename)", () =>
+      commands.upsertConversation(convToRecord(updated)),
+    );
   },
 
   noteFirstMessage: (id, text) => {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { pickFolder } from "../../ipc/pickFolder";
 import {
   createConversationInRepo,
@@ -13,22 +13,107 @@ import {
 import { useSessionState } from "../../store/conversationStore";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   // State is keyed by the conversation's stable id (the message store routes
   // live events back to it); undefined until it has been live at least once.
   const state = useSessionState(conv.id);
   const select = useConversationsStore((s) => s.selectConversation);
+  const rename = useConversationsStore((s) => s.renameConversation);
+  const remove = useConversationsStore((s) => s.removeConversation);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(conv.name);
+  const [confirming, setConfirming] = useState(false);
+  // Both Enter/blur commit and Escape cancel unmount the input, which fires a
+  // trailing `onBlur`. This latch makes the commit run exactly once and lets
+  // Escape suppress it entirely (so a cancel never writes the edited draft).
+  const settled = useRef(false);
+
+  function startEdit() {
+    settled.current = false;
+    setDraft(conv.name);
+    setEditing(true);
+  }
+  function commitEdit() {
+    if (settled.current) return;
+    settled.current = true;
+    setEditing(false);
+    rename(conv.id, draft); // the store ignores a blank or unchanged title
+  }
+  function cancelEdit() {
+    settled.current = true; // suppress the trailing blur-commit
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div className={"cv-sess-row" + (active ? " on" : "")}>
+        <span className="cv-sess" style={{ cursor: "default" }}>
+          <Dot s={sessionStreamState(state)} pulse />
+          <input
+            className="cv-sess-edit"
+            value={draft}
+            autoFocus
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitEdit();
+              else if (e.key === "Escape") cancelEdit();
+            }}
+            onBlur={commitEdit}
+          />
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      className={"cv-sess" + (active ? " on" : "")}
-      style={{ width: "100%", border: 0, background: active ? undefined : "transparent", textAlign: "left", cursor: "pointer" }}
-      onClick={() => select(conv.id)}
-    >
-      <Dot s={sessionStreamState(state)} pulse />
-      <span className="cv-sess-n">{conv.name}</span>
-    </button>
+    <div className={"cv-sess-row" + (active ? " on" : "")}>
+      <button
+        type="button"
+        className="cv-sess"
+        onClick={() => select(conv.id)}
+        onDoubleClick={startEdit}
+      >
+        <Dot s={sessionStreamState(state)} pulse />
+        <span className="cv-sess-n">{conv.name}</span>
+      </button>
+      <Menu
+        align="right"
+        trigger={
+          <button
+            type="button"
+            className="cv-sess-menu"
+            title="Options de la conversation"
+            aria-label="Options de la conversation"
+          >
+            <Ico name="dots" className="sm" />
+          </button>
+        }
+      >
+        <MenuItem icon="form" onClick={startEdit}>
+          Renommer
+        </MenuItem>
+        <MenuItem icon="trash" onClick={() => setConfirming(true)}>
+          Supprimer
+        </MenuItem>
+      </Menu>
+      <ConfirmDialog
+        open={confirming}
+        danger
+        title="Supprimer la conversation ?"
+        confirmLabel="Supprimer"
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          remove(conv.id);
+        }}
+      >
+        « {conv.name} » sera retirée de la liste et son process arrêté. Le transcript de
+        Claude sur le disque n'est pas touché.
+      </ConfirmDialog>
+    </div>
   );
 }
 

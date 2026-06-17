@@ -46,6 +46,7 @@ const WF_PATHS: Record<string, string> = {
   form: "M5 4h12v14H5zM8 8h6M8 11h6M8 14h3",
   diamond: "M11 3 18 11 11 19 4 11Z",
   stopc: "M6 6h10v10H6z",
+  trash: "M4 6h14M9 6V4h4v2M6 6l1 12h8l1-12M9.5 9.5v6M12.5 9.5v6",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {
