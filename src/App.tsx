@@ -25,7 +25,7 @@ export default function App() {
 
   // On first mount: hydrate from the core's persisted state, then resume those
   // conversations (--resume with their sessionId, rebuilding history from
-  // Claude's transcript) or start a fresh one if there are none.
+  // Claude's transcript). An empty store stays empty — no default conversation.
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
@@ -53,14 +53,7 @@ export default function App() {
       }
     >
       {view === "conversation" ? (
-        // Keyed by the STABLE id (component persists across handle remaps); the
-        // live Rust handle is passed as `session`. Until the handle is bound
-        // (spawn/resume in flight), show the loading state.
-        active?.handle ? (
-          <ConductorConversation key={active.id} session={active.handle} />
-        ) : (
-          <div style={{ margin: "auto", color: "var(--wf-tx-lo)", fontSize: 13 }}>Démarrage de la session…</div>
-        )
+        <ConductorConversation active={active} />
       ) : (
         <FleetPlaceholder />
       )}

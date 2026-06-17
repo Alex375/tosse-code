@@ -56,9 +56,8 @@ export interface Conversation {
   handle: string | null;
 }
 
-/** Display name for a repo path (its basename, or "Projet local" for "."). */
+/** Display name for a repo path — its basename. */
 export function repoName(path: string): string {
-  if (!path || path === ".") return "Projet local";
   const parts = path.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || path;
 }
@@ -254,9 +253,10 @@ export async function createConversationInRepo(repoPath: string): Promise<string
 
 /**
  * Boot: hydrate the store from the core's persisted state, then resume the
- * conversations (or start a fresh one if there are none). Called once at App
- * mount. The store starts empty — persistence now lives in the Rust core, not
- * in the webview, so nothing is in memory until this runs.
+ * persisted conversations. Called once at App mount. The store starts empty —
+ * persistence now lives in the Rust core, not in the webview, so nothing is in
+ * memory until this runs. An empty store stays empty: there is NO default
+ * conversation; the user opens a folder to start one.
  */
 export async function bootConversations(): Promise<void> {
   const res = await commands.loadPersistedState();
@@ -270,11 +270,8 @@ export async function bootConversations(): Promise<void> {
     console.error("loadPersistedState failed:", res.error);
   }
 
-  const st = useConversationsStore.getState();
-  if (st.conversations.length > 0) {
+  if (useConversationsStore.getState().conversations.length > 0) {
     await resumeAllConversations();
-  } else {
-    await createConversationInRepo(st.repos[0]?.path ?? ".");
   }
 }
 
@@ -320,11 +317,11 @@ export async function resumeAllConversations(): Promise<void> {
 }
 
 /**
- * Drop ALL data — persisted (the core's db) and in-memory — then start fresh.
- * Wired to the Settings "drop all" button; also handy during development since
- * the SQL model is still in flux. Best-effort stops every live `claude` session
- * first so we don't orphan child processes. Claude's on-disk transcripts are
- * untouched.
+ * Drop ALL data — persisted (the core's db) and in-memory — leaving an empty
+ * slate (no default conversation). Wired to the Settings "drop all" button; also
+ * handy during development since the SQL model is still in flux. Best-effort
+ * stops every live `claude` session first so we don't orphan child processes.
+ * Claude's on-disk transcripts are untouched.
  */
 export async function wipeAllData(): Promise<void> {
   const { conversations } = useConversationsStore.getState();
@@ -336,7 +333,6 @@ export async function wipeAllData(): Promise<void> {
   await commands.wipeAllData();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
-  await createConversationInRepo(".");
 }
 
 /**
