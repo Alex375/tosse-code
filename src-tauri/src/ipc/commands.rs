@@ -205,6 +205,94 @@ pub async fn stop_session(
     Ok(())
 }
 
+/// Open the OS terminal on this conversation: resume it as an interactive
+/// `claude` session (`claude --resume <session_id>`) in its working directory.
+///
+/// This launches a *separate*, user-driven `claude` outside the app — the same
+/// session id the supervisor drives, resumed from Claude's on-disk transcript
+/// (not the live stream). macOS only for now (drives Terminal.app via
+/// AppleScript); other platforms return an error the UI can surface. The
+/// blocking `osascript` call runs off the async runtime via `spawn_blocking`.
+#[tauri::command]
+#[specta::specta]
+pub async fn open_in_terminal(cwd: String, session_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || open_terminal_resume(&cwd, &session_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(target_os = "macos")]
+fn open_terminal_resume(cwd: &str, session_id: &str) -> Result<(), String> {
+    // Resolve the same binary the supervisor uses ($TOSSE_CLAUDE_BIN, else
+    // `claude` on PATH) so the terminal runs exactly what the app runs.
+    let bin = std::env::var("TOSSE_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
+    // `claude --resume <id>` is scoped to the current PROJECT, which the CLI
+    // derives from the working directory. So the terminal must `cd` into the
+    // exact directory the session was spawned in — otherwise resume finds
+    // nothing and opens a fresh, empty session. A relative cwd (e.g. "." for the
+    // default local project) is resolved against the app process's own working
+    // directory: the same base the supervisor passed to `current_dir` at spawn,
+    // so the resumed project matches.
+    let cwd_abs = resolve_cwd(cwd);
+    // The command Terminal.app runs in a fresh login shell. No `exec`: when
+    // claude exits the user is left at a usable prompt rather than a dead tab.
+    let shell_cmd = format!(
+        "cd {} && {} --resume {}",
+        sh_quote(&cwd_abs),
+        sh_quote(&bin),
+        sh_quote(session_id),
+    );
+    let script = format!(
+        "tell application \"Terminal\"\n  activate\n  do script \"{}\"\nend tell",
+        applescript_escape(&shell_cmd),
+    );
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .status()
+        .map_err(|e| format!("failed to launch osascript: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("osascript exited with {status}"))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_terminal_resume(_cwd: &str, _session_id: &str) -> Result<(), String> {
+    Err("« Ouvrir dans le terminal » n'est pris en charge que sur macOS pour l'instant.".to_string())
+}
+
+/// Turn a possibly-relative conversation cwd into an absolute path. Relative
+/// paths (notably "." for the default local project) are joined onto the app
+/// process's current working directory — the exact base the supervisor used when
+/// it spawned the session — so `claude --resume` lands in the matching project.
+#[cfg(target_os = "macos")]
+fn resolve_cwd(cwd: &str) -> String {
+    let p = std::path::Path::new(cwd);
+    if p.is_absolute() {
+        return cwd.to_string();
+    }
+    match std::env::current_dir() {
+        Ok(base) => base.join(p).to_string_lossy().into_owned(),
+        Err(_) => cwd.to_string(),
+    }
+}
+
+/// POSIX single-quote `s` for safe embedding in a `/bin/sh` command line: wrap
+/// in `'…'`, and turn any inner `'` into `'\''`.
+#[cfg(target_os = "macos")]
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Escape `s` for embedding inside an AppleScript double-quoted string literal
+/// (backslash, then double-quote).
+#[cfg(target_os = "macos")]
+fn applescript_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn ping(msg: String) -> Pong {
@@ -233,5 +321,30 @@ mod tests {
         assert!(pong.ok);
         assert_eq!(pong.echo, "hello");
         assert!(pong.at_ms > 0, "timestamp should be populated");
+    }
+
+    /// A cwd with a space and a single quote must survive shell-quoting intact,
+    /// so `cd` lands in the right directory (no command injection / breakage).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sh_quote_wraps_and_escapes_single_quotes() {
+        assert_eq!(super::sh_quote("/tmp/plain"), "'/tmp/plain'");
+        assert_eq!(super::sh_quote("/a b/c"), "'/a b/c'");
+        assert_eq!(super::sh_quote("/o'brien"), "'/o'\\''brien'");
+    }
+
+    /// `claude --resume` is project-scoped by cwd, so a relative path like "."
+    /// must become absolute (against the app's cwd) or resume opens the wrong,
+    /// empty project. Absolute paths pass through untouched.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_cwd_makes_relative_paths_absolute() {
+        assert_eq!(super::resolve_cwd("/Users/x/proj"), "/Users/x/proj");
+        let resolved = super::resolve_cwd(".");
+        assert!(
+            std::path::Path::new(&resolved).is_absolute(),
+            "'.' should resolve to an absolute path, got {resolved:?}"
+        );
+        assert!(!resolved.contains("/./"), "should not keep a literal '.' segment");
     }
 }

@@ -156,7 +156,20 @@
 .wf-btn.sm { padding: 4px 9px; font-size: 11px; }
 .wf-icon-btn {
   width: 28px; height: 28px; display: inline-flex; align-items:center; justify-content:center;
-  border-radius: var(--wf-r); border: 1px solid var(--wf-line); background: var(--wf-panel); color: var(--wf-tx-lo);
+  border-radius: var(--wf-r); border: 1px solid var(--wf-line); background: var(--wf-panel); color: var(--wf-tx);
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .12s ease;
+}
+.wf-icon-btn:hover:not(:disabled) {
+  background: var(--wf-panel-3); border-color: var(--wf-line-2); color: var(--wf-tx-hi);
+  transform: translateY(-1px);
+}
+.wf-icon-btn:active:not(:disabled) {
+  transform: translateY(0) scale(.94);
+  background: var(--wf-panel-2);
+}
+.wf-icon-btn:disabled {
+  opacity: .38; cursor: default; color: var(--wf-tx-lo);
 }
 
 .wf-ico { width: 15px; height: 15px; display: inline-block; flex: 0 0 auto; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -288,6 +301,8 @@
 @media (prefers-reduced-motion: reduce) {
   .wf-eff-fill, .wf-eff-thumb { transition:none; }
   .wf-eff-fill.ultra, .wf-eff-thumb.ultra { animation:none; }
+  .wf-icon-btn { transition:none; }
+  .wf-icon-btn:hover:not(:disabled), .wf-icon-btn:active:not(:disabled) { transform:none; }
 }
 
 /* ---- anneau de contexte ------------------------------------ */

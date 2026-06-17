@@ -114,6 +114,24 @@ async stopSession(session: string) : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Open the OS terminal on this conversation: resume it as an interactive
+ * `claude` session (`claude --resume <session_id>`) in its working directory.
+ * 
+ * This launches a *separate*, user-driven `claude` outside the app — the same
+ * session id the supervisor drives, resumed from Claude's on-disk transcript
+ * (not the live stream). macOS only for now (drives Terminal.app via
+ * AppleScript); other platforms return an error the UI can surface. The
+ * blocking `osascript` call runs off the async runtime via `spawn_blocking`.
+ */
+async openInTerminal(cwd: string, sessionId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_in_terminal", { cwd, sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 

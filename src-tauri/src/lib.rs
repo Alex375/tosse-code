@@ -2,8 +2,9 @@ mod ipc;
 pub mod supervisor;
 
 use ipc::commands::{
-    answer_permission, interrupt_session, load_session_history, ping, send_message,
-    set_effort_level, set_model, set_permission_mode, spawn_session, stop_session, Sessions,
+    answer_permission, interrupt_session, load_session_history, open_in_terminal, ping,
+    send_message, set_effort_level, set_model, set_permission_mode, spawn_session, stop_session,
+    Sessions,
 };
 use ipc::events::{SessionMessageEvent, SessionPermissionEvent, SessionStateEvent, TickEvent};
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
@@ -23,6 +24,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             set_effort_level,
             interrupt_session,
             stop_session,
+            open_in_terminal,
         ])
         .events(collect_events![
             TickEvent,

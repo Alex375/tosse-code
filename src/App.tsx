@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ConductorConversation } from "./features/conversation/ConductorConversation";
+import { OpenInTerminalButton } from "./features/conversation/OpenInTerminalButton";
 import { FleetPlaceholder } from "./features/fleet/FleetPlaceholder";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
 import {
@@ -51,9 +52,12 @@ export default function App() {
       }
       right={
         view === "conversation" && activeRepo ? (
-          <Tag icon="folder" title={activeRepo.path}>
-            {repoName(activeRepo.path)}
-          </Tag>
+          <>
+            {active ? <OpenInTerminalButton session={active.id} cwd={active.cwd} /> : null}
+            <Tag icon="folder" title={activeRepo.path}>
+              {repoName(activeRepo.path)}
+            </Tag>
+          </>
         ) : undefined
       }
     >

@@ -167,4 +167,10 @@ export const mockCommands = {
     sessionStateEvent.emit({ session, state: rec.lastState });
     return ok(null);
   },
+
+  async openInTerminal(cwd: string, sessionId: string): Promise<Result<null, string>> {
+    // No OS terminal in the browser mock — just log what the real command would run.
+    console.info(`[mock] openInTerminal: cd ${cwd} && claude --resume ${sessionId}`);
+    return ok(null);
+  },
 };
