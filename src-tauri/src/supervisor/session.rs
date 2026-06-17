@@ -168,6 +168,10 @@ struct SessionCore {
     assembler: Assembler,
     /// Inbound permission prompts keyed by their `request_id`.
     pending: HashMap<String, PendingPermission>,
+    /// The `request_id` of our outbound `initialize` request, kept so we can pick
+    /// its `control_response` out of the stream and harvest the slash commands.
+    /// Cleared once consumed (the handshake happens once per session).
+    init_request_id: Option<String>,
     next_req: u64,
     /// Outbound JSON lines (→ the process stdin in production, → a test channel
     /// in unit tests).
@@ -181,6 +185,7 @@ impl SessionCore {
             emitter,
             assembler: Assembler::new(),
             pending: HashMap::new(),
+            init_request_id: None,
             next_req: 0,
             outbound,
         }
@@ -204,12 +209,16 @@ impl SessionCore {
             SessionEvent::State(s) => self.emitter.emit_state(&self.id, &s),
             SessionEvent::Item(i) => self.emitter.emit_item(&self.id, &i),
             SessionEvent::Permission(p) => self.emitter.emit_permission(&self.id, &p),
+            SessionEvent::Commands(c) => self.emitter.emit_commands(&self.id, &c),
         }
     }
 
-    /// Fire-and-forget initialize handshake at startup (spec §4.4).
+    /// Initialize handshake at startup (spec §4.4). We do NOT block on it, but we
+    /// remember its `request_id` so the matching `control_response` — which
+    /// carries the session's slash commands — is harvested when it arrives.
     fn initialize(&mut self) {
         let rid = self.next_request_id();
+        self.init_request_id = Some(rid.clone());
         self.send(control::initialize_request(&rid));
     }
 
@@ -221,9 +230,10 @@ impl SessionCore {
 
     fn on_message(&mut self, msg: CliMessage) {
         match msg {
-            // Outbound control acks (initialize/interrupt/set_permission_mode):
-            // fire-and-forget for the MVP — consume and drop.
-            CliMessage::ControlResponse(_) => {}
+            // Outbound control acks. The `initialize` ack carries the session's
+            // slash commands (harvested below); the rest (interrupt /
+            // set_permission_mode / set_model) are fire-and-forget — drop them.
+            CliMessage::ControlResponse(v) => self.on_control_response(v),
             CliMessage::ControlRequest(v) => self.on_control_request(v),
             CliMessage::ControlCancelRequest { request_id } => {
                 if self.pending.remove(&request_id).is_some() {
@@ -235,6 +245,24 @@ impl SessionCore {
                 for ev in self.assembler.ingest(&other) {
                     self.emit(ev);
                 }
+            }
+        }
+    }
+
+    /// Handle an outbound-request acknowledgement. Only the `initialize` response
+    /// is acted on: it carries the session's available slash commands, which we
+    /// normalize and emit once (spec §4.4). Routing keys on the nested
+    /// `response.request_id` (spec §4.1). Everything else is a no-op ack.
+    fn on_control_response(&mut self, v: Value) {
+        let echoed = v
+            .get("response")
+            .and_then(|r| r.get("request_id"))
+            .and_then(Value::as_str);
+        if echoed.is_some() && echoed == self.init_request_id.as_deref() {
+            // The handshake completes once; don't match a later response again.
+            self.init_request_id = None;
+            if let Some(commands) = control::parse_initialize_commands(&v) {
+                self.emit(SessionEvent::Commands(commands));
             }
         }
     }
@@ -373,6 +401,9 @@ mod tests {
         fn emit_permission(&self, _session: &str, request: &PermissionRequestPayload) {
             let _ = self.tx.send(SessionEvent::Permission(request.clone()));
         }
+        fn emit_commands(&self, _session: &str, commands: &[crate::supervisor::model::SlashCommand]) {
+            let _ = self.tx.send(SessionEvent::Commands(commands.to_vec()));
+        }
     }
 
     /// Build a `SessionCore` wired to two inspectable channels (events, outbound).
@@ -492,6 +523,59 @@ mod tests {
         let lines = drain(&mut out);
         assert_eq!(lines[0]["type"], json!("user"));
         assert_eq!(lines[0]["message"]["content"][0]["text"], json!("hello"));
+    }
+
+    /// ACCEPTANCE: the `initialize` control_response (matched by its echoed
+    /// request_id) is harvested into a single `Commands` event, with the
+    /// camelCase `argumentHint` wire key mapped to `argument_hint`.
+    #[test]
+    fn initialize_response_harvests_slash_commands() {
+        let (mut core, mut events, _out) = test_core();
+        core.initialize(); // sends "tosse-1" and remembers it
+
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": "tosse-1",
+                    "response": {
+                        "commands": [
+                            { "name": "compact", "description": "Compact the conversation", "argumentHint": "" },
+                            { "name": "tosse-workflow:pickup", "description": "Start a task", "argumentHint": "<task_id>" }
+                        ],
+                        "models": []
+                    }
+                }
+            }))
+            .unwrap(),
+        );
+
+        let cmds = drain(&mut events)
+            .into_iter()
+            .find_map(|e| match e {
+                SessionEvent::Commands(c) => Some(c),
+                _ => None,
+            })
+            .expect("a Commands event should be emitted");
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0].name, "compact");
+        assert_eq!(cmds[1].name, "tosse-workflow:pickup");
+        assert_eq!(cmds[1].argument_hint, "<task_id>");
+
+        // A second matching response must NOT re-emit (handshake is one-shot).
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": { "subtype": "success", "request_id": "tosse-1",
+                    "response": { "commands": [{ "name": "x", "description": "", "argumentHint": "" }] } }
+            }))
+            .unwrap(),
+        );
+        assert!(
+            !drain(&mut events).iter().any(|e| matches!(e, SessionEvent::Commands(_))),
+            "the initialize handshake should be consumed exactly once"
+        );
     }
 
     /// LIVE end-to-end: spawn a real `claude`, run a tool to completion. In this

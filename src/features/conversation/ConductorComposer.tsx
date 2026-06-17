@@ -1,5 +1,5 @@
-import { useRef, useState, type KeyboardEvent } from "react";
-import type { PermissionMode } from "../../ipc/client";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import type { PermissionMode, SlashCommand } from "../../ipc/client";
 import {
   useInterrupt,
   useSendMessage,
@@ -9,8 +9,15 @@ import {
 } from "../../ipc/useCommands";
 import { useSessionState } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
+import { useSlashCommands } from "../../store/commandsStore";
 import { ChipBtn, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
+import {
+  SlashCommandMenu,
+  filterSlashCommands,
+  slashTokenAt,
+  type SlashToken,
+} from "./SlashCommandMenu";
 import styles from "./ConductorComposer.module.css";
 
 // The real Claude models. Wire value = CLI alias (sent verbatim to set_model and
@@ -76,6 +83,35 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
   const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
+  // ---- Slash-command autocomplete (the `/` menu) --------------------------
+  // Commands are keyed by the conversation's working folder, so the menu works
+  // even before the session spawns (typing `/pickup` as the first thing).
+  const cwd = useConversationsStore(
+    (s) => s.conversations.find((c) => c.id === session)?.cwd ?? null,
+  );
+  const commands = useSlashCommands(cwd);
+  const [slashToken, setSlashToken] = useState<SlashToken | null>(null);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [slashActive, setSlashActive] = useState(0);
+
+  const slashMatches = useMemo(
+    () => filterSlashCommands(commands, slashToken?.query ?? ""),
+    [commands, slashToken?.query],
+  );
+  const slashOpen = slashToken !== null && !slashDismissed && slashMatches.length > 0;
+  // Clamp the active row to the (possibly shrunk) match list.
+  const activeIdx = slashMatches.length ? Math.min(slashActive, slashMatches.length - 1) : 0;
+
+  // Reset the highlight to the top whenever the filtered set changes.
+  useEffect(() => {
+    setSlashActive(0);
+  }, [slashToken?.query, commands]);
+
+  /** Recompute the `/` token from the live textarea (value + caret). */
+  const syncSlashToken = (el: HTMLTextAreaElement) => {
+    setSlashToken(slashTokenAt(el.value, el.selectionStart ?? el.value.length));
+  };
+
   const busy = state?.busy ?? false;
   // The generated contract types permission_mode loosely as string; the core only
   // ever emits valid modes, so narrow it back to PermissionMode for the helpers below.
@@ -110,18 +146,78 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   };
 
-  const doSend = () => {
-    const t = text.trim();
+  const sendText = (raw: string) => {
+    const t = raw.trim();
     if (!t || busy) return;
     // Sending always (re)starts the stream lazily if the session is off/ended,
     // so there is no separate "ended" lock — only "busy" blocks a new send.
     useConversationsStore.getState().noteFirstMessage(session, t);
     send.mutate(t);
     setText("");
+    setSlashToken(null);
     requestAnimationFrame(autoGrow);
   };
 
+  const doSend = () => sendText(text);
+
+  /**
+   * Accept a slash command from the menu. Mirrors the VS Code extension:
+   *  - a bare `/cmd` at the start of the input, taken with Enter/click → RUN it
+   *    now (send `/cmd`);
+   *  - taken with Tab, or with text before the `/` → INSERT `/cmd ` so arguments
+   *    can be typed, caret placed right after.
+   */
+  const pickCommand = (cmd: SlashCommand, viaTab: boolean) => {
+    if (!slashToken) return;
+    const before = text.slice(0, slashToken.start);
+    const after = text.slice(slashToken.end);
+    const hasTextBefore = before.trim().length > 0;
+
+    if (!viaTab && !hasTextBefore) {
+      const rest = after.trim();
+      sendText(rest ? `/${cmd.name} ${rest}` : `/${cmd.name}`);
+      return;
+    }
+
+    const insert = `/${cmd.name} `;
+    const next = before + insert + (after.startsWith(" ") ? after.slice(1) : after);
+    const caret = before.length + insert.length;
+    setText(next);
+    setSlashToken(null);
+    setSlashDismissed(false);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(caret, caret);
+      autoGrow();
+    });
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // While the `/` menu is open it owns the navigation/commit keys.
+    if (slashOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashActive((i) => (i + 1) % slashMatches.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashActive((i) => (i - 1 + slashMatches.length) % slashMatches.length);
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        pickCommand(slashMatches[activeIdx], e.key === "Tab");
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+    }
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
       cyclePermMode();
@@ -135,6 +231,14 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
 
   return (
     <div className="cv-composer" style={wide ? { maxWidth: 760, margin: "0 auto", width: "100%" } : undefined}>
+      {slashOpen ? (
+        <SlashCommandMenu
+          items={slashMatches}
+          activeIndex={activeIdx}
+          onHover={setSlashActive}
+          onPick={(cmd) => pickCommand(cmd, false)}
+        />
+      ) : null}
       <div className="cv-input">
         <button className="cv-add" disabled title="Joindre — à venir">
           <Ico name="plus" className="sm" />
@@ -147,8 +251,11 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
           placeholder="Demande à l'agent, @ pour un fichier, / pour une commande…"
           onChange={(e) => {
             setText(e.target.value);
+            setSlashDismissed(false);
+            syncSlashToken(e.currentTarget);
             autoGrow();
           }}
+          onSelect={(e) => syncSlashToken(e.currentTarget)}
           onKeyDown={onKeyDown}
           aria-label="Message"
         />

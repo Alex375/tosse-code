@@ -8,7 +8,9 @@ use ipc::commands::{
     set_effort_level, set_model, set_permission_mode, spawn_session, stop_session,
     upsert_conversation, upsert_repo, wipe_all_data, Sessions,
 };
-use ipc::events::{SessionMessageEvent, SessionPermissionEvent, SessionStateEvent, TickEvent};
+use ipc::events::{
+    SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent, SessionStateEvent, TickEvent,
+};
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
 /// Declare the IPC contract (commands + events) once. Shared by `run()` and the
@@ -40,6 +42,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionStateEvent,
             SessionMessageEvent,
             SessionPermissionEvent,
+            SessionCommandsEvent,
         ])
 }
 

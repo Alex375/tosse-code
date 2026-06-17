@@ -217,11 +217,13 @@ async wipeAllData() : Promise<Result<null, string>> {
 
 
 export const events = __makeEvents__<{
+sessionCommandsEvent: SessionCommandsEvent,
 sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionStateEvent: SessionStateEvent,
 tickEvent: TickEvent
 }>({
+sessionCommandsEvent: "session-commands-event",
 sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionStateEvent: "session-state-event",
@@ -366,6 +368,11 @@ export type RepoRecord = { id: string; path: string;
  */
 added_at: number }
 /**
+ * The session's available slash commands (one-shot, at `initialize`). Drives the
+ * composer's `/` autocomplete menu.
+ */
+export type SessionCommandsEvent = { session: string; commands: SlashCommand[] }
+/**
  * A normalized conversation item to render (text delta, assistant message,
  * tool result, turn result, …).
  */
@@ -412,6 +419,22 @@ awaiting_permission: boolean;
  * dead instead of showing it as live forever.
  */
 ended: boolean }
+/**
+ * One slash command available in the session, as advertised by the CLI in its
+ * `initialize` control response (spec §4.4). The same shape the official VS Code
+ * extension consumes to drive its `/` autocomplete menu. `name` carries NO
+ * leading slash (e.g. `"compact"`, `"tosse-workflow:pickup"`).
+ */
+export type SlashCommand = { name: string; 
+/**
+ * Human-readable description (may be empty). For skills, the CLI prefixes a
+ * `(plugin)` / `(dynamic workflow)` source hint.
+ */
+description: string; 
+/**
+ * Hint for the command's arguments (e.g. `"<task_id>"`), empty when none.
+ */
+argument_hint: string }
 /**
  * Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
  */

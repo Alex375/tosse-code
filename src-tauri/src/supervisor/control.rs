@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
 
+use super::model::SlashCommand;
+
 /// Permission mode, switched at runtime via `set_permission_mode` (spec §4.5).
 /// The wire tokens are exactly these camelCase strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -85,6 +87,41 @@ pub fn parse_inbound_control(v: &Value) -> Option<(String, Result<InboundControl
     let request = v.get("request").cloned().unwrap_or(Value::Null);
     let body = serde_json::from_value::<InboundControl>(request).map_err(|e| e.to_string());
     Some((request_id, body))
+}
+
+/// Extract the slash-command list from a successful `initialize` control
+/// response (spec §4.4). The list lives at `response.response.commands` and each
+/// element is `{name, description, argumentHint}` (note the camelCase wire key).
+/// Returns `None` for any non-`initialize`-shaped response so the caller can skip
+/// it; missing per-command fields default to empty strings.
+pub fn parse_initialize_commands(line: &Value) -> Option<Vec<SlashCommand>> {
+    let arr = line
+        .get("response")?
+        .get("response")?
+        .get("commands")?
+        .as_array()?;
+    Some(
+        arr.iter()
+            .filter_map(|c| {
+                let name = c.get("name")?.as_str()?.to_string();
+                let description = c
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let argument_hint = c
+                    .get("argumentHint")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                Some(SlashCommand {
+                    name,
+                    description,
+                    argument_hint,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Wrap a `request` body into a full `control_request` envelope (spec §4.1).

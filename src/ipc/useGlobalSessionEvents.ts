@@ -14,12 +14,14 @@
 import { useEffect } from "react";
 import { events } from "./client";
 import type {
+  SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionStateEvent,
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore } from "../store/conversationsStore";
+import { useCommandsStore } from "../store/commandsStore";
 
 interface DeltaBuf {
   text: string;
@@ -138,6 +140,17 @@ export function useGlobalSessionEvents(): void {
       useConversationStore.getState().enqueuePermission(session, payload.request);
     }
 
+    function onCommands(payload: SessionCommandsEvent) {
+      // Cache the catalogue by cwd (not by session): commands depend on the
+      // working folder, and a fresh conversation in the same repo reuses them
+      // even before its own process spawns.
+      const conv = useConversationsStore
+        .getState()
+        .conversations.find((c) => c.handle === payload.session);
+      if (!conv) return;
+      useCommandsStore.getState().setCommands(conv.cwd, payload.commands);
+    }
+
     events.sessionMessageEvent
       .listen((e) => { if (!disposed) onMessage(e.payload); })
       .then((un) => unlisteners.push(un));
@@ -146,6 +159,9 @@ export function useGlobalSessionEvents(): void {
       .then((un) => unlisteners.push(un));
     events.sessionPermissionEvent
       .listen((e) => { if (!disposed) onPermission(e.payload); })
+      .then((un) => unlisteners.push(un));
+    events.sessionCommandsEvent
+      .listen((e) => { if (!disposed) onCommands(e.payload); })
       .then((un) => unlisteners.push(un));
 
     return () => {

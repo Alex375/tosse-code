@@ -10,13 +10,27 @@ import type {
   Pong,
   RepoRecord,
   Result,
+  SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionStatePayload,
   SessionStateEvent,
+  SlashCommand,
   TickEvent,
 } from "../bindings";
 import { idleState, ScenarioDriver } from "./scenario";
+
+// A small slash-command catalogue so the browser/Playwright build exercises the
+// `/` autocomplete menu without a real `claude` process.
+const MOCK_COMMANDS: SlashCommand[] = [
+  { name: "clear", description: "Clear the conversation history", argument_hint: "" },
+  { name: "compact", description: "Compact the conversation to free up context", argument_hint: "" },
+  { name: "init", description: "Initialize a new CLAUDE.md with codebase docs", argument_hint: "" },
+  { name: "review", description: "Review a pull request", argument_hint: "[pr]" },
+  { name: "tosse-workflow:pickup", description: "(tosse-workflow) Start working on a TOSSE task", argument_hint: "<task_id>" },
+  { name: "tosse-workflow:done", description: "(tosse-workflow) Finish a task and move it to review", argument_hint: "" },
+  { name: "tosse-workflow:list-tasks", description: "(tosse-workflow) List the project's tasks", argument_hint: "" },
+];
 
 // ---- Minimal Tauri-shaped event emitter -----------------------------------
 
@@ -51,12 +65,14 @@ class MockEmitter<T> {
 const sessionMessageEvent = new MockEmitter<SessionMessageEvent>();
 const sessionPermissionEvent = new MockEmitter<SessionPermissionEvent>();
 const sessionStateEvent = new MockEmitter<SessionStateEvent>();
+const sessionCommandsEvent = new MockEmitter<SessionCommandsEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
 
 export const mockEvents = {
   sessionMessageEvent,
   sessionPermissionEvent,
   sessionStateEvent,
+  sessionCommandsEvent,
   tickEvent,
 };
 
@@ -105,10 +121,12 @@ export const mockCommands = {
     // Unique id per spawn so multiple browser conversations don't collide.
     const session = `mock-session-${++mockCounter}`;
     const rec = getRecord(session);
-    // Emit the initial idle state once listeners have had a tick to subscribe.
+    // Emit the initial idle state + the slash-command catalogue once listeners
+    // have had a tick to subscribe (mirrors the core's initialize handshake).
     setTimeout(() => {
       rec.lastState = idleState();
       sessionStateEvent.emit({ session, state: rec.lastState });
+      sessionCommandsEvent.emit({ session, commands: MOCK_COMMANDS });
     }, 30);
     return ok(session);
   },
