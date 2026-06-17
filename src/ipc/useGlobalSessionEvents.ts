@@ -3,7 +3,12 @@
 // race condition where Claude starts replaying history before a per-component
 // listener has finished its async `listen()` calls.
 //
-// Coalescing: text/thinking deltas are buffered per (session, messageId) and
+// Keying: the core emits events keyed by the live session HANDLE (`session-N`),
+// but the message store and the whole UI key off a conversation's STABLE id. So
+// every event is first mapped handle → stable id; an event for an unknown handle
+// (e.g. a just-deleted conversation) is dropped.
+//
+// Coalescing: text/thinking deltas are buffered per (convId, messageId) and
 // flushed on a single rAF tick, keeping re-renders at one frame per token burst.
 
 import { useEffect } from "react";
@@ -19,6 +24,13 @@ import { useConversationsStore } from "../store/conversationsStore";
 interface DeltaBuf {
   text: string;
   thinking: string;
+}
+
+/** Resolve a live session handle to its conversation's stable id (null if gone). */
+function convIdForHandle(handle: string): string | null {
+  return (
+    useConversationsStore.getState().conversations.find((c) => c.handle === handle)?.id ?? null
+  );
 }
 
 export function useGlobalSessionEvents(): void {
@@ -57,7 +69,8 @@ export function useGlobalSessionEvents(): void {
     }
 
     function onMessage(payload: SessionMessageEvent) {
-      const session = payload.session;
+      const session = convIdForHandle(payload.session);
+      if (!session) return; // unknown / deleted conversation
       const item = payload.item;
       ensureOnce(session);
 
@@ -90,16 +103,23 @@ export function useGlobalSessionEvents(): void {
     }
 
     function onState(payload: SessionStateEvent) {
-      const session = payload.session;
+      const session = convIdForHandle(payload.session);
+      if (!session) return;
       ensureOnce(session);
       useConversationStore.getState().applyState(session, payload.state);
       if (payload.state.session_id) {
         useConversationsStore.getState().noteSessionId(session, payload.state.session_id);
       }
+      if (payload.state.ended) {
+        // The process is gone: unbind the live handle so the next send re-spawns
+        // lazily instead of routing to a dead session.
+        useConversationsStore.getState().setHandle(session, null);
+      }
     }
 
     function onPermission(payload: SessionPermissionEvent) {
-      const session = payload.session;
+      const session = convIdForHandle(payload.session);
+      if (!session) return;
       ensureOnce(session);
       useConversationStore.getState().enqueuePermission(session, payload.request);
     }

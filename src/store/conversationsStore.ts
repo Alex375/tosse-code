@@ -133,10 +133,10 @@ interface ConversationsState {
   addConversation: (c: Conversation) => void;
   selectConversation: (id: string) => void;
   removeConversation: (id: string) => void;
-  /** Name an untitled conversation from its first user message (keyed by live handle). */
-  noteFirstMessage: (handle: string, text: string) => void;
-  /** Store Claude's session_id on the conversation for --resume (keyed by live handle). */
-  noteSessionId: (handle: string, sessionId: string) => void;
+  /** Name an untitled conversation from its first user message (keyed by stable id). */
+  noteFirstMessage: (id: string, text: string) => void;
+  /** Store Claude's session_id on the conversation for --resume (keyed by stable id). */
+  noteSessionId: (id: string, sessionId: string) => void;
   /** Bind a conversation (by stable id) to its live Rust session handle. In-memory only. */
   setHandle: (id: string, handle: string | null) => void;
 }
@@ -186,6 +186,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
   },
 
   removeConversation: (id) => {
+    const conv = get().conversations.find((c) => c.id === id);
     set((s) => {
       const rest = s.conversations.filter((c) => c.id !== id);
       return {
@@ -193,12 +194,19 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
         activeId: s.activeId === id ? (rest[rest.length - 1]?.id ?? null) : s.activeId,
       };
     });
+    // Kill the live `claude` process (if any) so deleting a conversation never
+    // leaves an orphan. Distinct from interrupt: this terminates the session.
+    if (conv?.handle) {
+      syncToCore("stopSession", () => commands.stopSession(conv.handle!));
+    }
+    // Drop its (now unreachable) message timeline from the message store.
+    useConversationStore.getState().dropSession(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
 
-  noteFirstMessage: (handle, text) => {
-    const conv = get().conversations.find((c) => c.handle === handle);
+  noteFirstMessage: (id, text) => {
+    const conv = get().conversations.find((c) => c.id === id);
     if (!conv || conv.name !== DEFAULT_CONV_NAME) return;
     const updated = { ...conv, name: deriveName(text) };
     set((s) => ({
@@ -209,8 +217,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     );
   },
 
-  noteSessionId: (handle, sessionId) => {
-    const conv = get().conversations.find((c) => c.handle === handle);
+  noteSessionId: (id, sessionId) => {
+    const conv = get().conversations.find((c) => c.id === id);
     if (!conv || conv.sessionId === sessionId) return;
     const updated = { ...conv, sessionId };
     set((s) => ({
@@ -228,35 +236,37 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
 }));
 
 /**
- * Spawn a new Claude session in `repoPath` (registering the repo if new) and add
- * it as a conversation with a fresh stable id. Returns its stable id (or null).
+ * Create a new conversation in `repoPath` (registering the repo if new) with a
+ * fresh stable id. Returns its stable id.
+ *
+ * Lazy policy: NO `claude` process is spawned here — only the metadata record is
+ * created. The live session is spawned on the first message (see
+ * [`ensureConversationSession`]).
  */
-export async function createConversationInRepo(repoPath: string): Promise<string | null> {
+export function createConversationInRepo(repoPath: string): string {
   const repo = useConversationsStore.getState().addRepo(repoPath);
   const id = uid();
-  const res = await commands.spawnSession(repoPath, null);
-  if (res.status === "ok") {
-    useConversationsStore.getState().addConversation({
-      id,
-      name: DEFAULT_CONV_NAME,
-      repoId: repo.id,
-      cwd: repoPath,
-      createdAt: Date.now(),
-      sessionId: null,
-      handle: res.data, // live session handle
-    });
-    return id;
-  }
-  console.error("spawnSession failed:", res.error);
-  return null;
+  useConversationsStore.getState().addConversation({
+    id,
+    name: DEFAULT_CONV_NAME,
+    repoId: repo.id,
+    cwd: repoPath,
+    createdAt: Date.now(),
+    sessionId: null,
+    handle: null, // no live process until the first message
+  });
+  return id;
 }
 
 /**
- * Boot: hydrate the store from the core's persisted state, then resume the
- * persisted conversations. Called once at App mount. The store starts empty —
- * persistence now lives in the Rust core, not in the webview, so nothing is in
- * memory until this runs. An empty store stays empty: there is NO default
- * conversation; the user opens a folder to start one.
+ * Boot: hydrate the store from the core's persisted state. Called once at App
+ * mount. The store starts empty — persistence lives in the Rust core, not in the
+ * webview — so nothing is in memory until this runs.
+ *
+ * Lazy policy: boot spawns NOTHING. Conversations are listed from their
+ * metadata; a conversation's transcript is loaded on demand when it is shown
+ * (see [`loadConversationHistory`]) and its `claude` process is spawned only when
+ * the user sends a message. An empty store stays empty — no default conversation.
  */
 export async function bootConversations(): Promise<void> {
   const res = await commands.loadPersistedState();
@@ -269,51 +279,55 @@ export async function bootConversations(): Promise<void> {
   } else {
     console.error("loadPersistedState failed:", res.error);
   }
+}
 
-  if (useConversationsStore.getState().conversations.length > 0) {
-    await resumeAllConversations();
-  }
+/** A conversation's live Rust session handle, or null if it isn't spawned. */
+export function liveHandle(convId: string): string | null {
+  return (
+    useConversationsStore.getState().conversations.find((c) => c.id === convId)?.handle ?? null
+  );
 }
 
 /**
- * On app restart: re-spawn all persisted conversations. Each conversation with a
- * sessionId gets --resume (so the live `claude` continues that session), and its
- * past messages are rebuilt from Claude's transcript via `loadSessionHistory` and
- * replayed into the conversation store under the new live handle. Conversations
- * without a sessionId get a fresh session (nothing to restore).
+ * Ensure a conversation has a LIVE `claude` session, spawning it lazily if not.
+ * Returns the live handle. This is the single spawn point of the lazy policy —
+ * called on the first message (and on any send after the session was stopped or
+ * ended). A conversation with a `sessionId` is resumed (`--resume`) so the same
+ * Claude session continues; a brand-new one starts fresh.
  *
- * The conversation's stable id never changes — we only (re)bind its `handle`.
+ * The handle is bound synchronously before this resolves, so live events (which
+ * the core keys by handle) route back to this conversation's stable id.
  */
-export async function resumeAllConversations(): Promise<void> {
-  const { conversations, setHandle, removeConversation, selectConversation } =
-    useConversationsStore.getState();
+export async function ensureConversationSession(convId: string): Promise<string> {
+  const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+  if (!conv) throw new Error(`conversation ${convId} introuvable`);
+  if (conv.handle) return conv.handle;
+  const res = await commands.spawnSession(conv.cwd, conv.sessionId ?? null);
+  if (res.status !== "ok") throw new Error(res.error);
+  useConversationsStore.getState().setHandle(convId, res.data);
+  return res.data;
+}
 
-  const results = await Promise.all(
-    conversations.map(async (conv) => {
-      const res = await commands.spawnSession(conv.cwd, conv.sessionId ?? null);
-      if (res.status === "ok") {
-        const handle = res.data; // new live handle
-        // Rebuild from Claude's transcript and replay under the new handle BEFORE
-        // binding it, so the view mounts with history already present.
-        if (conv.sessionId) {
-          await restoreHistory(conv.sessionId, handle);
-        }
-        setHandle(conv.id, handle);
-        return conv.id;
-      } else {
-        console.error(`Failed to resume conversation ${conv.id}:`, res.error);
-        removeConversation(conv.id);
-        return null;
-      }
-    }),
-  );
+// Conversations whose on-disk transcript has already been replayed this run.
+const historyLoaded = new Set<string>();
 
-  // Safety net: if activeId is still null (e.g. it pointed at a conversation that
-  // failed to resume), activate the first successfully spawned one.
-  if (!useConversationsStore.getState().activeId) {
-    const firstId = results.find(Boolean);
-    if (firstId) selectConversation(firstId);
-  }
+/**
+ * Load a conversation's history from Claude's on-disk transcript into the message
+ * store, keyed by its STABLE id — no process spawned (pure file IO). Idempotent
+ * and run at most once per conversation per app run; `applyItem` also dedupes by
+ * id, so a later live re-spawn never double-renders. A conversation with no
+ * `sessionId` (never sent a message) has nothing to load.
+ */
+export async function loadConversationHistory(convId: string): Promise<void> {
+  if (historyLoaded.has(convId)) return;
+  historyLoaded.add(convId); // mark before awaiting to avoid a double-load race
+  const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+  if (!conv || !conv.sessionId) return;
+  const res = await commands.loadSessionHistory(conv.sessionId);
+  if (res.status !== "ok" || res.data.length === 0) return;
+  const { ensureSession, applyItem } = useConversationStore.getState();
+  ensureSession(convId);
+  for (const item of res.data) applyItem(convId, item);
 }
 
 /**
@@ -331,21 +345,9 @@ export async function wipeAllData(): Promise<void> {
       .map((c) => commands.stopSession(c.handle)),
   );
   await commands.wipeAllData();
+  historyLoaded.clear();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
-}
-
-/**
- * Load `sessionId`'s history from Claude's transcript and replay it into the
- * conversation store under `handle` (the new live session). Best-effort: a
- * missing transcript or an IPC error just leaves the conversation empty.
- */
-async function restoreHistory(sessionId: string, handle: string): Promise<void> {
-  const res = await commands.loadSessionHistory(sessionId);
-  if (res.status !== "ok" || res.data.length === 0) return;
-  const { ensureSession, applyItem } = useConversationStore.getState();
-  ensureSession(handle);
-  for (const item of res.data) applyItem(handle, item);
 }
 
 export const useConversations = () =>

@@ -1,18 +1,22 @@
 import { useState } from "react";
 import { commands } from "../../ipc/client";
-import { useSessionState } from "../../store/conversationStore";
 import { Ico } from "../../ui/kit";
 
 /**
  * Title-bar action: resume the current conversation in an OS terminal
- * (`claude --resume <session_id>`, in the conversation's cwd). Disabled until the
- * session has a session_id — Claude assigns it on system/init, and there is
- * nothing to resume before that. Opens a *separate*, user-driven `claude`
- * outside the app.
+ * (`claude --resume <session_id>`, in the conversation's cwd). Driven by the
+ * conversation's PERSISTED session_id — Claude assigns it on the first turn and
+ * we keep it across runs — so it works straight from the on-disk transcript,
+ * with no live process needed (disabled until a session_id exists). Opens a
+ * *separate*, user-driven `claude` outside the app.
  */
-export function OpenInTerminalButton({ session, cwd }: { session: string; cwd: string }) {
-  const state = useSessionState(session);
-  const sessionId = state?.session_id ?? null;
+export function OpenInTerminalButton({
+  sessionId,
+  cwd,
+}: {
+  sessionId: string | null;
+  cwd: string;
+}) {
   const [busy, setBusy] = useState(false);
 
   const open = async () => {

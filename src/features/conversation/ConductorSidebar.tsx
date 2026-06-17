@@ -15,8 +15,9 @@ import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
-  // Live state is keyed by the Rust session handle, not the stable id.
-  const state = useSessionState(conv.handle ?? "");
+  // State is keyed by the conversation's stable id (the message store routes
+  // live events back to it); undefined until it has been live at least once.
+  const state = useSessionState(conv.id);
   const select = useConversationsStore((s) => s.selectConversation);
   return (
     <button
