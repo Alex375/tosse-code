@@ -35,6 +35,12 @@ pub struct ConversationRecord {
     pub cwd: String,
     /// Unix ms timestamp the conversation was created.
     pub created_at: i64,
+    /// Unix ms timestamp of the conversation's last activity — the last message
+    /// sent OR received. Drives the sidebar's most-recent-first ordering. Bumped
+    /// by the UI on each user send and turn result; pre-existing rows (created
+    /// before this column) are backfilled from the transcript mtime at boot (see
+    /// [`super::db::Store::backfill_last_activity`]).
+    pub last_activity_at: i64,
     /// Claude's own session UUID (from system/init) — used for `--resume`.
     pub session_id: Option<String>,
 }

@@ -6,7 +6,11 @@ import { useMutation } from "@tanstack/react-query";
 import { commands } from "./client";
 import type { PermissionDecision, PermissionMode, Result } from "./client";
 import { useConversationStore } from "../store/conversationStore";
-import { ensureConversationSession, liveHandle } from "../store/conversationsStore";
+import {
+  ensureConversationSession,
+  liveHandle,
+  useConversationsStore,
+} from "../store/conversationsStore";
 
 // These hooks are keyed by a conversation's STABLE id, not its live session
 // handle. Reads (the message store) key by the stable id; commands target the
@@ -29,6 +33,9 @@ export function useSendMessage(convId: string) {
       // The core does not echo user turns, so append optimistically (keyed by the
       // stable id) before sending — instant even while the session spawns.
       addUserTurn(convId, text);
+      // Sending IS activity: float the conversation to the top now and persist
+      // the new timestamp so the recency order survives a restart.
+      useConversationsStore.getState().noteActivity(convId, { persist: true });
       // Lazy spawn: a conversation has no live process until its first message
       // (or its first message after being stopped/ended).
       const handle = await ensureConversationSession(convId);

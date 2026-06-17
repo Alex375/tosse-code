@@ -33,6 +33,20 @@ pub struct Store {
     conn: Mutex<Connection>,
 }
 
+/// Whether `table` already has a column named `column` (via `PRAGMA table_info`).
+/// Makes the additive `last_activity_at` migration idempotent across reopens.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        // PRAGMA table_info columns: (cid, name, type, notnull, dflt_value, pk).
+        if row.get::<_, String>(1)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 impl Store {
     /// Open (creating if absent) the database at `path` and run migrations.
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
@@ -70,14 +84,25 @@ impl Store {
                  added_at INTEGER NOT NULL
              );
              CREATE TABLE IF NOT EXISTS conversations (
-                 id         TEXT PRIMARY KEY,
-                 name       TEXT NOT NULL,
-                 repo_id    TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-                 cwd        TEXT NOT NULL,
-                 created_at INTEGER NOT NULL,
-                 session_id TEXT
+                 id               TEXT PRIMARY KEY,
+                 name             TEXT NOT NULL,
+                 repo_id          TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                 cwd              TEXT NOT NULL,
+                 created_at       INTEGER NOT NULL,
+                 last_activity_at INTEGER NOT NULL DEFAULT 0,
+                 session_id       TEXT
              );",
         )?;
+        // Additive migration: a db created before `last_activity_at` keeps its
+        // table untouched by CREATE TABLE IF NOT EXISTS, so add the column in
+        // place. Existing rows get the sentinel 0 and are backfilled at boot once
+        // transcript mtimes can be resolved (see `backfill_last_activity`).
+        if !column_exists(&conn, "conversations", "last_activity_at")? {
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         conn.execute(
             "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?1)",
             params![SCHEMA_VERSION.to_string()],
@@ -86,7 +111,9 @@ impl Store {
     }
 
     /// The full snapshot the UI hydrates from at boot. Repos are ordered by when
-    /// they were added, conversations by creation time — the sidebar's order.
+    /// they were added, conversations by creation time. Display order is the
+    /// front's concern: the sidebar re-sorts conversations by `last_activity_at`
+    /// (most recent first) — this is just a stable initial array.
     pub fn load_state(&self) -> rusqlite::Result<PersistedState> {
         let conn = self.conn.lock().unwrap();
 
@@ -103,7 +130,7 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut conv_stmt = conn.prepare(
-            "SELECT id, name, repo_id, cwd, created_at, session_id
+            "SELECT id, name, repo_id, cwd, created_at, last_activity_at, session_id
              FROM conversations ORDER BY created_at ASC",
         )?;
         let conversations = conv_stmt
@@ -114,7 +141,8 @@ impl Store {
                     repo_id: row.get(2)?,
                     cwd: row.get(3)?,
                     created_at: row.get(4)?,
-                    session_id: row.get(5)?,
+                    last_activity_at: row.get(5)?,
+                    session_id: row.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -156,16 +184,80 @@ impl Store {
     /// Insert or update a conversation (idempotent by id).
     pub fn upsert_conversation(&self, c: &ConversationRecord) -> rusqlite::Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT INTO conversations (id, name, repo_id, cwd, created_at, session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO conversations
+                 (id, name, repo_id, cwd, created_at, last_activity_at, session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
-                 name       = excluded.name,
-                 repo_id    = excluded.repo_id,
-                 cwd        = excluded.cwd,
-                 created_at = excluded.created_at,
-                 session_id = excluded.session_id",
-            params![c.id, c.name, c.repo_id, c.cwd, c.created_at, c.session_id],
+                 name             = excluded.name,
+                 repo_id          = excluded.repo_id,
+                 cwd              = excluded.cwd,
+                 created_at       = excluded.created_at,
+                 last_activity_at = excluded.last_activity_at,
+                 session_id       = excluded.session_id",
+            params![
+                c.id,
+                c.name,
+                c.repo_id,
+                c.cwd,
+                c.created_at,
+                c.last_activity_at,
+                c.session_id
+            ],
         )?;
+        Ok(())
+    }
+
+    /// Give every conversation that predates the `last_activity_at` column
+    /// (sentinel value 0) a real timestamp, so historical conversations sort by
+    /// true recency on the first run after the migration. `mtime` resolves a
+    /// session id to its transcript file's mtime (Unix ms) — the best proxy for
+    /// "time of the last message", since Claude rewrites the transcript on every
+    /// message. Conversations with no transcript (or that never sent a message)
+    /// fall back to `created_at`. A no-op on every later boot: new conversations
+    /// always carry a real timestamp, so no row stays at the sentinel.
+    ///
+    /// The filesystem lookups run WITHOUT the connection lock held (read the
+    /// sentinel rows, drop the guard, resolve mtimes, then re-lock to write).
+    pub fn backfill_last_activity(
+        &self,
+        mtime: impl Fn(&str) -> Option<i64>,
+    ) -> rusqlite::Result<()> {
+        let pending: Vec<(String, Option<String>, i64)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, created_at FROM conversations WHERE last_activity_at = 0",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let resolved: Vec<(String, i64)> = pending
+            .into_iter()
+            .map(|(id, session_id, created_at)| {
+                let ts = session_id
+                    .as_deref()
+                    .and_then(|s| mtime(s))
+                    .unwrap_or(created_at);
+                (id, ts)
+            })
+            .collect();
+        let conn = self.conn.lock().unwrap();
+        for (id, ts) in resolved {
+            conn.execute(
+                "UPDATE conversations SET last_activity_at = ?1 WHERE id = ?2",
+                params![ts, id],
+            )?;
+        }
         Ok(())
     }
 
@@ -232,6 +324,8 @@ mod tests {
             repo_id: repo_id.into(),
             cwd: format!("/tmp/{repo_id}"),
             created_at,
+            // Default to created_at: a freshly created conversation is active "now".
+            last_activity_at: created_at,
             session_id: session_id.map(str::to_string),
         }
     }
@@ -306,6 +400,57 @@ mod tests {
         assert_eq!(state.conversations.len(), 1);
         assert_eq!(state.conversations[0].name, "Renamed");
         assert_eq!(state.conversations[0].session_id.as_deref(), Some("sess"));
+    }
+
+    #[test]
+    fn last_activity_at_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        let mut c = conv("c1", "r1", None);
+        c.last_activity_at = 4242;
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(
+            store.load_state().unwrap().conversations[0].last_activity_at,
+            4242
+        );
+    }
+
+    #[test]
+    fn backfill_fills_sentinel_rows_from_resolver_else_created_at() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        // Two rows forced to the sentinel (0), as if they predate the column.
+        let mut c1 = conv_at("c1", "r1", 100, Some("sess-c1"));
+        c1.last_activity_at = 0;
+        let mut c2 = conv_at("c2", "r1", 200, None);
+        c2.last_activity_at = 0;
+        store.upsert_conversation(&c1).unwrap();
+        store.upsert_conversation(&c2).unwrap();
+
+        // Resolver knows a mtime only for c1's session; c2 must fall back to created_at.
+        store
+            .backfill_last_activity(|sid| if sid == "sess-c1" { Some(999) } else { None })
+            .unwrap();
+
+        let convs = store.load_state().unwrap().conversations; // created_at ASC -> [c1, c2]
+        assert_eq!(convs[0].last_activity_at, 999, "resolver mtime wins");
+        assert_eq!(convs[1].last_activity_at, 200, "no transcript -> created_at");
+    }
+
+    #[test]
+    fn backfill_leaves_already_filled_rows_untouched() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        let mut c = conv_at("c1", "r1", 100, Some("sess"));
+        c.last_activity_at = 555; // already has a real timestamp
+        store.upsert_conversation(&c).unwrap();
+
+        // A resolver that would overwrite everything must NOT touch a filled row.
+        store.backfill_last_activity(|_| Some(1)).unwrap();
+        assert_eq!(
+            store.load_state().unwrap().conversations[0].last_activity_at,
+            555
+        );
     }
 
     #[test]
