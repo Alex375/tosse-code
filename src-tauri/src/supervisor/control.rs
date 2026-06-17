@@ -111,6 +111,24 @@ pub fn set_permission_mode_request(request_id: &str, mode: PermissionMode) -> Va
     )
 }
 
+/// `set_model` — switch the active model mid-session (spec §4.5, sibling of
+/// `set_permission_mode`). `model` is a CLI model id/alias passed verbatim
+/// (e.g. "opus", "sonnet", "haiku", "default"). Cross-checked against the
+/// official extension SDK transport (`{subtype:"set_model", model}`).
+pub fn set_model_request(request_id: &str, model: &str) -> Value {
+    control_request(request_id, json!({ "subtype": "set_model", "model": model }))
+}
+
+/// `apply_flag_settings` — push a session flag/setting change. Used here to set
+/// the reasoning effort level (e.g. "low", "medium", "high", "xhigh", "max").
+/// Mirrors the extension SDK (`{subtype:"apply_flag_settings", settings:{effortLevel}}`).
+pub fn set_effort_level_request(request_id: &str, level: &str) -> Value {
+    control_request(
+        request_id,
+        json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": level } }),
+    )
+}
+
 /// A successful `control_response` carrying a permission ALLOW result (spec §5.2).
 /// Note the doubly-nested `response.response` and the camelCase result fields.
 pub fn permission_allow_response(request_id: &str, tool_use_id: &str, updated_input: Value) -> Value {

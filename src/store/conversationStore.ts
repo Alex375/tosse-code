@@ -1,0 +1,393 @@
+// The conversation store: a dumb reducer that applies pre-normalized events from
+// the Rust core and reconciles them by id. The UI never reconstructs anything —
+// it reads slices via fine-grained selectors so only affected turns re-render.
+//
+// Reconciliation rules (see the protocol):
+//  - message_started opens a streaming Turn (blocks=null) and an openBubble pointer.
+//  - text_delta / thinking_delta append to the matching buffer (ignored once final).
+//  - assistant_message is AUTHORITATIVE: set blocks, discard buffers, status=final;
+//    it may arrive mid-stream and later deltas for that id are ignored.
+//  - tool_result is joined to its tool_use lazily by tool_use_id.
+//  - turn_result finalizes open bubbles and renders a footer — NEVER a new bubble.
+//  - sub-agent (Task) turns carry parent_tool_use_id and are scoped to a sub-thread,
+//    never leaking into the root timeline.
+//  - all collections dedupe by id / tool_use_id (Tauri delivery is at-least-once).
+
+import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
+import type {
+  ConversationItem,
+  PermissionRequestPayload,
+  SessionStatePayload,
+} from "../ipc/client";
+import type {
+  NoticeItem,
+  SessionEntry,
+  TimelineEntry,
+  ToolResult,
+  Turn,
+  TurnResultMeta,
+} from "./types";
+
+const connectingState: SessionStatePayload = {
+  busy: false,
+  session_id: null,
+  model: null,
+  permission_mode: null,
+  activity: null,
+  awaiting_permission: false,
+  ended: false,
+};
+
+function emptyEntry(session: string): SessionEntry {
+  return {
+    session,
+    state: { ...connectingState },
+    timeline: [],
+    turns: {},
+    notices: {},
+    turnResults: {},
+    toolResults: {},
+    pendingPermissions: [],
+    openBubble: {},
+    subThreads: {},
+    seq: 0,
+  };
+}
+
+const rootKey = (parentToolUseId: string | null) => parentToolUseId ?? "root";
+
+function hasTimelineId(timeline: TimelineEntry[], id: string): boolean {
+  return timeline.some((e) => e.id === id);
+}
+
+interface ConversationState {
+  sessions: Record<string, SessionEntry>;
+  ensureSession: (session: string) => void;
+  applyState: (session: string, state: SessionStatePayload) => void;
+  applyItem: (session: string, item: ConversationItem) => void;
+  appendText: (session: string, messageId: string, text: string) => void;
+  appendThinking: (session: string, messageId: string, text: string) => void;
+  addUserTurn: (session: string, text: string) => void;
+  enqueuePermission: (session: string, request: PermissionRequestPayload) => void;
+  removePermission: (session: string, requestId: string) => void;
+  resetSession: (session: string) => void;
+}
+
+export const useConversationStore = create<ConversationState>((set) => {
+  /** Replace one session immutably; `fn` returns a NEW entry (or the same to skip). */
+  const withEntry = (session: string, fn: (entry: SessionEntry) => SessionEntry) =>
+    set((s) => {
+      const entry = s.sessions[session] ?? emptyEntry(session);
+      const next = fn(entry);
+      if (next === entry) return s;
+      return { sessions: { ...s.sessions, [session]: next } };
+    });
+
+  const openTurn = (
+    entry: SessionEntry,
+    id: string,
+    parentToolUseId: string | null,
+  ): SessionEntry => {
+    if (entry.turns[id]) return entry; // dedupe
+    const turn: Turn = {
+      id,
+      role: "assistant",
+      status: "streaming",
+      streamingText: "",
+      streamingThinking: "",
+      blocks: null,
+      parentToolUseId,
+      hasThinking: false,
+    };
+    const next: SessionEntry = {
+      ...entry,
+      turns: { ...entry.turns, [id]: turn },
+      openBubble: { ...entry.openBubble, [rootKey(parentToolUseId)]: id },
+    };
+    if (parentToolUseId === null) {
+      next.timeline = hasTimelineId(entry.timeline, id)
+        ? entry.timeline
+        : [...entry.timeline, { kind: "turn", id }];
+    } else {
+      const existing = entry.subThreads[parentToolUseId] ?? [];
+      next.subThreads = {
+        ...entry.subThreads,
+        [parentToolUseId]: existing.includes(id) ? existing : [...existing, id],
+      };
+    }
+    return next;
+  };
+
+  const appendBuffer = (
+    session: string,
+    messageId: string,
+    field: "streamingText" | "streamingThinking",
+    text: string,
+  ) =>
+    withEntry(session, (entry) => {
+      let turn = entry.turns[messageId];
+      let base = entry;
+      if (!turn) {
+        // Defensive: a delta before its message_started — open the turn.
+        base = openTurn(entry, messageId, null);
+        turn = base.turns[messageId];
+      }
+      if (turn.blocks !== null) return entry; // finalized: ignore late deltas
+      const nextTurn: Turn = {
+        ...turn,
+        [field]: turn[field] + text,
+        hasThinking: field === "streamingThinking" ? true : turn.hasThinking,
+      };
+      return { ...base, turns: { ...base.turns, [messageId]: nextTurn } };
+    });
+
+  return {
+    sessions: {},
+
+    ensureSession: (session) =>
+      set((s) =>
+        s.sessions[session]
+          ? s
+          : { sessions: { ...s.sessions, [session]: emptyEntry(session) } },
+      ),
+
+    applyState: (session, state) =>
+      withEntry(session, (entry) => ({ ...entry, state })),
+
+    appendText: (session, messageId, text) =>
+      appendBuffer(session, messageId, "streamingText", text),
+
+    appendThinking: (session, messageId, text) =>
+      appendBuffer(session, messageId, "streamingThinking", text),
+
+    addUserTurn: (session, text) =>
+      withEntry(session, (entry) => {
+        const id = `user_${entry.seq}`;
+        const turn: Turn = {
+          id,
+          role: "user",
+          status: "final",
+          streamingText: text,
+          streamingThinking: "",
+          blocks: null,
+          parentToolUseId: null,
+          hasThinking: false,
+        };
+        return {
+          ...entry,
+          seq: entry.seq + 1,
+          turns: { ...entry.turns, [id]: turn },
+          timeline: [...entry.timeline, { kind: "turn", id }],
+        };
+      }),
+
+    enqueuePermission: (session, request) =>
+      withEntry(session, (entry) =>
+        entry.pendingPermissions.some((p) => p.request_id === request.request_id)
+          ? entry
+          : { ...entry, pendingPermissions: [...entry.pendingPermissions, request] },
+      ),
+
+    removePermission: (session, requestId) =>
+      withEntry(session, (entry) => {
+        if (!entry.pendingPermissions.some((p) => p.request_id === requestId))
+          return entry;
+        return {
+          ...entry,
+          pendingPermissions: entry.pendingPermissions.filter(
+            (p) => p.request_id !== requestId,
+          ),
+        };
+      }),
+
+    resetSession: (session) =>
+      set((s) => ({ sessions: { ...s.sessions, [session]: emptyEntry(session) } })),
+
+    applyItem: (session, item) =>
+      withEntry(session, (entry) => {
+        switch (item.kind) {
+          case "message_started":
+            return openTurn(entry, item.id, item.parent_tool_use_id);
+
+          case "text_delta":
+          case "thinking_delta": {
+            // Normally deltas come via appendText/appendThinking (rAF-coalesced);
+            // handle here too for completeness / out-of-band delivery.
+            const field =
+              item.kind === "text_delta" ? "streamingText" : "streamingThinking";
+            const key = rootKey(null);
+            const messageId = item.message_id ?? entry.openBubble[key];
+            if (!messageId) return entry;
+            const turn = entry.turns[messageId];
+            if (!turn || turn.blocks !== null) return entry;
+            const nextTurn: Turn = {
+              ...turn,
+              [field]: turn[field] + item.text,
+              hasThinking:
+                field === "streamingThinking" ? true : turn.hasThinking,
+            };
+            return { ...entry, turns: { ...entry.turns, [messageId]: nextTurn } };
+          }
+
+          case "user_message": {
+            // A past user turn replayed from the transcript on resume. Mirrors
+            // addUserTurn (role "user", text in streamingText), but keyed by the
+            // transcript id so re-delivery dedupes.
+            if (entry.turns[item.id]) return entry;
+            const turn: Turn = {
+              id: item.id,
+              role: "user",
+              status: "final",
+              streamingText: item.text,
+              streamingThinking: "",
+              blocks: null,
+              parentToolUseId: item.parent_tool_use_id,
+              hasThinking: false,
+            };
+            return {
+              ...entry,
+              turns: { ...entry.turns, [item.id]: turn },
+              timeline: hasTimelineId(entry.timeline, item.id)
+                ? entry.timeline
+                : [...entry.timeline, { kind: "turn", id: item.id }],
+            };
+          }
+
+          case "assistant_message": {
+            const prev = entry.turns[item.id];
+            const turn: Turn = {
+              id: item.id,
+              role: "assistant",
+              status: "final",
+              streamingText: "",
+              streamingThinking: "",
+              blocks: item.blocks,
+              parentToolUseId: item.parent_tool_use_id,
+              hasThinking: item.blocks.some((b) => b.type === "thinking"),
+            };
+            let base = openTurn(entry, item.id, item.parent_tool_use_id);
+            base = { ...base, turns: { ...base.turns, [item.id]: turn } };
+            // close the open-bubble pointer for this thread
+            base.openBubble = {
+              ...base.openBubble,
+              [rootKey(item.parent_tool_use_id)]: undefined,
+            };
+            void prev;
+            return base;
+          }
+
+          case "tool_result": {
+            const result: ToolResult = {
+              toolUseId: item.tool_use_id,
+              content: item.content,
+              isError: item.is_error,
+              parentToolUseId: item.parent_tool_use_id,
+            };
+            return {
+              ...entry,
+              toolResults: { ...entry.toolResults, [item.tool_use_id]: result },
+            };
+          }
+
+          case "turn_result": {
+            const id = `tr_${entry.seq}`;
+            const meta: TurnResultMeta = {
+              subtype: item.subtype,
+              isError: item.is_error,
+              result: item.result,
+              totalCostUsd: item.total_cost_usd,
+              numTurns: item.num_turns,
+              durationMs: item.duration_ms,
+            };
+            // finalize any still-streaming turns
+            const turns = { ...entry.turns };
+            let touched = false;
+            for (const [tid, t] of Object.entries(turns)) {
+              if (t.status === "streaming") {
+                turns[tid] = {
+                  ...t,
+                  status: item.subtype === "interrupted" ? "interrupted" : "final",
+                };
+                touched = true;
+              }
+            }
+            return {
+              ...entry,
+              seq: entry.seq + 1,
+              turns: touched ? turns : entry.turns,
+              turnResults: { ...entry.turnResults, [id]: meta },
+              timeline: [...entry.timeline, { kind: "turn_result", id }],
+              openBubble: {},
+              pendingPermissions: [],
+            };
+          }
+
+          case "notice": {
+            const id = `nt_${entry.seq}`;
+            const notice: NoticeItem = {
+              id,
+              subtype: item.subtype,
+              detail: item.detail,
+            };
+            return {
+              ...entry,
+              seq: entry.seq + 1,
+              notices: { ...entry.notices, [id]: notice },
+              timeline: [...entry.timeline, { kind: "notice", id }],
+            };
+          }
+
+          default:
+            return entry;
+        }
+      }),
+  };
+});
+
+// ---- Fine-grained selector hooks -------------------------------------------
+
+const EMPTY_TIMELINE: TimelineEntry[] = [];
+const EMPTY_PERMS: PermissionRequestPayload[] = [];
+const EMPTY_IDS: string[] = [];
+
+export const useSessionState = (session: string): SessionStatePayload | undefined =>
+  useConversationStore((s) => s.sessions[session]?.state);
+
+export const useTimeline = (session: string): TimelineEntry[] =>
+  useConversationStore(
+    useShallow((s) => s.sessions[session]?.timeline ?? EMPTY_TIMELINE),
+  );
+
+export const useTurn = (session: string, id: string): Turn | undefined =>
+  useConversationStore((s) => s.sessions[session]?.turns[id]);
+
+export const useToolResult = (
+  session: string,
+  toolUseId: string,
+): ToolResult | undefined =>
+  useConversationStore((s) => s.sessions[session]?.toolResults[toolUseId]);
+
+export const useTurnResult = (
+  session: string,
+  id: string,
+): TurnResultMeta | undefined =>
+  useConversationStore((s) => s.sessions[session]?.turnResults[id]);
+
+export const useNotice = (session: string, id: string): NoticeItem | undefined =>
+  useConversationStore((s) => s.sessions[session]?.notices[id]);
+
+export const usePendingPermissions = (
+  session: string,
+): PermissionRequestPayload[] =>
+  useConversationStore(
+    useShallow((s) => s.sessions[session]?.pendingPermissions ?? EMPTY_PERMS),
+  );
+
+export const useSubThread = (
+  session: string,
+  parentToolUseId: string,
+): string[] =>
+  useConversationStore(
+    useShallow((s) => s.sessions[session]?.subThreads[parentToolUseId] ?? EMPTY_IDS),
+  );

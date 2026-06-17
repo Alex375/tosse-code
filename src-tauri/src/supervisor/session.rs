@@ -31,6 +31,8 @@ pub enum SessionCommand {
         decision: PermissionDecision,
     },
     SetPermissionMode(PermissionMode),
+    SetModel(String),
+    SetEffortLevel(String),
     Interrupt,
     Shutdown,
 }
@@ -78,6 +80,14 @@ impl SessionHandle {
 
     pub async fn set_permission_mode(&self, mode: PermissionMode) -> Result<(), SessionError> {
         self.send(SessionCommand::SetPermissionMode(mode)).await
+    }
+
+    pub async fn set_model(&self, model: String) -> Result<(), SessionError> {
+        self.send(SessionCommand::SetModel(model)).await
+    }
+
+    pub async fn set_effort_level(&self, level: String) -> Result<(), SessionError> {
+        self.send(SessionCommand::SetEffortLevel(level)).await
     }
 
     pub async fn interrupt(&self) -> Result<(), SessionError> {
@@ -283,6 +293,8 @@ impl SessionCore {
         match cmd {
             SessionCommand::SendUserText(text) => {
                 self.send(transport::user_message(text));
+                let ev = self.assembler.set_busy(true);
+                self.emit(ev);
             }
             SessionCommand::AnswerPermission { request_id, decision } => {
                 match self.pending.remove(&request_id) {
@@ -316,6 +328,19 @@ impl SessionCore {
                     .unwrap_or_default();
                 let ev = self.assembler.set_permission_mode(&mode_str);
                 self.emit(ev);
+            }
+            SessionCommand::SetModel(model) => {
+                let rid = self.next_request_id();
+                self.send(control::set_model_request(&rid, &model));
+                let ev = self.assembler.set_model(&model);
+                self.emit(ev);
+            }
+            SessionCommand::SetEffortLevel(level) => {
+                // Effort is a fire-and-forget flag change; the CLI carries no
+                // effort field in its state, so there is no event to emit back —
+                // the UI owns the selected level locally.
+                let rid = self.next_request_id();
+                self.send(control::set_effort_level_request(&rid, &level));
             }
             SessionCommand::Interrupt => {
                 let rid = self.next_request_id();

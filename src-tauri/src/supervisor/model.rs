@@ -66,6 +66,14 @@ pub enum ConversationItem {
         message_id: Option<String>,
         text: String,
     },
+    /// A past user turn, replayed from Claude's transcript when a conversation is
+    /// resumed. The live path never emits this — the UI adds user turns
+    /// optimistically on send — so it only appears during history restore.
+    UserMessage {
+        id: String,
+        text: String,
+        parent_tool_use_id: Option<String>,
+    },
     /// The authoritative assembled assistant message (text + tool_use blocks).
     /// Carries the same `id` as the streamed `message_start` — the UI reconciles.
     AssistantMessage {

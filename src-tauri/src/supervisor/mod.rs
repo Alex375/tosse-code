@@ -9,11 +9,14 @@
 //!     permissions, modes, interrupt (subtask 2).
 //!   - [`model`] — normalized, UI-facing events.
 //!   - [`assembler`] — turn the raw stream into normalized events (subtask 3).
+//!   - [`history`] — rebuild a past conversation from Claude's on-disk
+//!     transcript on resume (the CLI does not re-stream history).
 //!   - [`session`] — the actor that wires transport + control + assembler + an
 //!     event sink, exposed to the IPC layer (subtask 3).
 
 pub mod assembler;
 pub mod control;
+pub mod history;
 pub mod model;
 pub mod protocol;
 pub mod session;

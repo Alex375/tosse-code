@@ -41,9 +41,22 @@ impl Assembler {
         SessionEvent::State(self.state.clone())
     }
 
+    /// Mark a turn in flight on user send (before the CLI streams anything back),
+    /// so the composer flips to "working" immediately.
+    pub fn set_busy(&mut self, busy: bool) -> SessionEvent {
+        self.state.busy = busy;
+        SessionEvent::State(self.state.clone())
+    }
+
     /// Reflect a permission-mode change (after `set_permission_mode`).
     pub fn set_permission_mode(&mut self, mode: &str) -> SessionEvent {
         self.state.permission_mode = Some(mode.to_string());
+        SessionEvent::State(self.state.clone())
+    }
+
+    /// Reflect a model change (after `set_model`).
+    pub fn set_model(&mut self, model: &str) -> SessionEvent {
+        self.state.model = Some(model.to_string());
         SessionEvent::State(self.state.clone())
     }
 
@@ -79,7 +92,10 @@ impl Assembler {
                 self.state.session_id = init.session_id.clone();
                 self.state.model = init.model.clone();
                 self.state.permission_mode = init.permission_mode.clone();
-                self.state.busy = true; // a turn is starting
+                // Do NOT force busy here: `system/init` is emitted at the start of
+                // each turn (not at spawn). Marking busy on init is fine for turns,
+                // but busy is driven by user-send (set_busy) + message_start /
+                // result so the composer is never wedged "busy" without a turn.
                 out.push(SessionEvent::State(self.state.clone()));
             }
             SystemMsg::Status {
@@ -205,7 +221,10 @@ impl Assembler {
 }
 
 /// Turn an assistant `content[]` array into typed normalized blocks.
-fn normalize_blocks(content: Option<&Value>) -> Vec<NormalizedBlock> {
+///
+/// Shared with [`super::history`], which reconstructs assistant turns from
+/// Claude's on-disk transcript (same Anthropic `content[]` shape).
+pub(crate) fn normalize_blocks(content: Option<&Value>) -> Vec<NormalizedBlock> {
     let mut blocks = Vec::new();
     if let Some(Value::Array(arr)) = content {
         for b in arr {

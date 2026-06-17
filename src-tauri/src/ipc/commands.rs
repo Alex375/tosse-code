@@ -9,6 +9,7 @@ use tauri::Manager;
 
 use crate::ipc::events::TauriEmitter;
 use crate::supervisor::control::{PermissionDecision, PermissionMode};
+use crate::supervisor::model::ConversationItem;
 use crate::supervisor::session::{self, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
 
@@ -75,6 +76,9 @@ pub async fn spawn_session(
     let id = sessions.next_id();
     let mut cfg = SpawnConfig::new(PathBuf::from(repo_path));
     cfg.resume = resume;
+    // Product defaults: new sessions open on Opus 4.8 with Extra (xhigh) effort.
+    cfg.model = Some("opus".into());
+    cfg.effort = Some("xhigh".into());
     let emitter = Arc::new(TauriEmitter { app: app.clone() });
     // When the actor fully exits (process gone / stopped), evict the dead handle
     // from the registry so entries never leak.
@@ -88,6 +92,21 @@ pub async fn spawn_session(
     let handle = session::spawn_session(id.clone(), cfg, emitter, on_exit).map_err(|e| e.to_string())?;
     sessions.insert(id.clone(), handle);
     Ok(id)
+}
+
+/// Rebuild a resumed conversation's history from Claude's on-disk transcript.
+///
+/// `claude --resume` does not re-stream past messages, so the live event path
+/// delivers nothing for an existing conversation. The UI calls this after
+/// re-spawning a session to replay its history into the store. An absent
+/// transcript yields an empty list (not an error). File IO runs off the async
+/// runtime via `spawn_blocking` so a large transcript never stalls it.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_session_history(session_id: String) -> Result<Vec<ConversationItem>, String> {
+    tokio::task::spawn_blocking(move || crate::supervisor::history::load_history(&session_id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Send a user turn to a session.
@@ -129,6 +148,33 @@ pub async fn set_permission_mode(
     let handle = sessions.get(&session).ok_or_else(unknown_session)?;
     handle
         .set_permission_mode(mode)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Switch the session's active model at runtime (`set_model`).
+#[tauri::command]
+#[specta::specta]
+pub async fn set_model(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    model: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.set_model(model).await.map_err(|e| e.to_string())
+}
+
+/// Set the session's reasoning effort level at runtime (`apply_flag_settings`).
+#[tauri::command]
+#[specta::specta]
+pub async fn set_effort_level(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    level: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle
+        .set_effort_level(level)
         .await
         .map_err(|e| e.to_string())
 }

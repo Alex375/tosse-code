@@ -46,6 +46,8 @@ pub struct SpawnConfig {
     pub add_dirs: Vec<PathBuf>,
     /// Override the session model (`--model`).
     pub model: Option<String>,
+    /// Initial reasoning effort level (`--effort`, e.g. "xhigh").
+    pub effort: Option<String>,
 }
 
 impl SpawnConfig {
@@ -60,6 +62,7 @@ impl SpawnConfig {
             disallowed_tools: Vec::new(),
             add_dirs: Vec::new(),
             model: None,
+            effort: None,
         }
     }
 }
@@ -150,6 +153,9 @@ impl Transport {
         }
         if let Some(model) = &cfg.model {
             cmd.arg("--model").arg(model);
+        }
+        if let Some(effort) = &cfg.effort {
+            cmd.arg("--effort").arg(effort);
         }
 
         cmd.current_dir(&cfg.cwd)

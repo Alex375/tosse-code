@@ -22,6 +22,23 @@ async spawnSession(repoPath: string, resume: string | null) : Promise<Result<str
 }
 },
 /**
+ * Rebuild a resumed conversation's history from Claude's on-disk transcript.
+ * 
+ * `claude --resume` does not re-stream past messages, so the live event path
+ * delivers nothing for an existing conversation. The UI calls this after
+ * re-spawning a session to replay its history into the store. An absent
+ * transcript yields an empty list (not an error). File IO runs off the async
+ * runtime via `spawn_blocking` so a large transcript never stalls it.
+ */
+async loadSessionHistory(sessionId: string) : Promise<Result<ConversationItem[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_session_history", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Send a user turn to a session.
  */
 async sendMessage(session: string, text: string) : Promise<Result<null, string>> {
@@ -49,6 +66,28 @@ async answerPermission(session: string, requestId: string, decision: PermissionD
 async setPermissionMode(session: string, mode: PermissionMode) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_permission_mode", { session, mode }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Switch the session's active model at runtime (`set_model`).
+ */
+async setModel(session: string, model: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_model", { session, model }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Set the session's reasoning effort level at runtime (`apply_flag_settings`).
+ */
+async setEffortLevel(session: string, level: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_effort_level", { session, level }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -116,6 +155,12 @@ export type ConversationItem =
  * Live extended-thinking token(s).
  */
 { kind: "thinking_delta"; message_id: string | null; text: string } | 
+/**
+ * A past user turn, replayed from Claude's transcript when a conversation is
+ * resumed. The live path never emits this — the UI adds user turns
+ * optimistically on send — so it only appears during history restore.
+ */
+{ kind: "user_message"; id: string; text: string; parent_tool_use_id: string | null } | 
 /**
  * The authoritative assembled assistant message (text + tool_use blocks).
  * Carries the same `id` as the streamed `message_start` — the UI reconciles.

@@ -1,0 +1,110 @@
+.card {
+  margin: var(--block-rhythm) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.summary {
+  padding: var(--space-3) var(--space-4);
+  min-height: 30px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+.icon {
+  flex: none;
+  color: var(--text-secondary);
+}
+.toolName {
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: none;
+}
+.primaryArg {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.body {
+  padding: 0 var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.ioLabel {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.pre {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-code);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-size: var(--fs-code);
+  line-height: 1.55;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.errorOutput {
+  background: var(--error-bg);
+  color: var(--text-primary);
+}
+
+/* Expandable show-more container */
+.expandable {
+  position: relative;
+}
+.expandableInner {
+  overflow: hidden;
+}
+.showMore {
+  margin-top: var(--space-2);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-4);
+  cursor: pointer;
+}
+.showMore:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+/* status dot */
+.dotOk {
+  color: var(--success);
+  display: inline-flex;
+}
+.dotErr {
+  color: var(--error);
+  display: inline-flex;
+}
+.dotPending {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.5;
+  display: inline-block;
+}

@@ -1,0 +1,41 @@
+.empty {
+  margin: 60px auto;
+  text-align: center;
+  color: var(--wf-tx-lo);
+  font-size: 13px;
+}
+
+.activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--wf-run);
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.okIco {
+  color: var(--wf-run);
+}
+.errIco {
+  color: var(--wf-err);
+}
+.runDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wf-run);
+  box-shadow: 0 0 0 3px var(--wf-run-bg);
+  animation: cdpulse 1.6s ease-in-out infinite;
+}
+@keyframes cdpulse {
+  50% {
+    opacity: 0.35;
+  }
+}

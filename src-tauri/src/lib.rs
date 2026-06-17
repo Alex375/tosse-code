@@ -2,8 +2,8 @@ mod ipc;
 pub mod supervisor;
 
 use ipc::commands::{
-    answer_permission, interrupt_session, ping, send_message, set_permission_mode, spawn_session,
-    stop_session, Sessions,
+    answer_permission, interrupt_session, load_session_history, ping, send_message,
+    set_effort_level, set_model, set_permission_mode, spawn_session, stop_session, Sessions,
 };
 use ipc::events::{SessionMessageEvent, SessionPermissionEvent, SessionStateEvent, TickEvent};
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
@@ -15,9 +15,12 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         .commands(collect_commands![
             ping,
             spawn_session,
+            load_session_history,
             send_message,
             answer_permission,
             set_permission_mode,
+            set_model,
+            set_effort_level,
             interrupt_session,
             stop_session,
         ])
@@ -57,6 +60,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         // Wire commands through tauri-specta (replaces generate_handler!).
         .invoke_handler(specta_builder.invoke_handler())
         // The live session registry, reachable from every command.

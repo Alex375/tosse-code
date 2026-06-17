@@ -1,0 +1,166 @@
+/* Assistant markdown flows full-width with no container chrome. */
+.root {
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  line-height: var(--lh-body);
+}
+
+.root > :first-child {
+  margin-top: 0;
+}
+.root > :last-child {
+  margin-bottom: 0;
+}
+
+.root p {
+  white-space: pre-wrap;
+  margin: 0.1em 0 0.6em;
+}
+
+.root h1,
+.root h2,
+.root h3,
+.root h4 {
+  margin: 1em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.root h1 {
+  font-size: var(--fs-h1);
+}
+.root h2 {
+  font-size: var(--fs-h2);
+}
+.root h3,
+.root h4 {
+  font-size: var(--fs-h3);
+}
+
+.root ul,
+.root ol {
+  margin: 0.2em 0 0.6em;
+  padding-inline-start: 1.6em;
+}
+.root li {
+  margin: 0.15em 0;
+}
+.root li::marker {
+  color: var(--text-muted);
+}
+
+.root blockquote {
+  margin: 0.4em 0;
+  padding: 0.1em 0 0.1em 0.8em;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.root hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.8em 0;
+}
+
+.root a {
+  color: var(--text-link);
+}
+
+/* GFM tables */
+.root table {
+  border-collapse: collapse;
+  margin: 0.4em 0;
+  font-size: var(--fs-sm);
+  display: block;
+  overflow-x: auto;
+}
+.root th,
+.root td {
+  border: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+.root th {
+  background: var(--bg-surface);
+  font-weight: 600;
+}
+
+/* GFM task lists */
+.root input[type="checkbox"] {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin: 0 0.4em 0 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  vertical-align: -2px;
+  position: relative;
+}
+.root input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.root input[type="checkbox"]:checked::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  color: var(--accent-text);
+  font-size: 10px;
+  line-height: 13px;
+  text-align: center;
+}
+.root ul:has(input[type="checkbox"]) {
+  list-style: none;
+  padding-inline-start: 0.2em;
+}
+
+/* Fenced code block */
+.codeBlockWrapper {
+  position: relative;
+  margin: 0.5em 0;
+}
+.copyBtn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 1;
+  opacity: 0;
+  background: var(--bg-elevated);
+  transition: opacity var(--transition-hover);
+}
+.codeBlockWrapper:hover .copyBtn,
+.copyBtn:focus-visible {
+  opacity: 1;
+}
+.pre {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  white-space: pre;
+}
+.pre code {
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-size: var(--fs-code);
+  line-height: 1.5;
+  color: var(--text-primary);
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+/* Inline code */
+.inlineCode {
+  font-family: var(--font-mono);
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-size: 0.88em;
+  background: var(--bg-inline-code);
+  border-radius: 5px;
+  padding: 2px 5px;
+  word-break: break-word;
+}

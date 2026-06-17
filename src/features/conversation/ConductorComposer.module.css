@@ -1,0 +1,22 @@
+.ta {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  resize: none;
+  color: var(--wf-tx-hi);
+  font-family: var(--wf-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 4px 0;
+  min-height: 20px;
+  max-height: 160px;
+}
+.ta::placeholder {
+  color: var(--wf-tx-lo);
+}
+.ta:focus {
+  outline: none;
+}
+.ta:disabled {
+  opacity: 0.6;
+}
