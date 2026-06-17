@@ -11,6 +11,7 @@ import {
 } from "../../store/conversationStore";
 import { Avatar, Ico } from "../../ui/kit";
 import { DiffView } from "./DiffView";
+import { QuestionnaireAsk, QuestionnaireSummary, questionCount } from "./QuestionnaireAsk";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolResultBody } from "./ToolResultBody";
@@ -65,15 +66,21 @@ function ConductorToolCard({
 
   const isEdit = meta.kind === "edit";
   const isWrite = meta.kind === "write";
+  // AskUserQuestion renders a clean Q→A recap instead of raw result text.
+  const isQuestionnaire = name === "AskUserQuestion";
   const running = !result && (state?.busy ?? false);
 
   // Edit/Write show their diff immediately; all other results are collapsed by default.
   const [open, setOpen] = useState(isEdit || isWrite);
 
-  const hasBody = isEdit || isWrite || !!result;
+  const hasBody = isEdit || isWrite || isQuestionnaire || !!result;
   const canToggle = hasBody && !isEdit && !isWrite;
 
-  const icon = TOOL_ICON[name] || "cog";
+  const icon = isQuestionnaire ? "form" : TOOL_ICON[name] || "cog";
+  const label = isQuestionnaire ? "Questionnaire" : name;
+  const primaryArg = isQuestionnaire
+    ? `${questionCount(input)} question${questionCount(input) > 1 ? "s" : ""}`
+    : meta.primaryArg;
   const tone = isEdit || isWrite ? "diff" : meta.kind === "bash" ? "term" : "";
 
   return (
@@ -84,8 +91,8 @@ function ConductorToolCard({
         style={canToggle ? { cursor: "pointer" } : undefined}
       >
         <Ico name={icon} className="sm" />
-        <span className="cv-tool-t">{name}</span>
-        {meta.primaryArg ? <span className="cv-tool-m wf-mono">{meta.primaryArg}</span> : null}
+        <span className="cv-tool-t">{label}</span>
+        {primaryArg ? <span className="cv-tool-m wf-mono">{primaryArg}</span> : null}
         <span className={styles.status}>
           {running ? (
             <span className={styles.runDot} />
@@ -112,6 +119,8 @@ function ConductorToolCard({
             />
           ) : isWrite ? (
             <DiffView path={field(input, "file_path")} newText={field(input, "content") ?? ""} />
+          ) : isQuestionnaire ? (
+            <QuestionnaireSummary input={input} result={result?.content} />
           ) : result ? (
             <ToolResultBody content={result.content} isError={result.isError} />
           ) : null}
@@ -144,14 +153,12 @@ function MsgAI({ session, turnId }: { session: string; turnId: string }) {
     <div className="cv-msg cv-ai">
       <Avatar ai>✦</Avatar>
       <div className="cv-aibody">
-        {turn.blocks !== null ? (
-          <AssistantBlocks session={session} blocks={turn.blocks} />
-        ) : (
-          <>
-            {turn.streamingThinking && <ThinkingBlock text={turn.streamingThinking} finalized={false} />}
-            {turn.streamingText && <StreamMarkdown text={turn.streamingText} streaming />}
-          </>
-        )}
+        {/* Finalized blocks accumulated so far, then the block currently being
+            typed as a live tail. Both render together so an already-shown block is
+            never swapped out — the text between two tools stays put. */}
+        {turn.blocks.length > 0 && <AssistantBlocks session={session} blocks={turn.blocks} />}
+        {turn.streamingThinking && <ThinkingBlock text={turn.streamingThinking} finalized={false} />}
+        {turn.streamingText && <StreamMarkdown text={turn.streamingText} streaming />}
       </div>
     </div>
   );
@@ -160,22 +167,12 @@ function MsgAI({ session, turnId }: { session: string; turnId: string }) {
 // ---- Ask box (the real request: question / permission / questionnaire) ----
 
 interface Ask {
-  kind: "question" | "permission" | "questions" | "error" | "blocked";
+  kind: "question" | "permission" | "error" | "blocked";
   text?: string;
   cmd?: string;
-  questions?: string[];
 }
 
 function toAsk(req: PermissionRequestPayload): Ask {
-  if (req.tool_name === "AskUserQuestion") {
-    const input = req.input as Record<string, JsonValue> | null;
-    const raw = input && Array.isArray(input.questions) ? input.questions : [];
-    const questions = raw.map((q) => {
-      const o = q as Record<string, JsonValue>;
-      return typeof o?.question === "string" ? o.question : String(q);
-    });
-    return { kind: "questions", questions };
-  }
   if (req.tool_name === "Bash") {
     return { kind: "permission", text: "Autoriser l'exécution de la commande ?", cmd: field(req.input, "command") };
   }
@@ -188,16 +185,15 @@ function toAsk(req: PermissionRequestPayload): Ask {
 
 function AskTurn({ session, request }: { session: string; request: PermissionRequestPayload }) {
   const answer = useAnswerPermission(session);
+  // AskUserQuestion is an interactive questionnaire, not a yes/no prompt.
+  if (request.tool_name === "AskUserQuestion") {
+    return <QuestionnaireAsk session={session} request={request} />;
+  }
   const ask = toAsk(request);
   const allow = () =>
     answer.mutate({ requestId: request.request_id, decision: { behavior: "allow", updated_input: null } });
   const deny = () =>
     answer.mutate({ requestId: request.request_id, decision: { behavior: "deny", message: "Refusé." } });
-
-  const meta =
-    ask.kind === "questions"
-      ? { icon: "form", label: `${ask.questions?.length ?? 0} questions à répondre` }
-      : { icon: "key", label: "Demande une autorisation" };
 
   return (
     <div className="cv-msg cv-ai">
@@ -206,19 +202,11 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
         <div className="cv-ask-turn">
           <div className="wf-ask">
             <div className="wf-ask-h">
-              <Ico name={meta.icon} className="sm" />
-              {meta.label}
+              <Ico name="key" className="sm" />
+              Demande une autorisation
             </div>
-            {ask.kind === "questions" ? (
-              <ol className="wf-ask-q">
-                {ask.questions?.map((q, i) => <li key={i}>{q}</li>)}
-              </ol>
-            ) : (
-              <>
-                <div className="wf-ask-t">{ask.text}</div>
-                {ask.cmd ? <code className="wf-ask-cmd wf-mono">$ {ask.cmd}</code> : null}
-              </>
-            )}
+            <div className="wf-ask-t">{ask.text}</div>
+            {ask.cmd ? <code className="wf-ask-cmd wf-mono">$ {ask.cmd}</code> : null}
           </div>
           <div className="wf-row" style={{ gap: 8, justifyContent: "flex-end" }}>
             <button className="wf-btn ghost sm" onClick={deny}>
@@ -226,7 +214,7 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
             </button>
             <button className="wf-btn prim sm" onClick={allow}>
               <Ico name="check" className="sm" />
-              {ask.kind === "questions" ? `Répondre (${ask.questions?.length ?? 0})` : "Autoriser"}
+              Autoriser
             </button>
           </div>
         </div>

@@ -73,17 +73,20 @@ export function useGlobalSessionEvents(): void {
         return;
       }
 
-      if (item.kind === "message_started" && item.parent_tool_use_id === null) {
-        currentMsgId.set(session, item.id);
-      }
-
-      // Non-delta: flush buffered deltas for this session first (preserve order).
+      // Non-delta: flush buffered deltas for the CURRENTLY open message first, so
+      // its streamed text lands before this item is applied — and BEFORE a new
+      // message_started switches currentMsgId, otherwise the old message's tail
+      // would be left dangling in its buffer.
       const openMsgId = currentMsgId.get(session);
       if (openMsgId) {
         const key = `${session}:${openMsgId}`;
         const rafId = rafIds.get(key);
         if (rafId) cancelAnimationFrame(rafId);
         flushKey(key, session, openMsgId);
+      }
+
+      if (item.kind === "message_started" && item.parent_tool_use_id === null) {
+        currentMsgId.set(session, item.id);
       }
 
       useConversationStore.getState().applyItem(session, item);

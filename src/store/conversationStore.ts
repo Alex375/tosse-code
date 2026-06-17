@@ -3,10 +3,14 @@
 // it reads slices via fine-grained selectors so only affected turns re-render.
 //
 // Reconciliation rules (see the protocol):
-//  - message_started opens a streaming Turn (blocks=null) and an openBubble pointer.
+//  - message_started opens a streaming Turn (blocks=[]) and an openBubble pointer.
 //  - text_delta / thinking_delta append to the matching buffer (ignored once final).
-//  - assistant_message is AUTHORITATIVE: set blocks, discard buffers, status=final;
-//    it may arrive mid-stream and later deltas for that id are ignored.
+//  - assistant_message carries ONE finalized content block of a message; Claude
+//    sends a message's blocks as several same-id events (thinking, then text, then
+//    tool_use). We APPEND its blocks to the turn and clear the live buffers — never
+//    replace — so an earlier block (e.g. the text between two tools) is not wiped
+//    by a later one. The turn stays "streaming" until turn_result. Mirrors
+//    history.rs, which merges same-id transcript lines on resume.
 //  - tool_result is joined to its tool_use lazily by tool_use_id.
 //  - turn_result finalizes open bubbles and renders a footer — NEVER a new bubble.
 //  - sub-agent (Task) turns carry parent_tool_use_id and are scoped to a sub-thread,
@@ -96,7 +100,7 @@ export const useConversationStore = create<ConversationState>((set) => {
       status: "streaming",
       streamingText: "",
       streamingThinking: "",
-      blocks: null,
+      blocks: [],
       parentToolUseId,
       hasThinking: false,
     };
@@ -133,7 +137,7 @@ export const useConversationStore = create<ConversationState>((set) => {
         base = openTurn(entry, messageId, null);
         turn = base.turns[messageId];
       }
-      if (turn.blocks !== null) return entry; // finalized: ignore late deltas
+      if (turn.status !== "streaming") return entry; // finalized: ignore late deltas
       const nextTurn: Turn = {
         ...turn,
         [field]: turn[field] + text,
@@ -170,7 +174,7 @@ export const useConversationStore = create<ConversationState>((set) => {
           status: "final",
           streamingText: text,
           streamingThinking: "",
-          blocks: null,
+          blocks: [],
           parentToolUseId: null,
           hasThinking: false,
         };
@@ -220,7 +224,7 @@ export const useConversationStore = create<ConversationState>((set) => {
             const messageId = item.message_id ?? entry.openBubble[key];
             if (!messageId) return entry;
             const turn = entry.turns[messageId];
-            if (!turn || turn.blocks !== null) return entry;
+            if (!turn || turn.status !== "streaming") return entry;
             const nextTurn: Turn = {
               ...turn,
               [field]: turn[field] + item.text,
@@ -241,7 +245,7 @@ export const useConversationStore = create<ConversationState>((set) => {
               status: "final",
               streamingText: item.text,
               streamingThinking: "",
-              blocks: null,
+              blocks: [],
               parentToolUseId: item.parent_tool_use_id,
               hasThinking: false,
             };
@@ -255,26 +259,26 @@ export const useConversationStore = create<ConversationState>((set) => {
           }
 
           case "assistant_message": {
-            const prev = entry.turns[item.id];
+            // Claude delivers one logical message (same id) as SEPARATE events,
+            // one per finalized content block (thinking, then text, then tool_use).
+            // APPEND the new block(s) to whatever the turn already shows — never
+            // replace — otherwise the text rendered between two tools would be
+            // overwritten by the following tool_use block and vanish. The live
+            // buffers are cleared because the block they were typing is now
+            // authoritative in `blocks`. The turn stays "streaming"; turn_result
+            // finalizes it. (Resume takes a faster path: history.rs has already
+            // merged the same-id lines, so this just appends the one merged event.)
+            const base = openTurn(entry, item.id, item.parent_tool_use_id);
+            const existing = base.turns[item.id];
+            const blocks = [...existing.blocks, ...item.blocks];
             const turn: Turn = {
-              id: item.id,
-              role: "assistant",
-              status: "final",
+              ...existing,
+              blocks,
               streamingText: "",
               streamingThinking: "",
-              blocks: item.blocks,
-              parentToolUseId: item.parent_tool_use_id,
-              hasThinking: item.blocks.some((b) => b.type === "thinking"),
+              hasThinking: blocks.some((b) => b.type === "thinking"),
             };
-            let base = openTurn(entry, item.id, item.parent_tool_use_id);
-            base = { ...base, turns: { ...base.turns, [item.id]: turn } };
-            // close the open-bubble pointer for this thread
-            base.openBubble = {
-              ...base.openBubble,
-              [rootKey(item.parent_tool_use_id)]: undefined,
-            };
-            void prev;
-            return base;
+            return { ...base, turns: { ...base.turns, [item.id]: turn } };
           }
 
           case "tool_result": {

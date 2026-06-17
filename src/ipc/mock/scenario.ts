@@ -115,6 +115,16 @@ const QUESTION: PermissionRequestPayload = {
           { label: "localStorage", description: "Simple, mais exposé au XSS." },
         ],
       },
+      {
+        header: "Extras",
+        question: "Quelles protections veux-tu activer ? (plusieurs choix possibles)",
+        multiSelect: true,
+        options: [
+          { label: "Rate limiting", description: "Limiter les tentatives de connexion." },
+          { label: "2FA", description: "Double authentification (TOTP)." },
+          { label: "Refresh tokens", description: "Renouvellement silencieux des sessions." },
+        ],
+      },
     ],
   },
   title: "Claude te pose une question",
@@ -247,6 +257,41 @@ export class ScenarioDriver {
 
     if (this.mode === "question") {
       this.emit.state({ ...baseState, busy: true, activity: null });
+
+      // Realistic AskUserQuestion tool card, mirroring the CLI: the recorded
+      // tool_use carries ONLY the questions (no answers), and the answers come
+      // back in the tool_result string — exercising the parser end-to-end.
+      if (decision.behavior === "allow" && decision.updated_input) {
+        const upd = decision.updated_input;
+        const answers =
+          upd && typeof upd === "object" && !Array.isArray(upd)
+            ? ((upd as Record<string, unknown>).answers as Record<string, string> | undefined)
+            : undefined;
+        const pairs = Object.entries(answers ?? {})
+          .map(([q, a]) => `"${q}"="${a}"`)
+          .join(", ");
+        const resultText = pairs
+          ? `Your questions have been answered: ${pairs}. You can now continue with these answers in mind.`
+          : "L'utilisateur a ignoré le questionnaire sans répondre.";
+        this.step(120, () =>
+          this.emit.item({
+            kind: "assistant_message",
+            id: "mq0",
+            parent_tool_use_id: null,
+            blocks: [{ type: "tool_use", id: "toolu_ask", name: "AskUserQuestion", input: QUESTION.input }],
+          }),
+        );
+        this.step(180, () =>
+          this.emit.item({
+            kind: "tool_result",
+            tool_use_id: "toolu_ask",
+            content: resultText,
+            is_error: false,
+            parent_tool_use_id: null,
+          }),
+        );
+      }
+
       const txt = allowed
         ? "Parfait, c'est noté — je pars sur cette approche et je commence l'implémentation."
         : "Ok, je n'avance pas pour l'instant. Dis-moi quand tu veux qu'on en reparle.";

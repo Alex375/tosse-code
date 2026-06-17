@@ -24,19 +24,23 @@ export type TurnStatus = "streaming" | "final" | "interrupted";
 export type TurnRole = "assistant" | "user";
 
 /**
- * One rendered turn. While streaming we keep live text/thinking buffers; once the
- * authoritative `assistant_message` lands we set `blocks` and discard the buffers.
+ * One rendered turn. Claude streams a single logical message (one `id`) as a
+ * sequence of content blocks (thinking, then text, then tool_use, …), each
+ * delivered as its OWN `assistant_message` event. We APPEND those blocks into
+ * `blocks` as they finalize, while the live text/thinking buffers hold only the
+ * block currently being typed. Render = finalized `blocks` followed by the live
+ * buffer tail, so nothing already shown is ever overwritten.
  */
 export interface Turn {
   id: string;
   role: TurnRole;
   status: TurnStatus;
-  /** Live assistant text accumulated from text_delta (ignored once blocks!==null). */
+  /** Live text of the block currently streaming (ignored once status!=="streaming"). */
   streamingText: string;
-  /** Live extended-thinking accumulated from thinking_delta. */
+  /** Live extended-thinking of the block currently streaming. */
   streamingThinking: string;
-  /** Authoritative assembled blocks; null while still streaming. */
-  blocks: NormalizedBlock[] | null;
+  /** Authoritative assembled blocks, accumulated in arrival order (starts empty). */
+  blocks: NormalizedBlock[];
   /** Non-null => this turn belongs to a sub-agent (Task) sub-thread. */
   parentToolUseId: string | null;
   /** True once a thinking section has been seen, so we can keep it collapsible. */
