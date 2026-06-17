@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { pickFolder } from "../../ipc/pickFolder";
 import {
   createConversationInRepo,
@@ -10,10 +11,12 @@ import {
   type Conversation,
 } from "../../store/conversationsStore";
 import { useSessionState } from "../../store/conversationStore";
+import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
-  const state = useSessionState(conv.id);
+  // Live state is keyed by the Rust session handle, not the stable id.
+  const state = useSessionState(conv.handle ?? "");
   const select = useConversationsStore((s) => s.selectConversation);
   return (
     <button
@@ -38,6 +41,7 @@ export function ConductorSidebar() {
   const repos = useRepos();
   const conversations = useConversations();
   const activeId = useActiveConversationId();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Group conversations by their repo (stable, ordered by when the repo was added).
   const byRepo = new Map<string, Conversation[]>();
@@ -122,12 +126,28 @@ export function ConductorSidebar() {
         )}
       </div>
 
-      <div className="cv-side-foot">
+      <button
+        type="button"
+        className="cv-side-foot"
+        onClick={() => setSettingsOpen(true)}
+        style={{
+          background: "transparent",
+          borderLeft: 0,
+          borderRight: 0,
+          borderBottom: 0,
+          width: "100%",
+          cursor: "pointer",
+          textAlign: "left",
+          font: "inherit",
+        }}
+      >
         <Ico name="cog" className="sm" />
         <span className="wf-muted" style={{ fontSize: 12 }}>
           Réglages
         </span>
-      </div>
+      </button>
+
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

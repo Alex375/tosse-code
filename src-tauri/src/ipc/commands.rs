@@ -8,6 +8,7 @@ use specta::Type;
 use tauri::Manager;
 
 use crate::ipc::events::TauriEmitter;
+use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
 use crate::supervisor::control::{PermissionDecision, PermissionMode};
 use crate::supervisor::model::ConversationItem;
 use crate::supervisor::session::{self, SessionHandle};
@@ -291,6 +292,70 @@ fn sh_quote(s: &str) -> String {
 #[cfg(target_os = "macos")]
 fn applescript_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+// ---- Persistence (conversation metadata) ----------------------------------
+//
+// These commands are the front's single boundary to the store. They forward to
+// `Store` (the only SQL-speaking service) and return / accept domain records —
+// never anything SQL-shaped. Each call is a sub-ms, rare write off the hot path.
+
+/// Load the persisted repos + conversations + active selection (UI hydration at boot).
+#[tauri::command]
+#[specta::specta]
+pub fn load_persisted_state(store: tauri::State<'_, Store>) -> Result<PersistedState, String> {
+    store.load_state().map_err(|e| e.to_string())
+}
+
+/// Insert or update a repo (idempotent by id).
+#[tauri::command]
+#[specta::specta]
+pub fn upsert_repo(store: tauri::State<'_, Store>, repo: RepoRecord) -> Result<(), String> {
+    store.upsert_repo(&repo).map_err(|e| e.to_string())
+}
+
+/// Delete a repo; its conversations cascade away.
+#[tauri::command]
+#[specta::specta]
+pub fn delete_repo(store: tauri::State<'_, Store>, id: String) -> Result<(), String> {
+    store.delete_repo(&id).map_err(|e| e.to_string())
+}
+
+/// Insert or update a conversation's metadata (idempotent by stable id).
+#[tauri::command]
+#[specta::specta]
+pub fn upsert_conversation(
+    store: tauri::State<'_, Store>,
+    conversation: ConversationRecord,
+) -> Result<(), String> {
+    store
+        .upsert_conversation(&conversation)
+        .map_err(|e| e.to_string())
+}
+
+/// Forget a conversation's metadata.
+#[tauri::command]
+#[specta::specta]
+pub fn delete_conversation(store: tauri::State<'_, Store>, id: String) -> Result<(), String> {
+    store.delete_conversation(&id).map_err(|e| e.to_string())
+}
+
+/// Persist (or clear, with `null`) the active conversation's stable id.
+#[tauri::command]
+#[specta::specta]
+pub fn set_active_conversation(
+    store: tauri::State<'_, Store>,
+    id: Option<String>,
+) -> Result<(), String> {
+    store.set_active(id.as_deref()).map_err(|e| e.to_string())
+}
+
+/// Drop ALL persisted data (dev escape hatch + Settings "drop all"). Claude's
+/// on-disk transcripts are untouched.
+#[tauri::command]
+#[specta::specta]
+pub fn wipe_all_data(store: tauri::State<'_, Store>) -> Result<(), String> {
+    store.wipe_all().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

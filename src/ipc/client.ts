@@ -7,12 +7,15 @@ export { commands, events, isTauri } from "./provider";
 
 export type {
   ConversationItem,
+  ConversationRecord,
   JsonValue,
   NormalizedBlock,
   PermissionDecision,
   PermissionMode,
   PermissionRequestPayload,
+  PersistedState,
   Pong,
+  RepoRecord,
   Result,
   SessionMessageEvent,
   SessionPermissionEvent,

@@ -1,10 +1,12 @@
 mod ipc;
+pub mod store;
 pub mod supervisor;
 
 use ipc::commands::{
-    answer_permission, interrupt_session, load_session_history, open_in_terminal, ping,
-    send_message, set_effort_level, set_model, set_permission_mode, spawn_session, stop_session,
-    Sessions,
+    answer_permission, delete_conversation, delete_repo, interrupt_session, load_persisted_state,
+    load_session_history, open_in_terminal, ping, send_message, set_active_conversation,
+    set_effort_level, set_model, set_permission_mode, spawn_session, stop_session,
+    upsert_conversation, upsert_repo, wipe_all_data, Sessions,
 };
 use ipc::events::{SessionMessageEvent, SessionPermissionEvent, SessionStateEvent, TickEvent};
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
@@ -25,6 +27,13 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             interrupt_session,
             stop_session,
             open_in_terminal,
+            load_persisted_state,
+            upsert_repo,
+            delete_repo,
+            upsert_conversation,
+            delete_conversation,
+            set_active_conversation,
+            wipe_all_data,
         ])
         .events(collect_events![
             TickEvent,
@@ -68,8 +77,23 @@ pub fn run() {
         // The live session registry, reachable from every command.
         .manage(Sessions::new())
         .setup(move |app| {
+            use tauri::Manager;
+
             // Mount the Specta events on this app instance (REQUIRED for events).
             specta_builder.mount_events(app);
+
+            // Open the persistence store in the app data dir (created if absent).
+            // The store is the single owner of SQLite; the rest of the core and
+            // the UI see domain records via IPC, never rows. dev and the bundled
+            // app share the same identifier -> the same db -> a unified list.
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("no app data dir available");
+            std::fs::create_dir_all(&data_dir).expect("failed to create app data dir");
+            let store = store::Store::open(&data_dir.join("tosse.db"))
+                .expect("failed to open the persistence store");
+            app.manage(store);
 
             // Rust timer: emit a TickEvent every second (Rust -> React) — kept as
             // a heartbeat / proof of the outbound event leg.

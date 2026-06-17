@@ -4,13 +4,11 @@ import { OpenInTerminalButton } from "./features/conversation/OpenInTerminalButt
 import { FleetPlaceholder } from "./features/fleet/FleetPlaceholder";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
 import {
-  createConversationInRepo,
-  resumeAllConversations,
+  bootConversations,
   repoName,
   useActiveConversationId,
   useConversationRepo,
   useConversations,
-  useConversationsStore,
 } from "./store/conversationsStore";
 import { NavBtn, Tag, Win } from "./ui/kit";
 
@@ -25,20 +23,13 @@ export default function App() {
   const activeRepo = useConversationRepo(activeId);
   const booted = useRef(false);
 
-  // On first mount: resume persisted conversations (--resume with their sessionId),
-  // or spawn a fresh one if there are none.
+  // On first mount: hydrate from the core's persisted state, then resume those
+  // conversations (--resume with their sessionId, rebuilding history from
+  // Claude's transcript) or start a fresh one if there are none.
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
-    const st = useConversationsStore.getState();
-    if (st.conversations.length > 0) {
-      // Restart: re-spawn all persisted conversations and rebuild their history
-      // from Claude's transcript (claude --resume does not re-stream past messages).
-      void resumeAllConversations();
-    } else {
-      // First launch (or wiped data): start a fresh session.
-      void createConversationInRepo(st.repos[0]?.path ?? ".");
-    }
+    void bootConversations();
   }, []);
 
   return (
@@ -53,7 +44,7 @@ export default function App() {
       right={
         view === "conversation" && activeRepo ? (
           <>
-            {active ? <OpenInTerminalButton session={active.id} cwd={active.cwd} /> : null}
+            {active?.handle ? <OpenInTerminalButton session={active.handle} cwd={active.cwd} /> : null}
             <Tag icon="folder" title={activeRepo.path}>
               {repoName(activeRepo.path)}
             </Tag>
@@ -62,8 +53,11 @@ export default function App() {
       }
     >
       {view === "conversation" ? (
-        activeId ? (
-          <ConductorConversation key={activeId} session={activeId} />
+        // Keyed by the STABLE id (component persists across handle remaps); the
+        // live Rust handle is passed as `session`. Until the handle is bound
+        // (spawn/resume in flight), show the loading state.
+        active?.handle ? (
+          <ConductorConversation key={active.id} session={active.handle} />
         ) : (
           <div style={{ margin: "auto", color: "var(--wf-tx-lo)", fontSize: 13 }}>Démarrage de la session…</div>
         )

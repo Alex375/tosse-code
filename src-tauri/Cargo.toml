@@ -20,6 +20,11 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Persistence: SQLite compiled into the binary (`bundled`) — nothing to install,
+# no system dependency. Synchronous and tiny; our writes are rare and off the hot
+# path, so we skip sqlx's async machinery (see `store/db.rs`).
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 # Async runtime for the supervisor: spawn `claude`, pipe stdio, drive tasks.
 # Tauri 2 already runs on tokio; we depend on it directly for the features we use.
 tokio = { version = "1", features = [

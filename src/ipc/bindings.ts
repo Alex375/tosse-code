@@ -132,6 +132,84 @@ async openInTerminal(cwd: string, sessionId: string) : Promise<Result<null, stri
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Load the persisted repos + conversations + active selection (UI hydration at boot).
+ */
+async loadPersistedState() : Promise<Result<PersistedState, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_persisted_state") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Insert or update a repo (idempotent by id).
+ */
+async upsertRepo(repo: RepoRecord) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("upsert_repo", { repo }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Delete a repo; its conversations cascade away.
+ */
+async deleteRepo(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_repo", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Insert or update a conversation's metadata (idempotent by stable id).
+ */
+async upsertConversation(conversation: ConversationRecord) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("upsert_conversation", { conversation }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Forget a conversation's metadata.
+ */
+async deleteConversation(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_conversation", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Persist (or clear, with `null`) the active conversation's stable id.
+ */
+async setActiveConversation(id: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_active_conversation", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Drop ALL persisted data (dev escape hatch + Settings "drop all"). Claude's
+ * on-disk transcripts are untouched.
+ */
+async wipeAllData() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("wipe_all_data") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -197,6 +275,31 @@ export type ConversationItem =
  * lifecycle, …) surfaced raw for now.
  */
 { kind: "notice"; subtype: string; detail: JsonValue }
+/**
+ * A conversation's persisted metadata.
+ * 
+ * The stable `id` is the identity the whole app keys off. It is deliberately
+ * distinct from the ephemeral live session handle (`session-N`), which is
+ * in-memory only and never persisted — so other services can reference a
+ * conversation by an id that survives restarts.
+ */
+export type ConversationRecord = { id: string; name: string; 
+/**
+ * FK to [`RepoRecord::id`].
+ */
+repo_id: string; 
+/**
+ * Absolute path the session was spawned in.
+ */
+cwd: string; 
+/**
+ * Unix ms timestamp the conversation was created.
+ */
+created_at: number; 
+/**
+ * Claude's own session UUID (from system/init) — used for `--resume`.
+ */
+session_id: string | null }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
 /**
  * One authoritative content block of an assistant message.
@@ -235,9 +338,25 @@ export type PermissionRequestPayload = { request_id: string; tool_name: string; 
  */
 suggestions: JsonValue }
 /**
+ * The full persisted snapshot the UI hydrates from at boot.
+ */
+export type PersistedState = { repos: RepoRecord[]; conversations: ConversationRecord[]; 
+/**
+ * Stable id of the conversation that was active when last persisted.
+ */
+active_id: string | null }
+/**
  * Typed return value of `ping`. Proves React -> Rust (typed command).
  */
 export type Pong = { ok: boolean; echo: string; at_ms: number }
+/**
+ * A working folder a conversation can be opened in.
+ */
+export type RepoRecord = { id: string; path: string; 
+/**
+ * Unix ms timestamp the repo was first added.
+ */
+added_at: number }
 /**
  * A normalized conversation item to render (text delta, assistant message,
  * tool result, turn result, …).

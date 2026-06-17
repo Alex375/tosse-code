@@ -3,9 +3,12 @@
 // Selected at runtime by provider.ts when window.__TAURI_INTERNALS__ is absent.
 
 import type {
+  ConversationRecord,
   PermissionDecision,
   PermissionMode,
+  PersistedState,
   Pong,
+  RepoRecord,
   Result,
   SessionMessageEvent,
   SessionPermissionEvent,
@@ -171,6 +174,36 @@ export const mockCommands = {
   async openInTerminal(cwd: string, sessionId: string): Promise<Result<null, string>> {
     // No OS terminal in the browser mock — just log what the real command would run.
     console.info(`[mock] openInTerminal: cd ${cwd} && claude --resume ${sessionId}`);
+    return ok(null);
+  },
+
+  // ---- Persistence: in-memory only (no real db in the browser). The store
+  // boots empty and persists are no-ops, which is the correct dev behaviour.
+  async loadPersistedState(): Promise<Result<PersistedState, string>> {
+    return ok({ repos: [], conversations: [], active_id: null });
+  },
+
+  async upsertRepo(_repo: RepoRecord): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async deleteRepo(_id: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async upsertConversation(_conversation: ConversationRecord): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async deleteConversation(_id: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async setActiveConversation(_id: string | null): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async wipeAllData(): Promise<Result<null, string>> {
     return ok(null);
   },
 };

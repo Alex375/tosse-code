@@ -1,0 +1,112 @@
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-scrim);
+}
+
+.panel {
+  width: 460px;
+  max-width: 90vw;
+  background: var(--wf-panel);
+  border: 1px solid var(--wf-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--wf-line);
+}
+
+.title {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 15px;
+  cursor: pointer;
+}
+.close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.body {
+  padding: 16px;
+}
+
+.section {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  margin-bottom: var(--space-3);
+}
+
+.desc {
+  font-size: var(--fs-base);
+  color: var(--text-secondary);
+  line-height: var(--lh-body);
+  margin-bottom: var(--space-4);
+}
+
+.row {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.btn {
+  height: 30px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--transition-hover), border-color var(--transition-hover),
+    color var(--transition-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.danger {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--error);
+}
+.danger:not(:disabled):hover {
+  background: var(--error-bg);
+  border-color: var(--error);
+}
+
+.ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+.ghost:not(:disabled):hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
