@@ -111,7 +111,7 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
 
 /** Fire a persistence command, logging (never throwing) on failure. Persistence
  *  is best-effort and off the hot path — a failed write must not break the UI. */
-function persist(
+function syncToCore(
   label: string,
   run: () => Promise<{ status: "ok"; data: unknown } | { status: "error"; error: string }>,
 ): void {
@@ -151,7 +151,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     if (existing) return existing;
     const repo: Repo = { id: uid(), path, addedAt: Date.now() };
     set((s) => ({ repos: [...s.repos, repo] }));
-    persist("upsertRepo", () => commands.upsertRepo(repoToRecord(repo)));
+    syncToCore("upsertRepo", () => commands.upsertRepo(repoToRecord(repo)));
     return repo;
   },
 
@@ -170,19 +170,19 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     });
     // The db cascades the repo's conversations via the FK; just drop the repo
     // and re-sync the active selection.
-    persist("deleteRepo", () => commands.deleteRepo(repo.id));
-    persist("setActive", () => commands.setActiveConversation(get().activeId));
+    syncToCore("deleteRepo", () => commands.deleteRepo(repo.id));
+    syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
 
   addConversation: (c) => {
     set((s) => ({ conversations: [...s.conversations, c], activeId: c.id }));
-    persist("upsertConversation", () => commands.upsertConversation(convToRecord(c)));
-    persist("setActive", () => commands.setActiveConversation(c.id));
+    syncToCore("upsertConversation", () => commands.upsertConversation(convToRecord(c)));
+    syncToCore("setActive", () => commands.setActiveConversation(c.id));
   },
 
   selectConversation: (id) => {
     set({ activeId: id });
-    persist("setActive", () => commands.setActiveConversation(id));
+    syncToCore("setActive", () => commands.setActiveConversation(id));
   },
 
   removeConversation: (id) => {
@@ -193,8 +193,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
         activeId: s.activeId === id ? (rest[rest.length - 1]?.id ?? null) : s.activeId,
       };
     });
-    persist("deleteConversation", () => commands.deleteConversation(id));
-    persist("setActive", () => commands.setActiveConversation(get().activeId));
+    syncToCore("deleteConversation", () => commands.deleteConversation(id));
+    syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
 
   noteFirstMessage: (handle, text) => {
@@ -204,7 +204,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     set((s) => ({
       conversations: s.conversations.map((c) => (c.id === conv.id ? updated : c)),
     }));
-    persist("upsertConversation(rename)", () =>
+    syncToCore("upsertConversation(rename)", () =>
       commands.upsertConversation(convToRecord(updated)),
     );
   },
@@ -216,7 +216,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     set((s) => ({
       conversations: s.conversations.map((c) => (c.id === conv.id ? updated : c)),
     }));
-    persist("upsertConversation(sessionId)", () =>
+    syncToCore("upsertConversation(sessionId)", () =>
       commands.upsertConversation(convToRecord(updated)),
     );
   },
