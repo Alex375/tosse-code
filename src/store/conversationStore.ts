@@ -76,6 +76,8 @@ interface ConversationState {
   enqueuePermission: (session: string, request: PermissionRequestPayload) => void;
   removePermission: (session: string, requestId: string) => void;
   resetSession: (session: string) => void;
+  /** Forget a session's timeline entirely (e.g. its conversation was deleted). */
+  dropSession: (session: string) => void;
 }
 
 export const useConversationStore = create<ConversationState>((set) => {
@@ -207,6 +209,14 @@ export const useConversationStore = create<ConversationState>((set) => {
 
     resetSession: (session) =>
       set((s) => ({ sessions: { ...s.sessions, [session]: emptyEntry(session) } })),
+
+    dropSession: (session) =>
+      set((s) => {
+        if (!s.sessions[session]) return s;
+        const next = { ...s.sessions };
+        delete next[session];
+        return { sessions: next };
+      }),
 
     applyItem: (session, item) =>
       withEntry(session, (entry) => {

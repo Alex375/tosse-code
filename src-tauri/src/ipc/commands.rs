@@ -51,12 +51,17 @@ impl Sessions {
         self.inner.lock().unwrap().remove(id)
     }
 
-    /// Take every live handle out of the registry (used to tear sessions down on
-    /// app exit).
-    pub fn drain(&self) -> Vec<SessionHandle> {
-        std::mem::take(&mut *self.inner.lock().unwrap())
-            .into_values()
-            .collect()
+    /// Snapshot every live handle WITHOUT evicting them. Each session's actor
+    /// evicts itself (via its `on_exit`) once it has fully torn down, so callers
+    /// can request shutdown on this snapshot and then watch [`Sessions::is_empty`]
+    /// to know when every process is actually reaped.
+    pub fn handles(&self) -> Vec<SessionHandle> {
+        self.inner.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Whether any session is still registered (still tearing down or live).
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().unwrap().is_empty()
     }
 }
 

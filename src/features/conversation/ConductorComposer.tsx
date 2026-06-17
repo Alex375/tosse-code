@@ -77,7 +77,6 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   const busy = state?.busy ?? false;
-  const ended = state?.ended ?? false;
   // The generated contract types permission_mode loosely as string; the core only
   // ever emits valid modes, so narrow it back to PermissionMode for the helpers below.
   const permMode = (state?.permission_mode ?? "auto") as PermissionMode;
@@ -113,7 +112,9 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
 
   const doSend = () => {
     const t = text.trim();
-    if (!t || busy || ended) return;
+    if (!t || busy) return;
+    // Sending always (re)starts the stream lazily if the session is off/ended,
+    // so there is no separate "ended" lock — only "busy" blocks a new send.
     useConversationsStore.getState().noteFirstMessage(session, t);
     send.mutate(t);
     setText("");
@@ -143,7 +144,6 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
           className={styles.ta}
           rows={1}
           value={text}
-          disabled={ended}
           placeholder="Demande à l'agent, @ pour un fichier, / pour une commande…"
           onChange={(e) => {
             setText(e.target.value);
@@ -160,7 +160,7 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
           <button
             className="cv-send"
             onClick={doSend}
-            disabled={!text.trim() || ended}
+            disabled={!text.trim()}
             title="Envoyer"
           >
             <Ico name="send" className="sm" />

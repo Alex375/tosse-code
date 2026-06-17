@@ -112,6 +112,9 @@ pub struct Transport {
     /// `None` once [`Transport::shutdown`] has closed stdin.
     writer_tx: Option<mpsc::UnboundedSender<Value>>,
     child: Child,
+    /// The reader / writer / stderr pump tasks. Aborted on shutdown so none
+    /// outlive the process (no dangling tokio task, no pipe left open).
+    pumps: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl Transport {
@@ -170,6 +173,14 @@ impl Transport {
             // the process.
             .kill_on_drop(true);
 
+        // Put `claude` in its OWN process group (it becomes the group leader, so
+        // its pgid == its pid). On shutdown we signal the whole group (`-pid`),
+        // reaching every descendant — tool subprocesses, MCP servers — so none is
+        // ever orphaned. `kill_on_drop` only reaches the direct child and would
+        // miss those grandchildren.
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         let mut child = cmd.spawn().map_err(TransportError::Spawn)?;
         let pid = child.id();
 
@@ -180,15 +191,18 @@ impl Transport {
         let (msg_tx, msg_rx) = mpsc::unbounded_channel::<CliMessage>();
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Value>();
 
-        tokio::spawn(reader_loop(stdout, msg_tx));
-        tokio::spawn(writer_loop(stdin, writer_rx));
-        tokio::spawn(stderr_loop(stderr));
+        let pumps = vec![
+            tokio::spawn(reader_loop(stdout, msg_tx)),
+            tokio::spawn(writer_loop(stdin, writer_rx)),
+            tokio::spawn(stderr_loop(stderr)),
+        ];
 
         Ok((
             Transport {
                 pid,
                 writer_tx: Some(writer_tx),
                 child,
+                pumps,
             },
             msg_rx,
         ))
@@ -226,31 +240,74 @@ impl Transport {
             .map_err(|_| TransportError::Closed)
     }
 
-    /// Tear the session down (spec §2.5): close stdin (graceful EOF), give the
-    /// process a grace period to exit on its own, then force-kill if needed.
+    /// Tear the session down (spec §2.5) along a graduated ladder, so the common
+    /// case is clean and the worst case still leaves zero orphans:
     ///
-    /// The common case is graceful: `claude` exits shortly after stdin EOF once
-    /// the current turn finishes. `kill_on_drop` is the backstop if this is
-    /// never called.
+    ///   1. close stdin (EOF) and let `claude` exit on its own,
+    ///   2. else `SIGTERM` the process group — `claude` reaps its own children,
+    ///   3. else `SIGKILL` the child handle as a last resort,
+    ///   4. always finish with a `SIGKILL` sweep of the whole process group, so
+    ///      any straggler the leader left behind is reaped even on the graceful
+    ///      path (a no-op if the group is already empty).
     ///
-    /// TODO(subtask 2+): insert an intermediate `SIGTERM` before `SIGKILL` to
-    /// match the reference's EOF → 2s → SIGTERM → 5s → SIGKILL ladder (needs
-    /// `libc::kill` for a real `SIGTERM`; `tokio`'s kill is `SIGKILL`).
+    /// `kill_on_drop` remains the backstop if this is never called. On non-Unix
+    /// the signal steps degrade to `tokio`'s force-kill (`SIGKILL`-equivalent).
     pub async fn shutdown(&mut self) {
-        // Drop the writer sender → writer_loop ends → stdin is dropped → EOF.
+        // Step 1 — graceful EOF: drop the writer sender → writer_loop ends → stdin
+        // is dropped → the child sees EOF and normally exits once the turn settles.
         self.writer_tx = None;
+        let mut exited = self.wait_for_exit(Duration::from_secs(2)).await;
 
-        // Grace period for a clean exit.
-        if tokio::time::timeout(Duration::from_secs(2), self.child.wait())
-            .await
-            .is_ok()
-        {
-            return; // exited gracefully
+        // Step 2 — SIGTERM the whole group: a clean termination request that lets
+        // `claude` tear down its own subprocesses before dying.
+        #[cfg(unix)]
+        if !exited {
+            self.signal_group(libc::SIGTERM);
+            exited = self.wait_for_exit(Duration::from_secs(2)).await;
         }
 
-        // Still alive after EOF + grace → force kill.
-        let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
+        // Step 3 — SIGKILL the child handle if it is still standing.
+        if !exited {
+            let _ = self.child.start_kill();
+            let _ = self.child.wait().await;
+        }
+
+        // Step 4 — final SIGKILL sweep of the group. The leader is gone now, but a
+        // misbehaving child it failed to reap would still be a member; this kills
+        // it. Synchronous right after the leader exits → no pgid-reuse window.
+        // ESRCH (empty group) is the benign, expected case.
+        #[cfg(unix)]
+        self.signal_group(libc::SIGKILL);
+
+        self.stop_pumps();
+    }
+
+    /// Wait up to `d` for the child to exit; returns `true` if it did.
+    async fn wait_for_exit(&mut self, d: Duration) -> bool {
+        tokio::time::timeout(d, self.child.wait()).await.is_ok()
+    }
+
+    /// Send `sig` to the child's entire process group (negative pid). No-op if the
+    /// pid is already gone. The child is the group leader (see [`Transport::spawn`]),
+    /// so this reaches every descendant and prevents orphaned grandchildren.
+    #[cfg(unix)]
+    fn signal_group(&self, sig: i32) {
+        if let Some(pid) = self.pid {
+            // SAFETY: a plain `kill(2)` with a constant signal. The only realistic
+            // error is ESRCH (the group already exited), which is benign.
+            unsafe {
+                libc::kill(-(pid as i32), sig);
+            }
+        }
+    }
+
+    /// Abort the stdio pump tasks so none outlive the process. By the time we get
+    /// here the child is gone and its pipes are closed, so the loops have already
+    /// hit EOF; this is the belt-and-suspenders guarantee of "no dangling task".
+    fn stop_pumps(&mut self) {
+        for task in self.pumps.drain(..) {
+            task.abort();
+        }
     }
 }
 
@@ -347,6 +404,81 @@ mod tests {
         let cfg = SpawnConfig::new("/tmp");
         assert_eq!(cfg.claude_bin, PathBuf::from("claude"));
         assert_eq!(cfg.cwd, PathBuf::from("/tmp"));
+    }
+
+    /// ACCEPTANCE (zero orphans): a session's grandchild — the kind `claude`
+    /// spawns for tools / MCP servers — must not survive teardown. A fake `claude`
+    /// (shell script) backgrounds a long `sleep` (the "grandchild"), records its
+    /// pid, then exits on stdin EOF (the graceful path) WITHOUT reaping it. After
+    /// `shutdown`, the final process-group SIGKILL sweep must have reaped the
+    /// grandchild anyway — exercising the real teardown, no live `claude` needed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_reaps_orphaned_grandchildren() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("tosse-orphan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("fake-claude.sh");
+        // Ignores its (claude) args: background a grandchild, record its pid next
+        // to the script, then read stdin until EOF and exit — leaving the
+        // grandchild behind for the group sweep to clean up.
+        fs::write(
+            &script,
+            "#!/bin/sh\nsleep 30 &\necho \"$!\" > \"$0.pid\"\ncat >/dev/null\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut cfg = SpawnConfig::new(dir.clone());
+        cfg.claude_bin = script.clone();
+        let (mut transport, _rx) = Transport::spawn(cfg).expect("fake claude should spawn");
+
+        let grandchild = read_pid_when_ready(&dir.join("fake-claude.sh.pid"))
+            .await
+            .expect("grandchild pid should be recorded");
+        assert!(is_alive(grandchild), "grandchild should run before shutdown");
+
+        transport.shutdown().await;
+
+        assert!(
+            wait_until_dead(grandchild).await,
+            "grandchild {grandchild} survived shutdown (orphaned)"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Poll for the pid sidecar file the fake claude writes, returning the pid.
+    #[cfg(unix)]
+    async fn read_pid_when_ready(path: &std::path::Path) -> Option<i32> {
+        for _ in 0..200 {
+            if let Ok(s) = std::fs::read_to_string(path) {
+                if let Ok(pid) = s.trim().parse::<i32>() {
+                    return Some(pid);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        None
+    }
+
+    /// `kill(pid, 0)` probes existence without delivering a signal.
+    #[cfg(unix)]
+    fn is_alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    #[cfg(unix)]
+    async fn wait_until_dead(pid: i32) -> bool {
+        for _ in 0..200 {
+            if !is_alive(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
     }
 
     /// Live end-to-end transport check. Spawns the real `claude` binary, sends a

@@ -118,20 +118,26 @@ pub fn run() {
         .expect("error while building tosse-code")
         .run(|app_handle, event| {
             // On app exit, tear every live session down so we never orphan a
-            // `claude` child. Best-effort and bounded: request shutdown on each,
-            // then give the actor tasks (running on the runtime's worker threads)
-            // a short window to run their EOF→kill ladder before the process
-            // stops. A per-child process-group kill is the stronger future
-            // guarantee (see docs §2.5).
+            // `claude` child (nor any of its tool/MCP grandchildren — each session
+            // runs in its own process group and the actor's ladder signals the
+            // whole group; see `supervisor::transport`). Request shutdown on every
+            // session, then wait until the registry drains — each actor evicts
+            // itself once its process is reaped — capped so quit never hangs.
             if let tauri::RunEvent::Exit = event {
+                use std::time::{Duration, Instant};
                 use tauri::Manager;
-                let handles = app_handle.state::<Sessions>().drain();
+                let sessions = app_handle.state::<Sessions>();
+                let handles = sessions.handles();
                 if !handles.is_empty() {
                     tauri::async_runtime::block_on(async {
                         for handle in &handles {
                             let _ = handle.shutdown().await;
                         }
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        let deadline = Duration::from_secs(6);
+                        let start = Instant::now();
+                        while !sessions.is_empty() && start.elapsed() < deadline {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
                     });
                 }
             }

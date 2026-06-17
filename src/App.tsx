@@ -23,9 +23,9 @@ export default function App() {
   const activeRepo = useConversationRepo(activeId);
   const booted = useRef(false);
 
-  // On first mount: hydrate from the core's persisted state, then resume those
-  // conversations (--resume with their sessionId, rebuilding history from
-  // Claude's transcript). An empty store stays empty — no default conversation.
+  // On first mount: hydrate from the core's persisted state. Lazy policy — boot
+  // spawns nothing; a conversation's history loads when it's shown and its
+  // process starts on the first message. An empty store stays empty.
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
@@ -44,7 +44,7 @@ export default function App() {
       right={
         view === "conversation" && activeRepo ? (
           <>
-            {active?.handle ? <OpenInTerminalButton session={active.handle} cwd={active.cwd} /> : null}
+            {active ? <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} /> : null}
             <Tag icon="folder" title={activeRepo.path}>
               {repoName(activeRepo.path)}
             </Tag>
