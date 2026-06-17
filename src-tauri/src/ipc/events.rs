@@ -3,7 +3,7 @@ use specta::Type;
 use tauri_specta::Event;
 
 use crate::supervisor::model::{
-    ConversationItem, PermissionRequestPayload, SessionEmitter, SessionStatePayload,
+    ConversationItem, PermissionRequestPayload, SessionEmitter, SessionStatePayload, SlashCommand,
 };
 
 /// Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
@@ -35,6 +35,14 @@ pub struct SessionPermissionEvent {
     pub request: PermissionRequestPayload,
 }
 
+/// The session's available slash commands (one-shot, at `initialize`). Drives the
+/// composer's `/` autocomplete menu.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionCommandsEvent {
+    pub session: String,
+    pub commands: Vec<SlashCommand>,
+}
+
 /// Bridges a session's [`SessionEmitter`] sink onto the Tauri event bus: each
 /// session event becomes the matching tauri-specta event on the `AppHandle`.
 pub struct TauriEmitter {
@@ -62,6 +70,14 @@ impl SessionEmitter for TauriEmitter {
         let ev = SessionPermissionEvent {
             session: session.to_string(),
             request: request.clone(),
+        };
+        let _ = ev.emit(&self.app);
+    }
+
+    fn emit_commands(&self, session: &str, commands: &[SlashCommand]) {
+        let ev = SessionCommandsEvent {
+            session: session.to_string(),
+            commands: commands.to_vec(),
         };
         let _ = ev.emit(&self.app);
     }

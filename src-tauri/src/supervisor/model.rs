@@ -119,12 +119,29 @@ pub struct PermissionRequestPayload {
     pub suggestions: Value,
 }
 
+/// One slash command available in the session, as advertised by the CLI in its
+/// `initialize` control response (spec §4.4). The same shape the official VS Code
+/// extension consumes to drive its `/` autocomplete menu. `name` carries NO
+/// leading slash (e.g. `"compact"`, `"tosse-workflow:pickup"`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+pub struct SlashCommand {
+    pub name: String,
+    /// Human-readable description (may be empty). For skills, the CLI prefixes a
+    /// `(plugin)` / `(dynamic workflow)` source hint.
+    pub description: String,
+    /// Hint for the command's arguments (e.g. `"<task_id>"`), empty when none.
+    pub argument_hint: String,
+}
+
 /// What a session emits to the outside world.
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     State(SessionStatePayload),
     Item(ConversationItem),
     Permission(PermissionRequestPayload),
+    /// The session's available slash commands (one-shot, from the `initialize`
+    /// control response). Drives the composer's `/` autocomplete.
+    Commands(Vec<SlashCommand>),
 }
 
 /// Sink for a session's events. The IPC layer implements this over a Tauri
@@ -133,4 +150,5 @@ pub trait SessionEmitter: Send + Sync + 'static {
     fn emit_state(&self, session: &str, state: &SessionStatePayload);
     fn emit_item(&self, session: &str, item: &ConversationItem);
     fn emit_permission(&self, session: &str, request: &PermissionRequestPayload);
+    fn emit_commands(&self, session: &str, commands: &[SlashCommand]);
 }

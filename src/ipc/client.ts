@@ -17,9 +17,11 @@ export type {
   Pong,
   RepoRecord,
   Result,
+  SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionStateEvent,
   SessionStatePayload,
+  SlashCommand,
   TickEvent,
 } from "./bindings";

@@ -109,8 +109,18 @@
 .cv-meta-grid span:first-child { font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--wf-tx-xlo); }
 .cv-meta-grid span:last-child { font-size:12px; }
 
-.cv-composer { padding:12px 18px 14px; border-top:1px solid var(--wf-line); background:var(--wf-bg-2); }
+.cv-composer { position:relative; padding:12px 18px 14px; border-top:1px solid var(--wf-line); background:var(--wf-bg-2); }
 .cv-input { display:flex; align-items:center; gap:8px; padding:9px 10px; background:var(--wf-panel); border:1px solid var(--wf-line-2); border-radius:10px; }
+
+/* ---- menu d'autocomplétion des slash commands (popover au-dessus du composer) ---- */
+.cv-slash { position:absolute; left:18px; right:18px; bottom:calc(100% - 6px); z-index:50; background:var(--wf-panel-2); border:1px solid var(--wf-line-2); border-radius:10px; box-shadow:0 14px 36px -12px #000, 0 0 0 1px #0006; overflow:hidden; animation:cv-slash-in .12s ease-out; }
+@keyframes cv-slash-in { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+.cv-slash-list { display:flex; flex-direction:column; gap:1px; max-height:min(46vh,320px); overflow-y:auto; overscroll-behavior:contain; padding:5px; }
+.cv-slash-item { display:flex; flex-direction:column; align-items:flex-start; gap:1px; width:100%; text-align:left; font:inherit; cursor:default; border:0; background:transparent; color:var(--wf-tx); padding:6px 9px; border-radius:7px; }
+.cv-slash-item.on { background:var(--wf-panel-3); }
+.cv-slash-name { font-size:12.5px; color:var(--wf-tx-hi); white-space:nowrap; }
+.cv-slash-arg { font-size:11px; color:var(--wf-tx-xlo); font-weight:400; }
+.cv-slash-desc { font-size:11px; color:var(--wf-tx-lo); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
 .cv-add { width:28px; height:28px; flex:0 0 auto; border:0; border-radius:7px; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; cursor:default; }
 .cv-add:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
 .cv-ph { flex:1; font-size:12.5px; color:var(--wf-tx-lo); }
