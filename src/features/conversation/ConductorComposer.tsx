@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import type { PermissionMode, SlashCommand } from "../../ipc/client";
 import {
   useInterrupt,
@@ -71,7 +79,15 @@ function modelLabel(id?: string | null): string {
   return id;
 }
 
-export function ConductorComposer({ session, wide }: { session: string; wide?: boolean }) {
+export interface ComposerHandle {
+  /** Focus the message textarea. No-op when it's disabled (read-only session). */
+  focus: () => void;
+}
+
+export const ConductorComposer = forwardRef<
+  ComposerHandle,
+  { session: string; wide?: boolean }
+>(function ConductorComposer({ session, wide }, ref) {
   const state = useSessionState(session);
   const send = useSendMessage(session);
   const interrupt = useInterrupt(session);
@@ -82,6 +98,16 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
   const [model, setModelLocal] = useState(DEFAULT_MODEL);
   const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Let the conversation view focus the input on a background click (see
+  // ConductorConversation). Skips a disabled textarea so a read-only session
+  // can't be focused.
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      const ta = taRef.current;
+      if (ta && !ta.disabled) ta.focus();
+    },
+  }), []);
 
   // ---- Slash-command autocomplete (the `/` menu) --------------------------
   // Commands are keyed by the conversation's working folder, so the menu works
@@ -322,4 +348,4 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
       </div>
     </div>
   );
-}
+});

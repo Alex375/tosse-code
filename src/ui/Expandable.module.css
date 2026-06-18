@@ -1,0 +1,38 @@
+/* Height-capped block with a bottom fade + "Voir plus / Voir moins" toggle.
+   Shared by tool-result output and fenced code blocks so a long block never
+   eats the whole screen. */
+.wrap {
+  position: relative;
+}
+.inner {
+  overflow: hidden;
+}
+/* Fade sits over the clipped bottom edge while collapsed. The end colour is
+   overridable (--expandable-fade) so it matches whatever sits behind it. */
+.fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 44px;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--expandable-fade, var(--bg-code))
+  );
+}
+.toggle {
+  margin-top: var(--space-2);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-4);
+  cursor: pointer;
+}
+.toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
