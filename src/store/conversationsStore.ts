@@ -338,6 +338,13 @@ export function liveHandle(convId: string): string | null {
   );
 }
 
+// In-flight spawns keyed by conversation id. Spawning is async (a round-trip to
+// the core), so two concurrent callers — e.g. the "allumer" button and a message
+// send firing at once — could both see a null handle and spawn TWO processes,
+// leaking one as an orphan. Sharing the in-flight promise makes the spawn
+// idempotent per conversation: concurrent callers await the same one.
+const spawning = new Map<string, Promise<string>>();
+
 /**
  * Ensure a conversation has a LIVE `claude` session, spawning it lazily if not.
  * Returns the live handle. This is the single spawn point of the lazy policy —
@@ -352,10 +359,65 @@ export async function ensureConversationSession(convId: string): Promise<string>
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv) throw new Error(`conversation ${convId} introuvable`);
   if (conv.handle) return conv.handle;
-  const res = await commands.spawnSession(conv.cwd, conv.sessionId ?? null);
+  const inflight = spawning.get(convId);
+  if (inflight) return inflight;
+  const promise = (async () => {
+    const res = await commands.spawnSession(conv.cwd, conv.sessionId ?? null);
+    if (res.status !== "ok") throw new Error(res.error);
+    useConversationsStore.getState().setHandle(convId, res.data);
+    return res.data;
+  })();
+  spawning.set(convId, promise);
+  try {
+    return await promise;
+  } finally {
+    spawning.delete(convId);
+  }
+}
+
+/**
+ * Stop a conversation's live `claude` process (the "éteindre" action). No-op if
+ * it isn't running. The core also clears the handle via the terminal `ended`
+ * event, but we drop it here too so the UI flips to "off" without waiting for the
+ * round-trip. Distinct from `interrupt` (which only ends the current turn): this
+ * kills the process. The on-disk transcript is untouched, so a later send (or
+ * "allumer") resumes the same Claude session via `--resume`.
+ */
+export async function stopConversationSession(convId: string): Promise<void> {
+  const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+  if (!conv?.handle) return; // already off
+  const res = await commands.stopSession(conv.handle);
+  useConversationsStore.getState().setHandle(convId, null);
+  // The core's terminal `ended` event is keyed by the (now-cleared) handle and
+  // gets dropped, so the message store would keep the last live state (e.g.
+  // busy=true) and the composer would stay locked. Reset it to idle so the
+  // conversation reads as off and a new message can re-spawn it.
+  useConversationStore.getState().clearState(convId);
   if (res.status !== "ok") throw new Error(res.error);
-  useConversationsStore.getState().setHandle(convId, res.data);
-  return res.data;
+}
+
+/**
+ * Turn a conversation's stream ON (the "allumer" action). Before spawning, it
+ * re-syncs the timeline from Claude's on-disk transcript so any turns added
+ * out-of-band — e.g. while the same session was resumed in a terminal
+ * (`claude --resume`) — show up. `--resume` does not re-stream past messages, so
+ * reading the transcript is the only way to pick them up.
+ */
+export async function startConversationSession(convId: string): Promise<string> {
+  await reloadConversationHistory(convId);
+  return ensureConversationSession(convId);
+}
+
+/**
+ * Restart a conversation's stream (off→on): stop the live process if any, then
+ * start it again. Clearing the handle in `stopConversationSession` first means
+ * `ensureConversationSession` sees no live handle and genuinely re-spawns instead
+ * of returning the dead one. Like "allumer", this re-syncs the on-disk transcript
+ * (via `startConversationSession`) so externally-added turns appear.
+ */
+export async function restartConversationSession(convId: string): Promise<string> {
+  await stopConversationSession(convId);
+  return startConversationSession(convId);
 }
 
 // Conversations whose on-disk transcript has already been replayed this run.
@@ -378,6 +440,28 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   const { ensureSession, applyItem } = useConversationStore.getState();
   ensureSession(convId);
   for (const item of res.data) applyItem(convId, item);
+}
+
+/**
+ * Re-read a conversation's on-disk transcript and rebuild its timeline from
+ * scratch. Unlike `loadConversationHistory` (additive, once per run), this RESETS
+ * the session first, so it picks up turns appended out-of-band — e.g. the same
+ * Claude session resumed in a terminal (`claude --resume`). The reset is required
+ * for correctness: replaying an assistant message over an existing turn would
+ * APPEND its blocks a second time (the reducer merges same-id blocks), duplicating
+ * content. A failed or empty read leaves the current timeline untouched. Called
+ * when the stream is (re)started from the UI; on a conversation that never sent a
+ * message (no session_id) there is nothing to read.
+ */
+export async function reloadConversationHistory(convId: string): Promise<void> {
+  const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+  if (!conv?.sessionId) return;
+  const res = await commands.loadSessionHistory(conv.sessionId);
+  if (res.status !== "ok" || res.data.length === 0) return; // keep timeline on error/empty
+  const { resetSession, applyItem } = useConversationStore.getState();
+  resetSession(convId);
+  for (const item of res.data) applyItem(convId, item);
+  historyLoaded.add(convId); // the select-time loader is now satisfied for this run
 }
 
 /**
@@ -413,11 +497,19 @@ export function useConversationRepo(convId: string | null): Repo | null {
   });
 }
 
-/** Map a live session's state onto the design's 5-status model (for the status dot). */
-export function sessionStreamState(s?: SessionStatePayload): StreamState {
-  if (!s) return "done";
-  if (s.ended) return "arch";
-  if (s.awaiting_permission) return "ask";
-  if (s.busy) return "work";
-  return "done";
+/**
+ * Map a conversation's stream onto the design's status model (for the status dot
+ * / title-bar control). The `handle` is the source of truth for on/off: with the
+ * lazy policy a conversation has no live `claude` process until its first message,
+ * and a stopped/exited one drops its handle (see `setHandle(null)` on `ended`).
+ * So a null handle is `off` — this subsumes "never started", "stopped by the
+ * user", and "the process exited", which the protocol does not distinguish (both
+ * a Shutdown and a natural exit travel the same `emit_ended` path in the core).
+ * When live, the sub-state reflects what the session is doing.
+ */
+export function streamStatus(handle: string | null, s?: SessionStatePayload): StreamState {
+  if (!handle) return "off"; // no live process: never started, stopped, or exited
+  if (s?.awaiting_permission) return "ask";
+  if (s?.busy) return "work";
+  return "done"; // live and idle = ready to take a message
 }

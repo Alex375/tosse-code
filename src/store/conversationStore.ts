@@ -71,6 +71,12 @@ interface ConversationState {
   sessions: Record<string, SessionEntry>;
   ensureSession: (session: string) => void;
   applyState: (session: string, state: SessionStatePayload) => void;
+  /** Reset a session's live state to neutral (idle, not busy/ended) WITHOUT
+   *  touching its timeline. Used when the stream is turned off: the terminal
+   *  `ended` event is routed by the now-stale handle and gets dropped, so the
+   *  last live state (e.g. busy=true) would otherwise linger and block the
+   *  composer. Clears it so the conversation reads as off/idle (a send re-spawns). */
+  clearState: (session: string) => void;
   applyItem: (session: string, item: ConversationItem) => void;
   appendText: (session: string, messageId: string, text: string) => void;
   appendThinking: (session: string, messageId: string, text: string) => void;
@@ -165,6 +171,9 @@ export const useConversationStore = create<ConversationState>((set) => {
 
     applyState: (session, state) =>
       withEntry(session, (entry) => ({ ...entry, state })),
+
+    clearState: (session) =>
+      withEntry(session, (entry) => ({ ...entry, state: { ...connectingState } })),
 
     appendText: (session, messageId, text) =>
       appendBuffer(session, messageId, "streamingText", text),

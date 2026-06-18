@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ConductorConversation } from "./features/conversation/ConductorConversation";
 import { OpenInTerminalButton } from "./features/conversation/OpenInTerminalButton";
+import { StreamControl } from "./features/conversation/StreamControl";
 import { FleetPlaceholder } from "./features/fleet/FleetPlaceholder";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
 import {
@@ -44,6 +45,7 @@ export default function App() {
       right={
         view === "conversation" && activeRepo ? (
           <>
+            {active ? <StreamControl key={active.id} conv={active} /> : null}
             {active ? <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} /> : null}
             <Tag icon="folder" title={activeRepo.path}>
               {repoName(activeRepo.path)}
