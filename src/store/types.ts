@@ -73,13 +73,24 @@ export interface NoticeItem {
 }
 
 /**
+ * A local, client-side error surfaced in the timeline — e.g. a message that could
+ * not be sent because the `claude` session failed to spawn. Not from the core's
+ * event stream: it makes an otherwise-silent command failure visible to the user.
+ */
+export interface ErrorItem {
+  id: string;
+  message: string;
+}
+
+/**
  * The ordered render stream for a session: turns, notices and turn-footers are all
  * positioned by a single id list so they render in arrival order.
  */
 export type TimelineEntry =
   | { kind: "turn"; id: string }
   | { kind: "notice"; id: string }
-  | { kind: "turn_result"; id: string };
+  | { kind: "turn_result"; id: string }
+  | { kind: "error"; id: string };
 
 /** Everything we hold for one live session. */
 export interface SessionEntry {
@@ -88,6 +99,8 @@ export interface SessionEntry {
   timeline: TimelineEntry[];
   turns: Record<string, Turn>;
   notices: Record<string, NoticeItem>;
+  /** Client-side error entries (failed sends), keyed by generated id. */
+  errors: Record<string, ErrorItem>;
   turnResults: Record<string, TurnResultMeta>;
   /** tool_use_id -> result, joined lazily (core does not pre-link them). */
   toolResults: Record<string, ToolResult>;

@@ -25,6 +25,7 @@ import type {
   SessionStatePayload,
 } from "../ipc/client";
 import type {
+  ErrorItem,
   NoticeItem,
   SessionEntry,
   TimelineEntry,
@@ -50,6 +51,7 @@ function emptyEntry(session: string): SessionEntry {
     timeline: [],
     turns: {},
     notices: {},
+    errors: {},
     turnResults: {},
     toolResults: {},
     pendingPermissions: [],
@@ -73,6 +75,9 @@ interface ConversationState {
   appendText: (session: string, messageId: string, text: string) => void;
   appendThinking: (session: string, messageId: string, text: string) => void;
   addUserTurn: (session: string, text: string) => void;
+  /** Append a visible error bubble to the timeline (e.g. a send that failed to
+   *  spawn the session). Makes an otherwise-silent command failure self-evident. */
+  addErrorTurn: (session: string, message: string) => void;
   enqueuePermission: (session: string, request: PermissionRequestPayload) => void;
   removePermission: (session: string, requestId: string) => void;
   resetSession: (session: string) => void;
@@ -185,6 +190,17 @@ export const useConversationStore = create<ConversationState>((set) => {
           seq: entry.seq + 1,
           turns: { ...entry.turns, [id]: turn },
           timeline: [...entry.timeline, { kind: "turn", id }],
+        };
+      }),
+
+    addErrorTurn: (session, message) =>
+      withEntry(session, (entry) => {
+        const id = `err_${entry.seq}`;
+        return {
+          ...entry,
+          seq: entry.seq + 1,
+          errors: { ...entry.errors, [id]: { id, message } },
+          timeline: [...entry.timeline, { kind: "error", id }],
         };
       }),
 
@@ -390,6 +406,9 @@ export const useTurnResult = (
 
 export const useNotice = (session: string, id: string): NoticeItem | undefined =>
   useConversationStore((s) => s.sessions[session]?.notices[id]);
+
+export const useError = (session: string, id: string): ErrorItem | undefined =>
+  useConversationStore((s) => s.sessions[session]?.errors[id]);
 
 export const usePendingPermissions = (
   session: string,

@@ -28,6 +28,7 @@ async function unwrap<T>(p: Promise<Result<T, string>>): Promise<T> {
 
 export function useSendMessage(convId: string) {
   const addUserTurn = useConversationStore((s) => s.addUserTurn);
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
   return useMutation({
     mutationFn: async (text: string) => {
       // The core does not echo user turns, so append optimistically (keyed by the
@@ -40,6 +41,13 @@ export function useSendMessage(convId: string) {
       // (or its first message after being stopped/ended).
       const handle = await ensureConversationSession(convId);
       return unwrap(commands.sendMessage(handle, text));
+    },
+    // The send can fail before anything streams back — most importantly when the
+    // `claude` session fails to spawn (binary not found). Surface it as a visible
+    // error bubble instead of leaving the optimistic user turn dangling silently.
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      addErrorTurn(convId, message);
     },
   });
 }
