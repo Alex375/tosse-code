@@ -22,14 +22,18 @@ import { idleState, ScenarioDriver } from "./scenario";
 
 // A small slash-command catalogue so the browser/Playwright build exercises the
 // `/` autocomplete menu without a real `claude` process.
+// Faithful to the real `initialize` shape: BARE names, plugin carried as a
+// leading "(plugin)" in the description (built-ins have none).
 const MOCK_COMMANDS: SlashCommand[] = [
-  { name: "clear", description: "Clear the conversation history", argument_hint: "" },
-  { name: "compact", description: "Compact the conversation to free up context", argument_hint: "" },
-  { name: "init", description: "Initialize a new CLAUDE.md with codebase docs", argument_hint: "" },
-  { name: "review", description: "Review a pull request", argument_hint: "[pr]" },
-  { name: "tosse-workflow:pickup", description: "(tosse-workflow) Start working on a TOSSE task", argument_hint: "<task_id>" },
-  { name: "tosse-workflow:done", description: "(tosse-workflow) Finish a task and move it to review", argument_hint: "" },
-  { name: "tosse-workflow:list-tasks", description: "(tosse-workflow) List the project's tasks", argument_hint: "" },
+  { name: "clear", description: "Start a new session with empty context", argument_hint: "[name]" },
+  { name: "compact", description: "Free up context by summarizing the conversation so far", argument_hint: "" },
+  { name: "init", description: "Initialize a new CLAUDE.md with codebase documentation", argument_hint: "" },
+  { name: "review", description: "Review a pull request", argument_hint: "" },
+  { name: "pickup", description: "(tosse-workflow) Start working on a TOSSE task", argument_hint: "<task_id>" },
+  { name: "done", description: "(tosse-workflow) Finish a TOSSE task and move it to review", argument_hint: "" },
+  { name: "list-tasks", description: "(tosse-workflow) List the tasks for the current project", argument_hint: "" },
+  { name: "algorithmic-art", description: "(example-skills) Creating algorithmic art using p5.js with seeded randomness", argument_hint: "" },
+  { name: "canvas-design", description: "(example-skills) Create beautiful visual art in .png and .pdf documents", argument_hint: "" },
 ];
 
 // ---- Minimal Tauri-shaped event emitter -----------------------------------
