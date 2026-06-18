@@ -405,6 +405,15 @@ pub async fn remove_worktree(
     .map_err(|e| e.to_string())
 }
 
+/// Whether a filesystem path currently exists. Used to detect a conversation
+/// whose worktree cwd was removed, so the UI can fall back to the repo's main
+/// checkout instead of failing to spawn `claude` in a directory that is gone.
+#[tauri::command]
+#[specta::specta]
+pub fn path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
 // ---- Persistence (conversation metadata) ----------------------------------
 //
 // These commands are the front's single boundary to the store. They forward to

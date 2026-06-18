@@ -198,6 +198,14 @@ async removeWorktree(repoPath: string, worktreePath: string, force: boolean) : P
 }
 },
 /**
+ * Whether a filesystem path currently exists. Used to detect a conversation
+ * whose worktree cwd was removed, so the UI can fall back to the repo's main
+ * checkout instead of failing to spawn `claude` in a directory that is gone.
+ */
+async pathExists(path: string) : Promise<boolean> {
+    return await TAURI_INVOKE("path_exists", { path });
+},
+/**
  * Load the persisted repos + conversations + active selection (UI hydration at boot).
  */
 async loadPersistedState() : Promise<Result<PersistedState, string>> {

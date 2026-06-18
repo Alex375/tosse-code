@@ -285,6 +285,12 @@ export const mockCommands = {
     );
     return ok(null);
   },
+
+  async pathExists(_path: string): Promise<boolean> {
+    // No real filesystem in the browser mock — everything "exists" so the normal
+    // spawn flow runs (the deleted-worktree recovery is exercised in the real app).
+    return true;
+  },
 };
 
 // Per-repo worktree set, seeded lazily with just the main worktree (== repoPath).

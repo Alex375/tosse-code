@@ -444,7 +444,34 @@ export async function ensureConversationSession(
       useConversationsStore.getState().repointCwd(convId, wt.data.path);
       cwd = wt.data.path;
     }
-    const res = await commands.spawnSession(cwd, before.sessionId ?? null);
+    let res = await commands.spawnSession(cwd, before.sessionId ?? null);
+    if (res.status !== "ok") {
+      // The spawn may have failed because the conversation's cwd is GONE — its
+      // worktree was removed. (A missing cwd and a missing `claude` binary both
+      // surface as the same OS error.) If so, fall back to the repo's main
+      // checkout and start FRESH there: resuming the old session would fail,
+      // since its transcript lives under the deleted worktree's project, not the
+      // main one (verified: `claude --resume` errors when the session isn't in
+      // the current project). The user is told; prior turns already shown stay,
+      // and the message they just sent goes to the new session.
+      const repo = useConversationsStore.getState().repos.find((r) => r.id === before.repoId);
+      const fallback = repo?.path;
+      if (
+        fallback &&
+        fallback !== cwd &&
+        !(await commands.pathExists(cwd)) &&
+        (await commands.pathExists(fallback))
+      ) {
+        useConversationStore
+          .getState()
+          .addErrorTurn(
+            convId,
+            `⚠️ Le worktree associé à cette conversation a été supprimé. Elle est relancée dans l'arbre de travail principal (${repoName(fallback)}) — nouvelle session.`,
+          );
+        useConversationsStore.getState().repointCwd(convId, fallback);
+        res = await commands.spawnSession(fallback, null);
+      }
+    }
     if (res.status !== "ok") throw new Error(res.error);
     useConversationsStore.getState().setHandle(convId, res.data);
     return res.data;

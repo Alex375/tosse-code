@@ -6,8 +6,8 @@ pub mod supervisor;
 use ipc::commands::{
     answer_permission, create_worktree, delete_conversation, delete_repo, fetch_slash_commands,
     interrupt_session, list_worktrees, load_persisted_state, load_session_history, open_in_terminal,
-    ping, remove_worktree, send_message, set_active_conversation, set_effort_level, set_model,
-    set_permission_mode, spawn_session, stop_session, upsert_conversation, upsert_repo,
+    path_exists, ping, remove_worktree, send_message, set_active_conversation, set_effort_level,
+    set_model, set_permission_mode, spawn_session, stop_session, upsert_conversation, upsert_repo,
     wipe_all_data, worktree_status, Sessions,
 };
 use ipc::events::{
@@ -36,6 +36,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             worktree_status,
             create_worktree,
             remove_worktree,
+            path_exists,
             load_persisted_state,
             upsert_repo,
             delete_repo,
