@@ -116,10 +116,17 @@
   padding-inline-start: 0.2em;
 }
 
-/* Fenced code block */
+/* Fenced code block. The frame (border + radius + background) lives on the
+   WRAPPER, and the inner <pre> is what scrolls — so a long single line's
+   horizontal scrollbar sits INSIDE the frame instead of painting over the bottom
+   border. `overflow:hidden` clips the scroll to the rounded corners. */
 .codeBlockWrapper {
   position: relative;
   margin: 0.5em 0;
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 .copyBtn {
   position: absolute;
@@ -137,11 +144,19 @@
 .pre {
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  background: var(--bg-code);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   overflow-x: auto;
   white-space: pre;
+}
+/* Thin, unobtrusive scrollbar that stays within the frame (WebKit webview). */
+.pre::-webkit-scrollbar {
+  height: 9px;
+}
+.pre::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 99px;
+}
+.pre::-webkit-scrollbar-track {
+  background: transparent;
 }
 .pre code {
   font-family: var(--font-mono);

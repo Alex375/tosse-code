@@ -66,6 +66,7 @@ function ConductorToolCard({
 
   const isEdit = meta.kind === "edit";
   const isWrite = meta.kind === "write";
+  const isBash = meta.kind === "bash";
   // AskUserQuestion renders a clean Q→A recap instead of raw result text.
   const isQuestionnaire = name === "AskUserQuestion";
   const running = !result && (state?.busy ?? false);
@@ -73,7 +74,9 @@ function ConductorToolCard({
   // Edit/Write show their diff immediately; all other results are collapsed by default.
   const [open, setOpen] = useState(isEdit || isWrite);
 
-  const hasBody = isEdit || isWrite || isQuestionnaire || !!result;
+  // Bash cards are expandable even before a result: the header command is
+  // ellipsised, so expanding is how the user reads the full command.
+  const hasBody = isEdit || isWrite || isQuestionnaire || !!result || (isBash && !!meta.primaryArg);
   const canToggle = hasBody && !isEdit && !isWrite;
 
   const icon = isQuestionnaire ? "form" : TOOL_ICON[name] || "cog";
@@ -111,6 +114,10 @@ function ConductorToolCard({
 
       {open && hasBody && (
         <div className="cv-tool-b">
+          {/* Bash: the full command (wraps, fully readable) above its output. */}
+          {isBash && meta.primaryArg ? (
+            <pre className="cv-tool-cmd wf-mono">{meta.primaryArg}</pre>
+          ) : null}
           {isEdit ? (
             <DiffView
               path={field(input, "file_path")}

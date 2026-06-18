@@ -32,16 +32,24 @@
 .cv-day { display:flex; align-items:center; gap:12px; font-size:11px; color:var(--wf-tx-xlo); text-transform:lowercase; }
 .cv-day .wf-line { flex:1; height:1px; background:var(--wf-line); }
 
-.cv-msg { display:flex; gap:11px; }
-.cv-user .cv-bubble { background:var(--wf-panel-2); border:1px solid var(--wf-line); border-radius:10px; padding:12px 14px; flex:1; }
-.cv-aibody { flex:1; display:flex; flex-direction:column; gap:13px; padding-top:3px; }
+/* min-width:0 lets these flex items shrink below their content size, so wide
+   children (diffs, code blocks) scroll INTERNALLY instead of forcing the whole
+   thread wider than its max-width (horizontal overflow / runaway scrollbar). */
+.cv-msg { display:flex; gap:11px; min-width:0; }
+.cv-user .cv-bubble { background:var(--wf-panel-2); border:1px solid var(--wf-line); border-radius:10px; padding:12px 14px; flex:1; min-width:0; }
+.cv-aibody { flex:1; min-width:0; display:flex; flex-direction:column; gap:13px; padding-top:3px; }
 
 .cv-tool { border:1px solid var(--wf-line); border-radius:8px; background:var(--wf-panel); overflow:hidden; }
 .cv-tool-h { display:flex; align-items:center; gap:8px; padding:9px 11px; color:var(--wf-tx); }
 .cv-tool-h .wf-ico:last-child { margin-left:auto; color:var(--wf-run); }
-.cv-tool-t { font-size:12px; color:var(--wf-tx-hi); }
-.cv-tool-m { font-size:11px; color:var(--wf-tx-lo); }
+.cv-tool-t { font-size:12px; color:var(--wf-tx-hi); flex:none; }
+/* The command/path preview takes the free space and ellipsises — a clean
+   one-line header; the full value is revealed by expanding the card. */
+.cv-tool-m { font-size:11px; color:var(--wf-tx-lo); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cv-tool-b { border-top:1px solid var(--wf-line); padding:10px 12px; background:var(--wf-bg-2); }
+/* Full command shown in the body of an expanded Bash card (wraps, fully readable). */
+.cv-tool-cmd { margin:0 0 10px; padding:8px 10px; background:#0e0e11; border:1px solid var(--wf-line); border-radius:6px; font-size:11.5px; line-height:1.5; color:#f0cd97; white-space:pre-wrap; word-break:break-word; }
+.cv-tool-cmd:last-child { margin-bottom:0; }
 
 .cv-diff { display:flex; flex-direction:column; gap:4px; font-size:11.5px; }
 .cv-dl { display:flex; align-items:center; gap:9px; }
