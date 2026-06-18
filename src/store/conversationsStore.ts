@@ -59,6 +59,13 @@ export interface Conversation {
    * In-memory ONLY — never persisted; set on spawn/resume, changes each launch.
    */
   handle: string | null;
+  /**
+   * The worktree the session moved INTO mid-conversation via the agent's
+   * `EnterWorktree` tool (parsed from its result), or null when it is in its
+   * spawn cwd. In-memory ONLY. Takes precedence over the spawn `cwd` for the
+   * worktree indicator/badge so they follow the agent. Cleared on `ExitWorktree`.
+   */
+  liveCwd: string | null;
 }
 
 /** Display name for a repo path — its basename. */
@@ -114,6 +121,7 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   lastActivityAt: c.last_activity_at,
   sessionId: c.session_id,
   handle: null,
+  liveCwd: null,
 });
 
 /** Fire a persistence command, logging (never throwing) on failure. Persistence
@@ -148,6 +156,10 @@ interface ConversationsState {
   noteSessionId: (id: string, sessionId: string) => void;
   /** Bind a conversation (by stable id) to its live Rust session handle. In-memory only. */
   setHandle: (id: string, handle: string | null) => void;
+  /** Set/clear the worktree the session moved into (EnterWorktree/ExitWorktree). In-memory only. */
+  setLiveCwd: (id: string, cwd: string | null) => void;
+  /** Repoint a conversation's working directory (e.g. into a freshly created worktree) and persist it. */
+  repointCwd: (id: string, cwd: string) => void;
   /**
    * Mark a conversation active "now" — bumps `lastActivityAt`, which re-sorts the
    * sidebar (most recent first). Activity is the three meaningful edits to a
@@ -267,6 +279,23 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, handle } : c)),
     })),
 
+  setLiveCwd: (id, cwd) =>
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === id && c.liveCwd !== cwd ? { ...c, liveCwd: cwd } : c,
+      ),
+    })),
+
+  repointCwd: (id, cwd) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv || conv.cwd === cwd) return;
+    const updated = { ...conv, cwd };
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === id ? updated : c)),
+    }));
+    syncToCore("upsertConversation(cwd)", () => commands.upsertConversation(convToRecord(updated)));
+  },
+
   noteActivity: (id, opts) => {
     const conv = get().conversations.find((c) => c.id === id);
     if (!conv) return;
@@ -304,8 +333,41 @@ export function createConversationInRepo(repoPath: string): string {
     lastActivityAt: now,
     sessionId: null,
     handle: null, // no live process until the first message
+    liveCwd: null,
   });
   return id;
+}
+
+/**
+ * Create a new conversation in an EXISTING repo but rooted at `cwd` — typically a
+ * git worktree of that repo. Reuses the repo's id (so the conversation still
+ * groups under it in the sidebar) while spawning `claude` in the worktree
+ * directory. Returns the new conversation's stable id.
+ *
+ * This is how the app starts an agent "directly in a worktree": same repo group,
+ * a different working directory. The worktree indicator/badge resolve that cwd
+ * and light up accordingly. Lazy as ever — no process is spawned here.
+ */
+export function createConversationInWorktree(repoId: string, cwd: string): string {
+  const id = uid();
+  const now = Date.now();
+  useConversationsStore.getState().addConversation({
+    id,
+    name: DEFAULT_CONV_NAME,
+    repoId,
+    cwd,
+    createdAt: now,
+    lastActivityAt: now,
+    sessionId: null,
+    handle: null, // no live process until the first message
+    liveCwd: null,
+  });
+  return id;
+}
+
+/** Branch/dir name for an app-created worktree when starting a conversation in one. */
+function autoWorktreeBranch(): string {
+  return `wt-${Date.now().toString(36)}`;
 }
 
 /**
@@ -348,10 +410,29 @@ export function liveHandle(convId: string): string | null {
  * The handle is bound synchronously before this resolves, so live events (which
  * the core keys by handle) route back to this conversation's stable id.
  */
-export async function ensureConversationSession(convId: string): Promise<string> {
-  const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+export async function ensureConversationSession(
+  convId: string,
+  opts?: { worktree?: boolean },
+): Promise<string> {
+  let conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv) throw new Error(`conversation ${convId} introuvable`);
   if (conv.handle) return conv.handle;
+
+  // First spawn requested in a fresh worktree: create one (app-managed, under
+  // .claude/worktrees) and repoint the conversation's cwd into it BEFORE
+  // spawning — so the session, its transcript, and `--resume` all live in the
+  // worktree (cwd stays the single source of truth). Only on the very first
+  // spawn (no sessionId yet); a later resume must reuse the existing cwd and
+  // never create a second worktree. A failure throws so the send surfaces it.
+  if (opts?.worktree && !conv.sessionId) {
+    const repo = useConversationsStore.getState().repos.find((r) => r.id === conv!.repoId);
+    if (!repo) throw new Error("dépôt introuvable pour cette conversation");
+    const wt = await commands.createWorktree(repo.path, autoWorktreeBranch(), null, true);
+    if (wt.status !== "ok") throw new Error(`création du worktree impossible : ${wt.error}`);
+    useConversationsStore.getState().repointCwd(convId, wt.data.path);
+    conv = useConversationsStore.getState().conversations.find((c) => c.id === convId)!;
+  }
+
   const res = await commands.spawnSession(conv.cwd, conv.sessionId ?? null);
   if (res.status !== "ok") throw new Error(res.error);
   useConversationsStore.getState().setHandle(convId, res.data);

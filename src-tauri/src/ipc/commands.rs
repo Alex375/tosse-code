@@ -343,6 +343,68 @@ fn applescript_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+// ---- Git worktrees --------------------------------------------------------
+//
+// These commands are the front's single boundary to git worktree management.
+// They forward to [`crate::git`] (the only service that speaks `git`) and run
+// the blocking subprocess off the async runtime via `spawn_blocking`, so a slow
+// disk never stalls the event loop.
+
+/// List every worktree of the repository `repo_path` lives in (main first).
+#[tauri::command]
+#[specta::specta]
+pub async fn list_worktrees(repo_path: String) -> Result<Vec<crate::git::WorktreeInfo>, String> {
+    tokio::task::spawn_blocking(move || crate::git::list_worktrees(&repo_path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Working-tree status of one worktree (dirty / untracked / ahead-behind).
+#[tauri::command]
+#[specta::specta]
+pub async fn worktree_status(worktree_path: String) -> Result<crate::git::WorktreeStatus, String> {
+    tokio::task::spawn_blocking(move || crate::git::worktree_status(&worktree_path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Create a worktree for `branch` (new branch off `base_ref` when `new_branch`,
+/// else an existing branch). Returns the created worktree's info.
+#[tauri::command]
+#[specta::specta]
+pub async fn create_worktree(
+    repo_path: String,
+    branch: String,
+    base_ref: Option<String>,
+    new_branch: bool,
+) -> Result<crate::git::WorktreeInfo, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::git::create_worktree(&repo_path, &branch, base_ref.as_deref(), new_branch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Remove a worktree. `git` refuses a dirty or main worktree unless `force`,
+/// which the UI only passes after an explicit, separate confirmation.
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_worktree(
+    repo_path: String,
+    worktree_path: String,
+    force: bool,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        crate::git::remove_worktree(&repo_path, &worktree_path, force)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
 // ---- Persistence (conversation metadata) ----------------------------------
 //
 // These commands are the front's single boundary to the store. They forward to

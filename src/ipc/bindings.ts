@@ -152,6 +152,52 @@ async openInTerminal(cwd: string, sessionId: string) : Promise<Result<null, stri
 }
 },
 /**
+ * List every worktree of the repository `repo_path` lives in (main first).
+ */
+async listWorktrees(repoPath: string) : Promise<Result<WorktreeInfo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_worktrees", { repoPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Working-tree status of one worktree (dirty / untracked / ahead-behind).
+ */
+async worktreeStatus(worktreePath: string) : Promise<Result<WorktreeStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("worktree_status", { worktreePath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Create a worktree for `branch` (new branch off `base_ref` when `new_branch`,
+ * else an existing branch). Returns the created worktree's info.
+ */
+async createWorktree(repoPath: string, branch: string, baseRef: string | null, newBranch: boolean) : Promise<Result<WorktreeInfo, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_worktree", { repoPath, branch, baseRef, newBranch }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Remove a worktree. `git` refuses a dirty or main worktree unless `force`,
+ * which the UI only passes after an explicit, separate confirmation.
+ */
+async removeWorktree(repoPath: string, worktreePath: string, force: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_worktree", { repoPath, worktreePath, force }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Load the persisted repos + conversations + active selection (UI hydration at boot).
  */
 async loadPersistedState() : Promise<Result<PersistedState, string>> {
@@ -416,6 +462,13 @@ busy: boolean;
  */
 session_id: string | null; 
 /**
+ * The session's CURRENT working directory (from `system/init`). The CLI can
+ * move it mid-session when the agent calls `EnterWorktree`/`ExitWorktree`, so
+ * the UI reads this — not the static spawn cwd — to show which worktree the
+ * conversation is in right now.
+ */
+cwd: string | null; 
+/**
  * Current model id (from `system/init`).
  */
 model: string | null; 
@@ -457,6 +510,71 @@ argument_hint: string }
  * Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
  */
 export type TickEvent = { seq: number; message: string }
+/**
+ * Identity of one worktree of a repository (the cheap, always-listed part).
+ * 
+ * A repository has exactly one MAIN worktree (the original checkout) plus any
+ * number of LINKED worktrees created with `git worktree add`. Each is a
+ * separate working directory sharing the same `.git` history — which is what
+ * lets several `claude` agents work the same repo in parallel without stepping
+ * on each other.
+ */
+export type WorktreeInfo = { 
+/**
+ * Absolute path of the worktree's working directory.
+ */
+path: string; 
+/**
+ * Short branch name (`refs/heads/` stripped). `None` when detached or bare.
+ */
+branch: string | null; 
+/**
+ * Full HEAD commit oid. `None` for the bare entry.
+ */
+head: string | null; 
+/**
+ * The repository's MAIN worktree (the first entry `git` lists). The one
+ * worktree that can never be removed.
+ */
+is_main: boolean; 
+/**
+ * HEAD is detached (no branch checked out).
+ */
+is_detached: boolean; 
+/**
+ * Locked via `git worktree lock` (a removal needs `--force`).
+ */
+is_locked: boolean; 
+/**
+ * The bare repository entry (has no working tree of its own).
+ */
+is_bare: boolean }
+/**
+ * Working-tree status of one worktree (the heavier, on-demand part — one extra
+ * `git` call per worktree, so it is fetched lazily by the manager, never for
+ * the always-on indicator).
+ */
+export type WorktreeStatus = { 
+/**
+ * At least one tracked file has staged or unstaged modifications.
+ */
+dirty: boolean; 
+/**
+ * At least one untracked file is present.
+ */
+untracked: boolean; 
+/**
+ * Number of entries `git status --porcelain` reports (changed + untracked).
+ */
+changed_files: number; 
+/**
+ * Commits ahead of the branch's upstream. `None` when no upstream is set.
+ */
+ahead: number | null; 
+/**
+ * Commits behind the branch's upstream. `None` when no upstream is set.
+ */
+behind: number | null }
 
 /** tauri-specta globals **/
 

@@ -92,6 +92,11 @@ impl Assembler {
                 self.state.session_id = init.session_id.clone();
                 self.state.model = init.model.clone();
                 self.state.permission_mode = init.permission_mode.clone();
+                // `system/init` is re-emitted at the start of EACH turn, so when the
+                // agent moves the session into/out of a worktree (EnterWorktree /
+                // ExitWorktree), the next turn's init carries the new cwd — the UI's
+                // worktree indicator follows along.
+                self.state.cwd = init.cwd.clone();
                 // Do NOT force busy here: `system/init` is emitted at the start of
                 // each turn (not at spawn). Marking busy on init is fine for turns,
                 // but busy is driven by user-send (set_busy) + message_start /

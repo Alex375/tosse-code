@@ -36,6 +36,7 @@ import type {
 const connectingState: SessionStatePayload = {
   busy: false,
   session_id: null,
+  cwd: null,
   model: null,
   permission_mode: null,
   activity: null,

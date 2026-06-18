@@ -2,7 +2,7 @@
 // directly (see useSessionEvents); Query only models the imperative commands so we
 // get loading/error states and never silently swallow a Result.error branch.
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { commands } from "./client";
 import type { PermissionDecision, PermissionMode, Result } from "./client";
 import { useConversationStore } from "../store/conversationStore";
@@ -11,6 +11,7 @@ import {
   liveHandle,
   useConversationsStore,
 } from "../store/conversationsStore";
+import { worktreesKey } from "./useWorktrees";
 
 // These hooks are keyed by a conversation's STABLE id, not its live session
 // handle. Reads (the message store) key by the stable id; commands target the
@@ -28,8 +29,11 @@ async function unwrap<T>(p: Promise<Result<T, string>>): Promise<T> {
 
 export function useSendMessage(convId: string) {
   const addUserTurn = useConversationStore((s) => s.addUserTurn);
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (text: string) => {
+    // `worktree` (first send only): spawn this conversation inside a freshly
+    // created git worktree instead of the repo's main checkout.
+    mutationFn: async ({ text, worktree }: { text: string; worktree?: boolean }) => {
       // The core does not echo user turns, so append optimistically (keyed by the
       // stable id) before sending — instant even while the session spawns.
       addUserTurn(convId, text);
@@ -38,10 +42,24 @@ export function useSendMessage(convId: string) {
       useConversationsStore.getState().noteActivity(convId, { persist: true });
       // Lazy spawn: a conversation has no live process until its first message
       // (or its first message after being stopped/ended).
-      const handle = await ensureConversationSession(convId);
-      return unwrap(commands.sendMessage(handle, text));
+      const handle = await ensureConversationSession(convId, { worktree });
+      const res = await unwrap(commands.sendMessage(handle, text));
+      if (worktree) {
+        // The first spawn just created a worktree — refresh the repo's list so
+        // the indicator/manager show it.
+        const repoPath = repoPathForConv(convId);
+        if (repoPath) void qc.invalidateQueries({ queryKey: worktreesKey(repoPath) });
+      }
+      return res;
     },
   });
+}
+
+/** Repo path of a conversation, for invalidating its cached worktree list. */
+function repoPathForConv(convId: string): string | null {
+  const s = useConversationsStore.getState();
+  const conv = s.conversations.find((c) => c.id === convId);
+  return conv ? (s.repos.find((r) => r.id === conv.repoId)?.path ?? null) : null;
 }
 
 export function useAnswerPermission(convId: string) {

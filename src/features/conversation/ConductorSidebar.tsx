@@ -15,6 +15,8 @@ import { useSessionState } from "../../store/conversationStore";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { WorktreeBadge } from "../git/WorktreeBadge";
+import { useWorktreeUi } from "../git/worktreeUiStore";
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   // State is keyed by the conversation's stable id (the message store routes
@@ -80,6 +82,7 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
         <Dot s={sessionStreamState(state)} pulse />
         <span className="cv-sess-n">{conv.name}</span>
       </button>
+      <WorktreeBadge conv={conv} />
       <Menu
         align="right"
         trigger={
@@ -128,6 +131,7 @@ export function ConductorSidebar() {
   const repos = useRepos();
   const conversations = useConversations();
   const activeId = useActiveConversationId();
+  const openManager = useWorktreeUi((s) => s.openManager);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Group conversations by their repo, then order everything by recency: within a
@@ -197,10 +201,16 @@ export function ConductorSidebar() {
             return (
               <div key={repo.id} className="cv-repo">
                 <div className="cv-repo-h">
-                  <Ico name="folder" className="sm" />
-                  <span className="cv-repo-n" title={repo.path}>
-                    {repoName(repo.path)}
-                  </span>
+                  <button
+                    type="button"
+                    className="cv-repo-wt"
+                    title="Gérer les worktrees de ce dépôt"
+                    onClick={() => openManager(repo.id)}
+                  >
+                    <Ico name="folder" className="sm" />
+                    <span className="cv-repo-n">{repoName(repo.path)}</span>
+                    <Ico name="branch" className="sm cv-repo-wt-hint" />
+                  </button>
                   <button
                     className="cv-repo-add"
                     title="Nouvelle conversation dans ce dépôt"

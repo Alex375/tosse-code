@@ -20,6 +20,11 @@ pub struct SessionStatePayload {
     pub busy: bool,
     /// The CLI-assigned conversation id (from `system/init`); enables `--resume`.
     pub session_id: Option<String>,
+    /// The session's CURRENT working directory (from `system/init`). The CLI can
+    /// move it mid-session when the agent calls `EnterWorktree`/`ExitWorktree`, so
+    /// the UI reads this — not the static spawn cwd — to show which worktree the
+    /// conversation is in right now.
+    pub cwd: Option<String>,
     /// Current model id (from `system/init`).
     pub model: Option<String>,
     /// Current permission mode (from `system/init` / `set_permission_mode`).

@@ -26,6 +26,7 @@ export const MOCK_SESSION_ID = "01HVMOCK-S3SSION-ID";
 const baseState: SessionStatePayload = {
   busy: false,
   session_id: MOCK_SESSION_ID,
+  cwd: null,
   model: MODEL,
   permission_mode: "auto",
   activity: null,

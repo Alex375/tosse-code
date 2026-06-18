@@ -12,6 +12,7 @@
 // flushed on a single rAF tick, keeping re-renders at one frame per token burst.
 
 import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { events } from "./client";
 import type {
   SessionCommandsEvent,
@@ -22,6 +23,38 @@ import type {
 import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore } from "../store/conversationsStore";
 import { useCommandsStore } from "../store/commandsStore";
+import { worktreesKey } from "./useWorktrees";
+
+/** Repo path of a conversation (for invalidating its cached worktree list). */
+function repoPathForConv(convId: string): string | null {
+  const s = useConversationsStore.getState();
+  const conv = s.conversations.find((c) => c.id === convId);
+  return conv ? (s.repos.find((r) => r.id === conv.repoId)?.path ?? null) : null;
+}
+
+/** Flatten a tool_result's content (string, or array of {text}) to plain text. */
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : ""))
+      .join(" ");
+  }
+  return "";
+}
+
+/**
+ * Pull the worktree path out of an `EnterWorktree` tool result, e.g.
+ * "Created worktree at /…/.claude/worktrees/foo on branch …" or a "Switched to
+ * worktree at /…" message. Returns null if no path is found.
+ */
+function parseEnterWorktreePath(content: unknown): string | null {
+  const s = resultText(content);
+  const at = s.match(/worktree at (\/[^\n]+?)(?: on branch | on commit |[\n"']|$)/);
+  if (at) return at[1].trim();
+  const wt = s.match(/(\/\S*\/\.claude\/worktrees\/[^\s"']+)/);
+  return wt ? wt[1] : null;
+}
 
 interface DeltaBuf {
   text: string;
@@ -36,11 +69,18 @@ function convIdForHandle(handle: string): string | null {
 }
 
 export function useGlobalSessionEvents(): void {
+  const queryClient = useQueryClient();
   useEffect(() => {
     // Per-(session,messageId) delta buffers.
     const pending = new Map<string, DeltaBuf>();
     // Current open message id per session (for deltas without explicit message_id).
     const currentMsgId = new Map<string, string>();
+    // tool_use id → which worktree tool, for calls awaiting their result. On the
+    // RESULT (worktree now exists / cwd actually moved) we update the live cwd
+    // and refresh the list — not on the earlier tool_use block.
+    const worktreeToolIds = new Map<string, "EnterWorktree" | "ExitWorktree">();
+    // Last cwd seen per session, to invalidate the worktree list only on change.
+    const lastCwd = new Map<string, string>();
     const rafIds = new Map<string, number>();
     // Sessions already ensured in the store (avoid redundant state writes).
     const ensured = new Set<string>();
@@ -115,6 +155,33 @@ export function useGlobalSessionEvents(): void {
         currentMsgId.set(session, item.id);
       }
 
+      // Worktree awareness: the agent moves the session into/out of a worktree
+      // with EnterWorktree/ExitWorktree. Live cwd is NOT carried by the ongoing
+      // stream (only system/init has it), so we read the new worktree path from
+      // the tool's RESULT — that is the reliable live signal — and set the
+      // conversation's liveCwd so the indicator/badge follow the agent.
+      if (item.kind === "assistant_message") {
+        for (const b of item.blocks) {
+          if (b.type === "tool_use" && (b.name === "EnterWorktree" || b.name === "ExitWorktree")) {
+            worktreeToolIds.set(b.id, b.name);
+          }
+        }
+      } else if (item.kind === "tool_result" && worktreeToolIds.has(item.tool_use_id)) {
+        const tool = worktreeToolIds.get(item.tool_use_id)!;
+        worktreeToolIds.delete(item.tool_use_id);
+        const convs = useConversationsStore.getState();
+        if (tool === "EnterWorktree" && !item.is_error) {
+          const path = parseEnterWorktreePath(item.content);
+          if (path) convs.setLiveCwd(session, path);
+        } else if (tool === "ExitWorktree") {
+          // Back to where the session was spawned (its cwd is the source of truth).
+          const conv = convs.conversations.find((c) => c.id === session);
+          convs.setLiveCwd(session, conv?.cwd ?? null);
+        }
+        const repoPath = repoPathForConv(session);
+        if (repoPath) void queryClient.invalidateQueries({ queryKey: worktreesKey(repoPath) });
+      }
+
       useConversationStore.getState().applyItem(session, item);
     }
 
@@ -123,6 +190,15 @@ export function useGlobalSessionEvents(): void {
       if (!session) return;
       ensureOnce(session);
       useConversationStore.getState().applyState(session, payload.state);
+      // The session reports its current cwd via system/init (re-sent per turn).
+      // When it changes — e.g. a conversation spawned straight into a worktree —
+      // refresh the repo's worktree list so the new worktree is resolvable.
+      const cwd = payload.state.cwd;
+      if (cwd && lastCwd.get(session) !== cwd) {
+        lastCwd.set(session, cwd);
+        const repoPath = repoPathForConv(session);
+        if (repoPath) void queryClient.invalidateQueries({ queryKey: worktreesKey(repoPath) });
+      }
       if (payload.state.session_id) {
         useConversationsStore.getState().noteSessionId(session, payload.state.session_id);
       }

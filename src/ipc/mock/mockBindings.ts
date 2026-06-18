@@ -17,6 +17,8 @@ import type {
   SessionStateEvent,
   SlashCommand,
   TickEvent,
+  WorktreeInfo,
+  WorktreeStatus,
 } from "../bindings";
 import { idleState, ScenarioDriver } from "./scenario";
 
@@ -232,4 +234,68 @@ export const mockCommands = {
   async wipeAllData(): Promise<Result<null, string>> {
     return ok(null);
   },
+
+  // ---- Git worktrees: in-memory, no real `git` in the browser. Seeds a single
+  // main worktree per repo so the indicator/manager render, and reflects
+  // create/remove so the UI can be exercised end to end in dev/Playwright.
+  async listWorktrees(repoPath: string): Promise<Result<WorktreeInfo[], string>> {
+    return ok(mockWorktreeList(repoPath));
+  },
+
+  async worktreeStatus(_worktreePath: string): Promise<Result<WorktreeStatus, string>> {
+    return ok({ dirty: false, untracked: false, changed_files: 0, ahead: null, behind: null });
+  },
+
+  async createWorktree(
+    repoPath: string,
+    branch: string,
+    _baseRef: string | null,
+    _newBranch: boolean,
+  ): Promise<Result<WorktreeInfo, string>> {
+    const list = mockWorktreeList(repoPath);
+    const wt: WorktreeInfo = {
+      path: `${repoPath.replace(/\/+$/, "")}/.claude/worktrees/${branch.replace(/\//g, "-")}`,
+      branch,
+      head: "1".repeat(40),
+      is_main: false,
+      is_detached: false,
+      is_locked: false,
+      is_bare: false,
+    };
+    mockWorktrees.set(repoPath, [...list, wt]);
+    return ok(wt);
+  },
+
+  async removeWorktree(
+    repoPath: string,
+    worktreePath: string,
+    _force: boolean,
+  ): Promise<Result<null, string>> {
+    mockWorktrees.set(
+      repoPath,
+      mockWorktreeList(repoPath).filter((w) => w.path !== worktreePath),
+    );
+    return ok(null);
+  },
 };
+
+// Per-repo worktree set, seeded lazily with just the main worktree (== repoPath).
+const mockWorktrees = new Map<string, WorktreeInfo[]>();
+function mockWorktreeList(repoPath: string): WorktreeInfo[] {
+  let list = mockWorktrees.get(repoPath);
+  if (!list) {
+    list = [
+      {
+        path: repoPath,
+        branch: "main",
+        head: "0".repeat(40),
+        is_main: true,
+        is_detached: false,
+        is_locked: false,
+        is_bare: false,
+      },
+    ];
+    mockWorktrees.set(repoPath, list);
+  }
+  return list;
+}

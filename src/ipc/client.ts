@@ -24,4 +24,6 @@ export type {
   SessionStatePayload,
   SlashCommand,
   TickEvent,
+  WorktreeInfo,
+  WorktreeStatus,
 } from "./bindings";

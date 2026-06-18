@@ -97,6 +97,13 @@ export const ConductorComposer = forwardRef<
   const [text, setText] = useState("");
   const [model, setModelLocal] = useState(DEFAULT_MODEL);
   const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
+  // "Start this conversation in a fresh worktree" toggle — only meaningful on the
+  // FIRST message (before the session spawns); it disappears once spawned.
+  const [useWorktree, setUseWorktree] = useState(false);
+  const isFresh = useConversationsStore((s) => {
+    const c = s.conversations.find((cv) => cv.id === session);
+    return !!c && !c.sessionId && !c.handle;
+  });
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   // Let the conversation view focus the input on a background click (see
@@ -202,7 +209,8 @@ export const ConductorComposer = forwardRef<
     // Sending always (re)starts the stream lazily if the session is off/ended,
     // so there is no separate "ended" lock — only "busy" blocks a new send.
     useConversationsStore.getState().noteFirstMessage(session, t);
-    send.mutate(t);
+    // The worktree toggle only applies to the very first spawn of a conversation.
+    send.mutate({ text: t, worktree: useWorktree && isFresh });
     setText("");
     setSlashToken(null);
     requestAnimationFrame(autoGrow);
@@ -362,8 +370,60 @@ export const ConductorComposer = forwardRef<
           ))}
         </Menu>
         <span style={{ marginLeft: "auto" }} />
+        {/* Worktree checkbox — only before the session spawns (first message).
+            Explicit empty/checked box so the on/off state is unambiguous. */}
+        {isFresh ? (
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={useWorktree}
+            onClick={() => setUseWorktree((v) => !v)}
+            title="Démarrer cette conversation dans un nouveau worktree git"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              font: "inherit",
+              fontSize: 11,
+              cursor: "pointer",
+              padding: "4px 9px",
+              borderRadius: 7,
+              border: `1px solid ${useWorktree ? "var(--wf-accent)" : "var(--wf-line)"}`,
+              background: "transparent",
+              color: useWorktree ? "var(--wf-accent)" : "var(--wf-tx-lo)",
+            }}
+          >
+            <span
+              style={{
+                width: 13,
+                height: 13,
+                flex: "0 0 auto",
+                borderRadius: 3,
+                border: `1.5px solid ${useWorktree ? "var(--wf-accent)" : "var(--wf-line-2)"}`,
+                background: useWorktree ? "var(--wf-accent)" : "transparent",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#1a0f0a",
+                fontSize: 10,
+                lineHeight: 1,
+              }}
+            >
+              {useWorktree ? "✓" : ""}
+            </span>
+            <Ico name="branch" className="sm" />
+            Worktree
+          </button>
+        ) : null}
         <ContextRing ctx={{ pct: 0, used: "—", max: "200k" }} disabled />
       </div>
+
+      {/* Surface a failed send (e.g. worktree creation refused) — never silent. */}
+      {send.isError ? (
+        <div style={{ color: "#f0a9af", fontSize: 11.5, lineHeight: 1.4, padding: "4px 10px 0" }}>
+          {(send.error as Error).message}
+        </div>
+      ) : null}
     </div>
   );
 });
