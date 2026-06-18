@@ -29,6 +29,7 @@ async function unwrap<T>(p: Promise<Result<T, string>>): Promise<T> {
 
 export function useSendMessage(convId: string) {
   const addUserTurn = useConversationStore((s) => s.addUserTurn);
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
   const qc = useQueryClient();
   return useMutation({
     // `worktree` (first send only): spawn this conversation inside a freshly
@@ -51,6 +52,13 @@ export function useSendMessage(convId: string) {
         if (repoPath) void qc.invalidateQueries({ queryKey: worktreesKey(repoPath) });
       }
       return res;
+    },
+    // The send can fail before anything streams back — most importantly when the
+    // `claude` session fails to spawn (binary not found). Surface it as a visible
+    // error bubble instead of leaving the optimistic user turn dangling silently.
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      addErrorTurn(convId, message);
     },
   });
 }

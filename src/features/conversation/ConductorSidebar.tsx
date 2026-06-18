@@ -3,7 +3,7 @@ import { pickFolder } from "../../ipc/pickFolder";
 import {
   createConversationInRepo,
   repoName,
-  sessionStreamState,
+  streamStatus,
   useActiveConversationId,
   useConversations,
   useConversationsStore,
@@ -53,7 +53,7 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
     return (
       <div className={"cv-sess-row" + (active ? " on" : "")}>
         <span className="cv-sess" style={{ cursor: "default" }}>
-          <Dot s={sessionStreamState(state)} pulse />
+          <Dot s={streamStatus(conv.handle, state)} pulse />
           <input
             className="cv-sess-edit"
             value={draft}
@@ -79,7 +79,7 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
         onClick={() => select(conv.id)}
         onDoubleClick={startEdit}
       >
-        <Dot s={sessionStreamState(state)} pulse />
+        <Dot s={streamStatus(conv.handle, state)} pulse />
         <span className="cv-sess-n">{conv.name}</span>
       </button>
       <WorktreeBadge conv={conv} />

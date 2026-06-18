@@ -18,6 +18,35 @@ export type {
   SessionStatePayload,
 };
 
+/** Status of a single agent to-do, mirroring the TodoWrite tool's vocabulary. */
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
+/**
+ * One agent to-do, captured from a `TodoWrite` tool_use. `activeForm` is the
+ * present-tense phrasing some agents emit for the in-progress label; optional
+ * because the official client only relies on `content` + `status`.
+ */
+export interface TodoItem {
+  content: string;
+  status: TodoStatus;
+  activeForm?: string;
+}
+
+/**
+ * Compact, fully-derived view of a todo list: counts plus the "current" item.
+ * Pure-derivable from `TodoItem[]` (see `todoSummary`), so the conversation bar
+ * and any other consumer (the multi-agent dashboard) share one definition.
+ */
+export interface TodoSummary {
+  total: number;
+  completed: number;
+  inProgress: number;
+  pending: number;
+  /** First `in_progress` item, else first `pending`, else null. */
+  current: TodoItem | null;
+  allDone: boolean;
+}
+
 /** Lifecycle of a single turn as the UI sees it. */
 export type TurnStatus = "streaming" | "final" | "interrupted";
 
@@ -73,13 +102,24 @@ export interface NoticeItem {
 }
 
 /**
+ * A local, client-side error surfaced in the timeline — e.g. a message that could
+ * not be sent because the `claude` session failed to spawn. Not from the core's
+ * event stream: it makes an otherwise-silent command failure visible to the user.
+ */
+export interface ErrorItem {
+  id: string;
+  message: string;
+}
+
+/**
  * The ordered render stream for a session: turns, notices and turn-footers are all
  * positioned by a single id list so they render in arrival order.
  */
 export type TimelineEntry =
   | { kind: "turn"; id: string }
   | { kind: "notice"; id: string }
-  | { kind: "turn_result"; id: string };
+  | { kind: "turn_result"; id: string }
+  | { kind: "error"; id: string };
 
 /** Everything we hold for one live session. */
 export interface SessionEntry {
@@ -88,6 +128,8 @@ export interface SessionEntry {
   timeline: TimelineEntry[];
   turns: Record<string, Turn>;
   notices: Record<string, NoticeItem>;
+  /** Client-side error entries (failed sends), keyed by generated id. */
+  errors: Record<string, ErrorItem>;
   turnResults: Record<string, TurnResultMeta>;
   /** tool_use_id -> result, joined lazily (core does not pre-link them). */
   toolResults: Record<string, ToolResult>;
@@ -100,6 +142,12 @@ export interface SessionEntry {
   openBubble: Record<string, string | undefined>;
   /** Ordered turn ids per sub-agent (Task) thread, keyed by parent_tool_use_id. */
   subThreads: Record<string, string[]>;
+  /**
+   * The agent's current to-do list (last `TodoWrite` on the MAIN thread wins; a
+   * sub-agent keeps its own and does not clobber this). Empty until the agent
+   * writes one. Read via `useTodos` / `useTodoSummary`.
+   */
+  todos: TodoItem[];
   /** Monotonic counter for generated ids (user turns, notices, turn footers). */
   seq: number;
 }

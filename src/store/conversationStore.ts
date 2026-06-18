@@ -25,13 +25,17 @@ import type {
   SessionStatePayload,
 } from "../ipc/client";
 import type {
+  ErrorItem,
   NoticeItem,
   SessionEntry,
   TimelineEntry,
+  TodoItem,
+  TodoSummary,
   ToolResult,
   Turn,
   TurnResultMeta,
 } from "./types";
+import { latestTodosInBlocks, todoSummary } from "./todos";
 
 const connectingState: SessionStatePayload = {
   busy: false,
@@ -51,11 +55,13 @@ function emptyEntry(session: string): SessionEntry {
     timeline: [],
     turns: {},
     notices: {},
+    errors: {},
     turnResults: {},
     toolResults: {},
     pendingPermissions: [],
     openBubble: {},
     subThreads: {},
+    todos: [],
     seq: 0,
   };
 }
@@ -70,10 +76,19 @@ interface ConversationState {
   sessions: Record<string, SessionEntry>;
   ensureSession: (session: string) => void;
   applyState: (session: string, state: SessionStatePayload) => void;
+  /** Reset a session's live state to neutral (idle, not busy/ended) WITHOUT
+   *  touching its timeline. Used when the stream is turned off: the terminal
+   *  `ended` event is routed by the now-stale handle and gets dropped, so the
+   *  last live state (e.g. busy=true) would otherwise linger and block the
+   *  composer. Clears it so the conversation reads as off/idle (a send re-spawns). */
+  clearState: (session: string) => void;
   applyItem: (session: string, item: ConversationItem) => void;
   appendText: (session: string, messageId: string, text: string) => void;
   appendThinking: (session: string, messageId: string, text: string) => void;
   addUserTurn: (session: string, text: string) => void;
+  /** Append a visible error bubble to the timeline (e.g. a send that failed to
+   *  spawn the session). Makes an otherwise-silent command failure self-evident. */
+  addErrorTurn: (session: string, message: string) => void;
   enqueuePermission: (session: string, request: PermissionRequestPayload) => void;
   removePermission: (session: string, requestId: string) => void;
   resetSession: (session: string) => void;
@@ -162,6 +177,9 @@ export const useConversationStore = create<ConversationState>((set) => {
     applyState: (session, state) =>
       withEntry(session, (entry) => ({ ...entry, state })),
 
+    clearState: (session) =>
+      withEntry(session, (entry) => ({ ...entry, state: { ...connectingState } })),
+
     appendText: (session, messageId, text) =>
       appendBuffer(session, messageId, "streamingText", text),
 
@@ -186,6 +204,17 @@ export const useConversationStore = create<ConversationState>((set) => {
           seq: entry.seq + 1,
           turns: { ...entry.turns, [id]: turn },
           timeline: [...entry.timeline, { kind: "turn", id }],
+        };
+      }),
+
+    addErrorTurn: (session, message) =>
+      withEntry(session, (entry) => {
+        const id = `err_${entry.seq}`;
+        return {
+          ...entry,
+          seq: entry.seq + 1,
+          errors: { ...entry.errors, [id]: { id, message } },
+          timeline: [...entry.timeline, { kind: "error", id }],
         };
       }),
 
@@ -289,7 +318,15 @@ export const useConversationStore = create<ConversationState>((set) => {
               streamingThinking: "",
               hasThinking: blocks.some((b) => b.type === "thinking"),
             };
-            return { ...base, turns: { ...base.turns, [item.id]: turn } };
+            const next = { ...base, turns: { ...base.turns, [item.id]: turn } };
+            // Capture the agent's to-do list from a TodoWrite tool_use (last
+            // write wins). Scoped to the MAIN thread: a sub-agent (Task) keeps
+            // its own todos and must not overwrite the conversation-level list.
+            if (item.parent_tool_use_id === null) {
+              const todos = latestTodosInBlocks(item.blocks);
+              if (todos) return { ...next, todos };
+            }
+            return next;
           }
 
           case "tool_result": {
@@ -365,6 +402,7 @@ export const useConversationStore = create<ConversationState>((set) => {
 const EMPTY_TIMELINE: TimelineEntry[] = [];
 const EMPTY_PERMS: PermissionRequestPayload[] = [];
 const EMPTY_IDS: string[] = [];
+const EMPTY_TODOS: TodoItem[] = [];
 
 export const useSessionState = (session: string): SessionStatePayload | undefined =>
   useConversationStore((s) => s.sessions[session]?.state);
@@ -392,6 +430,9 @@ export const useTurnResult = (
 export const useNotice = (session: string, id: string): NoticeItem | undefined =>
   useConversationStore((s) => s.sessions[session]?.notices[id]);
 
+export const useError = (session: string, id: string): ErrorItem | undefined =>
+  useConversationStore((s) => s.sessions[session]?.errors[id]);
+
 export const usePendingPermissions = (
   session: string,
 ): PermissionRequestPayload[] =>
@@ -405,4 +446,17 @@ export const useSubThread = (
 ): string[] =>
   useConversationStore(
     useShallow((s) => s.sessions[session]?.subThreads[parentToolUseId] ?? EMPTY_IDS),
+  );
+
+/** The conversation's current to-do list (raw items, in agent order). */
+export const useTodos = (session: string): TodoItem[] =>
+  useConversationStore(
+    useShallow((s) => s.sessions[session]?.todos ?? EMPTY_TODOS),
+  );
+
+/** Derived progress summary (counts + current item) for the conversation's todos.
+ *  Shallow-compared so it only re-renders when the underlying list changes. */
+export const useTodoSummary = (session: string): TodoSummary =>
+  useConversationStore(
+    useShallow((s) => todoSummary(s.sessions[session]?.todos ?? EMPTY_TODOS)),
   );

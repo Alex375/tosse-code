@@ -3,6 +3,7 @@
 // Selected at runtime by provider.ts when window.__TAURI_INTERNALS__ is absent.
 
 import type {
+  ConversationItem,
   ConversationRecord,
   PermissionDecision,
   PermissionMode,
@@ -203,6 +204,13 @@ export const mockCommands = {
     // No OS terminal in the browser mock — just log what the real command would run.
     console.info(`[mock] openInTerminal: cd ${cwd} && claude --resume ${sessionId}`);
     return ok(null);
+  },
+
+  async loadSessionHistory(_sessionId: string): Promise<Result<ConversationItem[], string>> {
+    // No on-disk transcript in the browser mock — history lives only in the live
+    // scenario stream. Empty means "nothing to replay", so reload is a no-op and
+    // keeps whatever the scenario already rendered.
+    return ok([]);
   },
 
   // ---- Persistence: in-memory only (no real db in the browser). The store

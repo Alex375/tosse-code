@@ -71,8 +71,110 @@ fn export_bindings(builder: &Builder<tauri::Wry>) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// Sentinels wrapping the PATH the probe prints, so any rc-file noise on stdout
+/// (an asdf/nvm banner, a stray `echo` in `.zshrc`) can never be mistaken for a
+/// PATH entry — we read only what sits between them.
+#[cfg(target_os = "macos")]
+const PATH_START: &str = "__TOSSE_PATH_START__";
+#[cfg(target_os = "macos")]
+const PATH_END: &str = "__TOSSE_PATH_END__";
+
+/// Pull the PATH printed between our sentinels out of the probe's stdout,
+/// ignoring anything an rc file emitted around it. `None` when the markers are
+/// absent (treat as a failed probe and keep our own PATH).
+#[cfg(target_os = "macos")]
+fn extract_sentinel_path(stdout: &str) -> Option<&str> {
+    let start = stdout.find(PATH_START)? + PATH_START.len();
+    let rest = &stdout[start..];
+    let end = rest.find(PATH_END)?;
+    Some(&rest[..end])
+}
+
+/// Merge `resolved` (the login shell's PATH) ahead of `current` (ours), dropping
+/// empties and duplicates while preserving order. When `resolved == current` the
+/// duplicates collapse back onto it and the result equals the input — so dev
+/// (terminal-launched: the inherited PATH already IS the login-shell PATH) is left
+/// byte-for-byte unchanged.
+#[cfg(target_os = "macos")]
+fn merge_paths(resolved: &str, current: &str) -> String {
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    resolved
+        .split(':')
+        .chain(current.split(':'))
+        .filter(|p| !p.is_empty() && seen.insert(*p))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Restore the user's real shell `PATH` into our own environment.
+///
+/// A macOS GUI app launched from Finder / Dock / Spotlight does NOT inherit the
+/// user's shell PATH — it gets a minimal `/usr/bin:/bin:/usr/sbin:/sbin`. So the
+/// `claude` binary (typically in `~/.local/bin`), and every tool it later spawns
+/// (`git`, `node`, `rg`…), are unresolvable: the session silently fails to start
+/// and messages appear to do nothing. (In dev the app is launched from a terminal,
+/// inherits the full PATH, and this never bites — which is why it only breaks the
+/// installed bundle.)
+///
+/// Fix: ask the user's login+interactive shell for its real PATH and merge it into
+/// ours, so every child process resolves the same binaries a terminal would. The
+/// merge is order-stable and de-duplicated, so it is a no-op when the PATH is
+/// already rich. Best-effort and time-boxed off-thread: a missing or slow shell
+/// must never block startup.
+#[cfg(target_os = "macos")]
+fn repair_env_path() {
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let (tx, rx) = mpsc::channel();
+    // The login shell sources rc files that may be slow (nvm, asdf…) or even hang;
+    // run it off-thread and abandon it past the deadline so boot can't wedge.
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(&shell)
+            // -l login (.zprofile/.bash_profile) + -i interactive (.zshrc, where
+            // brew/asdf/nvm extend PATH) + -c. `command printf` + sentinels isolate
+            // the value from any rc-file stdout noise.
+            .arg("-lic")
+            .arg(format!("command printf '{PATH_START}%s{PATH_END}' \"$PATH\""))
+            // Null stdin so an rc that reads stdin can't block us; null stderr to
+            // keep rc noise off ours. Only stdout (the sentinel value) is captured.
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        let _ = tx.send(out);
+    });
+
+    // Time-box: a slow/hung login shell must never wedge boot. The abandoned shell
+    // is short-lived and OS-reaped.
+    let stdout = match rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(out)) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
+        _ => return, // timed out, shell missing, or non-zero exit — keep our PATH
+    };
+    let Some(resolved) = extract_sentinel_path(&stdout).map(str::trim) else {
+        return; // markers absent (polluted/garbled output) — keep our PATH
+    };
+    if resolved.is_empty() {
+        return;
+    }
+
+    let current = std::env::var("PATH").unwrap_or_default();
+    let merged = merge_paths(resolved, &current);
+    // Only touch the env when the merge actually adds something (dev no-op).
+    if merged != current {
+        std::env::set_var("PATH", merged);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Restore the user's PATH before anything can spawn a child process (the lazy
+    // `claude` session, any tool it runs). Must run first — see fn doc.
+    #[cfg(target_os = "macos")]
+    repair_env_path();
+
     let specta_builder = ipc_builder();
 
     // Generate the TS client into src/ipc/bindings.ts (debug builds only).
@@ -174,5 +276,57 @@ mod tests {
     #[test]
     fn export_bindings_regenerates_ts_client() {
         export_bindings(&ipc_builder()).expect("bindings export should succeed");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod path_repair_tests {
+    use super::*;
+
+    #[test]
+    fn merge_puts_resolved_first_and_dedupes_in_order() {
+        // Resolved entries lead; duplicates already present in `current` are not
+        // repeated; current-only entries are appended.
+        let merged = merge_paths(
+            "/opt/homebrew/bin:/usr/bin",
+            "/usr/bin:/bin:/sbin",
+        );
+        assert_eq!(merged, "/opt/homebrew/bin:/usr/bin:/bin:/sbin");
+    }
+
+    #[test]
+    fn merge_drops_empty_segments() {
+        assert_eq!(merge_paths(":/a::/b:", "/a:"), "/a:/b");
+    }
+
+    #[test]
+    fn merge_is_noop_when_resolved_equals_current() {
+        // Dev: the inherited PATH already IS the login-shell PATH -> identical
+        // output, so repair_env_path's `merged != current` guard skips set_var.
+        let current = "/opt/homebrew/bin:/usr/bin:/bin";
+        assert_eq!(merge_paths(current, current), current);
+    }
+
+    #[test]
+    fn extract_reads_value_between_sentinels() {
+        let stdout = format!("{PATH_START}/a:/b{PATH_END}");
+        assert_eq!(extract_sentinel_path(&stdout), Some("/a:/b"));
+    }
+
+    #[test]
+    fn extract_ignores_rc_file_noise_around_the_value() {
+        // An rc file printed a banner before AND after the real value.
+        let stdout = format!(
+            "Restored session: 42\n{PATH_START}/opt/homebrew/bin:/usr/bin{PATH_END}\nwelcome!\n"
+        );
+        assert_eq!(
+            extract_sentinel_path(&stdout),
+            Some("/opt/homebrew/bin:/usr/bin"),
+        );
+    }
+
+    #[test]
+    fn extract_returns_none_when_markers_absent() {
+        assert_eq!(extract_sentinel_path("/usr/bin:/bin no markers here"), None);
     }
 }

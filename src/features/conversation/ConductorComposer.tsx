@@ -417,13 +417,6 @@ export const ConductorComposer = forwardRef<
         ) : null}
         <ContextRing ctx={{ pct: 0, used: "—", max: "200k" }} disabled />
       </div>
-
-      {/* Surface a failed send (e.g. worktree creation refused) — never silent. */}
-      {send.isError ? (
-        <div style={{ color: "#f0a9af", fontSize: 11.5, lineHeight: 1.4, padding: "4px 10px 0" }}>
-          {(send.error as Error).message}
-        </div>
-      ) : null}
     </div>
   );
 });

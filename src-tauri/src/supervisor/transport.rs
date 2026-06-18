@@ -15,7 +15,7 @@
 //! on the [`CliMessage`] stream this layer produces and the [`Transport::send_line`]
 //! escape hatch it exposes.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -73,6 +73,52 @@ fn default_claude_bin() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("claude"))
 }
 
+/// Resolve the binary actually handed to `Command::new` at spawn time.
+///
+/// Normally `claude` resolves on `PATH` (the terminal PATH in dev; the PATH
+/// restored at boot by `lib::repair_env_path` in a Finder-launched bundle). This
+/// is the belt to that suspenders: if `claude` is a bare name that STILL won't
+/// resolve — e.g. the login-shell PATH probe failed or timed out — fall back to a
+/// well-known absolute install location so the session can start anyway. An
+/// explicit path (anything with a directory component, incl. `$TOSSE_CLAUDE_BIN`)
+/// or a name that already resolves is returned unchanged.
+fn resolve_bin(bin: &Path) -> PathBuf {
+    let has_dir = bin.parent().map(|p| !p.as_os_str().is_empty()).unwrap_or(false);
+    if has_dir || find_on_path(bin).is_some() {
+        return bin.to_path_buf();
+    }
+    if bin.as_os_str() == "claude" {
+        if let Some(found) = known_claude_locations().into_iter().find(|p| p.is_file()) {
+            return found;
+        }
+    }
+    bin.to_path_buf()
+}
+
+/// A tiny `which`: is `bin` resolvable as a file on the current `$PATH`? Lets us
+/// tell whether a bare program name will spawn before falling back to absolute
+/// install locations.
+fn find_on_path(bin: &Path) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(bin))
+        .find(|p| p.is_file())
+}
+
+/// Well-known install locations for the `claude` binary, most-specific first.
+/// Used only as a fallback when `claude` does not resolve on `PATH`.
+fn known_claude_locations() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        out.push(home.join(".local/bin/claude"));
+        out.push(home.join(".claude/local/claude"));
+        out.push(home.join(".bun/bin/claude"));
+    }
+    out.push(PathBuf::from("/opt/homebrew/bin/claude"));
+    out.push(PathBuf::from("/usr/local/bin/claude"));
+    out
+}
+
 /// Build a `user` turn message in the Anthropic message shape (spec §2.3).
 pub fn user_message(text: impl Into<String>) -> Value {
     json!({
@@ -96,7 +142,17 @@ pub enum TransportError {
 impl std::fmt::Display for TransportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TransportError::Spawn(e) => write!(f, "failed to spawn claude: {e}"),
+            // Human-readable + actionable: this string is surfaced verbatim in the
+            // UI (commands map the error to a string). NotFound is the common case
+            // for a Finder-launched bundle whose PATH could not be repaired.
+            TransportError::Spawn(e) if e.kind() == std::io::ErrorKind::NotFound => write!(
+                f,
+                "Impossible de démarrer « claude » : binaire introuvable. \
+                 Vérifie que Claude Code est installé (essaie « claude --version » \
+                 dans un terminal), ou définis la variable TOSSE_CLAUDE_BIN sur le \
+                 chemin complet du binaire.",
+            ),
+            TransportError::Spawn(e) => write!(f, "Impossible de démarrer « claude » : {e}"),
             TransportError::Closed => write!(f, "claude session transport is closed"),
         }
     }
@@ -126,7 +182,7 @@ impl Transport {
     pub fn spawn(
         cfg: SpawnConfig,
     ) -> Result<(Transport, mpsc::UnboundedReceiver<CliMessage>), TransportError> {
-        let mut cmd = Command::new(&cfg.claude_bin);
+        let mut cmd = Command::new(resolve_bin(&cfg.claude_bin));
 
         // Persistent bidirectional stream-json mode. NOT `-p`/`--print`: with
         // `--input-format stream-json` the process lives for the whole session

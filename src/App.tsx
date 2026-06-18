@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ConductorConversation } from "./features/conversation/ConductorConversation";
 import { OpenInTerminalButton } from "./features/conversation/OpenInTerminalButton";
+import { StreamControl } from "./features/conversation/StreamControl";
 import { WorktreeIndicator } from "./features/git/WorktreeIndicator";
 import { WorktreeManager } from "./features/git/WorktreeManager";
 import { FleetPlaceholder } from "./features/fleet/FleetPlaceholder";
@@ -47,6 +48,7 @@ export default function App() {
         view === "conversation" && activeRepo ? (
           <>
             {active ? <WorktreeIndicator conv={active} repoPath={activeRepo.path} /> : null}
+            {active ? <StreamControl key={active.id} conv={active} /> : null}
             {active ? <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} /> : null}
             <Tag icon="folder" title={activeRepo.path}>
               {repoName(activeRepo.path)}

@@ -48,7 +48,9 @@ pub enum SessionError {
 impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SessionError::Spawn(e) => write!(f, "failed to start session: {e}"),
+            // Delegate to the transport error, which already carries a
+            // human-readable, actionable message surfaced in the UI.
+            SessionError::Spawn(e) => write!(f, "{e}"),
             SessionError::Closed => write!(f, "session is closed"),
         }
     }

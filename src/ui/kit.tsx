@@ -44,6 +44,7 @@ const WF_PATHS: Record<string, string> = {
   pr: "M7 6v9M7 6a2 2 0 1 0-.01 0ZM7 15a2 2 0 1 0 .01 0ZM15 16a2 2 0 1 0 .01 0ZM15 14V9a2 2 0 0 0-2-2h-3l2.5-2.5M9.5 7 12 9.5",
   chev: "M6 9l5 5 5-5",
   refresh: "M4.5 11a6.5 6.5 0 0 1 11-4.7M15.5 3.5v3h-3M17.5 11a6.5 6.5 0 0 1-11 4.7M6.5 18.5v-3h3",
+  restart: "M17 11a6 6 0 1 1-2.2-4.6M17 5.5V9.5H13",
   form: "M5 4h12v14H5zM8 8h6M8 11h6M8 14h3",
   diamond: "M11 3 18 11 11 19 4 11Z",
   stopc: "M6 6h10v10H6z",
@@ -104,15 +105,16 @@ export function NavBtn({
   );
 }
 
-export type StreamState = "work" | "ask" | "err" | "review" | "done" | "arch";
+export type StreamState = "work" | "ask" | "err" | "review" | "done" | "arch" | "off";
 
 export const WF_STATUS: Record<StreamState, { label: string; pill: string; dot: string }> = {
   work: { label: "En cours", pill: "run", dot: "run" },
   ask: { label: "Action requise", pill: "att", dot: "att" },
   err: { label: "Action requise", pill: "err", dot: "err" },
   review: { label: "À relire", pill: "wait", dot: "wait" },
-  done: { label: "Terminé", pill: "done", dot: "done" },
+  done: { label: "Actif", pill: "done", dot: "done" },
   arch: { label: "Archivé", pill: "arch", dot: "arch" },
+  off: { label: "Éteint", pill: "off", dot: "off" },
 };
 export const WF_ATTENTION: StreamState[] = ["ask", "err", "review"];
 

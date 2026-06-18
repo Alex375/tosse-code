@@ -3,6 +3,7 @@ import {
   loadConversationHistory,
   type Conversation,
 } from "../../store/conversationsStore";
+import { TodoBar } from "../todos/TodoBar";
 import { ConductorComposer, type ComposerHandle } from "./ConductorComposer";
 import { ConductorSidebar } from "./ConductorSidebar";
 import { ConductorThread } from "./ConductorThread";
@@ -54,6 +55,7 @@ export function ConductorConversation({ active }: { active: Conversation | null 
           onClick={focusComposerOnClick}
         >
           <ConductorThread session={active.id} />
+          <TodoBar session={active.id} />
           <ConductorComposer ref={composerRef} session={active.id} />
         </div>
       ) : (

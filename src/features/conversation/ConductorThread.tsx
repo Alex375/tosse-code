@@ -3,6 +3,7 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import type { JsonValue, NormalizedBlock, PermissionRequestPayload } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
 import {
+  useError,
   usePendingPermissions,
   useSessionState,
   useTimeline,
@@ -44,6 +45,17 @@ function MsgUser({ text }: { text: string }) {
     <div className="cv-msg cv-user">
       <Avatar>VS</Avatar>
       <div className="cv-bubble">{text}</div>
+    </div>
+  );
+}
+
+function MsgError({ session, errorId }: { session: string; errorId: string }) {
+  const err = useError(session, errorId);
+  if (!err) return null;
+  return (
+    <div className={styles.errorBubble} role="alert">
+      <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
+      <span>{err.message}</span>
     </div>
   );
 }
@@ -261,11 +273,13 @@ export function ConductorThread({ session, wide }: { session: string; wide?: boo
               aujourd'hui
               <span className="wf-line" />
             </div>
-            {timeline.map((entry) =>
-              entry.kind === "turn" ? (
-                <TurnRow key={entry.id} session={session} turnId={entry.id} />
-              ) : null,
-            )}
+            {timeline.map((entry) => {
+              if (entry.kind === "turn")
+                return <TurnRow key={entry.id} session={session} turnId={entry.id} />;
+              if (entry.kind === "error")
+                return <MsgError key={entry.id} session={session} errorId={entry.id} />;
+              return null;
+            })}
             {pending.map((req) => (
               <AskTurn key={req.request_id} session={session} request={req} />
             ))}
