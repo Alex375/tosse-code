@@ -3,6 +3,9 @@
   width: 100%;
   min-width: 0;
   overflow-x: hidden;
+  /* Long unbreakable tokens (URLs, file paths) wrap instead of widening the
+     bubble. Code fences keep white-space:pre and scroll on their own. */
+  overflow-wrap: anywhere;
   color: var(--text-primary);
   font-size: var(--fs-base);
   line-height: var(--lh-body);

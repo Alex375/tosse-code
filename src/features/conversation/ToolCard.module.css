@@ -69,28 +69,6 @@
   color: var(--text-primary);
 }
 
-/* Expandable show-more container */
-.expandable {
-  position: relative;
-}
-.expandableInner {
-  overflow: hidden;
-}
-.showMore {
-  margin-top: var(--space-2);
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  border-radius: var(--radius-pill);
-  padding: var(--space-1) var(--space-4);
-  cursor: pointer;
-}
-.showMore:hover {
-  color: var(--text-primary);
-  border-color: var(--border-strong);
-}
-
 /* status dot */
 .dotOk {
   color: var(--success);

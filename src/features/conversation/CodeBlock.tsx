@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import { memo, useState, type ReactNode } from "react";
+import { Expandable } from "../../ui/Expandable";
 import { IconButton } from "../../ui/IconButton";
 import styles from "./Markdown.module.css";
 
@@ -30,9 +31,11 @@ export const CodeBlock = memo(function CodeBlock({ code }: CodeBlockProps) {
         className={styles.copyBtn}
         onClick={copy}
       />
-      <pre className={styles.pre}>
-        <code>{code}</code>
-      </pre>
+      <Expandable>
+        <pre className={styles.pre}>
+          <code>{code}</code>
+        </pre>
+      </Expandable>
     </div>
   );
 });

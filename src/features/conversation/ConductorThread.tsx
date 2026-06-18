@@ -91,11 +91,16 @@ function ConductorToolCard({
       <div
         className="cv-tool-h"
         onClick={canToggle ? () => setOpen((o) => !o) : undefined}
+        role={canToggle ? "button" : undefined}
         style={canToggle ? { cursor: "pointer" } : undefined}
       >
         <Ico name={icon} className="sm" />
         <span className="cv-tool-t">{label}</span>
-        {primaryArg ? <span className="cv-tool-m wf-mono">{primaryArg}</span> : null}
+        {primaryArg ? (
+          <span className="cv-tool-m wf-mono" title={primaryArg}>
+            {primaryArg}
+          </span>
+        ) : null}
         <span className={styles.status}>
           {running ? (
             <span className={styles.runDot} />
