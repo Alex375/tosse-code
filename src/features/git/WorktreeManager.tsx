@@ -254,6 +254,9 @@ function WorktreeRow({
         Le dossier <span className="wf-mono">{worktree.path}</span> sera supprimé. La branche{" "}
         <span className="wf-mono">{worktreeLabel(worktree)}</span> est conservée (seul le worktree
         est retiré).
+        {convs.length > 0
+          ? ` ⚠️ ${convs.length} conversation${convs.length > 1 ? "s" : ""} y ${convs.length > 1 ? "sont rattachées et perdront" : "est rattachée et perdra"} son dossier de travail (tu pourras les relancer, mais plus dans ce worktree).`
+          : ""}
         {dirty
           ? " ⚠️ Ce worktree a des modifications non commitées qui seront définitivement perdues."
           : ""}

@@ -135,6 +135,11 @@ pub fn user_message(text: impl Into<String>) -> Value {
 pub enum TransportError {
     /// The `claude` process failed to spawn.
     Spawn(std::io::Error),
+    /// The conversation's working directory no longer exists (e.g. its worktree
+    /// was removed, or the folder was moved) — so `claude` can't be launched
+    /// there. Kept distinct from [`Spawn`] because a missing cwd and a missing
+    /// binary both surface as `NotFound`, and the two need different fixes.
+    CwdMissing(std::path::PathBuf),
     /// The writer channel is closed — the session is gone.
     Closed,
 }
@@ -153,6 +158,12 @@ impl std::fmt::Display for TransportError {
                  chemin complet du binaire.",
             ),
             TransportError::Spawn(e) => write!(f, "Impossible de démarrer « claude » : {e}"),
+            TransportError::CwdMissing(p) => write!(
+                f,
+                "Le dossier de travail de cette conversation n'existe plus : {}. \
+                 Son worktree a peut-être été supprimé, ou le dossier déplacé.",
+                p.display(),
+            ),
             TransportError::Closed => write!(f, "claude session transport is closed"),
         }
     }
@@ -236,6 +247,14 @@ impl Transport {
         // miss those grandchildren.
         #[cfg(unix)]
         cmd.process_group(0);
+
+        // A conversation whose cwd has vanished (e.g. its worktree was removed)
+        // makes `spawn` fail with NotFound — indistinguishable from a missing
+        // `claude` binary. Check first so the error names the real cause. (A
+        // relative cwd like "." resolves against the process dir and exists.)
+        if !cfg.cwd.exists() {
+            return Err(TransportError::CwdMissing(cfg.cwd.clone()));
+        }
 
         let mut child = cmd.spawn().map_err(TransportError::Spawn)?;
         let pid = child.id();
@@ -460,6 +479,19 @@ mod tests {
         let cfg = SpawnConfig::new("/tmp");
         assert_eq!(cfg.claude_bin, PathBuf::from("claude"));
         assert_eq!(cfg.cwd, PathBuf::from("/tmp"));
+    }
+
+    /// A vanished cwd (e.g. a conversation whose worktree was deleted) must report
+    /// `CwdMissing` — NOT the misleading "claude binary not found" — and must do so
+    /// BEFORE spawning, so no real `claude` is needed for this test.
+    #[test]
+    fn spawn_on_missing_cwd_reports_cwd_not_binary() {
+        let missing = PathBuf::from("/tosse/definitely/missing/worktree-gone");
+        match Transport::spawn(SpawnConfig::new(missing.clone())) {
+            Err(TransportError::CwdMissing(p)) => assert_eq!(p, missing),
+            Err(other) => panic!("expected CwdMissing, got error: {other:?}"),
+            Ok(_) => panic!("expected CwdMissing, but spawn succeeded"),
+        }
     }
 
     /// ACCEPTANCE (zero orphans): a session's grandchild — the kind `claude`
