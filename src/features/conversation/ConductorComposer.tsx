@@ -86,8 +86,8 @@ export interface ComposerHandle {
 
 export const ConductorComposer = forwardRef<
   ComposerHandle,
-  { session: string; wide?: boolean }
->(function ConductorComposer({ session, wide }, ref) {
+  { session: string; wide?: boolean; onSent?: () => void }
+>(function ConductorComposer({ session, wide, onSent }, ref) {
   const state = useSessionState(session);
   const send = useSendMessage(session);
   const interrupt = useInterrupt(session);
@@ -214,6 +214,9 @@ export const ConductorComposer = forwardRef<
     setText("");
     setSlashToken(null);
     requestAnimationFrame(autoGrow);
+    // Sending always snaps the thread to the bottom, even if the user had scrolled
+    // up — this re-engages stick-to-bottom so the incoming reply stays in view.
+    onSent?.();
   };
 
   const doSend = () => sendText(text);

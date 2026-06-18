@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useStickToBottom } from "use-stick-to-bottom";
+import type { StickToBottomInstance } from "use-stick-to-bottom";
 import type { JsonValue, NormalizedBlock, PermissionRequestPayload } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
 import {
@@ -247,15 +247,25 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
   );
 }
 
-export function ConductorThread({ session, wide }: { session: string; wide?: boolean }) {
+export function ConductorThread({
+  session,
+  wide,
+  scrollRef,
+  contentRef,
+}: {
+  session: string;
+  wide?: boolean;
+  // The stick-to-bottom instance is owned by the parent pane so the composer can
+  // snap the thread to the bottom on send (see ConductorConversation).
+  scrollRef: StickToBottomInstance["scrollRef"];
+  contentRef: StickToBottomInstance["contentRef"];
+}) {
   const timeline = useTimeline(session);
   const pending = usePendingPermissions(session);
   const state = useSessionState(session);
   const busy = state?.busy ?? false;
   const awaiting = state?.awaiting_permission ?? false;
   const empty = timeline.length === 0 && pending.length === 0;
-
-  const { scrollRef, contentRef } = useStickToBottom();
 
   return (
     <div className="cv-thread" ref={scrollRef}>

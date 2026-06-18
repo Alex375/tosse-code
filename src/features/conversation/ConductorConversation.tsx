@@ -1,4 +1,10 @@
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  type MouseEvent as ReactMouseEvent,
+  type RefObject,
+} from "react";
+import { useStickToBottom } from "use-stick-to-bottom";
 import {
   loadConversationHistory,
   type Conversation,
@@ -46,18 +52,15 @@ export function ConductorConversation({ active }: { active: Conversation | null 
     <>
       <ConductorSidebar />
       {active ? (
-        // Keyed by the STABLE id so the thread/composer remount per conversation
-        // and survive the live handle being (re)bound underneath them.
-        <div
+        // Keyed by the STABLE id so the pane (thread + composer + its stick-to-bottom
+        // state) remounts per conversation and survives the live handle being
+        // (re)bound underneath it.
+        <ConversationPane
           key={active.id}
-          className="wf-col"
-          style={{ flex: 1, minWidth: 0 }}
-          onClick={focusComposerOnClick}
-        >
-          <ConductorThread session={active.id} />
-          <TodoBar session={active.id} />
-          <ConductorComposer ref={composerRef} session={active.id} />
-        </div>
+          session={active.id}
+          composerRef={composerRef}
+          onBackgroundClick={focusComposerOnClick}
+        />
       ) : (
         <div
           className="wf-col"
@@ -78,5 +81,30 @@ export function ConductorConversation({ active }: { active: Conversation | null 
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * The active conversation's column: thread + todo bar + composer, sharing one
+ * stick-to-bottom instance. The thread is the scroll container; the composer
+ * snaps it to the bottom on send (`onSent`). Mounted with a per-conversation key
+ * so the scroll state (whether the user has scrolled up) resets on switch.
+ */
+function ConversationPane({
+  session,
+  composerRef,
+  onBackgroundClick,
+}: {
+  session: string;
+  composerRef: RefObject<ComposerHandle>;
+  onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
+}) {
+  const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
+  return (
+    <div className="wf-col" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
+      <ConductorThread session={session} scrollRef={scrollRef} contentRef={contentRef} />
+      <TodoBar session={session} />
+      <ConductorComposer ref={composerRef} session={session} onSent={() => scrollToBottom()} />
+    </div>
   );
 }
