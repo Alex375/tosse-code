@@ -18,6 +18,7 @@ import type { WorktreeInfo } from "../../ipc/client";
 import {
   createConversationInWorktree,
   repoName,
+  stopConversationSession,
   useConversations,
   useConversationsStore,
   type Conversation,
@@ -144,26 +145,46 @@ function WorktreeRow({
   const { data: status, isError: statusError, error: statusErr } = useWorktreeStatus(worktree.path);
   const remove = useRemoveWorktree(repoPath);
   const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const liveHere = convs.some((c) => c.handle != null);
   const dirty = !!status && (status.dirty || status.untracked);
-  const canDelete = !worktree.is_main && !liveHere;
-
+  // Only the main worktree is ever undeletable. A live session no longer blocks
+  // deletion — it's allowed, behind a loud warning in the confirm dialog.
+  const canDelete = !worktree.is_main;
   const disabledReason = worktree.is_main
     ? "Le worktree principal ne peut pas être supprimé."
-    : liveHere
-      ? "Une session tourne dans ce worktree — arrête-la d'abord."
-      : undefined;
+    : undefined;
 
-  function confirmDelete() {
-    // `force` only when there is uncommitted/untracked work — and only ever
-    // through this explicit, separate confirmation (the strict guard).
+  async function confirmDelete() {
+    setDeleting(true);
+    // Stop any live sessions rooted here FIRST: their cwd is about to vanish.
+    // Ending them cleanly (the user was warned) means a later message re-spawns
+    // them in the main checkout (the cwd-missing recovery) instead of talking to
+    // a process whose directory is gone. Best-effort — proceed even if a stop fails.
+    try {
+      await Promise.all(
+        convs.filter((c) => c.handle != null).map((c) => stopConversationSession(c.id)),
+      );
+    } catch {
+      /* ignore — the forced removal below still goes through */
+    }
+    // Force when there's a live session or uncommitted work (git would refuse a
+    // dirty worktree otherwise). Always via this explicit, separate confirmation.
     remove.mutate(
-      { worktreePath: worktree.path, force: dirty },
-      // Close the dialog on success AND on error: on error the row's red error
-      // message (remove.error) must become visible — it would otherwise stay
-      // hidden behind the still-open dialog, looking like nothing happened.
-      { onSuccess: () => setConfirming(false), onError: () => setConfirming(false) },
+      { worktreePath: worktree.path, force: dirty || liveHere },
+      // Close on success AND error so the row's red error message is visible
+      // (it would otherwise stay hidden behind the still-open dialog).
+      {
+        onSuccess: () => {
+          setDeleting(false);
+          setConfirming(false);
+        },
+        onError: () => {
+          setDeleting(false);
+          setConfirming(false);
+        },
+      },
     );
   }
 
@@ -245,17 +266,28 @@ function WorktreeRow({
       <ConfirmDialog
         open={confirming}
         danger
-        busy={remove.isPending}
+        busy={deleting || remove.isPending}
         title={`Supprimer le worktree « ${worktreeLabel(worktree)} » ?`}
-        confirmLabel={dirty ? "Forcer la suppression" : "Supprimer"}
+        confirmLabel={liveHere ? "Supprimer quand même" : dirty ? "Forcer la suppression" : "Supprimer"}
         onCancel={() => setConfirming(false)}
         onConfirm={confirmDelete}
       >
+        {liveHere ? (
+          <div className={styles.dangerBox}>
+            ⚠️ DANGER — {convs.filter((c) => c.handle != null).length} session
+            {convs.filter((c) => c.handle != null).length > 1 ? "s" : ""} Claude{" "}
+            <strong>active{convs.filter((c) => c.handle != null).length > 1 ? "s" : ""}</strong>{" "}
+            tourne{convs.filter((c) => c.handle != null).length > 1 ? "nt" : ""} dans ce worktree
+            (peut-être en train d'écrire). Les supprimer maintenant va{" "}
+            <strong>arrêter ces sessions</strong> et peut faire <strong>perdre le travail en
+            cours</strong>.
+          </div>
+        ) : null}
         Le dossier <span className="wf-mono">{worktree.path}</span> sera supprimé. La branche{" "}
         <span className="wf-mono">{worktreeLabel(worktree)}</span> est conservée (seul le worktree
         est retiré).
         {convs.length > 0
-          ? ` ⚠️ ${convs.length} conversation${convs.length > 1 ? "s" : ""} y ${convs.length > 1 ? "sont rattachées et perdront" : "est rattachée et perdra"} son dossier de travail (tu pourras les relancer, mais plus dans ce worktree).`
+          ? ` ⚠️ ${convs.length} conversation${convs.length > 1 ? "s" : ""} y ${convs.length > 1 ? "sont rattachées et perdront" : "est rattachée et perdra"} son dossier de travail (tu pourras les relancer, mais dans l'arbre principal).`
           : ""}
         {dirty
           ? " ⚠️ Ce worktree a des modifications non commitées qui seront définitivement perdues."
