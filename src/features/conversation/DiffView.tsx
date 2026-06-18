@@ -43,15 +43,17 @@ export function DiffView({ path, oldText, newText = "" }: DiffViewProps) {
         <pre className={styles.writePre}>{newText}</pre>
       ) : (
         <div className={styles.lines}>
-          {lines.map((l, idx) => (
-            <div key={idx} className={clsx(styles.line, styles[l.type])}>
-              <span className={styles.gutter}>{l.oldNo ?? l.newNo ?? ""}</span>
-              <span className={styles.sign}>
-                {l.type === "add" ? "+" : l.type === "del" ? "−" : " "}
-              </span>
-              <span className={styles.text}>{l.text || " "}</span>
-            </div>
-          ))}
+          <div className={styles.linesInner}>
+            {lines.map((l, idx) => (
+              <div key={idx} className={clsx(styles.line, styles[l.type])}>
+                <span className={styles.gutter}>{l.oldNo ?? l.newNo ?? ""}</span>
+                <span className={styles.sign}>
+                  {l.type === "add" ? "+" : l.type === "del" ? "−" : " "}
+                </span>
+                <span className={styles.text}>{l.text || " "}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -42,6 +42,15 @@
   line-height: 1.5;
 }
 
+/* The inner box sizes to the WIDEST line (max-content) and is at least as wide
+   as the visible area; every .line then fills it — so ALL add/del row backgrounds
+   span the full scroll width (right to the end), not just their own text, even
+   when scrolled hard right. */
+.linesInner {
+  width: max-content;
+  min-width: 100%;
+}
+
 .line {
   display: grid;
   grid-template-columns: 40px 1ch 1fr;
