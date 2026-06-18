@@ -12,6 +12,7 @@
 
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
+import { commands } from "../ipc/client";
 import type { SlashCommand } from "../ipc/client";
 
 const STORAGE_KEY = "tosse:slash-commands-by-cwd";
@@ -77,4 +78,31 @@ export function useSlashCommands(cwd: string | null | undefined): SlashCommand[]
   return useCommandsStore(
     useShallow((s) => (cwd && s.byCwd[cwd]) || s.lastSeen || EMPTY),
   );
+}
+
+// cwds whose one-shot fetch has already been attempted this run (dedupe).
+const fetchAttempted = new Set<string>();
+
+/**
+ * Make sure a cwd's command catalogue is loaded, fetching it once via a
+ * short-lived `claude` if we have never seen it. This is what makes the `/` menu
+ * work BEFORE the lazy session spawns — without it, typing `/` as the first
+ * thing in a fresh repo shows nothing until a message is sent. Cheap and
+ * idempotent: skipped if already cached (incl. from localStorage) or in flight.
+ */
+export async function prefetchSlashCommands(cwd: string | null | undefined): Promise<void> {
+  if (!cwd) return;
+  const store = useCommandsStore.getState();
+  if (store.byCwd[cwd]?.length || fetchAttempted.has(cwd)) return;
+  fetchAttempted.add(cwd);
+  try {
+    const res = await commands.fetchSlashCommands(cwd);
+    if (res.status === "ok" && res.data.length > 0) {
+      useCommandsStore.getState().setCommands(cwd, res.data);
+    } else {
+      fetchAttempted.delete(cwd); // empty/failed → allow a later retry
+    }
+  } catch {
+    fetchAttempted.delete(cwd);
+  }
 }

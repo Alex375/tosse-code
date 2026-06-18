@@ -10,7 +10,7 @@ use tauri::Manager;
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
 use crate::supervisor::control::{PermissionDecision, PermissionMode};
-use crate::supervisor::model::ConversationItem;
+use crate::supervisor::model::{ConversationItem, SlashCommand};
 use crate::supervisor::session::{self, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
 
@@ -98,6 +98,50 @@ pub async fn spawn_session(
     let handle = session::spawn_session(id.clone(), cfg, emitter, on_exit).map_err(|e| e.to_string())?;
     sessions.insert(id.clone(), handle);
     Ok(id)
+}
+
+/// Fetch the slash commands available in `cwd` WITHOUT starting a persistent
+/// session. Spawns a short-lived `claude`, performs the `initialize` handshake
+/// (spec §4.4), reads the advertised commands from its `control_response`, and
+/// tears the process down. This lets the composer populate its `/` autocomplete
+/// before the lazy session spawn — so typing `/pickup` as the very first thing
+/// works — without leaving a process alive. Returns an empty list if the
+/// handshake does not complete within the deadline (the live session, spawned on
+/// the first message, will still emit commands later via `SessionCommandsEvent`).
+#[tauri::command]
+#[specta::specta]
+pub async fn fetch_slash_commands(cwd: String) -> Result<Vec<SlashCommand>, String> {
+    use crate::supervisor::control;
+    use crate::supervisor::protocol::CliMessage;
+    use crate::supervisor::transport::Transport;
+
+    let (mut transport, mut rx) =
+        Transport::spawn(SpawnConfig::new(PathBuf::from(cwd))).map_err(|e| e.to_string())?;
+    // This transport serves exactly one request, so a fixed id is fine.
+    let request_id = "tosse-cmd-fetch";
+    transport
+        .send_line(control::initialize_request(request_id))
+        .map_err(|e| e.to_string())?;
+
+    let commands = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        while let Some(msg) = rx.recv().await {
+            if let CliMessage::ControlResponse(v) = msg {
+                let echoed = v
+                    .get("response")
+                    .and_then(|r| r.get("request_id"))
+                    .and_then(|x| x.as_str());
+                if echoed == Some(request_id) {
+                    return control::parse_initialize_commands(&v).unwrap_or_default();
+                }
+            }
+        }
+        Vec::new()
+    })
+    .await
+    .unwrap_or_default();
+
+    transport.shutdown().await;
+    Ok(commands)
 }
 
 /// Rebuild a resumed conversation's history from Claude's on-disk transcript.

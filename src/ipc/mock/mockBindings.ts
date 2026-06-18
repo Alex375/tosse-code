@@ -114,6 +114,10 @@ export const mockCommands = {
     return { ok: true, echo: msg, at_ms: Date.now() };
   },
 
+  async fetchSlashCommands(_cwd: string): Promise<Result<SlashCommand[], string>> {
+    return ok(MOCK_COMMANDS);
+  },
+
   async spawnSession(
     _repoPath: string,
     _resume: string | null,

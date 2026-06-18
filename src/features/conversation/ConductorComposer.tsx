@@ -9,7 +9,7 @@ import {
 } from "../../ipc/useCommands";
 import { useSessionState } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
-import { useSlashCommands } from "../../store/commandsStore";
+import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
 import { ChipBtn, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
 import {
@@ -93,6 +93,12 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
   const [slashToken, setSlashToken] = useState<SlashToken | null>(null);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [slashActive, setSlashActive] = useState(0);
+
+  // Load this repo's commands up front (once) so the `/` menu is ready before
+  // the first message spawns the session. No-op if already cached.
+  useEffect(() => {
+    void prefetchSlashCommands(cwd);
+  }, [cwd]);
 
   const slashMatches = useMemo(
     () => filterSlashCommands(commands, slashToken?.query ?? ""),

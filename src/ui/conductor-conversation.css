@@ -124,12 +124,17 @@
 /* ---- menu d'autocomplétion des slash commands (popover au-dessus du composer) ---- */
 .cv-slash { position:absolute; left:18px; right:18px; bottom:calc(100% - 6px); z-index:50; background:var(--wf-panel-2); border:1px solid var(--wf-line-2); border-radius:10px; box-shadow:0 14px 36px -12px #000, 0 0 0 1px #0006; overflow:hidden; animation:cv-slash-in .12s ease-out; }
 @keyframes cv-slash-in { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
-.cv-slash-list { display:flex; flex-direction:column; gap:1px; max-height:min(46vh,320px); overflow-y:auto; overscroll-behavior:contain; padding:5px; }
-.cv-slash-item { display:flex; flex-direction:column; align-items:flex-start; gap:1px; width:100%; text-align:left; font:inherit; cursor:default; border:0; background:transparent; color:var(--wf-tx); padding:6px 9px; border-radius:7px; }
+.cv-slash-list { display:flex; flex-direction:column; max-height:min(46vh,320px); overflow-y:auto; overscroll-behavior:contain; padding:5px; }
+.cv-slash-group { display:flex; flex-direction:column; gap:1px; }
+.cv-slash-group + .cv-slash-group { margin-top:3px; padding-top:3px; border-top:1px solid var(--wf-line); }
+.cv-slash-head { font-size:9.5px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--wf-tx-xlo); padding:5px 9px 3px; }
+.cv-slash-item { display:flex; flex-direction:row; align-items:baseline; gap:8px; width:100%; text-align:left; font:inherit; cursor:default; border:0; background:transparent; color:var(--wf-tx); padding:5px 9px; border-radius:7px; }
 .cv-slash-item.on { background:var(--wf-panel-3); }
 .cv-slash-name { font-size:12.5px; color:var(--wf-tx-hi); white-space:nowrap; }
 .cv-slash-arg { font-size:11px; color:var(--wf-tx-xlo); font-weight:400; }
-.cv-slash-desc { font-size:11px; color:var(--wf-tx-lo); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+.cv-slash-foot { display:flex; align-items:baseline; gap:8px; padding:7px 11px; border-top:1px solid var(--wf-line-2); background:var(--wf-panel); }
+.cv-slash-foot-cmd { font-size:11px; color:var(--wf-tx); white-space:nowrap; flex:0 0 auto; }
+.cv-slash-foot-desc { font-size:11px; color:var(--wf-tx-lo); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .cv-add { width:28px; height:28px; flex:0 0 auto; border:0; border-radius:7px; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; cursor:default; }
 .cv-add:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
 .cv-ph { flex:1; font-size:12.5px; color:var(--wf-tx-lo); }

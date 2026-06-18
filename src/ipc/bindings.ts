@@ -22,6 +22,24 @@ async spawnSession(repoPath: string, resume: string | null) : Promise<Result<str
 }
 },
 /**
+ * Fetch the slash commands available in `cwd` WITHOUT starting a persistent
+ * session. Spawns a short-lived `claude`, performs the `initialize` handshake
+ * (spec §4.4), reads the advertised commands from its `control_response`, and
+ * tears the process down. This lets the composer populate its `/` autocomplete
+ * before the lazy session spawn — so typing `/pickup` as the very first thing
+ * works — without leaving a process alive. Returns an empty list if the
+ * handshake does not complete within the deadline (the live session, spawned on
+ * the first message, will still emit commands later via `SessionCommandsEvent`).
+ */
+async fetchSlashCommands(cwd: string) : Promise<Result<SlashCommand[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("fetch_slash_commands", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Rebuild a resumed conversation's history from Claude's on-disk transcript.
  * 
  * `claude --resume` does not re-stream past messages, so the live event path

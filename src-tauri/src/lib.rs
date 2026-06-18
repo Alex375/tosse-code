@@ -3,10 +3,10 @@ pub mod store;
 pub mod supervisor;
 
 use ipc::commands::{
-    answer_permission, delete_conversation, delete_repo, interrupt_session, load_persisted_state,
-    load_session_history, open_in_terminal, ping, send_message, set_active_conversation,
-    set_effort_level, set_model, set_permission_mode, spawn_session, stop_session,
-    upsert_conversation, upsert_repo, wipe_all_data, Sessions,
+    answer_permission, delete_conversation, delete_repo, fetch_slash_commands, interrupt_session,
+    load_persisted_state, load_session_history, open_in_terminal, ping, send_message,
+    set_active_conversation, set_effort_level, set_model, set_permission_mode, spawn_session,
+    stop_session, upsert_conversation, upsert_repo, wipe_all_data, Sessions,
 };
 use ipc::events::{
     SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent, SessionStateEvent, TickEvent,
@@ -20,6 +20,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         .commands(collect_commands![
             ping,
             spawn_session,
+            fetch_slash_commands,
             load_session_history,
             send_message,
             answer_permission,
