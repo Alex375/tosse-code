@@ -4,7 +4,6 @@ import {
   type MouseEvent as ReactMouseEvent,
   type RefObject,
 } from "react";
-import { useStickToBottom } from "use-stick-to-bottom";
 import {
   loadConversationHistory,
   type Conversation,
@@ -13,6 +12,7 @@ import { TodoBar } from "../todos/TodoBar";
 import { ConductorComposer, type ComposerHandle } from "./ConductorComposer";
 import { ConductorSidebar } from "./ConductorSidebar";
 import { ConductorThread } from "./ConductorThread";
+import { useStickToBottom } from "./useStickToBottom";
 
 // Interactive elements whose clicks must NOT be hijacked to focus the composer
 // (buttons, links, other fields, expandable tool-card headers via role=button…).

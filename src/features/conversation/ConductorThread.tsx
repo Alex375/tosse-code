@@ -1,5 +1,4 @@
 import { useState } from "react";
-import type { StickToBottomInstance } from "use-stick-to-bottom";
 import type { JsonValue, NormalizedBlock, PermissionRequestPayload } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
 import {
@@ -17,6 +16,7 @@ import { StreamMarkdown } from "./StreamMarkdown";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolResultBody } from "./ToolResultBody";
 import { toolMeta } from "./toolMeta";
+import type { StickToBottom } from "./useStickToBottom";
 import styles from "./ConductorThread.module.css";
 
 function field(input: JsonValue, key: string): string | undefined {
@@ -257,8 +257,8 @@ export function ConductorThread({
   wide?: boolean;
   // The stick-to-bottom instance is owned by the parent pane so the composer can
   // snap the thread to the bottom on send (see ConductorConversation).
-  scrollRef: StickToBottomInstance["scrollRef"];
-  contentRef: StickToBottomInstance["contentRef"];
+  scrollRef: StickToBottom["scrollRef"];
+  contentRef: StickToBottom["contentRef"];
 }) {
   const timeline = useTimeline(session);
   const pending = usePendingPermissions(session);
