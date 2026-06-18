@@ -29,10 +29,13 @@ import type {
   NoticeItem,
   SessionEntry,
   TimelineEntry,
+  TodoItem,
+  TodoSummary,
   ToolResult,
   Turn,
   TurnResultMeta,
 } from "./types";
+import { latestTodosInBlocks, todoSummary } from "./todos";
 
 const connectingState: SessionStatePayload = {
   busy: false,
@@ -57,6 +60,7 @@ function emptyEntry(session: string): SessionEntry {
     pendingPermissions: [],
     openBubble: {},
     subThreads: {},
+    todos: [],
     seq: 0,
   };
 }
@@ -313,7 +317,15 @@ export const useConversationStore = create<ConversationState>((set) => {
               streamingThinking: "",
               hasThinking: blocks.some((b) => b.type === "thinking"),
             };
-            return { ...base, turns: { ...base.turns, [item.id]: turn } };
+            const next = { ...base, turns: { ...base.turns, [item.id]: turn } };
+            // Capture the agent's to-do list from a TodoWrite tool_use (last
+            // write wins). Scoped to the MAIN thread: a sub-agent (Task) keeps
+            // its own todos and must not overwrite the conversation-level list.
+            if (item.parent_tool_use_id === null) {
+              const todos = latestTodosInBlocks(item.blocks);
+              if (todos) return { ...next, todos };
+            }
+            return next;
           }
 
           case "tool_result": {
@@ -389,6 +401,7 @@ export const useConversationStore = create<ConversationState>((set) => {
 const EMPTY_TIMELINE: TimelineEntry[] = [];
 const EMPTY_PERMS: PermissionRequestPayload[] = [];
 const EMPTY_IDS: string[] = [];
+const EMPTY_TODOS: TodoItem[] = [];
 
 export const useSessionState = (session: string): SessionStatePayload | undefined =>
   useConversationStore((s) => s.sessions[session]?.state);
@@ -432,4 +445,17 @@ export const useSubThread = (
 ): string[] =>
   useConversationStore(
     useShallow((s) => s.sessions[session]?.subThreads[parentToolUseId] ?? EMPTY_IDS),
+  );
+
+/** The conversation's current to-do list (raw items, in agent order). */
+export const useTodos = (session: string): TodoItem[] =>
+  useConversationStore(
+    useShallow((s) => s.sessions[session]?.todos ?? EMPTY_TODOS),
+  );
+
+/** Derived progress summary (counts + current item) for the conversation's todos.
+ *  Shallow-compared so it only re-renders when the underlying list changes. */
+export const useTodoSummary = (session: string): TodoSummary =>
+  useConversationStore(
+    useShallow((s) => todoSummary(s.sessions[session]?.todos ?? EMPTY_TODOS)),
   );

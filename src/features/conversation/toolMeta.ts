@@ -68,7 +68,9 @@ export function toolMeta(name: string, input: JsonValue): ToolMeta {
     case "WebSearch":
       return { icon: Search, primaryArg: str(obj.query), suppressed: false, kind: "plain" };
     case "TodoWrite":
-      return { icon: ListTodo, primaryArg: null, suppressed: false, kind: "plain" };
+      // Suppressed from the transcript: the to-do list is rendered by the
+      // dedicated pinned <TodoBar>, so the raw tool card would be a duplicate.
+      return { icon: ListTodo, primaryArg: null, suppressed: true, kind: "plain" };
     case "Task":
       return { icon: Bot, primaryArg: str(obj.description), suppressed: false, kind: "plain" };
     default:

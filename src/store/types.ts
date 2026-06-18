@@ -18,6 +18,35 @@ export type {
   SessionStatePayload,
 };
 
+/** Status of a single agent to-do, mirroring the TodoWrite tool's vocabulary. */
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
+/**
+ * One agent to-do, captured from a `TodoWrite` tool_use. `activeForm` is the
+ * present-tense phrasing some agents emit for the in-progress label; optional
+ * because the official client only relies on `content` + `status`.
+ */
+export interface TodoItem {
+  content: string;
+  status: TodoStatus;
+  activeForm?: string;
+}
+
+/**
+ * Compact, fully-derived view of a todo list: counts plus the "current" item.
+ * Pure-derivable from `TodoItem[]` (see `todoSummary`), so the conversation bar
+ * and any other consumer (the multi-agent dashboard) share one definition.
+ */
+export interface TodoSummary {
+  total: number;
+  completed: number;
+  inProgress: number;
+  pending: number;
+  /** First `in_progress` item, else first `pending`, else null. */
+  current: TodoItem | null;
+  allDone: boolean;
+}
+
 /** Lifecycle of a single turn as the UI sees it. */
 export type TurnStatus = "streaming" | "final" | "interrupted";
 
@@ -113,6 +142,12 @@ export interface SessionEntry {
   openBubble: Record<string, string | undefined>;
   /** Ordered turn ids per sub-agent (Task) thread, keyed by parent_tool_use_id. */
   subThreads: Record<string, string[]>;
+  /**
+   * The agent's current to-do list (last `TodoWrite` on the MAIN thread wins; a
+   * sub-agent keeps its own and does not clobber this). Empty until the agent
+   * writes one. Read via `useTodos` / `useTodoSummary`.
+   */
+  todos: TodoItem[];
   /** Monotonic counter for generated ids (user turns, notices, turn footers). */
   seq: number;
 }

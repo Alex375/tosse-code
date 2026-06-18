@@ -175,3 +175,70 @@
 .cv-check.done { background:var(--wf-run); border-color:var(--wf-run); color:#06281b; }
 .cv-check.doing { border-color:var(--wf-att); border-style:dashed; }
 .cv-check.todo { border-color:var(--wf-line-2); }
+
+/* ---- barre de tâches (todo list de l'agent) : carte flottante au-dessus du composer ---- */
+.cv-todobar {
+  flex:0 0 auto;
+  margin:10px 14px 4px;
+  background:var(--wf-panel);
+  border:1px solid var(--wf-line-2);
+  border-radius:12px;
+  box-shadow:0 10px 26px -16px #000, 0 2px 8px -6px #000a, inset 0 1px 0 #ffffff08;
+  overflow:hidden;
+}
+.cv-todobar-h { display:flex; align-items:center; gap:8px; width:100%; padding:10px 13px; border:0; background:transparent; color:var(--wf-tx-lo); font:inherit; cursor:default; text-align:left; transition:background .15s ease, color .15s ease; }
+.cv-todobar-h:hover { background:color-mix(in srgb, var(--wf-panel-3) 55%, transparent); color:var(--wf-tx-hi); }
+.cv-todobar-h .wf-ico { width:14px; height:14px; flex:0 0 auto; }
+.cv-todobar-title { font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--wf-tx-xlo); }
+.cv-todobar-count { font-size:11px; color:var(--wf-tx-lo); font-variant-numeric:tabular-nums; }
+.cv-todobar-cur { flex:1; min-width:0; font-size:11.5px; color:var(--wf-tx); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cv-todobar-chev { flex:0 0 auto; margin-left:auto; transition:transform .18s ease; }
+.cv-todobar-chev.open { transform:rotate(180deg); }
+.cv-todobar-b { max-height:30vh; overflow-y:auto; overscroll-behavior:contain; padding:3px 14px 13px; }
+
+.cv-todolist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.cv-todo-i { display:flex; align-items:flex-start; gap:9px; font-size:12.5px; line-height:1.45; color:var(--wf-tx); }
+.cv-todo-i .cv-check { margin-top:1px; transition:border-color .2s ease, background .2s ease; }
+.cv-todo-i .cv-check .wf-ico { width:11px; height:11px; }
+.cv-todo-t { flex:1; min-width:0; word-break:break-word; overflow-wrap:break-word; transition:color .25s ease; }
+.cv-todo-i.completed .cv-todo-t { text-decoration:line-through; color:var(--wf-tx-lo); opacity:.7; }
+.cv-todo-i.in_progress .cv-todo-t { color:var(--wf-tx-hi); font-weight:600; }
+
+/* En cours : le rond ambre devient un spinner qui tourne, avec un halo pulsant. */
+@keyframes cv-todo-spin { to { transform:rotate(1turn); } }
+@keyframes cv-todo-doing-glow {
+  0%, 100% { box-shadow:0 0 0 0 transparent; }
+  50%      { box-shadow:0 0 7px 0 color-mix(in srgb, var(--wf-att) 60%, transparent); }
+}
+.cv-todo-i .cv-check.doing {
+  border-style:dashed;
+  border-color:var(--wf-att);
+  animation:cv-todo-spin 2.6s linear infinite, cv-todo-doing-glow 1.8s ease-in-out infinite;
+}
+
+/* Terminé : pop + onde verte + coche qui se dessine — joué UNIQUEMENT à la transition
+   (classe .just-done posée par TodoList le rendu où l'item bascule en "completed"). */
+@keyframes cv-todo-pop {
+  0%   { transform:scale(.5); }
+  55%  { transform:scale(1.22); }
+  100% { transform:scale(1); }
+}
+@keyframes cv-todo-ring {
+  0%   { box-shadow:0 0 0 0 color-mix(in srgb, var(--wf-run) 60%, transparent); }
+  100% { box-shadow:0 0 0 9px transparent; }
+}
+@keyframes cv-todo-check-in {
+  0%   { opacity:0; transform:scale(.3) rotate(-12deg); }
+  100% { opacity:1; transform:scale(1) rotate(0); }
+}
+.cv-todo-i.just-done .cv-check.done { animation:cv-todo-pop .34s ease-out, cv-todo-ring .55s ease-out; }
+.cv-todo-i.just-done .cv-check.done .wf-ico { animation:cv-todo-check-in .3s ease-out .03s both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cv-todobar,
+  .cv-todobar-chev,
+  .cv-todo-i .cv-check,
+  .cv-todo-i .cv-check.doing,
+  .cv-todo-i.just-done .cv-check.done,
+  .cv-todo-i.just-done .cv-check.done .wf-ico { animation:none !important; transition:none !important; transform:none !important; }
+}
