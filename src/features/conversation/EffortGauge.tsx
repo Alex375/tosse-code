@@ -50,6 +50,10 @@ export function clampEffort(effort: EffortLevel, model: string | null | undefine
 const span = "(100% - 18px)";
 const posAt = (t: number) => `calc(2px + ${t} * ${span} + 7px)`;
 const thumbAt = (t: number) => `calc(2px + ${t} * ${span})`;
+// Fill's rounded right cap is centred on the thumb (thumb-centre + track half-height
+// of 9px), so the coral wraps the thumb with a uniform 2px ring — symmetric with the
+// 2px the thumb is inset on the left at the minimum step.
+const fillAt = (t: number) => `calc(2px + ${t} * ${span} + 16px)`;
 
 /**
  * A stepped effort slider modeled on Claude Code's: a pill track with a coral
@@ -129,7 +133,7 @@ export function EffortGauge({
             else if (e.key === "ArrowRight" && sel < last) onChange(steps[sel + 1]);
           }}
         >
-          <div className={"wf-eff-fill" + (isUltra ? " ultra" : "")} style={{ width: posAt(t) }} />
+          <div className={"wf-eff-fill" + (isUltra ? " ultra" : "")} style={{ width: fillAt(t) }} />
           {steps.map((lvl, i) => (
             <span
               key={lvl}
