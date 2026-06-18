@@ -113,6 +113,24 @@ export function ConductorComposer({ session, wide }: { session: string; wide?: b
     setSlashActive(0);
   }, [slashToken?.query, commands]);
 
+  // Escape closes the menu. We also grab it at the window level (capture phase)
+  // while the menu is open — the OS webview (WKWebView) can swallow Escape inside
+  // a focused textarea before React's onKeyDown sees it, so the textarea handler
+  // alone isn't reliable. Mirrors how the VS Code extension captures keys while
+  // its command menu is open.
+  useEffect(() => {
+    if (!slashOpen) return;
+    const onEsc = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashDismissed(true);
+      }
+    };
+    window.addEventListener("keydown", onEsc, true);
+    return () => window.removeEventListener("keydown", onEsc, true);
+  }, [slashOpen]);
+
   /** Recompute the `/` token from the live textarea (value + caret). */
   const syncSlashToken = (el: HTMLTextAreaElement) => {
     setSlashToken(slashTokenAt(el.value, el.selectionStart ?? el.value.length));
