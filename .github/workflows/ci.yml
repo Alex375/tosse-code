@@ -1,0 +1,52 @@
+# Tests — tournent UNIQUEMENT à l'ouverture/MAJ d'une PR vers `main`.
+# PAS sur push (on pousse librement dans `dev`) : la validation se fait au
+# moment de la PR dev → main. Ce check est requis par la protection de `main`
+# (la PR ne peut pas être mergée tant qu'il n'est pas vert).
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Node 22 (≥ 22.13) requis par pnpm@11.7.0 (cf. release.yml).
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Installer les dépendances JS
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck + build front
+        run: pnpm build # = tsc --noEmit && vite build (produit aussi dist/ pour tauri-build)
+
+      - name: Tests unitaires Rust
+        working-directory: src-tauri
+        run: cargo test --lib

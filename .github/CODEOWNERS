@@ -1,0 +1,5 @@
+# Propriétaire de code par défaut : toute PR vers une branche protégée (main)
+# exige la revue/approbation d'Alexandre. Combiné à la protection de branche
+# (« require review from Code Owners »), c'est ce qui fait que seul @Alex375
+# valide les merges vers main.
+* @Alex375
