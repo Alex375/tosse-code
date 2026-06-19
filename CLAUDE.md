@@ -133,6 +133,7 @@ Comme on remplace l'IDE, on implémentera le côté serveur des tools IDE que l'
   - Surface IPC (tauri-specta) : commandes `spawn_session` / `send_message` / `answer_permission` / `set_permission_mode` / `interrupt_session` / `stop_session` + persistance `load_persisted_state` / `upsert_repo` / `delete_repo` / `upsert_conversation` / `delete_conversation` / `set_active_conversation` / `wipe_all_data` + worktrees `list_worktrees` / `worktree_status` / `create_worktree` / `remove_worktree` (types `WorktreeInfo` / `WorktreeStatus`) + events `session_state` / `session_message` / `session_permission`. Registre `Sessions` en managed state Tauri.
 - `src/` (React : `features/{fleet,conversation,editor,git,explorer,settings}`, `ipc/`, `store`)
   - `src/features/git/` **implémenté** : indicateur worktree actif, badge sidebar, gestionnaire modale des worktrees.
+  - `src/features/settings/SettingsPanel.tsx` : page Réglages — section « À propos » affiche la version de l'app via `getVersion()` (`@tauri-apps/api/app`, permission couverte par `core:default`).
   - `src/ipc/useWorktrees.ts` : hook TanStack Query pour les commandes worktree IPC.
 - `packages/ipc-types/` (types générés Rust→TS)
 
@@ -173,20 +174,21 @@ SemVer `MAJEUR.MINEUR.CORRECTIF`. Tant qu'on est en `0.y.z` (cas actuel) : **MIN
 - **Bumper** : `pnpm bump <patch|minor|major|X.Y.Z>` (script `scripts/bump-version.mjs`) met les 4 fichiers à jour d'un coup. Puis commit `chore(release): vX.Y.Z` + push sur `main`. Ne PAS éditer les versions à la main.
 
 ### Publier une release
-Workflow `.github/workflows/release.yml`, **100 % manuel** (`workflow_dispatch`, PAS de trigger sur push — choix assumé pour l'instant). Build depuis l'état courant de `main`.
+Workflow `.github/workflows/release.yml`, **100 % manuel** (`workflow_dispatch`, PAS de trigger sur push). Build depuis l'état courant de `main`.
 1. Bumper (`pnpm bump …`), commit, push.
 2. Actions → **Release** → Run workflow (ou `gh workflow run release.yml`).
-3. La CI compile un bundle **macOS universel** (Apple Silicon + Intel) et crée une release GitHub **EN BROUILLON** avec `.dmg`/`.app` attachés.
-4. Relire dans Releases puis cliquer **Publish**.
+3. La CI compile un bundle **macOS universel** (Apple Silicon + Intel) et **publie directement** (`releaseDraft: false`) la release GitHub. Assets : `.dmg` (installeur), `.app.tar.gz` + `.sig` (artefact updater signé), `latest.json` (manifeste). Plus rien à faire après.
 
 ### Sécurité (« un peu sécurisé »)
-- Lancement restreint : seuls les comptes de la liste `ALLOWED` du job `authorize` peuvent déclencher (aujourd'hui `Alex375` ; ajouter Armand au besoin).
-- La release sort en **brouillon** → publication = geste humain explicite (dernier verrou, jamais en un clic 100 % auto).
-- Garde-fou anti-doublon : le workflow refuse de tourner si une release porte déjà le numéro courant → force à bumper avant de re-publier.
-- macOS **non signé Apple** (pas de compte Developer) : au 1er lancement, clic droit → Ouvrir (`xattr -cr "/Applications/Tosse Code.app"`). Signature/notarisation = chantier ultérieur.
+- Déclenchement : `workflow_dispatch` est lançable par tout compte en write, MAIS le job `authorize` fait que **seuls les comptes de `ALLOWED` (aujourd'hui `Alex375`) produisent une release** — tout autre déclencheur échoue AVANT le build. Ajouter Armand à `ALLOWED` au besoin.
+- Garde-fou anti-doublon : refus si la version courante a déjà une release → force à bumper.
+- macOS **non signé Apple** (pas de compte Developer) : 1er lancement = clic droit → Ouvrir (`xattr -cr "/Applications/Tosse Code.app"`). Signature/notarisation Apple = chantier ultérieur.
 
-### Lien auto-update (pas encore branché)
-L'updater (`tauri-plugin-updater`) comparera la version installée à la dernière release → SemVer + tags `vX.Y.Z` cohérents indispensables. Quand on l'activera : `tauri signer generate` (clé privée en secret repo `TAURI_SIGNING_PRIVATE_KEY` + `_PASSWORD`, clé publique dans `tauri.conf.json`), activer `createUpdaterArtifacts` (génère artefacts signés + `latest.json`), dé-commenter les vars `TAURI_SIGNING_*` du workflow (déjà repérées en commentaire). Tant que non fait : builds non signés updater, MAJ manuelle (télécharger le `.dmg` de la dernière release).
+### Updater-ready (artefacts signés — l'auto-update in-app reste la tâche suivante)
+Le build produit déjà tout ce que `tauri-plugin-updater` consomme (vérifié sur la release v0.1.1) : `.app.tar.gz` **signé** + `.sig` + manifeste **`latest.json`** (généré/attaché par tauri-action).
+- **Clé de signature** : publique dans `tauri.conf.json` (`plugins.updater.pubkey`) ; privée en **secret repo `TAURI_SIGNING_PRIVATE_KEY`** + **backup local hors repo `~/.tauri/tosse-code-updater.key`** (sans mot de passe → workflow passe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""`). NE PAS perdre la privée (sinon plus aucune MAJ signable pour les versions déjà déployées).
+- `bundle.createUpdaterArtifacts: true` ; `plugins.updater.endpoints = [".../releases/latest/download/latest.json"]`.
+- **Reste à faire (tâche auto-update)** : brancher `tauri-plugin-updater` + `tauri-plugin-process` côté app + un bouton « Vérifier les MAJ ». Le plugin gère download → remplacement → relance AVEC vérif de signature → **pas de script maison**. ⚠️ **Repo privé** : `latest.json` et les assets ne sont pas téléchargeables sans auth → l'updater devra envoyer un token (header `Authorization`), ou rendre le repo public / héberger `latest.json` ailleurs.
 
 ## [GENERATED] Associated Project Contexts
 
