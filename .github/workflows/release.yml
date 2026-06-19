@@ -67,7 +67,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22 (≥ 22.13) requis par pnpm@11.7.0 (champ packageManager) :
+          # pnpm 11 utilise le builtin `node:sqlite`, absent avant Node 22.
+          node-version: 22
           cache: pnpm
 
       - name: Setup Rust (toolchain + cibles macOS)
