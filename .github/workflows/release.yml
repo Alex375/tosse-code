@@ -7,13 +7,14 @@
 # Ce que ça fait :
 #   1. Vérifie que la personne qui lance est autorisée (cf. job `authorize`).
 #   2. Compile l'app Tauri en bundle macOS universel (Apple Silicon + Intel).
-#   3. Crée une release GitHub EN BROUILLON, version = celle de tauri.conf.json,
-#      avec les artefacts installables (.dmg / .app) attachés.
+#   3. PUBLIE directement une release GitHub (version = tauri.conf.json),
+#      avec les artefacts installables (.dmg / .app) attachés. Rien à faire après.
 #
-# Deux garde-fous « un peu sécurisé » :
-#   - seul un compte de la liste ALLOWED peut lancer le workflow ;
-#   - la release est créée en BROUILLON : elle n'est publiée que quand un humain
-#     clique « Publish release » dans l'onglet Releases. C'est le dernier verrou.
+# Sécurité « un peu sécurisé » :
+#   - seuls les comptes de la liste ALLOWED produisent une release : tout autre
+#     déclencheur échoue au job `authorize` AVANT le build (sur GitHub le bouton
+#     reste visible pour les collaborateurs en write, mais leur run ne fait rien) ;
+#   - garde-fou anti-doublon : refus si la version courante a déjà une release.
 #
 # Versioning : la version vient de src-tauri/tauri.conf.json. On bumpe AVANT de
 # lancer (voir CLAUDE.md « Versioning & releases », `pnpm bump`). Le workflow
@@ -103,7 +104,7 @@ jobs:
           fi
           echo "✓ $TAG est libre."
 
-      - name: Build + création de la release (brouillon)
+      - name: Build + publication de la release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -122,6 +123,6 @@ jobs:
 
             ⚠️ App non signée Apple : au premier lancement, faire **clic droit → Ouvrir**
             (ou `xattr -cr /Applications/Tosse\ Code.app`) pour passer Gatekeeper.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: ${{ inputs.prerelease }}
           args: --target universal-apple-darwin
