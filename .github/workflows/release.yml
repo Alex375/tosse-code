@@ -108,13 +108,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # --- Signature updater (mise à jour automatique) ---
-          # Laissé désactivé pour l'instant : l'auto-update est une tâche dédiée.
-          # Quand on l'activera (cf. CLAUDE.md « Versioning & releases ») : générer la paire de clés
-          # `tauri signer generate`, stocker la privée en secret repo, activer
-          # `createUpdaterArtifacts` dans tauri.conf.json, puis dé-commenter :
-          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Signature des artefacts updater (.app.tar.gz + .sig) + génération de
+          # latest.json (manifeste consommé par tauri-plugin-updater). Clé privée
+          # en secret repo ; clé publique dans tauri.conf.json (plugins.updater.pubkey).
+          # Clé générée SANS mot de passe → password vide (évite tout prompt en CI).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: v${{ steps.version.outputs.version }}
           releaseName: "Tosse Code v${{ steps.version.outputs.version }}"
