@@ -205,12 +205,20 @@ export const ConductorComposer = forwardRef<
 
   const sendText = (raw: string) => {
     const t = raw.trim();
-    if (!t || busy) return;
-    // Sending always (re)starts the stream lazily if the session is off/ended,
-    // so there is no separate "ended" lock — only "busy" blocks a new send.
+    if (!t) return;
+    // NO busy gate: sending while the agent is working is supported and desirable.
+    // The `claude` CLI natively queues a user message received mid-turn and injects
+    // it at the next loop boundary (after a tool_result batch, before the next model
+    // call), wrapped in "The user sent a new message while you were working: … /
+    // IMPORTANT: After completing your current task, you MUST address the user's
+    // message above." Holding it app-side until the turn ends would defeat that
+    // mid-turn injection — the agent must see it in-flight, not only at the end.
+    // Sending also (re)starts the stream lazily if the session is off/ended.
     useConversationsStore.getState().noteFirstMessage(session, t);
     // The worktree toggle only applies to the very first spawn of a conversation.
-    send.mutate({ text: t, worktree: useWorktree && isFresh });
+    // `queued`: busy at send time → the CLI will inject this mid-turn, so the
+    // bubble shows an "en attente" badge until the turn ends.
+    send.mutate({ text: t, worktree: useWorktree && isFresh, queued: busy });
     setText("");
     setSlashToken(null);
     requestAnimationFrame(autoGrow);
@@ -309,7 +317,11 @@ export const ConductorComposer = forwardRef<
           className={styles.ta}
           rows={1}
           value={text}
-          placeholder="Demande à l'agent, @ pour un fichier, / pour une commande…"
+          placeholder={
+            busy
+              ? "L'agent travaille — ton message sera pris en compte en cours de route…"
+              : "Demande à l'agent, @ pour un fichier, / pour une commande…"
+          }
           onChange={(e) => {
             setText(e.target.value);
             setSlashDismissed(false);
@@ -320,7 +332,10 @@ export const ConductorComposer = forwardRef<
           onKeyDown={onKeyDown}
           aria-label="Message"
         />
-        {busy ? (
+        {/* While busy with an empty box, the action is "interrupt". As soon as there
+            is text to send — busy or not — it's a send button: a message sent mid-turn
+            is natively queued by the CLI and injected at the next loop boundary. */}
+        {busy && !text.trim() ? (
           <button className="cv-send" onClick={() => interrupt.mutate()} title="Interrompre">
             <Ico name="stop" className="sm" />
           </button>
@@ -329,7 +344,7 @@ export const ConductorComposer = forwardRef<
             className="cv-send"
             onClick={doSend}
             disabled={!text.trim()}
-            title="Envoyer"
+            title={busy ? "Envoyer — l'agent le traitera en cours de route" : "Envoyer"}
           >
             <Ico name="send" className="sm" />
           </button>

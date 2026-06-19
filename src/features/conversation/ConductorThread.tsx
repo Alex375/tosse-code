@@ -41,11 +41,19 @@ const TOOL_ICON: Record<string, string> = {
   TodoWrite: "list",
 };
 
-function MsgUser({ text }: { text: string }) {
+function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
   return (
-    <div className="cv-msg cv-user">
+    <div className={"cv-msg cv-user" + (queued ? " is-queued" : "")}>
       <Avatar>VS</Avatar>
-      <div className="cv-bubble">{text}</div>
+      <div className="cv-bubble">
+        {queued ? (
+          <span className="cv-queued-tag" title="Envoyé pendant que l'agent travaille — sera traité en cours de route">
+            <Ico name="clock" />
+            en attente
+          </span>
+        ) : null}
+        {text}
+      </div>
     </div>
   );
 }
@@ -326,6 +334,6 @@ function StreamFollow({ session, followIfPinned }: { session: string; followIfPi
 function TurnRow({ session, turnId }: { session: string; turnId: string }) {
   const turn = useTurn(session, turnId);
   if (!turn) return null;
-  if (turn.role === "user") return <MsgUser text={turn.streamingText} />;
+  if (turn.role === "user") return <MsgUser text={turn.streamingText} queued={turn.queued} />;
   return <MsgAI session={session} turnId={turnId} />;
 }

@@ -72,6 +72,18 @@ function hasTimelineId(timeline: TimelineEntry[], id: string): boolean {
   return timeline.some((e) => e.id === id);
 }
 
+/** Clear the "en attente" badge on any queued user turns. Cheap to call on every
+ *  boundary: bails out with zero allocation when nothing is waiting (the common
+ *  case), then rebuilds only the entries that change. */
+function clearQueuedBadges(entry: SessionEntry): SessionEntry {
+  if (!Object.values(entry.turns).some((t) => t.queued)) return entry;
+  const turns = { ...entry.turns };
+  for (const [id, t] of Object.entries(turns)) {
+    if (t.queued) turns[id] = { ...t, queued: false };
+  }
+  return { ...entry, turns };
+}
+
 interface ConversationState {
   sessions: Record<string, SessionEntry>;
   ensureSession: (session: string) => void;
@@ -85,7 +97,9 @@ interface ConversationState {
   applyItem: (session: string, item: ConversationItem) => void;
   appendText: (session: string, messageId: string, text: string) => void;
   appendThinking: (session: string, messageId: string, text: string) => void;
-  addUserTurn: (session: string, text: string) => void;
+  /** Append an optimistic user turn. `queued` marks it as sent mid-turn (the CLI
+   *  injects it before the loop ends) → drives the "en attente" badge. */
+  addUserTurn: (session: string, text: string, queued?: boolean) => void;
   /** Append a visible error bubble to the timeline (e.g. a send that failed to
    *  spawn the session). Makes an otherwise-silent command failure self-evident. */
   addErrorTurn: (session: string, message: string) => void;
@@ -178,7 +192,13 @@ export const useConversationStore = create<ConversationState>((set) => {
       withEntry(session, (entry) => ({ ...entry, state })),
 
     clearState: (session) =>
-      withEntry(session, (entry) => ({ ...entry, state: { ...connectingState } })),
+      // Also drop any "en attente" badge: the session is being turned off, so the
+      // queued message will never be picked up — no message_started/turn_result will
+      // arrive to clear it otherwise (the terminal `ended` event is routed by the
+      // now-stale handle and dropped).
+      withEntry(session, (entry) =>
+        clearQueuedBadges({ ...entry, state: { ...connectingState } }),
+      ),
 
     appendText: (session, messageId, text) =>
       appendBuffer(session, messageId, "streamingText", text),
@@ -186,7 +206,7 @@ export const useConversationStore = create<ConversationState>((set) => {
     appendThinking: (session, messageId, text) =>
       appendBuffer(session, messageId, "streamingThinking", text),
 
-    addUserTurn: (session, text) =>
+    addUserTurn: (session, text, queued) =>
       withEntry(session, (entry) => {
         const id = `user_${entry.seq}`;
         const turn: Turn = {
@@ -198,6 +218,7 @@ export const useConversationStore = create<ConversationState>((set) => {
           blocks: [],
           parentToolUseId: null,
           hasThinking: false,
+          queued,
         };
         return {
           ...entry,
@@ -210,12 +231,15 @@ export const useConversationStore = create<ConversationState>((set) => {
     addErrorTurn: (session, message) =>
       withEntry(session, (entry) => {
         const id = `err_${entry.seq}`;
-        return {
+        // An error turn means the send failed (or a respawn fallback): a message
+        // that was optimistically flagged "en attente" will never be delivered, so
+        // clear its badge instead of leaving it stuck.
+        return clearQueuedBadges({
           ...entry,
           seq: entry.seq + 1,
           errors: { ...entry.errors, [id]: { id, message } },
           timeline: [...entry.timeline, { kind: "error", id }],
-        };
+        });
       }),
 
     enqueuePermission: (session, request) =>
@@ -251,8 +275,16 @@ export const useConversationStore = create<ConversationState>((set) => {
     applyItem: (session, item) =>
       withEntry(session, (entry) => {
         switch (item.kind) {
-          case "message_started":
-            return openTurn(entry, item.id, item.parent_tool_use_id);
+          case "message_started": {
+            const opened = openTurn(entry, item.id, item.parent_tool_use_id);
+            // A new ROOT assistant message = the agent's next model call, which is
+            // past the boundary where the CLI injects queued messages. So a message
+            // that was waiting "en attente" has now been delivered to the agent —
+            // clear its badge here (not only at turn_result, the end of the whole
+            // loop). Sub-agent (Task) messages don't count: the queued message is
+            // injected into the ROOT loop, not the sub-thread.
+            return item.parent_tool_use_id === null ? clearQueuedBadges(opened) : opened;
+          }
 
           case "text_delta":
           case "thinking_delta": {
@@ -364,7 +396,10 @@ export const useConversationStore = create<ConversationState>((set) => {
                 touched = true;
               }
             }
-            return {
+            // Safety net for the "en attente" badge: normally cleared at the next
+            // message_started, but a loop can end (e.g. interrupted) without one, so
+            // clear any still-queued user turn now that the loop is over.
+            return clearQueuedBadges({
               ...entry,
               seq: entry.seq + 1,
               turns: touched ? turns : entry.turns,
@@ -372,7 +407,7 @@ export const useConversationStore = create<ConversationState>((set) => {
               timeline: [...entry.timeline, { kind: "turn_result", id }],
               openBubble: {},
               pendingPermissions: [],
-            };
+            });
           }
 
           case "notice": {

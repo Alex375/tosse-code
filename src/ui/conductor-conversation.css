@@ -46,6 +46,12 @@
    thread wider than its max-width (horizontal overflow / runaway scrollbar). */
 .cv-msg { display:flex; gap:11px; min-width:0; }
 .cv-user .cv-bubble { background:var(--wf-panel-2); border:1px solid var(--wf-line); border-radius:10px; padding:12px 14px; flex:1; min-width:0; overflow-wrap:anywhere; }
+/* Queued user message (sent while the agent was busy): dashed wait-coloured border
+   + an "en attente" tag, so it reads clearly as not-yet-processed. The tag clears
+   once the agent picks the message up (next message_started; see conversationStore). */
+.cv-user.is-queued .cv-bubble { border-color:var(--wf-wait); border-style:dashed; }
+.cv-queued-tag { display:flex; align-items:center; gap:5px; width:fit-content; margin-bottom:8px; padding:2px 8px; border-radius:6px; font-size:10px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--wf-wait); background:var(--wf-wait-bg); }
+.cv-queued-tag .wf-ico { width:11px; height:11px; color:var(--wf-wait); }
 .cv-aibody { flex:1; min-width:0; display:flex; flex-direction:column; gap:13px; padding-top:3px; }
 
 .cv-tool { border:1px solid var(--wf-line); border-radius:8px; background:var(--wf-panel); overflow:hidden; }

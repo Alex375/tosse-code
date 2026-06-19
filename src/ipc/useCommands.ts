@@ -33,11 +33,13 @@ export function useSendMessage(convId: string) {
   const qc = useQueryClient();
   return useMutation({
     // `worktree` (first send only): spawn this conversation inside a freshly
-    // created git worktree instead of the repo's main checkout.
-    mutationFn: async ({ text, worktree }: { text: string; worktree?: boolean }) => {
+    // created git worktree instead of the repo's main checkout. `queued`: the
+    // agent was busy at send time, so the CLI will inject this mid-turn — flag the
+    // optimistic turn so the UI shows it as "en attente".
+    mutationFn: async ({ text, worktree, queued }: { text: string; worktree?: boolean; queued?: boolean }) => {
       // The core does not echo user turns, so append optimistically (keyed by the
       // stable id) before sending — instant even while the session spawns.
-      addUserTurn(convId, text);
+      addUserTurn(convId, text, queued);
       // Sending IS activity: float the conversation to the top now and persist
       // the new timestamp so the recency order survives a restart.
       useConversationsStore.getState().noteActivity(convId, { persist: true });

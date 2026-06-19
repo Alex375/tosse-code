@@ -74,6 +74,15 @@ export interface Turn {
   parentToolUseId: string | null;
   /** True once a thinking section has been seen, so we can keep it collapsible. */
   hasThinking: boolean;
+  /**
+   * User turn only: true when the message was sent WHILE the agent was busy, so
+   * the CLI queues it and injects it mid-turn rather than starting a fresh turn.
+   * Drives the "en attente" badge on the bubble. Cleared once the message has been
+   * delivered to the agent — at the next ROOT `message_started` (the model call
+   * past the injection boundary), with `turn_result` / stop / send-error as safety
+   * nets so the badge can never linger.
+   */
+  queued?: boolean;
 }
 
 /** A tool result, joined to its tool_use by id. */
