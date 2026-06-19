@@ -1,0 +1,125 @@
+# Release de Tosse Code.
+#
+# Déclenchement : MANUEL uniquement (workflow_dispatch). Pas de trigger sur push
+# pour l'instant — on verra plus tard. La release est construite depuis l'état
+# courant de `main` (le ref sur lequel on lance le workflow).
+#
+# Ce que ça fait :
+#   1. Vérifie que la personne qui lance est autorisée (cf. job `authorize`).
+#   2. Compile l'app Tauri en bundle macOS universel (Apple Silicon + Intel).
+#   3. Crée une release GitHub EN BROUILLON, version = celle de tauri.conf.json,
+#      avec les artefacts installables (.dmg / .app) attachés.
+#
+# Deux garde-fous « un peu sécurisé » :
+#   - seul un compte de la liste ALLOWED peut lancer le workflow ;
+#   - la release est créée en BROUILLON : elle n'est publiée que quand un humain
+#     clique « Publish release » dans l'onglet Releases. C'est le dernier verrou.
+#
+# Versioning : la version vient de src-tauri/tauri.conf.json. On bumpe AVANT de
+# lancer (voir CLAUDE.md « Versioning & releases », `pnpm bump`). Le workflow
+# refuse de tourner si une release porte déjà ce numéro → ça force à incrémenter.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Marquer la release comme pré-release"
+        type: boolean
+        default: false
+
+# Une seule release à la fois.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # Garde-fou n°1 : qui a le droit de publier. Tourne sur un runner léger pour
+  # bloquer AVANT de réserver le runner macOS si l'acteur n'est pas autorisé.
+  authorize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérifier l'autorisation du déclencheur
+        env:
+          # Comptes GitHub autorisés à publier une release (séparés par des espaces).
+          # Ajouter Armand ici le jour où il doit pouvoir releaser.
+          ALLOWED: "Alex375"
+        run: |
+          if [[ " ${ALLOWED} " != *" ${{ github.actor }} "* ]]; then
+            echo "::error::@${{ github.actor }} n'est pas autorisé à publier une release (autorisés : ${ALLOWED})."
+            exit 1
+          fi
+          echo "✓ @${{ github.actor }} est autorisé à publier."
+
+  build:
+    needs: authorize
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup Rust (toolchain + cibles macOS)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Installer les dépendances JS
+        run: pnpm install --frozen-lockfile
+
+      - name: Résoudre la version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version à publier : $VERSION"
+
+      - name: Refuser une version déjà publiée
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::La release $TAG existe déjà. Bumpe la version (voir CLAUDE.md « Versioning & releases », \`pnpm bump\`) avant de relancer."
+            exit 1
+          fi
+          echo "✓ $TAG est libre."
+
+      - name: Build + création de la release (brouillon)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # --- Signature updater (mise à jour automatique) ---
+          # Laissé désactivé pour l'instant : l'auto-update est une tâche dédiée.
+          # Quand on l'activera (cf. CLAUDE.md « Versioning & releases ») : générer la paire de clés
+          # `tauri signer generate`, stocker la privée en secret repo, activer
+          # `createUpdaterArtifacts` dans tauri.conf.json, puis dé-commenter :
+          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v${{ steps.version.outputs.version }}
+          releaseName: "Tosse Code v${{ steps.version.outputs.version }}"
+          releaseBody: |
+            Build automatique depuis `main` — macOS universel (Apple Silicon + Intel).
+
+            ⚠️ App non signée Apple : au premier lancement, faire **clic droit → Ouvrir**
+            (ou `xattr -cr /Applications/Tosse\ Code.app`) pour passer Gatekeeper.
+          releaseDraft: true
+          prerelease: ${{ inputs.prerelease }}
+          args: --target universal-apple-darwin
