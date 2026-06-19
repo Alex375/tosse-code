@@ -99,12 +99,12 @@ function ConversationPane({
   composerRef: RefObject<ComposerHandle>;
   onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
-  const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
+  const { scrollRef, followIfPinned, scrollToBottom } = useStickToBottom();
   return (
     <div className="wf-col" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
-      <ConductorThread session={session} scrollRef={scrollRef} contentRef={contentRef} />
+      <ConductorThread session={session} scrollRef={scrollRef} followIfPinned={followIfPinned} />
       <TodoBar session={session} />
-      <ConductorComposer ref={composerRef} session={session} onSent={() => scrollToBottom()} />
+      <ConductorComposer ref={composerRef} session={session} onSent={scrollToBottom} />
     </div>
   );
 }

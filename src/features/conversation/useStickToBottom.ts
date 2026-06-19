@@ -1,81 +1,81 @@
 import { useCallback, useRef } from "react";
 
-// How close to the bottom (px) still counts as "at the bottom". A little tolerance
-// so streaming growth doesn't make the exact bottom impossible to reach/keep.
-const AT_BOTTOM_PX = 64;
+// Within this distance from the bottom (px) we consider the view "at the bottom"
+// and keep following new content. Matches the Claude Code VS Code extension (50px):
+// tight enough that being a little higher up does not auto-scroll, with a small margin.
+const AT_BOTTOM_PX = 50;
+// After a send, follow new content with a smooth animation for this long (the user
+// message + the "thinking" indicator land in this window), then snap instantly so
+// fast token streaming tracks the bottom without lag.
+const SMOOTH_SEND_MS = 700;
 
 export interface StickToBottom {
   /** Attach to the scroll container (the element with `overflow-y: auto`). */
   scrollRef: (node: HTMLDivElement | null) => void;
-  /** Attach to the growing content inside the scroll container. */
-  contentRef: (node: HTMLDivElement | null) => void;
-  /** Snap to the bottom and re-engage following (used on send). */
+  /**
+   * Re-pin to the bottom if we're currently following. Meant to be called from a
+   * layout effect on every streaming update, i.e. before paint — so there is no
+   * visible jump (an after-paint ResizeObserver pin looks like "moved by hand").
+   */
+  followIfPinned: () => void;
+  /** Engage following and smooth-scroll to the bottom — used on send. */
   scrollToBottom: () => void;
 }
 
 /**
- * Minimal, robust stick-to-bottom for the chat thread.
- *
- * Rule — exactly what's expected of a chat: while the viewport is at the bottom,
- * new content keeps it pinned there; scroll up and it stops following; scroll back
- * to the bottom and it follows again.
- *
- * Why not `use-stick-to-bottom`: its scroll handler ignores scroll events that
- * overlap a content resize. During streaming the content resizes on every frame,
- * so the user's "scroll back down to re-engage" was permanently swallowed and the
- * lock never came back. Here, following is decided purely from the scroll position
- * and is never gated on resizes, so it re-engages mid-stream.
+ * Stick-to-bottom for the chat thread, modelled on the Claude Code VS Code
+ * extension (the project's behavioural reference):
+ *  - a scroll handler keeps `following` true while within AT_BOTTOM_PX of the
+ *    bottom, and turns it off only when the user actively scrolls UP and away
+ *    (scrolling down — including our own pins and the smooth send-scroll — never
+ *    disengages, which is what let "send from the top then follow" break before);
+ *  - the actual follow happens instantly inside a layout effect (see StreamFollow
+ *    in ConductorThread) so it tracks streaming smoothly with no jank;
+ *  - send uses a real smooth scroll, briefly followed smoothly so the view ends
+ *    truly at the bottom — below the freshly written message and thinking dots.
  */
 export function useStickToBottom(): StickToBottom {
   const scrollEl = useRef<HTMLDivElement | null>(null);
   const following = useRef(true);
-  const observer = useRef<ResizeObserver | null>(null);
+  const lastTop = useRef(0);
+  const smoothUntil = useRef(0);
 
-  const pin = useCallback(() => {
-    const el = scrollEl.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, []);
-
-  // A scroll event (user wheel/drag, or our own pin) re-evaluates whether we
-  // follow: we follow iff the viewport sits at the bottom. Not gated on resizes.
   const onScroll = useCallback(() => {
     const el = scrollEl.current;
-    if (el) following.current = el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX;
+    if (!el) return;
+    const top = el.scrollTop;
+    const dist = el.scrollHeight - top - el.clientHeight;
+    if (dist < AT_BOTTOM_PX) following.current = true;
+    else if (top < lastTop.current) following.current = false; // user scrolled up & away
+    lastTop.current = top;
   }, []);
 
   const scrollRef = useCallback(
     (node: HTMLDivElement | null) => {
       scrollEl.current?.removeEventListener("scroll", onScroll);
       scrollEl.current = node;
-      if (!node) return;
-      node.addEventListener("scroll", onScroll, { passive: true });
-      following.current = true;
-      // Land at the bottom on open, instantly (no animation).
-      requestAnimationFrame(pin);
+      if (node) {
+        node.addEventListener("scroll", onScroll, { passive: true });
+        lastTop.current = node.scrollTop;
+      }
     },
-    [onScroll, pin],
+    [onScroll],
   );
 
-  const contentRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      observer.current?.disconnect();
-      observer.current = null;
-      if (!node) return;
-      // Content grew/shrank (streaming, history load, a tool card expanding…):
-      // keep pinned to the bottom only if we were following.
-      const ro = new ResizeObserver(() => {
-        if (following.current) pin();
-      });
-      ro.observe(node);
-      observer.current = ro;
-    },
-    [pin],
-  );
+  const followIfPinned = useCallback(() => {
+    const el = scrollEl.current;
+    if (!el || !following.current) return;
+    if (performance.now() < smoothUntil.current) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    else el.scrollTop = el.scrollHeight;
+  }, []);
 
   const scrollToBottom = useCallback(() => {
+    const el = scrollEl.current;
+    if (!el) return;
     following.current = true;
-    pin();
-  }, [pin]);
+    smoothUntil.current = performance.now() + SMOOTH_SEND_MS;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, []);
 
-  return { scrollRef, contentRef, scrollToBottom };
+  return { scrollRef, followIfPinned, scrollToBottom };
 }

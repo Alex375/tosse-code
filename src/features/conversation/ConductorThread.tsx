@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import type { JsonValue, NormalizedBlock, PermissionRequestPayload } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
 import {
+  useConversationStore,
   useError,
   usePendingPermissions,
   useSessionState,
@@ -251,14 +252,14 @@ export function ConductorThread({
   session,
   wide,
   scrollRef,
-  contentRef,
+  followIfPinned,
 }: {
   session: string;
   wide?: boolean;
   // The stick-to-bottom instance is owned by the parent pane so the composer can
   // snap the thread to the bottom on send (see ConductorConversation).
   scrollRef: StickToBottom["scrollRef"];
-  contentRef: StickToBottom["contentRef"];
+  followIfPinned: StickToBottom["followIfPinned"];
 }) {
   const timeline = useTimeline(session);
   const pending = usePendingPermissions(session);
@@ -269,9 +270,9 @@ export function ConductorThread({
 
   return (
     <div className="cv-thread" ref={scrollRef}>
+      <StreamFollow session={session} followIfPinned={followIfPinned} />
       <div
         className="cv-thread-inner"
-        ref={contentRef}
         style={wide ? { maxWidth: 720 } : { maxWidth: 760 }}
       >
         {empty && !busy ? (
@@ -304,6 +305,22 @@ export function ConductorThread({
       </div>
     </div>
   );
+}
+
+/**
+ * Invisible leaf that keeps the thread pinned to the bottom while it streams.
+ * It subscribes to the whole session entry, so it re-renders on every store
+ * update for this session (each streamed token, each state change), and re-pins
+ * in a layout effect — before paint — so the follow tracks streaming with no jank.
+ * Isolated in its own component so this per-token re-render doesn't re-render the
+ * message list.
+ */
+function StreamFollow({ session, followIfPinned }: { session: string; followIfPinned: () => void }) {
+  useConversationStore((s) => s.sessions[session]);
+  useLayoutEffect(() => {
+    followIfPinned();
+  });
+  return null;
 }
 
 function TurnRow({ session, turnId }: { session: string; turnId: string }) {
