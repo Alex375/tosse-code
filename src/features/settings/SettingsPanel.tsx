@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { wipeAllData } from "../../store/conversationsStore";
 import { Ico } from "../../ui/kit";
+import { UpdateSection } from "./UpdateSection";
 import styles from "./SettingsPanel.module.css";
 
 export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -60,6 +61,10 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
             <span className={styles.appName}>Tosse Code</span>
             {version && <span className={styles.version}>v{version}</span>}
           </div>
+
+          <div className={styles.divider} />
+
+          <UpdateSection />
 
           <div className={styles.divider} />
 

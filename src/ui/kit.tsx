@@ -64,11 +64,14 @@ export function Win({
   title,
   nav,
   right,
+  banner,
   children,
 }: {
   title?: ReactNode;
   nav?: ReactNode;
   right?: ReactNode;
+  /** Full-width strip between the title bar and the body (e.g. update banner). */
+  banner?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -78,6 +81,7 @@ export function Win({
         {title ? <span className="wf-title">{title}</span> : null}
         {right ? <div className="wf-tbright">{right}</div> : null}
       </div>
+      {banner}
       <div className="wf-body">{children}</div>
     </div>
   );
