@@ -5,7 +5,9 @@ import { StreamControl } from "./features/conversation/StreamControl";
 import { WorktreeIndicator } from "./features/git/WorktreeIndicator";
 import { WorktreeManager } from "./features/git/WorktreeManager";
 import { FleetPlaceholder } from "./features/fleet/FleetPlaceholder";
+import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
+import { startUpdaterAutoCheck } from "./store/updater";
 import {
   bootConversations,
   repoName,
@@ -33,11 +35,14 @@ export default function App() {
     if (booted.current) return;
     booted.current = true;
     void bootConversations();
+    // Check for app updates now and every 2h while open (idempotent).
+    startUpdaterAutoCheck();
   }, []);
 
   return (
     <Win
       title={view === "agents" ? "Conductor — agents" : active?.name ?? "Conductor"}
+      banner={<UpdateBanner />}
       nav={
         <>
           <NavBtn icon="chat" label="Conversation" on={view === "conversation"} onClick={() => setView("conversation")} />

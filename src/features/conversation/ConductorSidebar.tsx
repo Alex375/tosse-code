@@ -12,6 +12,7 @@ import {
   type Repo,
 } from "../../store/conversationsStore";
 import { useSessionState } from "../../store/conversationStore";
+import { useSettingsUi } from "../../store/settingsUi";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
@@ -132,7 +133,9 @@ export function ConductorSidebar() {
   const conversations = useConversations();
   const activeId = useActiveConversationId();
   const openManager = useWorktreeUi((s) => s.openManager);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpen = useSettingsUi((s) => s.open);
+  const openSettings = useSettingsUi((s) => s.openSettings);
+  const closeSettings = useSettingsUi((s) => s.closeSettings);
 
   // Group conversations by their repo, then order everything by recency: within a
   // repo the most recently active conversation comes first, and repos are ordered
@@ -234,7 +237,7 @@ export function ConductorSidebar() {
       <button
         type="button"
         className="cv-side-foot"
-        onClick={() => setSettingsOpen(true)}
+        onClick={openSettings}
         style={{
           background: "transparent",
           borderLeft: 0,
@@ -252,7 +255,7 @@ export function ConductorSidebar() {
         </span>
       </button>
 
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsPanel open={settingsOpen} onClose={closeSettings} />
     </div>
   );
 }

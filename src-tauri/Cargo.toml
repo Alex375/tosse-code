@@ -1,6 +1,6 @@
 [package]
 name = "tosse-code"
-version = "0.1.1"
+version = "0.2.0"
 description = "Tosse Code — desktop app to pilot Claude Code"
 authors = ["Tosse"]
 edition = "2021"
@@ -17,6 +17,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# Secure auto-update: verifies a cryptographic signature on each artifact before
+# installing (pubkey in tauri.conf.json, private key kept as a CI secret).
+# `tauri-plugin-process` provides the relaunch after an update is applied.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

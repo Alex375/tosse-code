@@ -185,6 +185,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Secure auto-update (signature-verified) + relaunch after install.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // Wire commands through tauri-specta (replaces generate_handler!).
         .invoke_handler(specta_builder.invoke_handler())
         // The live session registry, reachable from every command.
