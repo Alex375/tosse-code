@@ -166,17 +166,31 @@ Front TypeScript :
 
 Bindings IPC : regénérés automatiquement au build debug et via le test `export_bindings_regenerates_ts_client` (tauri-specta).
 
+## Branches & gouvernance
+
+Repo **public** (`github.com/Alex375/tosse-code`). Deux branches :
+- **`main`** — branche propre, **protégée**. **AUCUN push direct** : tout passe par PR. La PR doit (1) avoir le check **`test`** vert (workflow `.github/workflows/ci.yml`), (2) être approuvée par le **code owner** `@Alex375` (`.github/CODEOWNERS` ; l'approbation de quelqu'un d'autre ne suffit pas), (3) avoir ses conversations résolues. Force-push & suppression interdits.
+- **`dev`** — branche de travail. Push libre. **Pas de CI sur push dev** (les tests tournent à la PR vers main, pas avant).
+
+**Flux de travail** : bosser sur `dev` (ou des branches de feature → `dev`) → ouvrir une PR **`dev → main`** quand c'est mûr → la CI (`test`) se lance **sur la PR** → Alexandre approuve + merge. Les releases se coupent depuis `main` (workflow Release manuel, ci-dessous).
+
+`enforce_admins=false` : GitHub interdit d'approuver sa propre PR ; comme Alexandre est le seul validateur (code owner), l'admin doit pouvoir merger ses propres PR → enforcement admin OFF. Conséquence : Alexandre (admin) peut contourner ; tout autre collaborateur reste gated derrière son approbation.
+
+**Accès** : `Alex375` (admin), `clousty8`/Armand (write — peut pousser sur `dev` et ouvrir des PR ; ne peut PAS merger dans `main` sans l'approbation d'Alexandre, ni produire de release car le job `authorize` n'autorise que `Alex375`).
+
+⚠️ Pour les agents : **ne jamais `git push origin main` en direct** — committer sur `dev` (ou une branche de feature) et ouvrir une PR vers `main`.
+
 ## Versioning & releases
 
 SemVer `MAJEUR.MINEUR.CORRECTIF`. Tant qu'on est en `0.y.z` (cas actuel) : **MINEUR** pour toute nouveauté, **CORRECTIF** pour les fix ; on ne passe `1.0.0` que quand l'app est jugée stable. MAJEUR = changement incompatible (schéma SQLite sans migration, format de transcript, comportement cassé).
 
 - **La version vit à 3 endroits, toujours synchronisés** : `src-tauri/tauri.conf.json` (**source de vérité runtime** — lue par `getVersion()`, affichée dans la page Réglages, et utilisée par le workflow pour le tag), `package.json`, `src-tauri/Cargo.toml` (+ `Cargo.lock`). Ne jamais les laisser diverger.
-- **Bumper** : `pnpm bump <patch|minor|major|X.Y.Z>` (script `scripts/bump-version.mjs`) met les 4 fichiers à jour d'un coup. Puis commit `chore(release): vX.Y.Z` + push sur `main`. Ne PAS éditer les versions à la main.
+- **Bumper** : `pnpm bump <patch|minor|major|X.Y.Z>` (script `scripts/bump-version.mjs`) met les 4 fichiers à jour d'un coup. Puis commit `chore(release): vX.Y.Z` + push (sur `dev`, puis PR vers `main`). Ne PAS éditer les versions à la main.
 
 ### Publier une release
-Workflow `.github/workflows/release.yml`, **100 % manuel** (`workflow_dispatch`, PAS de trigger sur push). Build depuis l'état courant de `main`.
-1. Bumper (`pnpm bump …`), commit, push.
-2. Actions → **Release** → Run workflow (ou `gh workflow run release.yml`).
+Workflow `.github/workflows/release.yml`, **100 % manuel** (`workflow_dispatch`, PAS de trigger sur push). À lancer depuis **`main`** (branche propre).
+1. La version voulue est sur `main` (mergée via PR).
+2. Actions → **Release** → Run workflow (ou `gh workflow run release.yml --ref main`).
 3. La CI compile un bundle **macOS universel** (Apple Silicon + Intel) et **publie directement** (`releaseDraft: false`) la release GitHub. Assets : `.dmg` (installeur), `.app.tar.gz` + `.sig` (artefact updater signé), `latest.json` (manifeste). Plus rien à faire après.
 
 ### Sécurité (« un peu sécurisé »)
@@ -188,7 +202,7 @@ Workflow `.github/workflows/release.yml`, **100 % manuel** (`workflow_dispatch`,
 Le build produit déjà tout ce que `tauri-plugin-updater` consomme (vérifié sur la release v0.1.1) : `.app.tar.gz` **signé** + `.sig` + manifeste **`latest.json`** (généré/attaché par tauri-action).
 - **Clé de signature** : publique dans `tauri.conf.json` (`plugins.updater.pubkey`) ; privée en **secret repo `TAURI_SIGNING_PRIVATE_KEY`** + **backup local hors repo `~/.tauri/tosse-code-updater.key`** (sans mot de passe → workflow passe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""`). NE PAS perdre la privée (sinon plus aucune MAJ signable pour les versions déjà déployées).
 - `bundle.createUpdaterArtifacts: true` ; `plugins.updater.endpoints = [".../releases/latest/download/latest.json"]`.
-- **Reste à faire (tâche auto-update)** : brancher `tauri-plugin-updater` + `tauri-plugin-process` côté app + un bouton « Vérifier les MAJ ». Le plugin gère download → remplacement → relance AVEC vérif de signature → **pas de script maison**. ⚠️ **Repo privé** : `latest.json` et les assets ne sont pas téléchargeables sans auth → l'updater devra envoyer un token (header `Authorization`), ou rendre le repo public / héberger `latest.json` ailleurs.
+- **Reste à faire (tâche auto-update)** : brancher `tauri-plugin-updater` + `tauri-plugin-process` côté app + un bouton « Vérifier les MAJ ». Le plugin gère download → remplacement → relance AVEC vérif de signature → **pas de script maison**. Repo désormais **public** → `latest.json` et les assets sont accessibles sans token (plus de souci d'auth pour l'updater).
 
 ## [GENERATED] Associated Project Contexts
 
