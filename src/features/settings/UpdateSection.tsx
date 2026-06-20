@@ -15,6 +15,7 @@ export function UpdateSection() {
   const update = useUpdater((s) => s.update);
   const progress = useUpdater((s) => s.progress);
   const error = useUpdater((s) => s.error);
+  const lastCheckError = useUpdater((s) => s.lastCheckError);
   const check = useUpdater((s) => s.check);
   const install = useUpdater((s) => s.install);
 
@@ -69,7 +70,9 @@ export function UpdateSection() {
                 ? "Redémarrage…"
                 : status === "downloading"
                   ? "Téléchargement…"
-                  : "Installer et redémarrer"}
+                  : error
+                    ? "Réessayer l'installation"
+                    : "Installer et redémarrer"}
             </button>
           </div>
         </>
@@ -82,6 +85,11 @@ export function UpdateSection() {
                 ? "La dernière vérification a échoué."
                 : "Vérifie si une nouvelle version signée est disponible."}
           </div>
+          {status !== "error" && lastCheckError ? (
+            <div className={styles.hintWarn}>
+              Dernière vérification automatique échouée : {lastCheckError}
+            </div>
+          ) : null}
           <div className={styles.row}>
             <button
               className={`${styles.btn} ${styles.ghost}`}
@@ -94,7 +102,7 @@ export function UpdateSection() {
         </>
       )}
 
-      {status === "error" && error ? <div className={styles.errorMsg}>{error}</div> : null}
+      {error ? <div className={styles.errorMsg}>{error}</div> : null}
     </div>
   );
 }

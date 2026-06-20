@@ -137,6 +137,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Discreet line: a routine (silent) auto-check failed — surfaced so a broken
+   release endpoint is detectable, without nagging like a real error. */
+.hintWarn {
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
 .errorMsg {
   margin-top: var(--space-3);
   padding: var(--space-3);
