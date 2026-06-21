@@ -11,6 +11,7 @@ import {
   liveHandle,
   useConversationsStore,
 } from "../store/conversationsStore";
+import { noteInterrupt } from "../notifications/notify";
 import { worktreesKey } from "./useWorktrees";
 
 // These hooks are keyed by a conversation's STABLE id, not its live session
@@ -122,6 +123,9 @@ export function useInterrupt(convId: string) {
     mutationFn: async () => {
       const handle = liveHandle(convId);
       if (!handle) return; // nothing running to interrupt
+      // The interrupt ends the turn (busy→false), which would otherwise fire a
+      // "done" notification for a stop the user just performed — suppress it.
+      noteInterrupt(convId);
       return unwrap(commands.interruptSession(handle));
     },
   });

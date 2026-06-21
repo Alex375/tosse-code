@@ -105,6 +105,7 @@ Logiciel **rapide et très optimisé** — exigence cœur, pas un nice-to-have. 
 - **Terminal** : xterm.js + addon-webgl.
 - **État UI** : Zustand (flotte d'agents, nourri par les events) + TanStack Query (commandes).
 - **Crates clés** : portable-pty (PTY interactif), notify (watch fichiers), **rusqlite (bundled)** + SQLite (persistance — SQLite C compilé dans le binaire, synchrone, mode WAL, foreign_keys ON ; sqlx écarté : nos écritures sont minuscules/rares/hors chemin chaud, pas besoin d'async + macros), serde_json (parse stream-json), **tauri-specta** (contrat IPC typé Rust→TS auto-généré, jamais de resync manuelle).
+- **Plugins Tauri** : opener, dialog, **updater** + **process** (auto-update signé, cf. « Versioning & releases »).
 - **git2** : option ouverte pour diff/status in-process côté éditeur Monaco — PAS utilisé pour les worktrees (voir module `git/` ci-dessous).
 
 ## Frontière build vs réutilisation
@@ -128,12 +129,12 @@ Comme on remplace l'IDE, on implémentera le côté serveur des tools IDE que l'
 ## Structure (monorepo pnpm)
 - `src-tauri/` (Rust : `supervisor/`, `git/`, `fs/`, `store/`, `tosse/`, `ipc/`)
   - `supervisor/` **implémenté** : `protocol.rs` (types serde du fil stream-json), `transport.rs` (spawn + reader/writer/stderr), `control.rs` (canal de contrôle + gestion des permissions), `model.rs` + `assembler.rs` (normalisation des messages pour l'UI), `session.rs` (acteur tokio par session).
-  - `store/` **implémenté** : `model.rs` (records de domaine, zéro SQL) + `db.rs` (struct `Store` = le SEUL service qui parle SQL ; mappe lignes ↔ records). DB ouverte dans `lib.rs` setup → `app_data_dir()/tosse.db`, managée en state Tauri. Périmètre : métadonnées only (repos + conversations + sélection active) ; messages NON persistés (restent dans les transcripts Claude). Politique dev : pas de migration data-preserving pour l'instant → wipe-and-recreate (+ bouton « Tout supprimer » dans les Réglages).
+  - `store/` **implémenté** : `model.rs` (records de domaine, zéro SQL) + `db.rs` (struct `Store` = le SEUL service qui parle SQL ; mappe lignes ↔ records). DB ouverte dans `lib.rs` setup → `app_data_dir()/tosse.db`, managée en state Tauri. Périmètre : métadonnées only (repos + conversations + sélection active) ; messages NON persistés (restent dans les transcripts Claude). Politique dev : pas de migration data-preserving pour l'instant → wipe-and-recreate (+ bouton « Tout supprimer » dans les Réglages). NB : une vraie migration data-preserving est tracée comme tâche dédiée (l'auto-update rend les changements de schéma visibles côté utilisateur).
   - `git/` **implémenté** : `src-tauri/src/git/mod.rs` est le SEUL service qui parle `git` (même pattern d'encapsulation que `store/db.rs`, swappable). Il enveloppe le **binaire `git` en CLI** (sous-process + parsing `--porcelain`), PAS la crate git2. Raison : sécurité de suppression déléguée à `git worktree remove` (refuse de détruire un worktree sale), parsing porcelain stable, pas de dépendance de build libgit2 pour des ops rares hors hot-path. Aucune crate ajoutée au Cargo.toml.
   - Surface IPC (tauri-specta) : commandes `spawn_session` / `send_message` / `answer_permission` / `set_permission_mode` / `interrupt_session` / `stop_session` + persistance `load_persisted_state` / `upsert_repo` / `delete_repo` / `upsert_conversation` / `delete_conversation` / `set_active_conversation` / `wipe_all_data` + worktrees `list_worktrees` / `worktree_status` / `create_worktree` / `remove_worktree` (types `WorktreeInfo` / `WorktreeStatus`) + events `session_state` / `session_message` / `session_permission`. Registre `Sessions` en managed state Tauri.
 - `src/` (React : `features/{fleet,conversation,editor,git,explorer,settings}`, `ipc/`, `store`)
   - `src/features/git/` **implémenté** : indicateur worktree actif, badge sidebar, gestionnaire modale des worktrees.
-  - `src/features/settings/SettingsPanel.tsx` : page Réglages — section « À propos » affiche la version de l'app via `getVersion()` (`@tauri-apps/api/app`, permission couverte par `core:default`).
+  - `src/features/settings/SettingsPanel.tsx` : page Réglages — section « À propos » (version via `getVersion()`) + section « Mise à jour » (`UpdateSection`). `UpdateBanner` = bannière globale « MAJ dispo ». Store `src/store/updater.ts` + `src/store/settingsUi.ts`.
   - `src/ipc/useWorktrees.ts` : hook TanStack Query pour les commandes worktree IPC.
 - `packages/ipc-types/` (types générés Rust→TS)
 
@@ -165,6 +166,17 @@ Front TypeScript :
 - Build : `pnpm build`
 
 Bindings IPC : regénérés automatiquement au build debug et via le test `export_bindings_regenerates_ts_client` (tauri-specta).
+
+## Builds de test locaux (dev)
+
+Alexandre **dogfoode** : il code ce projet en se servant de l'app **de production** installée dans `/Applications/Tosse Code.app` (identifiant `com.tosse.desktop`, `productName` « Tosse Code ») — c'est son outil de travail quotidien, et ses vraies conversations vivent dans la base de cette app.
+
+⚠️ **Piège à connaître** : `tauri dev` ET `tauri build` réutilisent par défaut le MÊME `identifier` (`com.tosse.desktop`) → la MÊME base SQLite (`~/Library/Application Support/com.tosse.desktop/`). Un build de test lancé tel quel **écrase / pollue les données de l'app de prod** (vécu : un wipe pour réinstaller proprement la prod a aussi vidé l'environnement dev, car base partagée).
+
+**Règle pour tout build de test** : lui donner un **nom ET un identifiant DISTINCTS** de la prod — jamais les mêmes. Ex. `productName: "Tosse Code Test"` + `identifier: "com.tosse.desktop.test"` → bundle séparé (`Tosse Code Test.app`) + dossier de données séparé → zéro conflit avec la prod, zéro risque pour les conversations réelles.
+- Mécanisme propre : override **au moment du build** via `tauri build --config` (overlay JSON `productName`/`identifier`), SANS modifier le `tauri.conf.json` committé (qui reste la config prod).
+- Les artefacts de test restent dans la sortie de build (`src-tauri/target/release/bundle/{dmg,macos}/`) ou un dossier dédié hors du chemin de la prod — mais l'important est le **nom/identifiant distinct**, pas seulement le dossier.
+- Outiller ça proprement (script/skill « test build ») pourra faire l'objet d'une tâche.
 
 ## Branches & gouvernance
 
@@ -198,11 +210,8 @@ Workflow `.github/workflows/release.yml`, **100 % manuel** (`workflow_dispatch`,
 - Garde-fou anti-doublon : refus si la version courante a déjà une release → force à bumper.
 - macOS **non signé Apple** (pas de compte Developer) : 1er lancement = clic droit → Ouvrir (`xattr -cr "/Applications/Tosse Code.app"`). Signature/notarisation Apple = chantier ultérieur.
 
-### Updater-ready (artefacts signés — l'auto-update in-app reste la tâche suivante)
-Le build produit déjà tout ce que `tauri-plugin-updater` consomme (vérifié sur la release v0.1.1) : `.app.tar.gz` **signé** + `.sig` + manifeste **`latest.json`** (généré/attaché par tauri-action).
-- **Clé de signature** : publique dans `tauri.conf.json` (`plugins.updater.pubkey`) ; privée en **secret repo `TAURI_SIGNING_PRIVATE_KEY`** + **backup local hors repo `~/.tauri/tosse-code-updater.key`** (sans mot de passe → workflow passe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""`). NE PAS perdre la privée (sinon plus aucune MAJ signable pour les versions déjà déployées).
-- `bundle.createUpdaterArtifacts: true` ; `plugins.updater.endpoints = [".../releases/latest/download/latest.json"]`.
-- **Reste à faire (tâche auto-update)** : brancher `tauri-plugin-updater` + `tauri-plugin-process` côté app + un bouton « Vérifier les MAJ ». Le plugin gère download → remplacement → relance AVEC vérif de signature → **pas de script maison**. Repo désormais **public** → `latest.json` et les assets sont accessibles sans token (plus de souci d'auth pour l'updater).
+### Auto-update in-app (implémenté — `tauri-plugin-updater` + `tauri-plugin-process`)
+L'app vérifie/installe les MAJ signées depuis les releases GitHub (repo public → `latest.json` accessible sans token). Côté front : `src/store/updater.ts` (auto-check au lancement + toutes les 2h, check silencieux qui **enregistre** quand même les échecs dans `lastCheckError` → pas d'erreur silencieuse non détectable ; install = download → vérif signature → `relaunch()`), section « Mise à jour » des Réglages + `UpdateBanner`. Clé : publique dans `tauri.conf.json` (`plugins.updater.pubkey`) ; privée en secret repo `TAURI_SIGNING_PRIVATE_KEY` + backup local hors repo `~/.tauri/tosse-code-updater.key` (sans mot de passe → workflow passe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""`). NE PAS perdre la privée (sinon plus aucune MAJ signable). `bundle.createUpdaterArtifacts: true`. NB : la MAJ ne touche QUE le bundle `.app` ; les données (base SQLite + transcripts) sont hors bundle et préservées.
 
 ## [GENERATED] Associated Project Contexts
 

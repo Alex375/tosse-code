@@ -167,6 +167,22 @@ async openInTerminal(cwd: string, sessionId: string) : Promise<Result<null, stri
 }
 },
 /**
+ * Bounce the app's Dock icon (macOS) / flash the taskbar (other platforms) to
+ * get the user's attention when an agent finishes or needs input while the app
+ * is in the background. `critical` bounces repeatedly until the app is focused
+ * (a permission/question is waiting); otherwise it bounces once (a turn ended).
+ * The OS clears the request automatically when the window regains focus, so the
+ * front never has to cancel it. A no-op if the main window is gone.
+ */
+async requestUserAttention(critical: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("request_user_attention", { critical }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * List every worktree of the repository `repo_path` lives in (main first).
  */
 async listWorktrees(repoPath: string) : Promise<Result<WorktreeInfo[], string>> {
