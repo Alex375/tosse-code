@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef } from "react";
+import {
+  clampRestoreTop,
+  initialTarget,
+  nextFollowing,
+  readScrollMemo,
+  writeScrollMemo,
+} from "./scrollMemory";
 
-// Within this distance from the bottom (px) the view counts as "at the bottom" and
-// keeps following new content. Matches the Claude Code VS Code extension (50px):
-// tight enough that being a little higher up does not auto-scroll, with a small margin.
-const AT_BOTTOM_PX = 50;
 // After a send, follow new content smoothly for this long (the user message + the
 // "thinking" indicator land in this window), then snap instantly so fast token
 // streaming tracks the bottom without lag.
@@ -16,22 +19,6 @@ const SMOOTH_SEND_MS = 700;
 // history view, where no streaming re-render would otherwise re-pin.
 const SETTLE_STABLE_FRAMES = 5;
 const SETTLE_MAX_MS = 5000;
-
-/**
- * Per-conversation scroll memory, keyed by the conversation's STABLE id. The pane is
- * remounted on every conversation switch (it is `key`ed by id), so this module-level
- * cache is what lets a conversation reopen where the user left it. The rule mirrors
- * Claude.ai / Claude Code — "if we don't know where the user is, show the latest":
- *   - no memory yet (first open)      → land at the bottom;
- *   - left while pinned to the bottom → reopen at the bottom (and keep following);
- *   - left scrolled up to a spot      → reopen exactly at that spot.
- * Session-scoped (cleared on app restart, which then defaults back to the bottom).
- */
-interface ScrollMemo {
-  top: number;
-  atBottom: boolean;
-}
-const scrollMemory = new Map<string, ScrollMemo>();
 
 export interface StickToBottom {
   /** Attach to the scroll container (the element with `overflow-y: auto`). */
@@ -67,9 +54,9 @@ export function useStickToBottom(convId: string): StickToBottom {
   // the first render, so the very first layout-effect already positions correctly.
   if (!inited.current) {
     inited.current = true;
-    const memo = scrollMemory.get(convId);
-    following.current = memo ? memo.atBottom : true;
-    restoreTop.current = memo && !memo.atBottom ? memo.top : null;
+    const target = initialTarget(readScrollMemo(convId));
+    following.current = target.following;
+    restoreTop.current = target.restoreTop;
     restoring.current = true;
     settleStart.current = performance.now();
   }
@@ -83,12 +70,16 @@ export function useStickToBottom(convId: string): StickToBottom {
     if (restoring.current && Math.abs(top - programmaticTop.current) > 2) {
       restoring.current = false;
     }
-    const dist = el.scrollHeight - top - el.clientHeight;
-    if (dist < AT_BOTTOM_PX) following.current = true;
-    else if (top < lastTop.current) following.current = false; // scrolled up & away
+    following.current = nextFollowing(
+      following.current,
+      lastTop.current,
+      top,
+      el.scrollHeight,
+      el.clientHeight,
+    );
     lastTop.current = top;
     // Remember where this conversation is, so reopening it returns here.
-    scrollMemory.set(convId, { top, atBottom: following.current });
+    writeScrollMemo(convId, { top, atBottom: following.current });
   }, [convId]);
 
   const scrollRef = useCallback(
@@ -113,8 +104,10 @@ export function useStickToBottom(convId: string): StickToBottom {
       // immediately — treat it as arrived so we settle quickly instead of at the cap.
       if (el.scrollHeight > el.clientHeight + 4) grew.current = true;
     }
-    const max = Math.max(0, el.scrollHeight - el.clientHeight);
-    el.scrollTop = restoreTop.current == null ? el.scrollHeight : Math.min(restoreTop.current, max);
+    el.scrollTop =
+      restoreTop.current == null
+        ? el.scrollHeight
+        : clampRestoreTop(restoreTop.current, el.scrollHeight, el.clientHeight);
     programmaticTop.current = el.scrollTop;
 
     const h = el.scrollHeight;
