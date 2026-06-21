@@ -343,6 +343,28 @@ fn applescript_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Bounce the app's Dock icon (macOS) / flash the taskbar (other platforms) to
+/// get the user's attention when an agent finishes or needs input while the app
+/// is in the background. `critical` bounces repeatedly until the app is focused
+/// (a permission/question is waiting); otherwise it bounces once (a turn ended).
+/// The OS clears the request automatically when the window regains focus, so the
+/// front never has to cancel it. A no-op if the main window is gone.
+#[tauri::command]
+#[specta::specta]
+pub fn request_user_attention(app: tauri::AppHandle, critical: bool) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(()); // window already closed — nothing to flash
+    };
+    let kind = if critical {
+        tauri::UserAttentionType::Critical
+    } else {
+        tauri::UserAttentionType::Informational
+    };
+    window
+        .request_user_attention(Some(kind))
+        .map_err(|e| e.to_string())
+}
+
 // ---- Git worktrees --------------------------------------------------------
 //
 // These commands are the front's single boundary to git worktree management.

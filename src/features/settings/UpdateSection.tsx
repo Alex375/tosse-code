@@ -28,7 +28,7 @@ export function UpdateSection() {
       : null;
 
   return (
-    <div id="updates">
+    <div>
       <div className={styles.section}>Mise à jour</div>
 
       {hasUpdate && update ? (

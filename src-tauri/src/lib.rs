@@ -6,9 +6,9 @@ pub mod supervisor;
 use ipc::commands::{
     answer_permission, create_worktree, delete_conversation, delete_repo, fetch_slash_commands,
     interrupt_session, list_worktrees, load_persisted_state, load_session_history, open_in_terminal,
-    path_exists, ping, remove_worktree, send_message, set_active_conversation, set_effort_level,
-    set_model, set_permission_mode, spawn_session, stop_session, upsert_conversation, upsert_repo,
-    wipe_all_data, worktree_status, Sessions,
+    path_exists, ping, remove_worktree, request_user_attention, send_message,
+    set_active_conversation, set_effort_level, set_model, set_permission_mode, spawn_session,
+    stop_session, upsert_conversation, upsert_repo, wipe_all_data, worktree_status, Sessions,
 };
 use ipc::events::{
     SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent, SessionStateEvent, TickEvent,
@@ -32,6 +32,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             interrupt_session,
             stop_session,
             open_in_terminal,
+            request_user_attention,
             list_worktrees,
             worktree_status,
             create_worktree,
@@ -188,6 +189,8 @@ pub fn run() {
         // Secure auto-update (signature-verified) + relaunch after install.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // OS notifications (agent done / needs attention).
+        .plugin(tauri_plugin_notification::init())
         // Wire commands through tauri-specta (replaces generate_handler!).
         .invoke_handler(specta_builder.invoke_handler())
         // The live session registry, reachable from every command.

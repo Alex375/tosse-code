@@ -1,14 +1,27 @@
-// Settings modal. Phase-1 scope: a "Données" section with the destructive
-// "drop all" action (clears the core's SQLite db + in-memory state). The SQL
-// model is still in flux during development, so a one-click wipe is intentional.
+// Settings modal — a left-rail tabbed panel (built to scale as more settings
+// land). Sections: Général (about), Notifications, Mises à jour, Données (the
+// destructive "drop all", kept while the SQL model is still in flux). The active
+// section is shared state so deep-links (e.g. the update banner) can open it
+// straight onto a given tab.
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { wipeAllData } from "../../store/conversationsStore";
+import { useSettingsUi, type SettingsSection } from "../../store/settingsUi";
 import { Ico } from "../../ui/kit";
 import { UpdateSection } from "./UpdateSection";
+import { NotificationsSection } from "./NotificationsSection";
 import styles from "./SettingsPanel.module.css";
 
+const TABS: Array<{ id: SettingsSection; label: string; icon: string }> = [
+  { id: "general", label: "Général", icon: "cog" },
+  { id: "notifications", label: "Notifications", icon: "bell" },
+  { id: "updates", label: "Mises à jour", icon: "refresh" },
+  { id: "data", label: "Données", icon: "trash" },
+];
+
 export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const section = useSettingsUi((s) => s.section);
+  const setSection = useSettingsUi((s) => s.setSection);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   // App version, read from the bundle (tauri.conf.json — the runtime source of
@@ -22,6 +35,17 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
       .then(setVersion)
       .catch(() => setVersion(null));
   }, [open]);
+
+  // Close on Escape, but never mid-wipe.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, busy]);
 
   if (!open) return null;
 
@@ -55,51 +79,77 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
           </button>
         </div>
 
-        <div className={styles.body}>
-          <div className={styles.section}>À propos</div>
-          <div className={styles.about}>
-            <span className={styles.appName}>Tosse Code</span>
-            {version && <span className={styles.version}>v{version}</span>}
-          </div>
-
-          <div className={styles.divider} />
-
-          <UpdateSection />
-
-          <div className={styles.divider} />
-
-          <div className={styles.section}>Données</div>
-          <div className={styles.desc}>
-            Supprime toutes les conversations et tous les dépôts enregistrés, et vide la base
-            locale. Les transcripts de Claude sur le disque ne sont pas touchés. Action
-            irréversible.
-          </div>
-
-          {confirming ? (
-            <div className={styles.row}>
+        <div className={styles.layout}>
+          <nav className={styles.rail} aria-label="Sections des réglages">
+            {TABS.map((t) => (
               <button
-                className={`${styles.btn} ${styles.danger}`}
-                onClick={() => void dropAll()}
-                disabled={busy}
+                key={t.id}
+                type="button"
+                className={styles.railItem}
+                data-on={section === t.id ? "" : undefined}
+                onClick={() => setSection(t.id)}
               >
-                {busy ? "Suppression…" : "Confirmer la suppression"}
+                <Ico name={t.icon} className="sm" />
+                <span>{t.label}</span>
               </button>
-              <button
-                className={`${styles.btn} ${styles.ghost}`}
-                onClick={() => setConfirming(false)}
-                disabled={busy}
-              >
-                Annuler
-              </button>
-            </div>
-          ) : (
-            <button
-              className={`${styles.btn} ${styles.danger}`}
-              onClick={() => setConfirming(true)}
-            >
-              Tout supprimer…
-            </button>
-          )}
+            ))}
+          </nav>
+
+          <div className={styles.content}>
+            {section === "general" && (
+              <div>
+                <div className={styles.section}>À propos</div>
+                <div className={styles.about}>
+                  <span className={styles.appName}>Tosse Code</span>
+                  {version && <span className={styles.version}>v{version}</span>}
+                </div>
+                <div className={styles.desc}>
+                  Application de bureau pour piloter Claude Code.
+                </div>
+              </div>
+            )}
+
+            {section === "notifications" && <NotificationsSection />}
+
+            {section === "updates" && <UpdateSection />}
+
+            {section === "data" && (
+              <div>
+                <div className={styles.section}>Données</div>
+                <div className={styles.desc}>
+                  Supprime toutes les conversations et tous les dépôts enregistrés, et vide la base
+                  locale. Les transcripts de Claude sur le disque ne sont pas touchés. Action
+                  irréversible.
+                </div>
+
+                {confirming ? (
+                  <div className={styles.row}>
+                    <button
+                      className={`${styles.btn} ${styles.danger}`}
+                      onClick={() => void dropAll()}
+                      disabled={busy}
+                    >
+                      {busy ? "Suppression…" : "Confirmer la suppression"}
+                    </button>
+                    <button
+                      className={`${styles.btn} ${styles.ghost}`}
+                      onClick={() => setConfirming(false)}
+                      disabled={busy}
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className={`${styles.btn} ${styles.danger}`}
+                    onClick={() => setConfirming(true)}
+                  >
+                    Tout supprimer…
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
