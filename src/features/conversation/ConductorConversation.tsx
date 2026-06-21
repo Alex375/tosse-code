@@ -86,9 +86,11 @@ export function ConductorConversation({ active }: { active: Conversation | null 
 
 /**
  * The active conversation's column: thread + todo bar + composer, sharing one
- * stick-to-bottom instance. The thread is the scroll container; the composer
- * snaps it to the bottom on send (`onSent`). Mounted with a per-conversation key
- * so the scroll state (whether the user has scrolled up) resets on switch.
+ * stick-to-bottom instance. The thread is the scroll container; the composer snaps it
+ * to the bottom on send (`onSent`). Mounted with a per-conversation key so it remounts
+ * on switch; the scroll position is remembered per conversation inside the hook (keyed
+ * by `session`, the stable id), so reopening returns to where the user left off —
+ * defaulting to the bottom when there is no memory yet.
  */
 function ConversationPane({
   session,
@@ -99,10 +101,10 @@ function ConversationPane({
   composerRef: RefObject<ComposerHandle>;
   onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
-  const { scrollRef, followIfPinned, scrollToBottom } = useStickToBottom();
+  const { scrollRef, onRender, scrollToBottom } = useStickToBottom(session);
   return (
     <div className="wf-col" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
-      <ConductorThread session={session} scrollRef={scrollRef} followIfPinned={followIfPinned} />
+      <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
       <TodoBar session={session} />
       <ConductorComposer ref={composerRef} session={session} onSent={scrollToBottom} />
     </div>
