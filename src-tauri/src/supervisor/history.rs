@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::assembler::normalize_blocks;
-use super::model::ConversationItem;
+use super::assembler::{context_used_from_usage, default_context_window, normalize_blocks};
+use super::model::{ContextFill, ConversationItem};
 
 /// Claude's config dir: `$CLAUDE_CONFIG_DIR` if set, else `$HOME/.claude`.
 fn claude_config_dir() -> Option<PathBuf> {
@@ -76,6 +76,55 @@ fn load_history_in(config_dir: &Path, session_id: &str) -> Vec<ConversationItem>
         Some(path) => parse_transcript(&path),
         None => Vec::new(),
     }
+}
+
+/// Read a conversation's current context fill from its transcript, so the UI can
+/// render the ring the moment the conversation is opened / its stream turned on —
+/// before any new live turn reports usage. Uses the most recent MAIN-thread
+/// assistant `usage` (input + cache = prompt size) for the tokens and the model it
+/// ran on for the provisional window (the transcript carries no authoritative
+/// `modelUsage`; the first live `result` later refines it). Absent/empty transcript
+/// → all-`None`.
+pub fn load_context_fill(session_id: &str) -> ContextFill {
+    match claude_config_dir() {
+        Some(dir) => load_context_fill_in(&dir, session_id),
+        None => ContextFill::default(),
+    }
+}
+
+fn load_context_fill_in(config_dir: &Path, session_id: &str) -> ContextFill {
+    let Some(path) = find_transcript(config_dir, session_id) else {
+        return ContextFill::default();
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return ContextFill::default();
+    };
+    let mut fill = ContextFill::default();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        // Sub-agent (sidechain) turns run on their own window — never let them drive
+        // the conversation's meter.
+        if entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let Some(message) = entry.get("message") else {
+            continue;
+        };
+        // The freshest main-thread usage wins (largest accumulated context); keep
+        // scanning so the LAST one sticks.
+        if let Some(used) = message.get("usage").and_then(context_used_from_usage) {
+            fill.context_tokens = Some(used);
+            fill.context_window =
+                Some(default_context_window(message.get("model").and_then(Value::as_str)));
+        }
+    }
+    fill
 }
 
 fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
@@ -277,5 +326,36 @@ mod tests {
     fn missing_transcript_is_empty_not_an_error() {
         let base = std::env::temp_dir().join("tosse-hist-nope-dir");
         assert!(load_history_in(&base, "does-not-exist").is_empty());
+        // Same for the context fill: no transcript → nothing seeded, not an error.
+        assert_eq!(load_context_fill_in(&base, "does-not-exist"), ContextFill::default());
+    }
+
+    #[test]
+    fn context_fill_uses_last_main_thread_usage_and_model() {
+        let base = std::env::temp_dir().join(format!("tosse-ctx-{}", std::process::id()));
+        let proj = base.join("projects").join("-some-cwd");
+        std::fs::create_dir_all(&proj).unwrap();
+        let session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let mut f = std::fs::File::create(proj.join(format!("{session_id}.jsonl"))).unwrap();
+        let lines = [
+            // An early small turn…
+            r#"{"type":"assistant","uuid":"a1","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}"#,
+            // …then the latest main-thread turn — this one must win.
+            r#"{"type":"assistant","uuid":"a2","message":{"id":"m2","model":"claude-opus-4-8","usage":{"input_tokens":5000,"cache_creation_input_tokens":9000,"cache_read_input_tokens":15000,"output_tokens":12}}}"#,
+            // A sidechain turn with bigger numbers must be ignored.
+            r#"{"type":"assistant","isSidechain":true,"uuid":"a3","message":{"id":"m9","model":"claude-haiku-4-5","usage":{"input_tokens":999999,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}"#,
+        ];
+        for l in lines {
+            writeln!(f, "{l}").unwrap();
+        }
+        drop(f);
+
+        let fill = load_context_fill_in(&base, session_id);
+        std::fs::remove_dir_all(&base).ok();
+
+        // 5000 + 9000 + 15000 = 29000 from the latest main-thread turn.
+        assert_eq!(fill.context_tokens, Some(29_000));
+        // Opus → 1M provisional window.
+        assert_eq!(fill.context_window, Some(1_000_000));
     }
 }

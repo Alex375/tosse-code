@@ -168,6 +168,11 @@ pub struct ResultMsg {
     /// Aggregate usage; shape varies per message kind, kept raw.
     #[serde(default)]
     pub usage: Value,
+    /// Per-model usage map (`{"claude-opus-4-8[1m]": {inputTokens, contextWindow, …}}`).
+    /// camelCase inner fields; kept raw and read by the assembler to surface the
+    /// context-window size. Absent on some result subtypes → defaults to `null`.
+    #[serde(default, rename = "modelUsage")]
+    pub model_usage: Value,
 }
 
 /// `stream_event` — an incremental SSE delta wrapped with session metadata.

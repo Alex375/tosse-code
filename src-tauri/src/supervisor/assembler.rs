@@ -14,8 +14,12 @@
 
 use serde_json::Value;
 
-use super::model::{ConversationItem, NormalizedBlock, SessionEvent, SessionStatePayload};
-use super::protocol::{AssistantMsg, CliMessage, ResultMsg, StreamEventMsg, SystemMsg, UserMsg};
+use super::model::{
+    ConversationItem, NormalizedBlock, RateLimitSnapshot, SessionEvent, SessionStatePayload,
+};
+use super::protocol::{
+    AssistantMsg, CliMessage, RateLimitMsg, ResultMsg, StreamEventMsg, SystemMsg, UserMsg,
+};
 
 /// Stateful normalizer for one session.
 #[derive(Debug, Default)]
@@ -79,8 +83,9 @@ impl Assembler {
             CliMessage::Assistant(a) => self.ingest_assistant(a, &mut out),
             CliMessage::User(u) => self.ingest_user(u, &mut out),
             CliMessage::Result(r) => self.ingest_result(r, &mut out),
-            // rate_limit_event / control_* / keep_alive / transcript_mirror /
-            // unknown: nothing for the UI at this layer.
+            CliMessage::RateLimitEvent(rl) => self.ingest_rate_limit(rl, &mut out),
+            // control_* / keep_alive / transcript_mirror / unknown: nothing for the
+            // UI at this layer.
             _ => {}
         }
         out
@@ -134,8 +139,28 @@ impl Assembler {
                     .unwrap_or_default()
                     .to_string();
                 self.current_message_id = (!id.is_empty()).then(|| id.clone());
+                let mut state_changed = false;
                 if !self.state.busy {
                     self.state.busy = true;
+                    state_changed = true;
+                }
+                // Live context fill: a ROOT model call's input usage = the prompt size
+                // sent to the model = current context occupancy. Sub-agent (Task) calls
+                // have `parent_tool_use_id` set and their own window — never let them
+                // clobber the conversation's context meter.
+                if se.parent_tool_use_id.is_none() {
+                    if let Some(used) = event
+                        .get("message")
+                        .and_then(|m| m.get("usage"))
+                        .and_then(context_used_from_usage)
+                    {
+                        if self.state.context_tokens != Some(used) {
+                            self.state.context_tokens = Some(used);
+                            state_changed = true;
+                        }
+                    }
+                }
+                if state_changed {
                     out.push(SessionEvent::State(self.state.clone()));
                 }
                 out.push(SessionEvent::Item(ConversationItem::MessageStarted {
@@ -213,6 +238,23 @@ impl Assembler {
         self.state.activity = None;
         self.state.awaiting_permission = false;
         self.current_message_id = None;
+        // Authoritative end-of-turn context fill + window size. A multi-call turn's
+        // top-level `usage` can aggregate its `iterations[]`, so prefer the LAST
+        // iteration — the final model call's prompt = current context occupancy.
+        let final_usage = r
+            .usage
+            .get("iterations")
+            .and_then(Value::as_array)
+            .and_then(|it| it.last())
+            .unwrap_or(&r.usage);
+        if let Some(used) = context_used_from_usage(final_usage) {
+            self.state.context_tokens = Some(used);
+        }
+        // contextWindow is a model property (stable across the session); only update
+        // when this result carries it, so a turn without modelUsage keeps the last value.
+        if let Some(window) = context_window_from_model_usage(&r.model_usage) {
+            self.state.context_window = Some(window);
+        }
         out.push(SessionEvent::Item(ConversationItem::TurnResult {
             subtype: r.subtype.clone(),
             is_error: r.is_error,
@@ -223,6 +265,82 @@ impl Assembler {
         }));
         out.push(SessionEvent::State(self.state.clone()));
     }
+
+    /// Normalize a `rate_limit_event` into the session's [`RateLimitSnapshot`]. The
+    /// inner `rate_limit_info` has camelCase keys; we read them by hand off the raw
+    /// Value (protocol.rs keeps it untyped). Emits a state event only on change so a
+    /// per-turn re-emit of the same snapshot does not churn the UI.
+    fn ingest_rate_limit(&mut self, rl: &RateLimitMsg, out: &mut Vec<SessionEvent>) {
+        let info = &rl.rate_limit_info;
+        let snapshot = RateLimitSnapshot {
+            status: info.get("status").and_then(Value::as_str).map(str::to_string),
+            resets_at: info.get("resetsAt").and_then(Value::as_i64),
+            limit_type: info
+                .get("rateLimitType")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            using_overage: info
+                .get("isUsingOverage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        };
+        if self.state.rate_limit.as_ref() != Some(&snapshot) {
+            self.state.rate_limit = Some(snapshot);
+            out.push(SessionEvent::State(self.state.clone()));
+        }
+    }
+}
+
+/// Provisional context-window size for a model id, used to render the ring before
+/// the authoritative `result.modelUsage[…].contextWindow` arrives (e.g. seeding a
+/// resumed conversation from its transcript, which carries no window). Opus runs
+/// with the 1M beta on this CLI; everything else is 200k.
+pub(crate) fn default_context_window(model: Option<&str>) -> u64 {
+    match model {
+        Some(m) if m.to_ascii_lowercase().contains("opus") => 1_000_000,
+        _ => 200_000,
+    }
+}
+
+/// Sum the tokens that occupy the context window from a `usage` object:
+/// `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` (the full
+/// prompt sent to the model). Returns `None` when the object carries no token counts
+/// (e.g. an empty/`null` usage), so callers don't reset a known value to zero.
+pub(crate) fn context_used_from_usage(usage: &Value) -> Option<u64> {
+    let field = |k: &str| usage.get(k).and_then(Value::as_u64);
+    let input = field("input_tokens");
+    let cache_creation = field("cache_creation_input_tokens");
+    let cache_read = field("cache_read_input_tokens");
+    if input.is_none() && cache_creation.is_none() && cache_read.is_none() {
+        return None;
+    }
+    Some(input.unwrap_or(0) + cache_creation.unwrap_or(0) + cache_read.unwrap_or(0))
+}
+
+/// Pick the active model's context-window size from a `modelUsage` map. A turn may
+/// list several models (a sub-agent runs on a cheaper one); the conversation's model
+/// is the one that consumed the most input, so we return the `contextWindow` of the
+/// entry with the largest `input + cacheRead + cacheCreation`. Returns `None` when the
+/// map is absent or carries no window.
+pub(crate) fn context_window_from_model_usage(model_usage: &Value) -> Option<u64> {
+    let obj = model_usage.as_object()?;
+    let mut best: Option<(u64, u64)> = None; // (input_total, context_window)
+    for entry in obj.values() {
+        let Some(window) = entry.get("contextWindow").and_then(Value::as_u64) else {
+            continue;
+        };
+        let field = |k: &str| entry.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let input_total =
+            field("inputTokens") + field("cacheReadInputTokens") + field("cacheCreationInputTokens");
+        let better = match best {
+            Some((b, _)) => input_total >= b,
+            None => true,
+        };
+        if better {
+            best = Some((input_total, window));
+        }
+    }
+    best.map(|(_, window)| window)
 }
 
 /// Turn an assistant `content[]` array into typed normalized blocks.
@@ -352,5 +470,107 @@ mod tests {
             _ => None,
         });
         assert_eq!(result.as_deref(), Some("toolu_1"));
+    }
+
+    #[test]
+    fn captures_context_fill_and_window_from_fixture() {
+        let mut asm = Assembler::new();
+        for line in CAPTURE.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let msg: CliMessage = serde_json::from_str(line).unwrap();
+            asm.ingest(&msg);
+        }
+        // input(5069) + cache_creation(9061) + cache_read(15626) = 29756.
+        assert_eq!(asm.state().context_tokens, Some(29_756));
+        // Opus 1M window wins over the haiku sub-agent's 200k (more input tokens).
+        assert_eq!(asm.state().context_window, Some(1_000_000));
+    }
+
+    #[test]
+    fn context_helpers_sum_and_pick_window() {
+        let usage = serde_json::json!({
+            "input_tokens": 100,
+            "cache_creation_input_tokens": 20,
+            "cache_read_input_tokens": 3,
+            "output_tokens": 9
+        });
+        assert_eq!(context_used_from_usage(&usage), Some(123));
+        // Empty usage → None (don't reset a known fill to zero).
+        assert_eq!(context_used_from_usage(&serde_json::json!({})), None);
+
+        let model_usage = serde_json::json!({
+            "claude-haiku-4-5": {"inputTokens": 500, "contextWindow": 200000},
+            "claude-opus-4-8[1m]": {
+                "inputTokens": 5000, "cacheReadInputTokens": 15000,
+                "cacheCreationInputTokens": 9000, "contextWindow": 1000000
+            }
+        });
+        assert_eq!(context_window_from_model_usage(&model_usage), Some(1_000_000));
+        assert_eq!(context_window_from_model_usage(&serde_json::json!({})), None);
+        assert_eq!(context_window_from_model_usage(&Value::Null), None);
+    }
+
+    #[test]
+    fn result_context_uses_last_iteration_not_aggregate() {
+        let result = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "result": "ok",
+            "stop_reason": "end_turn",
+            "session_id": "s",
+            "uuid": "u",
+            // A multi-call turn: the LAST iteration is the real final prompt size and
+            // must win over the (here tiny) top-level number.
+            "usage": {
+                "input_tokens": 1,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "iterations": [
+                    {"input_tokens": 100, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                    {"input_tokens": 2000, "cache_read_input_tokens": 18000, "cache_creation_input_tokens": 0}
+                ]
+            },
+            "modelUsage": {"claude-opus-4-8[1m]": {"inputTokens": 2000, "contextWindow": 1000000}}
+        });
+        let msg: CliMessage = serde_json::from_value(result).unwrap();
+        let mut asm = Assembler::new();
+        asm.ingest(&msg);
+        // last iteration: 2000 + 18000 + 0 = 20000 (NOT the top-level 1).
+        assert_eq!(asm.state().context_tokens, Some(20_000));
+        assert_eq!(asm.state().context_window, Some(1_000_000));
+    }
+
+    #[test]
+    fn ingests_rate_limit_event_into_state() {
+        let event = serde_json::json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "allowed_warning",
+                "resetsAt": 1781618400_i64,
+                "rateLimitType": "five_hour",
+                "overageStatus": "rejected",
+                "isUsingOverage": false
+            },
+            "session_id": "s", "uuid": "u"
+        });
+        let msg: CliMessage = serde_json::from_value(event).unwrap();
+        let mut asm = Assembler::new();
+        let events = asm.ingest(&msg);
+        // First sighting emits a state event...
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::State(_))));
+        let rl = asm.state().rate_limit.clone().expect("rate limit captured");
+        assert_eq!(rl.status.as_deref(), Some("allowed_warning"));
+        assert_eq!(rl.resets_at, Some(1781618400));
+        assert_eq!(rl.limit_type.as_deref(), Some("five_hour"));
+        assert!(!rl.using_overage);
+        // ...re-emitting the same snapshot is a no-op (no churn).
+        let again = asm.ingest(&msg);
+        assert!(again.is_empty(), "unchanged rate limit should emit nothing");
     }
 }

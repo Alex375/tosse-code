@@ -337,7 +337,14 @@
 .wf-pop-bar > i { display:block; height:100%; background:var(--wf-tx-lo); border-radius:999px; }
 .wf-pop-bar > i.warn { background:var(--wf-att); }
 .wf-pop-sub { font-size:10.5px; color:var(--wf-tx-xlo); }
-.wf-pop-act { display:flex; align-items:center; gap:7px; margin-top:2px; padding:7px 8px; border-radius:6px; font-size:11.5px; color:var(--wf-accent); border:1px solid var(--wf-accent-dim); background:#241813; cursor:default; }
+.wf-pop-ctx-line { font-size:12.5px; color:var(--wf-tx-hi); font-variant-numeric:tabular-nums; }
+.wf-pop-ctx-line .wf-pop-ctx-pct { color:var(--wf-tx-lo); }
+.wf-pop-ctx-line .warn { color:var(--wf-att); }
+.wf-pop-act { display:flex; align-items:center; gap:7px; margin-top:2px; padding:7px 8px; border-radius:6px; font-size:11.5px; color:var(--wf-accent); border:1px solid var(--wf-accent-dim); background:#241813; cursor:pointer; }
+.wf-pop-act:hover { background:#2c1d16; }
+.wf-pop-sep { height:1px; margin:3px 0; background:var(--wf-line-2); }
+.wf-pop-pill { display:inline-flex; align-items:center; gap:6px; font-size:11.5px; color:var(--wf-tx-hi); }
+.wf-pop-pill > i { width:7px; height:7px; border-radius:999px; flex:0 0 auto; }
 
 /* ---- à relire (ready for review) --------------------------- */
 .wf-review { border:1px solid #314463; background:var(--wf-wait-bg); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }

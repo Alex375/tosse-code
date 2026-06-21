@@ -32,6 +32,14 @@ const baseState: SessionStatePayload = {
   activity: null,
   awaiting_permission: false,
   ended: false,
+  context_tokens: 29756,
+  context_window: 1000000,
+  rate_limit: {
+    status: "allowed",
+    resets_at: Math.floor(Date.now() / 1000) + 2 * 3600 + 14 * 60,
+    limit_type: "five_hour",
+    using_overage: false,
+  },
 };
 
 export const idleState = (): SessionStatePayload => ({ ...baseState });

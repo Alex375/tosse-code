@@ -37,6 +37,45 @@ pub struct SessionStatePayload {
     /// stopped). A final state event with this set lets the UI mark the session
     /// dead instead of showing it as live forever.
     pub ended: bool,
+    /// Tokens occupying the model's context window right now: the last model call's
+    /// `input + cache_creation + cache_read` (from `message_start` live, then the
+    /// `result`). `None` until the first turn reports usage. Drives the context ring.
+    pub context_tokens: Option<u64>,
+    /// Size of the active model's context window (from `result.modelUsage[…].contextWindow`,
+    /// e.g. 200k or 1M for Opus in 1M mode). `None` until a `result` reports it; once
+    /// known it is kept across turns that omit it. The ring's denominator.
+    pub context_window: Option<u64>,
+    /// Latest subscription rate-limit snapshot (from `rate_limit_event`). `None` until
+    /// the CLI emits one. NOTE: the stream only carries status + reset, NOT a usage
+    /// percentage — that lives behind the `/api/oauth/usage` endpoint (separate task).
+    pub rate_limit: Option<RateLimitSnapshot>,
+}
+
+/// Context-meter seed for a conversation, read from its on-disk transcript so the
+/// ring shows the real fill the moment a conversation is opened / its stream turned
+/// on — before the first new turn streams live usage. `context_window` is the model's
+/// provisional window (the transcript carries no authoritative `modelUsage`); the
+/// first live `result` later refines it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct ContextFill {
+    pub context_tokens: Option<u64>,
+    pub context_window: Option<u64>,
+}
+
+/// Subscription rate-limit status, normalized from `rate_limit_event.rate_limit_info`.
+/// Carries only what the stream-json protocol exposes: the coarse `status`, the
+/// reset time, the window type, and whether overage is active. The precise usage
+/// percentage is NOT in the stream (it comes from `GET /api/oauth/usage`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct RateLimitSnapshot {
+    /// `"allowed"` (no warning), `"allowed_warning"` (approaching), `"rejected"` (limited), …
+    pub status: Option<String>,
+    /// Unix epoch seconds when the current window resets.
+    pub resets_at: Option<i64>,
+    /// Which window this refers to: `"five_hour"`, `"seven_day"`, …
+    pub limit_type: Option<String>,
+    /// `true` while the account is spending overage credits.
+    pub using_overage: bool,
 }
 
 /// One authoritative content block of an assistant message.

@@ -265,21 +265,80 @@ export interface Ctx {
   max: string;
 }
 
-export function ContextRing({ ctx, label, disabled }: { ctx: Ctx; label?: boolean; disabled?: boolean }) {
+/** Subscription plan (rate-limit) snapshot, surfaced from `rate_limit_event`.
+ *  The stream-json protocol only exposes the coarse status + reset time — NOT a
+ *  usage percentage (that lives behind `/api/oauth/usage`). */
+export interface PlanInfo {
+  status: string | null;
+  resetsAt: number | null;
+  limitType: string | null;
+  usingOverage: boolean;
+}
+
+/** Map a rate-limit status to a label + colour token. */
+function planStatus(status: string | null): { label: string; color: string } {
+  switch (status) {
+    case "allowed":
+      return { label: "OK", color: "var(--wf-run)" };
+    case "allowed_warning":
+      return { label: "Proche limite", color: "var(--wf-att)" };
+    case "rejected":
+      return { label: "Limité", color: "var(--wf-err)" };
+    default:
+      return { label: status ?? "—", color: "var(--wf-tx-lo)" };
+  }
+}
+
+/** Human label for a rate-limit window type. */
+function planWindow(limitType: string | null): string {
+  switch (limitType) {
+    case "five_hour":
+      return "5h";
+    case "seven_day":
+      return "7j";
+    default:
+      return limitType ?? "";
+  }
+}
+
+/** "dans 2h14" / "dans 43min" / "imminent" — computed at render (popover re-opens). */
+function fmtReset(resetsAt: number | null): string {
+  if (!resetsAt) return "—";
+  const secs = resetsAt - Math.floor(Date.now() / 1000);
+  if (secs <= 0) return "imminent";
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return h > 0 ? `dans ${h}h${m.toString().padStart(2, "0")}` : `dans ${m}min`;
+}
+
+export function ContextRing({
+  ctx,
+  plan,
+  label,
+  disabled,
+  onCompact,
+}: {
+  ctx: Ctx;
+  plan?: PlanInfo | null;
+  label?: boolean;
+  disabled?: boolean;
+  onCompact?: () => void;
+}) {
   const sz = 16;
   const r = sz / 2 - 1.6;
   const c = 2 * Math.PI * r;
   const warn = ctx.pct >= 70;
-  // The core does not expose context usage yet — render a quiet, non-interactive stub.
+  // No usage reported yet (fresh session, pre-first-turn) — quiet, non-interactive stub.
   if (disabled) {
     return (
-      <button className="wf-ring" disabled title="Contexte — à venir">
+      <button className="wf-ring" disabled title="Contexte — en attente du 1er tour">
         <svg width={sz} height={sz} viewBox={"0 0 " + sz + " " + sz}>
           <circle cx={sz / 2} cy={sz / 2} r={r} className="wf-ring-bg" />
         </svg>
       </button>
     );
   }
+  const st = plan ? planStatus(plan.status) : null;
   return (
     <Menu
       align="right"
@@ -303,21 +362,39 @@ export function ContextRing({ ctx, label, disabled }: { ctx: Ctx; label?: boolea
     >
       <div className="wf-pop-ctx" onClick={(e) => e.stopPropagation()}>
         <div className="wf-pop-h">Fenêtre de contexte</div>
-        <div className="wf-pop-row">
-          <span>Utilisé</span>
-          <span className="wf-mono wf-hi">{ctx.used}</span>
-        </div>
-        <div className="wf-pop-row">
-          <span>Fenêtre</span>
-          <span className="wf-mono">{ctx.max}</span>
+        <div className="wf-pop-ctx-line wf-mono">
+          {ctx.used}/{ctx.max} tokens <span className={warn ? "warn" : "wf-pop-ctx-pct"}>({ctx.pct}%)</span>
         </div>
         <div className="wf-pop-bar">
           <i className={warn ? "warn" : ""} style={{ width: ctx.pct + "%" }} />
         </div>
-        <div className="wf-pop-sub">
-          {ctx.pct}% utilisé · {100 - ctx.pct}% libre
-        </div>
-        <div className="wf-pop-act">
+        {st && plan ? (
+          <>
+            <div className="wf-pop-sep" />
+            <div className="wf-pop-h">Forfait{planWindow(plan.limitType) ? ` · ${planWindow(plan.limitType)}` : ""}</div>
+            <div className="wf-pop-row">
+              <span>Statut</span>
+              <span className="wf-pop-pill">
+                <i style={{ background: st.color }} />
+                {st.label}
+              </span>
+            </div>
+            <div className="wf-pop-row">
+              <span>Réinitialisation</span>
+              <span className="wf-mono">{fmtReset(plan.resetsAt)}</span>
+            </div>
+            {plan.usingOverage ? (
+              <div className="wf-pop-sub">Overage actif</div>
+            ) : null}
+          </>
+        ) : null}
+        <div
+          className="wf-pop-act"
+          role="button"
+          tabIndex={0}
+          onClick={() => onCompact?.()}
+          title="Envoyer /compact pour réduire le contexte"
+        >
           <Ico name="spark" className="sm" />
           Compacter le contexte
         </div>

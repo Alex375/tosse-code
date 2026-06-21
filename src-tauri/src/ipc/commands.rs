@@ -10,7 +10,7 @@ use tauri::Manager;
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
 use crate::supervisor::control::{PermissionDecision, PermissionMode};
-use crate::supervisor::model::{ConversationItem, SlashCommand};
+use crate::supervisor::model::{ContextFill, ConversationItem, SlashCommand};
 use crate::supervisor::session::{self, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
 
@@ -155,6 +155,19 @@ pub async fn fetch_slash_commands(cwd: String) -> Result<Vec<SlashCommand>, Stri
 #[specta::specta]
 pub async fn load_session_history(session_id: String) -> Result<Vec<ConversationItem>, String> {
     tokio::task::spawn_blocking(move || crate::supervisor::history::load_history(&session_id))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Read a resumed conversation's current context fill (used tokens + window) from
+/// its on-disk transcript, so the UI can show the context ring as soon as the
+/// conversation is opened / its stream turned on — before the first new turn streams
+/// live usage. An absent transcript yields all-`None` (not an error). File IO runs
+/// off the async runtime via `spawn_blocking`.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_session_context(session_id: String) -> Result<ContextFill, String> {
+    tokio::task::spawn_blocking(move || crate::supervisor::history::load_context_fill(&session_id))
         .await
         .map_err(|e| e.to_string())
 }

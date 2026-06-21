@@ -546,9 +546,16 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   if (!conv || !conv.sessionId) return;
   const res = await commands.loadSessionHistory(conv.sessionId);
   if (res.status !== "ok" || res.data.length === 0) return;
-  const { ensureSession, applyItem } = useConversationStore.getState();
+  const { ensureSession, applyItem, applyContextFill } = useConversationStore.getState();
   ensureSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // Seed the context ring from the transcript so it shows immediately on open,
+  // before any new live turn reports usage. A missing/unreadable transcript is NOT
+  // an error (the core returns an empty fill), so a status "error" here is a real
+  // failure worth surfacing rather than swallowing.
+  const ctx = await commands.loadSessionContext(conv.sessionId);
+  if (ctx.status === "ok") applyContextFill(convId, ctx.data);
+  else console.error("loadSessionContext failed:", ctx.error);
 }
 
 /**
@@ -567,9 +574,13 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
   if (!conv?.sessionId) return;
   const res = await commands.loadSessionHistory(conv.sessionId);
   if (res.status !== "ok" || res.data.length === 0) return; // keep timeline on error/empty
-  const { resetSession, applyItem } = useConversationStore.getState();
+  const { resetSession, applyItem, applyContextFill } = useConversationStore.getState();
   resetSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // Re-seed the context ring from the transcript (resetSession cleared it).
+  const ctx = await commands.loadSessionContext(conv.sessionId);
+  if (ctx.status === "ok") applyContextFill(convId, ctx.data);
+  else console.error("loadSessionContext failed:", ctx.error);
   historyLoaded.add(convId); // the select-time loader is now satisfied for this run
 }
 

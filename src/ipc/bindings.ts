@@ -57,6 +57,21 @@ async loadSessionHistory(sessionId: string) : Promise<Result<ConversationItem[],
 }
 },
 /**
+ * Read a resumed conversation's current context fill (used tokens + window) from
+ * its on-disk transcript, so the UI can show the context ring as soon as the
+ * conversation is opened / its stream turned on — before the first new turn streams
+ * live usage. An absent transcript yields all-`None` (not an error). File IO runs
+ * off the async runtime via `spawn_blocking`.
+ */
+async loadSessionContext(sessionId: string) : Promise<Result<ContextFill, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_session_context", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Send a user turn to a session.
  */
 async sendMessage(session: string, text: string) : Promise<Result<null, string>> {
@@ -309,6 +324,14 @@ tickEvent: "tick-event"
 /** user-defined types **/
 
 /**
+ * Context-meter seed for a conversation, read from its on-disk transcript so the
+ * ring shows the real fill the moment a conversation is opened / its stream turned
+ * on — before the first new turn streams live usage. `context_window` is the model's
+ * provisional window (the transcript carries no authoritative `modelUsage`); the
+ * first live `result` later refines it.
+ */
+export type ContextFill = { context_tokens: number | null; context_window: number | null }
+/**
  * A normalized conversation event the UI applies incrementally. Tagged on
  * `kind` so the TS side is a simple discriminated union.
  */
@@ -432,6 +455,29 @@ active_id: string | null }
  */
 export type Pong = { ok: boolean; echo: string; at_ms: number }
 /**
+ * Subscription rate-limit status, normalized from `rate_limit_event.rate_limit_info`.
+ * Carries only what the stream-json protocol exposes: the coarse `status`, the
+ * reset time, the window type, and whether overage is active. The precise usage
+ * percentage is NOT in the stream (it comes from `GET /api/oauth/usage`).
+ */
+export type RateLimitSnapshot = { 
+/**
+ * `"allowed"` (no warning), `"allowed_warning"` (approaching), `"rejected"` (limited), …
+ */
+status: string | null; 
+/**
+ * Unix epoch seconds when the current window resets.
+ */
+resets_at: number | null; 
+/**
+ * Which window this refers to: `"five_hour"`, `"seven_day"`, …
+ */
+limit_type: string | null; 
+/**
+ * `true` while the account is spending overage credits.
+ */
+using_overage: boolean }
+/**
  * A working folder a conversation can be opened in.
  */
 export type RepoRecord = { id: string; path: string; 
@@ -497,7 +543,25 @@ awaiting_permission: boolean;
  * stopped). A final state event with this set lets the UI mark the session
  * dead instead of showing it as live forever.
  */
-ended: boolean }
+ended: boolean; 
+/**
+ * Tokens occupying the model's context window right now: the last model call's
+ * `input + cache_creation + cache_read` (from `message_start` live, then the
+ * `result`). `None` until the first turn reports usage. Drives the context ring.
+ */
+context_tokens: number | null; 
+/**
+ * Size of the active model's context window (from `result.modelUsage[…].contextWindow`,
+ * e.g. 200k or 1M for Opus in 1M mode). `None` until a `result` reports it; once
+ * known it is kept across turns that omit it. The ring's denominator.
+ */
+context_window: number | null; 
+/**
+ * Latest subscription rate-limit snapshot (from `rate_limit_event`). `None` until
+ * the CLI emits one. NOTE: the stream only carries status + reset, NOT a usage
+ * percentage — that lives behind the `/api/oauth/usage` endpoint (separate task).
+ */
+rate_limit: RateLimitSnapshot | null }
 /**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code
