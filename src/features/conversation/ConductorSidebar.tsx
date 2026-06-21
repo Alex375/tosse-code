@@ -237,7 +237,7 @@ export function ConductorSidebar() {
       <button
         type="button"
         className="cv-side-foot"
-        onClick={openSettings}
+        onClick={() => openSettings()}
         style={{
           background: "transparent",
           borderLeft: 0,

@@ -1,6 +1,6 @@
 [package]
 name = "tosse-code"
-version = "0.2.1"
+version = "0.3.0"
 description = "Tosse Code — desktop app to pilot Claude Code"
 authors = ["Tosse"]
 edition = "2021"
@@ -22,6 +22,9 @@ tauri-plugin-dialog = "2"
 # `tauri-plugin-process` provides the relaunch after an update is applied.
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# OS notifications (banner/Notification Center) for agent done / needs-attention
+# events. The Dock bounce is a separate, custom command (see request_user_attention).
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

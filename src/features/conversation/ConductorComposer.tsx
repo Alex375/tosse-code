@@ -79,6 +79,20 @@ function modelLabel(id?: string | null): string {
   return id;
 }
 
+/** Compact token count for the context ring: 29756 → "29.8k", 200000 → "200k", 1e6 → "1M". */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000;
+    return (Number.isInteger(m) ? m.toFixed(0) : m.toFixed(1)) + "M";
+  }
+  if (n >= 1_000) {
+    const k = n / 1_000;
+    if (k >= 999.95) return "1M"; // avoid "1000.0k" right below the 1M boundary
+    return (Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)) + "k";
+  }
+  return String(n);
+}
+
 export interface ComposerHandle {
   /** Focus the message textarea. No-op when it's disabled (read-only session). */
   focus: () => void;
@@ -174,6 +188,30 @@ export const ConductorComposer = forwardRef<
   // ever emits valid modes, so narrow it back to PermissionMode for the helpers below.
   const permMode = (state?.permission_mode ?? "auto") as PermissionMode;
   const permLabel = PERM_LABEL[permMode] ?? "Auto mode";
+
+  // Context ring: real fill from the last model call's input usage over the model's
+  // context window (both surfaced by the core in SessionStatePayload). Until the first
+  // turn reports usage, the ring renders a quiet stub (`disabled`).
+  const ctxTokens = state?.context_tokens ?? null;
+  const ctxWindow = state?.context_window ?? null;
+  const ctxReady = ctxTokens != null && ctxWindow != null && ctxWindow > 0;
+  const ctxData = ctxReady
+    ? {
+        pct: Math.min(100, Math.round((ctxTokens / ctxWindow) * 100)),
+        used: fmtTokens(ctxTokens),
+        max: fmtTokens(ctxWindow),
+      }
+    : { pct: 0, used: "—", max: "—" };
+  // Subscription plan snapshot (status + reset). Percentage of plan usage is NOT in
+  // the stream — only what `rate_limit_event` carries.
+  const planData = state?.rate_limit
+    ? {
+        status: state.rate_limit.status,
+        resetsAt: state.rate_limit.resets_at,
+        limitType: state.rate_limit.limit_type,
+        usingOverage: state.rate_limit.using_overage,
+      }
+    : null;
 
   // Shift+Tab cycles the permission mode, like the Claude Code terminal.
   const cyclePermMode = () => {
@@ -433,7 +471,12 @@ export const ConductorComposer = forwardRef<
             Worktree
           </button>
         ) : null}
-        <ContextRing ctx={{ pct: 0, used: "—", max: "200k" }} disabled />
+        <ContextRing
+          ctx={ctxData}
+          plan={planData}
+          disabled={!ctxReady}
+          onCompact={() => sendText("/compact")}
+        />
       </div>
     </div>
   );

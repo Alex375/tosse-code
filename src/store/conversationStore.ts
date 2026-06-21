@@ -46,6 +46,9 @@ const connectingState: SessionStatePayload = {
   activity: null,
   awaiting_permission: false,
   ended: false,
+  context_tokens: null,
+  context_window: null,
+  rate_limit: null,
 };
 
 function emptyEntry(session: string): SessionEntry {
@@ -88,6 +91,13 @@ interface ConversationState {
   sessions: Record<string, SessionEntry>;
   ensureSession: (session: string) => void;
   applyState: (session: string, state: SessionStatePayload) => void;
+  /** Seed the context meter (tokens/window) from the on-disk transcript on open or
+   *  stream-(re)start, so the ring shows the real fill BEFORE the first live turn.
+   *  Only fills a field that's still null — never clobbers a fresher live value. */
+  applyContextFill: (
+    session: string,
+    fill: { context_tokens: number | null; context_window: number | null },
+  ) => void;
   /** Reset a session's live state to neutral (idle, not busy/ended) WITHOUT
    *  touching its timeline. Used when the stream is turned off: the terminal
    *  `ended` event is routed by the now-stale handle and gets dropped, so the
@@ -189,7 +199,31 @@ export const useConversationStore = create<ConversationState>((set) => {
       ),
 
     applyState: (session, state) =>
-      withEntry(session, (entry) => ({ ...entry, state })),
+      // Carry forward the context meter + rate-limit snapshot when a state event
+      // omits them (null): a freshly-spawned session's first states (system/init,
+      // status) carry no usage yet, and would otherwise WIPE a value seeded from the
+      // transcript (or set by an earlier message_start) — making the ring flicker
+      // full → empty → full at the start of every (re)engaged conversation. The
+      // assembler's real (non-null) values always win; only nulls defer to what we
+      // already hold.
+      withEntry(session, (entry) => ({
+        ...entry,
+        state: {
+          ...state,
+          context_tokens: state.context_tokens ?? entry.state.context_tokens,
+          context_window: state.context_window ?? entry.state.context_window,
+          rate_limit: state.rate_limit ?? entry.state.rate_limit,
+        },
+      })),
+
+    applyContextFill: (session, fill) =>
+      withEntry(session, (entry) => {
+        const s = entry.state;
+        const tokens = s.context_tokens ?? fill.context_tokens;
+        const window = s.context_window ?? fill.context_window;
+        if (tokens === s.context_tokens && window === s.context_window) return entry;
+        return { ...entry, state: { ...s, context_tokens: tokens, context_window: window } };
+      }),
 
     clearState: (session) =>
       // Also drop any "en attente" badge: the session is being turned off, so the

@@ -27,7 +27,7 @@ export function UpdateBanner() {
     <button
       type="button"
       className={styles.banner}
-      onClick={openSettings}
+      onClick={() => openSettings("updates")}
       title="Ouvrir les réglages de mise à jour"
     >
       <Ico name="spark" className="sm" />

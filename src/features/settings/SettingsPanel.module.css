@@ -9,8 +9,12 @@
 }
 
 .panel {
-  width: 460px;
-  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  width: 760px;
+  max-width: 92vw;
+  height: 560px;
+  max-height: 86vh;
   background: var(--wf-panel);
   border: 1px solid var(--wf-line);
   border-radius: var(--radius-lg);
@@ -24,6 +28,7 @@
   gap: var(--space-3);
   padding: 14px 16px;
   border-bottom: 1px solid var(--wf-line);
+  flex: none;
 }
 
 .title {
@@ -50,9 +55,59 @@
   color: var(--text-primary);
 }
 
-.body {
-  padding: 16px;
+/* ---- Tabbed layout: left rail + content pane ---------------------------- */
+
+.layout {
+  display: flex;
+  flex: 1;
+  min-height: 0; /* let .content scroll instead of growing the panel */
 }
+
+.rail {
+  flex: none;
+  width: 188px;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--wf-line);
+  overflow-y: auto;
+}
+
+.railItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-hover), color var(--transition-hover);
+}
+.railItem:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.railItem[data-on] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 22px;
+  overflow-y: auto;
+}
+
+/* ---- Shared section primitives ------------------------------------------ */
 
 .section {
   font-size: var(--fs-xs);
@@ -73,6 +128,7 @@
   display: flex;
   align-items: baseline;
   gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 .appName {
   font-weight: 600;
@@ -84,10 +140,63 @@
   font-variant-numeric: tabular-nums;
 }
 
-.divider {
-  height: 1px;
-  background: var(--wf-line);
-  margin: var(--space-4) 0;
+/* ---- Toggle rows (Notifications) ---------------------------------------- */
+
+.toggleList {
+  display: flex;
+  flex-direction: column;
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--wf-line);
+}
+.toggleRow:last-child {
+  border-bottom: 1px solid var(--wf-line);
+}
+
+.toggleText {
+  flex: 1;
+  min-width: 0;
+}
+.toggleTitle {
+  font-size: var(--fs-base);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.toggleHint {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  line-height: var(--lh-body);
+  margin-top: 2px;
+}
+
+/* ---- Buttons ------------------------------------------------------------ */
+
+.row {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.btn {
+  height: 30px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: background var(--transition-hover), border-color var(--transition-hover),
+    color var(--transition-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .primary {
@@ -99,6 +208,28 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+
+.danger {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--error);
+}
+.danger:not(:disabled):hover {
+  background: var(--error-bg);
+  border-color: var(--error);
+}
+
+.ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+.ghost:not(:disabled):hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ---- Update section ----------------------------------------------------- */
 
 .notes {
   margin: 0 0 var(--space-4);
@@ -137,6 +268,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Discreet line: a routine (silent) auto-check failed — surfaced so a broken
+   release endpoint is detectable, without nagging like a real error. */
+.hintWarn {
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
 .errorMsg {
   margin-top: var(--space-3);
   padding: var(--space-3);
@@ -146,46 +285,4 @@
   color: var(--error);
   font-size: var(--fs-sm);
   word-break: break-word;
-}
-
-.row {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.btn {
-  height: 30px;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-ui);
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: background var(--transition-hover), border-color var(--transition-hover),
-    color var(--transition-hover);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.danger {
-  background: transparent;
-  border-color: var(--border-strong);
-  color: var(--error);
-}
-.danger:not(:disabled):hover {
-  background: var(--error-bg);
-  border-color: var(--error);
-}
-
-.ghost {
-  background: transparent;
-  border-color: var(--border);
-  color: var(--text-secondary);
-}
-.ghost:not(:disabled):hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
 }

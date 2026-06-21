@@ -10,7 +10,7 @@ use tauri::Manager;
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
 use crate::supervisor::control::{PermissionDecision, PermissionMode};
-use crate::supervisor::model::{ConversationItem, SlashCommand};
+use crate::supervisor::model::{ContextFill, ConversationItem, SlashCommand};
 use crate::supervisor::session::{self, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
 
@@ -155,6 +155,19 @@ pub async fn fetch_slash_commands(cwd: String) -> Result<Vec<SlashCommand>, Stri
 #[specta::specta]
 pub async fn load_session_history(session_id: String) -> Result<Vec<ConversationItem>, String> {
     tokio::task::spawn_blocking(move || crate::supervisor::history::load_history(&session_id))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Read a resumed conversation's current context fill (used tokens + window) from
+/// its on-disk transcript, so the UI can show the context ring as soon as the
+/// conversation is opened / its stream turned on — before the first new turn streams
+/// live usage. An absent transcript yields all-`None` (not an error). File IO runs
+/// off the async runtime via `spawn_blocking`.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_session_context(session_id: String) -> Result<ContextFill, String> {
+    tokio::task::spawn_blocking(move || crate::supervisor::history::load_context_fill(&session_id))
         .await
         .map_err(|e| e.to_string())
 }
@@ -341,6 +354,28 @@ fn sh_quote(s: &str) -> String {
 #[cfg(target_os = "macos")]
 fn applescript_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Bounce the app's Dock icon (macOS) / flash the taskbar (other platforms) to
+/// get the user's attention when an agent finishes or needs input while the app
+/// is in the background. `critical` bounces repeatedly until the app is focused
+/// (a permission/question is waiting); otherwise it bounces once (a turn ended).
+/// The OS clears the request automatically when the window regains focus, so the
+/// front never has to cancel it. A no-op if the main window is gone.
+#[tauri::command]
+#[specta::specta]
+pub fn request_user_attention(app: tauri::AppHandle, critical: bool) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(()); // window already closed — nothing to flash
+    };
+    let kind = if critical {
+        tauri::UserAttentionType::Critical
+    } else {
+        tauri::UserAttentionType::Informational
+    };
+    window
+        .request_user_attention(Some(kind))
+        .map_err(|e| e.to_string())
 }
 
 // ---- Git worktrees --------------------------------------------------------

@@ -21,8 +21,11 @@ import type {
   SessionStateEvent,
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
-import { useConversationsStore } from "../store/conversationsStore";
+import { useConversationsStore, repoName } from "../store/conversationsStore";
 import { useCommandsStore } from "../store/commandsStore";
+import { dispatchAgentNotification } from "../notifications/notify";
+import { agentEventFor } from "../notifications/transition";
+import type { SessionStatePayload } from "./client";
 import { worktreesKey } from "./useWorktrees";
 
 /** Repo path of a conversation (for invalidating its cached worktree list). */
@@ -66,6 +69,40 @@ function convIdForHandle(handle: string): string | null {
   return (
     useConversationsStore.getState().conversations.find((c) => c.handle === handle)?.id ?? null
   );
+}
+
+/**
+ * Fire a notification on the meaningful session-state transitions:
+ *  - awaiting_permission false→true → "attention" (a permission/question is up).
+ *  - busy true→false while still alive and not waiting → "done" (turn finished).
+ * Compared against the PREVIOUS state so we notify on the edge, not continuously.
+ * `prev` is the entry's state before this event (the neutral connecting state on
+ * the very first one, whose busy/awaiting_permission are false → no false fire).
+ * Reading `prev` from the already-applied store also dedupes Tauri's at-least-once
+ * delivery: a duplicated state event finds `prev` already equal to `next`, so no
+ * edge is seen and nothing re-fires.
+ * The dispatcher suppresses notifications when the user is already watching this
+ * conversation, and swallows the "done" that follows a user-initiated interrupt.
+ */
+function notifyTransition(
+  convId: string,
+  prev: SessionStatePayload,
+  next: SessionStatePayload,
+): void {
+  const kind = agentEventFor(prev, next);
+  if (!kind) return;
+
+  const convs = useConversationsStore.getState();
+  const conv = convs.conversations.find((c) => c.id === convId);
+  if (!conv) return;
+  const repo = convs.repos.find((r) => r.id === conv.repoId);
+  dispatchAgentNotification({
+    kind,
+    convId,
+    title: conv.name,
+    repoName: repo ? repoName(repo.path) : null,
+    activeId: convs.activeId,
+  });
 }
 
 export function useGlobalSessionEvents(): void {
@@ -188,8 +225,18 @@ export function useGlobalSessionEvents(): void {
     function onState(payload: SessionStateEvent) {
       const session = convIdForHandle(payload.session);
       if (!session) return;
-      ensureOnce(session);
+      ensureOnce(session); // creates the entry (neutral state) if first seen
+      // Read the prior state BEFORE applying the new one, to detect the edge.
+      const prev = useConversationStore.getState().sessions[session]?.state;
       useConversationStore.getState().applyState(session, payload.state);
+      if (prev) {
+        // A notification failure must never break conversation event processing.
+        try {
+          notifyTransition(session, prev, payload.state);
+        } catch (e) {
+          console.error("notification dispatch failed:", e);
+        }
+      }
       // The session reports its current cwd via system/init (re-sent per turn).
       // When it changes — e.g. a conversation spawned straight into a worktree —
       // refresh the repo's worktree list so the new worktree is resolvable.

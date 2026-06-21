@@ -8,6 +8,8 @@ import { FleetPlaceholder } from "./features/fleet/FleetPlaceholder";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
 import { startUpdaterAutoCheck } from "./store/updater";
+import { initNotifications } from "./notifications/notify";
+import { primeAudioUnlock } from "./notifications/sound";
 import {
   bootConversations,
   repoName,
@@ -37,6 +39,11 @@ export default function App() {
     void bootConversations();
     // Check for app updates now and every 2h while open (idempotent).
     startUpdaterAutoCheck();
+    // Prime OS notification permission so the first agent notification doesn't
+    // race a permission prompt, and unlock audio on the first user gesture so a
+    // background chime isn't blocked by the webview's autoplay policy.
+    void initNotifications();
+    primeAudioUnlock();
   }, []);
 
   return (

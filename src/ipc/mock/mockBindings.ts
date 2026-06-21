@@ -3,6 +3,7 @@
 // Selected at runtime by provider.ts when window.__TAURI_INTERNALS__ is absent.
 
 import type {
+  ContextFill,
   ConversationItem,
   ConversationRecord,
   PermissionDecision,
@@ -211,6 +212,12 @@ export const mockCommands = {
     // scenario stream. Empty means "nothing to replay", so reload is a no-op and
     // keeps whatever the scenario already rendered.
     return ok([]);
+  },
+
+  async loadSessionContext(_sessionId: string): Promise<Result<ContextFill, string>> {
+    // No transcript in the browser mock; the scenario's baseState already carries a
+    // context fill, so nothing to seed here.
+    return ok({ context_tokens: null, context_window: null });
   },
 
   // ---- Persistence: in-memory only (no real db in the browser). The store
