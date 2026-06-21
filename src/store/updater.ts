@@ -12,7 +12,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 export type UpdaterStatus =
   | "idle" // nothing checked yet
   | "checking" // querying the release manifest
-  | "available" // a newer signed version exists, not downloaded yet
+  | "available" // a newer signed version exists, not installed yet
   | "downloading" // fetching the artifact
   | "installing" // verified + applying, about to relaunch
   | "uptodate" // checked, already on the latest
@@ -30,17 +30,31 @@ interface UpdaterState {
   update: AvailableUpdate | null;
   /** Download progress, bytes. `total` is null until the server reports a length. */
   progress: { downloaded: number; total: number | null } | null;
+  /** Loud, actionable error (a manual check or an install that failed). */
   error: string | null;
+  /** Last check failure, recorded even for silent auto-checks so a broken release
+   *  endpoint stays discoverable in Settings (never a fully silent failure). */
+  lastCheckError: string | null;
   lastCheckedAt: number | null;
-  /** Query the manifest. `silent` (auto checks) never surfaces errors — just logs. */
+  /** Query the manifest. `silent` (auto checks) never flips to the error status,
+   *  but still records the failure in `lastCheckError`. */
   check: (opts?: { silent?: boolean }) => Promise<void>;
   /** Download + verify + install the pending update, then relaunch onto it. */
   install: () => Promise<void>;
 }
 
-// The Update handle (a class instance with download/install methods) is not React
-// state — it isn't serialisable and we only ever act on the latest one.
+// The Update handle (a Rust-side Resource with download/install methods) is not
+// React state — it isn't serialisable and we only ever act on the latest one.
 let pending: Update | null = null;
+
+// Release the previous Update handle: each positive check allocates a Resource
+// (rid) on the Rust side; replacing `pending` (every 2h auto-check) or finishing
+// an install without closing the old one leaks resources over a long session.
+function discardPending(): void {
+  const p = pending;
+  pending = null;
+  if (p) void p.close().catch(() => {});
+}
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -55,6 +69,7 @@ export const useUpdater = create<UpdaterState>((set, get) => ({
   update: null,
   progress: null,
   error: null,
+  lastCheckError: null,
   lastCheckedAt: null,
 
   check: async (opts) => {
@@ -66,12 +81,14 @@ export const useUpdater = create<UpdaterState>((set, get) => ({
     set({ status: "checking", ...(silent ? {} : { error: null }) });
     try {
       const found = await check();
-      set({ lastCheckedAt: Date.now() });
+      discardPending(); // close the previous handle before replacing it
       if (found) {
         pending = found;
         set({
           status: "available",
           error: null,
+          lastCheckError: null,
+          lastCheckedAt: Date.now(),
           update: {
             version: found.version,
             currentVersion: found.currentVersion,
@@ -80,20 +97,35 @@ export const useUpdater = create<UpdaterState>((set, get) => ({
           },
         });
       } else {
-        pending = null;
-        set({ status: "uptodate", update: null });
+        set({
+          status: "uptodate",
+          update: null,
+          error: null,
+          lastCheckError: null,
+          lastCheckedAt: Date.now(),
+        });
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("update check failed:", msg);
-      // Auto checks must never nag: keep the prior state, just log.
-      if (!silent) set({ status: "error", error: msg });
-      else set({ status: get().update ? "available" : "idle" });
+      // Record the failure ALWAYS (even silent) so a broken release endpoint is
+      // discoverable in Settings. A manual check additionally flips to `error`.
+      if (!silent) {
+        set({ status: "error", error: msg, lastCheckError: msg, lastCheckedAt: Date.now() });
+      } else {
+        set({
+          status: get().update ? "available" : "idle",
+          lastCheckError: msg,
+          lastCheckedAt: Date.now(),
+        });
+      }
     }
   },
 
   install: async () => {
     if (!pending) return;
+    const busy = get().status;
+    if (busy === "downloading" || busy === "installing") return;
     set({ status: "downloading", progress: { downloaded: 0, total: null }, error: null });
     try {
       let downloaded = 0;
@@ -115,11 +147,14 @@ export const useUpdater = create<UpdaterState>((set, get) => ({
       });
       // Verified, installed — restart onto the new version. The plugin has already
       // rejected anything with a bad/absent signature before reaching here.
+      discardPending();
       await relaunch();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("update install failed:", msg);
-      set({ status: "error", error: msg });
+      // Keep the detected update visible (pending is still valid) so the user can
+      // retry; surface the error rather than hiding the update behind a recheck.
+      set({ status: "available", error: msg, progress: null });
     }
   },
 }));
