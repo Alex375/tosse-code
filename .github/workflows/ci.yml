@@ -47,6 +47,9 @@ jobs:
       - name: Typecheck + build front
         run: pnpm build # = tsc --noEmit && vite build (produit aussi dist/ pour tauri-build)
 
+      - name: Tests unitaires front (vitest)
+        run: pnpm test # = vitest run (jsdom)
+
       - name: Tests unitaires Rust
         working-directory: src-tauri
         run: cargo test --lib

@@ -24,6 +24,7 @@ import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
 import { useCommandsStore } from "../store/commandsStore";
 import { dispatchAgentNotification } from "../notifications/notify";
+import { agentEventFor } from "../notifications/transition";
 import type { SessionStatePayload } from "./client";
 import { worktreesKey } from "./useWorktrees";
 
@@ -88,17 +89,15 @@ function notifyTransition(
   prev: SessionStatePayload,
   next: SessionStatePayload,
 ): void {
-  const enteredAttention = !prev.awaiting_permission && next.awaiting_permission;
-  const finishedTurn =
-    prev.busy && !next.busy && !next.awaiting_permission && !next.ended;
-  if (!enteredAttention && !finishedTurn) return;
+  const kind = agentEventFor(prev, next);
+  if (!kind) return;
 
   const convs = useConversationsStore.getState();
   const conv = convs.conversations.find((c) => c.id === convId);
   if (!conv) return;
   const repo = convs.repos.find((r) => r.id === conv.repoId);
   dispatchAgentNotification({
-    kind: enteredAttention ? "attention" : "done",
+    kind,
     convId,
     title: conv.name,
     repoName: repo ? repoName(repo.path) : null,
