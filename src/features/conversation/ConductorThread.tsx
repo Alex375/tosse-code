@@ -260,14 +260,14 @@ export function ConductorThread({
   session,
   wide,
   scrollRef,
-  followIfPinned,
+  onRender,
 }: {
   session: string;
   wide?: boolean;
   // The stick-to-bottom instance is owned by the parent pane so the composer can
   // snap the thread to the bottom on send (see ConductorConversation).
   scrollRef: StickToBottom["scrollRef"];
-  followIfPinned: StickToBottom["followIfPinned"];
+  onRender: StickToBottom["onRender"];
 }) {
   const timeline = useTimeline(session);
   const pending = usePendingPermissions(session);
@@ -278,7 +278,7 @@ export function ConductorThread({
 
   return (
     <div className="cv-thread" ref={scrollRef}>
-      <StreamFollow session={session} followIfPinned={followIfPinned} />
+      <StreamFollow session={session} onRender={onRender} />
       <div
         className="cv-thread-inner"
         style={wide ? { maxWidth: 720 } : { maxWidth: 760 }}
@@ -316,17 +316,17 @@ export function ConductorThread({
 }
 
 /**
- * Invisible leaf that keeps the thread pinned to the bottom while it streams.
- * It subscribes to the whole session entry, so it re-renders on every store
- * update for this session (each streamed token, each state change), and re-pins
- * in a layout effect — before paint — so the follow tracks streaming with no jank.
- * Isolated in its own component so this per-token re-render doesn't re-render the
- * message list.
+ * Invisible leaf that drives scroll positioning. It subscribes to the whole session
+ * entry, so it re-renders on every store update for this session (each streamed token,
+ * each state change, the async history replay), and calls `onRender` in a layout
+ * effect — before paint — so positioning (initial restore, then stick-to-bottom while
+ * streaming) tracks updates with no visible jump. Isolated in its own component so
+ * this per-token re-render doesn't re-render the message list.
  */
-function StreamFollow({ session, followIfPinned }: { session: string; followIfPinned: () => void }) {
+function StreamFollow({ session, onRender }: { session: string; onRender: () => void }) {
   useConversationStore((s) => s.sessions[session]);
   useLayoutEffect(() => {
-    followIfPinned();
+    onRender();
   });
   return null;
 }
