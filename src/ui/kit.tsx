@@ -97,16 +97,18 @@ export function NavBtn({
   label,
   on,
   badge,
+  title,
   onClick,
 }: {
   icon?: string;
   label: string;
   on?: boolean;
   badge?: number | null;
+  title?: string;
   onClick?: () => void;
 }) {
   return (
-    <button {...(on ? { "data-on": "" } : {})} onClick={onClick}>
+    <button {...(on ? { "data-on": "" } : {})} title={title} onClick={onClick}>
       {icon ? <Ico name={icon} className="sm" /> : null}
       {label}
       {badge != null ? <span className="wf-badge att">{badge}</span> : null}

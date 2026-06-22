@@ -54,17 +54,41 @@ export default function App() {
     primeAudioUnlock();
   }, []);
 
+  // ⌘/Ctrl+1 → Conversation, ⌘/Ctrl+2 → Flight Deck. Works from anywhere (even the
+  // composer): ⌘+digit never types a character, so it won't clash with editing.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key === "1") {
+        e.preventDefault();
+        setView("conversation");
+      } else if (e.key === "2") {
+        e.preventDefault();
+        setView("flightdeck");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <Win
       title={view === "flightdeck" ? "Flight Deck" : active?.name ?? "Conductor"}
       banner={<UpdateBanner />}
       nav={
         <>
-          <NavBtn icon="chat" label="Conversation" on={view === "conversation"} onClick={() => setView("conversation")} />
+          <NavBtn
+            icon="chat"
+            label="Conversation"
+            on={view === "conversation"}
+            title="Conversation (⌘1)"
+            onClick={() => setView("conversation")}
+          />
           <NavBtn
             icon="grid"
             label="Flight Deck"
             on={view === "flightdeck"}
+            title="Flight Deck (⌘2)"
             onClick={() => setView("flightdeck")}
           />
         </>
