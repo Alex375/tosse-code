@@ -250,9 +250,12 @@ impl Assembler {
         if let Some(used) = context_used_from_usage(final_usage) {
             self.state.context_tokens = Some(used);
         }
-        // contextWindow is a model property (stable across the session); only update
-        // when this result carries it, so a turn without modelUsage keeps the last value.
-        if let Some(window) = context_window_from_model_usage(&r.model_usage) {
+        // Authoritative window for THIS session's model (distinguishes 200k vs 1M).
+        // Only updates when the result reports the session model's own entry — a
+        // sub-agent-only turn returns None and keeps the last known window.
+        if let Some(window) =
+            context_window_from_model_usage(&r.model_usage, self.state.model.as_deref())
+        {
             self.state.context_window = Some(window);
         }
         out.push(SessionEvent::Item(ConversationItem::TurnResult {
@@ -291,17 +294,6 @@ impl Assembler {
     }
 }
 
-/// Provisional context-window size for a model id, used to render the ring before
-/// the authoritative `result.modelUsage[…].contextWindow` arrives (e.g. seeding a
-/// resumed conversation from its transcript, which carries no window). Opus runs
-/// with the 1M beta on this CLI; everything else is 200k.
-pub(crate) fn default_context_window(model: Option<&str>) -> u64 {
-    match model {
-        Some(m) if m.to_ascii_lowercase().contains("opus") => 1_000_000,
-        _ => 200_000,
-    }
-}
-
 /// Sum the tokens that occupy the context window from a `usage` object:
 /// `input_tokens + cache_creation_input_tokens + cache_read_input_tokens` (the full
 /// prompt sent to the model). Returns `None` when the object carries no token counts
@@ -317,30 +309,29 @@ pub(crate) fn context_used_from_usage(usage: &Value) -> Option<u64> {
     Some(input.unwrap_or(0) + cache_creation.unwrap_or(0) + cache_read.unwrap_or(0))
 }
 
-/// Pick the active model's context-window size from a `modelUsage` map. A turn may
-/// list several models (a sub-agent runs on a cheaper one); the conversation's model
-/// is the one that consumed the most input, so we return the `contextWindow` of the
-/// entry with the largest `input + cacheRead + cacheCreation`. Returns `None` when the
-/// map is absent or carries no window.
-pub(crate) fn context_window_from_model_usage(model_usage: &Value) -> Option<u64> {
+/// The AUTHORITATIVE context-window size for the session's own model, read from a
+/// `result.modelUsage` map. This is the only reliable source of the window: the
+/// number distinguishes e.g. Opus-200k from Opus-1M, which the model NAME cannot
+/// (both are `claude-opus-4-8`; only the `[1m]` variant — and its `contextWindow`
+/// value — tells them apart).
+///
+/// We match the entry whose key is (or starts with) `session_model`, since the key
+/// may carry a beta suffix (`claude-opus-4-8[1m]`). We deliberately DO NOT fall back
+/// to "some other model in the map": a turn that only ran a sub-agent (e.g. haiku
+/// 200k) must not shrink an Opus conversation's window — returning `None` there tells
+/// the caller to KEEP the last known window instead of clobbering it.
+pub(crate) fn context_window_from_model_usage(
+    model_usage: &Value,
+    session_model: Option<&str>,
+) -> Option<u64> {
     let obj = model_usage.as_object()?;
-    let mut best: Option<(u64, u64)> = None; // (input_total, context_window)
-    for entry in obj.values() {
-        let Some(window) = entry.get("contextWindow").and_then(Value::as_u64) else {
-            continue;
-        };
-        let field = |k: &str| entry.get(k).and_then(Value::as_u64).unwrap_or(0);
-        let input_total =
-            field("inputTokens") + field("cacheReadInputTokens") + field("cacheCreationInputTokens");
-        let better = match best {
-            Some((b, _)) => input_total >= b,
-            None => true,
-        };
-        if better {
-            best = Some((input_total, window));
-        }
-    }
-    best.map(|(_, window)| window)
+    let model = session_model?;
+    // Exact key first, then prefix (to absorb a `[1m]`-style suffix).
+    obj.iter()
+        .find(|(k, _)| k.as_str() == model)
+        .or_else(|| obj.iter().find(|(k, _)| k.starts_with(model)))
+        .and_then(|(_, entry)| entry.get("contextWindow"))
+        .and_then(Value::as_u64)
 }
 
 /// Turn an assistant `content[]` array into typed normalized blocks.
@@ -508,9 +499,25 @@ mod tests {
                 "cacheCreationInputTokens": 9000, "contextWindow": 1000000
             }
         });
-        assert_eq!(context_window_from_model_usage(&model_usage), Some(1_000_000));
-        assert_eq!(context_window_from_model_usage(&serde_json::json!({})), None);
-        assert_eq!(context_window_from_model_usage(&Value::Null), None);
+        // Matches the session model by prefix (absorbs the `[1m]` suffix) → 1M, NOT
+        // the sub-agent's 200k.
+        assert_eq!(
+            context_window_from_model_usage(&model_usage, Some("claude-opus-4-8")),
+            Some(1_000_000)
+        );
+        // A 200k model resolves to 200k — the VALUE, not the name, sets the window.
+        assert_eq!(
+            context_window_from_model_usage(&model_usage, Some("claude-haiku-4-5")),
+            Some(200_000)
+        );
+        // No entry for the session model → None (caller keeps the last known window,
+        // so a sub-agent-only turn can't shrink an Opus conversation).
+        assert_eq!(
+            context_window_from_model_usage(&model_usage, Some("claude-sonnet-4-6")),
+            None
+        );
+        assert_eq!(context_window_from_model_usage(&model_usage, None), None);
+        assert_eq!(context_window_from_model_usage(&Value::Null, Some("x")), None);
     }
 
     #[test]
@@ -538,6 +545,9 @@ mod tests {
         });
         let msg: CliMessage = serde_json::from_value(result).unwrap();
         let mut asm = Assembler::new();
+        // The window is matched to the session model, so set it (system/init does this
+        // live); the modelUsage key carries a `[1m]` suffix the prefix match absorbs.
+        let _ = asm.set_model("claude-opus-4-8");
         asm.ingest(&msg);
         // last iteration: 2000 + 18000 + 0 = 20000 (NOT the top-level 1).
         assert_eq!(asm.state().context_tokens, Some(20_000));

@@ -26,6 +26,7 @@ import type {
   SessionStatePayload,
 } from "../ipc/client";
 import { useConversationStore } from "./conversationStore";
+import { getCachedWindow } from "./contextWindowCache";
 import type { StreamState } from "../ui/kit";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
@@ -554,7 +555,13 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   // an error (the core returns an empty fill), so a status "error" here is a real
   // failure worth surfacing rather than swallowing.
   const ctx = await commands.loadSessionContext(conv.sessionId);
-  if (ctx.status === "ok") applyContextFill(convId, ctx.data);
+  if (ctx.status === "ok")
+    // Tokens from the transcript; window from the persisted cache (the only place the
+    // real 200k-vs-1M window is known before the first live turn).
+    applyContextFill(convId, {
+      context_tokens: ctx.data.context_tokens,
+      context_window: getCachedWindow(convId),
+    });
   else console.error("loadSessionContext failed:", ctx.error);
 }
 
@@ -577,9 +584,14 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
   const { resetSession, applyItem, applyContextFill } = useConversationStore.getState();
   resetSession(convId);
   for (const item of res.data) applyItem(convId, item);
-  // Re-seed the context ring from the transcript (resetSession cleared it).
+  // Re-seed the context ring from the transcript (resetSession cleared it); window
+  // from the persisted cache (the real 200k-vs-1M value learned on a prior turn).
   const ctx = await commands.loadSessionContext(conv.sessionId);
-  if (ctx.status === "ok") applyContextFill(convId, ctx.data);
+  if (ctx.status === "ok")
+    applyContextFill(convId, {
+      context_tokens: ctx.data.context_tokens,
+      context_window: getCachedWindow(convId),
+    });
   else console.error("loadSessionContext failed:", ctx.error);
   historyLoaded.add(convId); // the select-time loader is now satisfied for this run
 }

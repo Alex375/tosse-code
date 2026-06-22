@@ -23,6 +23,7 @@ import type {
 import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
 import { useCommandsStore } from "../store/commandsStore";
+import { setCachedWindow } from "../store/contextWindowCache";
 import { dispatchAgentNotification } from "../notifications/notify";
 import { agentEventFor } from "../notifications/transition";
 import type { SessionStatePayload } from "./client";
@@ -229,6 +230,12 @@ export function useGlobalSessionEvents(): void {
       // Read the prior state BEFORE applying the new one, to detect the edge.
       const prev = useConversationStore.getState().sessions[session]?.state;
       useConversationStore.getState().applyState(session, payload.state);
+      // Remember the AUTHORITATIVE context window (from the live result's modelUsage)
+      // so the ring is seeded correctly next time this conversation is opened — the
+      // on-disk transcript can't distinguish a 200k model from a 1M one.
+      if (payload.state.context_window) {
+        setCachedWindow(session, payload.state.context_window);
+      }
       if (prev) {
         // A notification failure must never break conversation event processing.
         try {
