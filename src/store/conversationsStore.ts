@@ -20,11 +20,18 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "../ipc/client";
-import type { ConversationRecord, RepoRecord } from "../ipc/client";
+import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
+
+// Product defaults for a conversation's controls — also the spawn defaults the
+// Rust core falls back to. A conversation seeds these at creation; the composer
+// uses the same values as its display fallback, so UI and stream never disagree.
+export const DEFAULT_MODEL = "opus";
+export const DEFAULT_EFFORT = "xhigh";
+export const DEFAULT_PERMISSION_MODE = "default";
 
 /** A working folder / repository a conversation can be opened in. */
 export interface Repo {
@@ -62,6 +69,19 @@ export interface Conversation {
    * worktree indicator/badge so they follow the agent. Cleared on `ExitWorktree`.
    */
   liveCwd: string | null;
+  // ---- Per-conversation controls (persisted) -------------------------------
+  // Last-known model / effort / ultracode / permission, persisted so they survive
+  // a restart and are re-applied at the next (lazy) spawn. While a session is LIVE,
+  // its own state (get_settings / system/init) is the source of truth for DISPLAY;
+  // these are what we spawn/restore from and what a pre-spawn pick writes to.
+  /** Model ALIAS chosen in the UI (e.g. "opus"); null → product default at spawn. */
+  model: string | null;
+  /** Reasoning-effort level (low/medium/high/xhigh); null → product default. */
+  effort: string | null;
+  /** Whether the "ultracode" tier (xhigh + orchestration) is on. */
+  ultracode: boolean;
+  /** Permission mode (default/plan/acceptEdits/auto/…); null → product default. */
+  permissionMode: string | null;
 }
 
 /** Display name for a repo path — its basename. */
@@ -100,6 +120,10 @@ const convToRecord = (c: Conversation): ConversationRecord => ({
   created_at: c.createdAt,
   last_activity_at: c.lastActivityAt,
   session_id: c.sessionId,
+  model: c.model,
+  effort: c.effort,
+  ultracode: c.ultracode,
+  permission_mode: c.permissionMode,
 });
 
 const recordToRepo = (r: RepoRecord): Repo => ({
@@ -118,6 +142,10 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   sessionId: c.session_id,
   handle: null,
   liveCwd: null,
+  model: c.model,
+  effort: c.effort,
+  ultracode: c.ultracode,
+  permissionMode: c.permission_mode,
 });
 
 /** Fire a persistence command, logging (never throwing) on failure. Persistence
@@ -166,6 +194,19 @@ interface ConversationsState {
    * order survives a restart.
    */
   noteActivity: (id: string, opts?: { persist?: boolean }) => void;
+  // ---- Controls: persist + push to the live stream --------------------------
+  // Each writes the conversation record (so a pre-spawn pick survives and is
+  // re-applied at spawn) AND, if a session is live, pushes the change to it. A
+  // live push failure is logged, never thrown — and the core's get_settings
+  // read-back then re-aligns the indicator with reality, so the UI can't lie.
+  /** Set this conversation's model (the clamp of effort is the composer's job). */
+  setConvModel: (id: string, model: string) => void;
+  /** Set a plain effort level — clears the ultracode tier. */
+  setConvEffort: (id: string, effort: string) => void;
+  /** Enable the ultracode tier (effort xhigh + the separate flag). */
+  setConvUltracode: (id: string) => void;
+  /** Set the permission mode. */
+  setConvPermission: (id: string, mode: PermissionMode) => void;
 }
 
 export const useConversationsStore = create<ConversationsState>()((set, get) => ({
@@ -307,6 +348,43 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       );
     }
   },
+
+  setConvModel: (id, model) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv || conv.model === model) return;
+    const updated = { ...conv, model };
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
+    syncToCore("upsertConversation(model)", () => commands.upsertConversation(convToRecord(updated)));
+    if (conv.handle) syncToCore("setModel(live)", () => commands.setModel(conv.handle!, model));
+  },
+
+  setConvEffort: (id, effort) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv) return;
+    const updated = { ...conv, effort, ultracode: false };
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
+    syncToCore("upsertConversation(effort)", () => commands.upsertConversation(convToRecord(updated)));
+    if (conv.handle) syncToCore("setEffortLevel(live)", () => commands.setEffortLevel(conv.handle!, effort));
+  },
+
+  setConvUltracode: (id) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv) return;
+    const updated = { ...conv, effort: "xhigh", ultracode: true };
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
+    syncToCore("upsertConversation(ultracode)", () => commands.upsertConversation(convToRecord(updated)));
+    if (conv.handle) syncToCore("setUltracode(live)", () => commands.setUltracode(conv.handle!));
+  },
+
+  setConvPermission: (id, mode) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv || conv.permissionMode === mode) return;
+    const updated = { ...conv, permissionMode: mode };
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
+    syncToCore("upsertConversation(permission)", () => commands.upsertConversation(convToRecord(updated)));
+    if (conv.handle)
+      syncToCore("setPermissionMode(live)", () => commands.setPermissionMode(conv.handle!, mode));
+  },
 }));
 
 /**
@@ -332,6 +410,10 @@ export function createConversationInRepo(repoPath: string): string {
     sessionId: null,
     handle: null, // no live process until the first message
     liveCwd: null,
+    model: DEFAULT_MODEL,
+    effort: DEFAULT_EFFORT,
+    ultracode: false,
+    permissionMode: DEFAULT_PERMISSION_MODE,
   });
   return id;
 }
@@ -359,6 +441,10 @@ export function createConversationInWorktree(repoId: string, cwd: string): strin
     sessionId: null,
     handle: null, // no live process until the first message
     liveCwd: null,
+    model: DEFAULT_MODEL,
+    effort: DEFAULT_EFFORT,
+    ultracode: false,
+    permissionMode: DEFAULT_PERMISSION_MODE,
   });
   return id;
 }
@@ -442,7 +528,17 @@ export async function ensureConversationSession(
       useConversationsStore.getState().repointCwd(convId, wt.data.path);
       cwd = wt.data.path;
     }
-    let res = await commands.spawnSession(cwd, before.sessionId ?? null);
+    // Apply this conversation's persisted controls at spawn, so the live stream
+    // starts in EXACTLY the model/effort/permission/ultracode the UI shows — never
+    // the old hardcoded defaults. A pre-first-message pick is honored here too.
+    let res = await commands.spawnSession(
+      cwd,
+      before.sessionId ?? null,
+      before.model,
+      before.effort,
+      before.permissionMode,
+      before.ultracode,
+    );
     if (res.status !== "ok") {
       // The spawn may have failed because the conversation's cwd is GONE — its
       // worktree was removed. (A missing cwd and a missing `claude` binary both
@@ -467,7 +563,14 @@ export async function ensureConversationSession(
             `⚠️ Le worktree associé à cette conversation a été supprimé. Elle est relancée dans l'arbre de travail principal (${repoName(fallback)}) — nouvelle session.`,
           );
         useConversationsStore.getState().repointCwd(convId, fallback);
-        res = await commands.spawnSession(fallback, null);
+        res = await commands.spawnSession(
+          fallback,
+          null,
+          before.model,
+          before.effort,
+          before.permissionMode,
+          before.ultracode,
+        );
       }
     }
     if (res.status !== "ok") throw new Error(res.error);

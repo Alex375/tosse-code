@@ -64,6 +64,44 @@ impl Assembler {
         SessionEvent::State(self.state.clone())
     }
 
+    /// Seed the live state with the spawn controls, so the FIRST emitted state event
+    /// already carries them (before the round-trips land). `system/init` later
+    /// refines model + permission; the `get_settings` read-back refines effort +
+    /// ultracode. Does NOT emit — the session emits its first state on a real event.
+    pub fn seed_controls(
+        &mut self,
+        model: Option<String>,
+        effort: Option<String>,
+        permission_mode: Option<String>,
+        ultracode: bool,
+    ) {
+        self.state.model = model;
+        self.state.effort = effort;
+        self.state.permission_mode = permission_mode;
+        self.state.ultracode = ultracode;
+    }
+
+    /// Apply a live `get_settings` read-back: the authoritative model / effort /
+    /// ultracode the CLI reports. A field absent from the response (`None`) is left
+    /// untouched, so a partial reply never clobbers a known value.
+    pub fn apply_settings(
+        &mut self,
+        model: Option<String>,
+        effort: Option<String>,
+        ultracode: Option<bool>,
+    ) -> SessionEvent {
+        if let Some(m) = model {
+            self.state.model = Some(m);
+        }
+        if let Some(e) = effort {
+            self.state.effort = Some(e);
+        }
+        if let Some(u) = ultracode {
+            self.state.ultracode = u;
+        }
+        SessionEvent::State(self.state.clone())
+    }
+
     /// Mark the session as ended and return the terminal state event.
     pub fn set_ended(&mut self) -> SessionEvent {
         self.state.busy = false;

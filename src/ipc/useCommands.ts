@@ -4,7 +4,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { commands } from "./client";
-import type { PermissionDecision, PermissionMode, Result } from "./client";
+import type { PermissionDecision, Result } from "./client";
 import { useConversationStore } from "../store/conversationStore";
 import {
   ensureConversationSession,
@@ -88,35 +88,12 @@ export function useAnswerPermission(convId: string) {
   });
 }
 
-export function useSetPermissionMode(convId: string) {
-  return useMutation({
-    mutationFn: async (mode: PermissionMode) => {
-      const handle = liveHandle(convId);
-      if (!handle) return; // applied once the session is live
-      return unwrap(commands.setPermissionMode(handle, mode));
-    },
-  });
-}
-
-export function useSetModel(convId: string) {
-  return useMutation({
-    mutationFn: async (model: string) => {
-      const handle = liveHandle(convId);
-      if (!handle) return;
-      return unwrap(commands.setModel(handle, model));
-    },
-  });
-}
-
-export function useSetEffortLevel(convId: string) {
-  return useMutation({
-    mutationFn: async (level: string) => {
-      const handle = liveHandle(convId);
-      if (!handle) return;
-      return unwrap(commands.setEffortLevel(handle, level));
-    },
-  });
-}
+// Model / effort / ultracode / permission are NOT TanStack mutations: they route
+// through the conversations store (`setConvModel` / `setConvEffort` /
+// `setConvUltracode` / `setConvPermission`), which persists the choice AND pushes
+// it to the live stream. That keeps a pre-spawn pick (persisted, applied at spawn)
+// and a live change on one path, and lets the core's get_settings read-back be the
+// source of truth for what the indicator shows.
 
 export function useInterrupt(convId: string) {
   return useMutation({

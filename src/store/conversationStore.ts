@@ -43,6 +43,8 @@ const connectingState: SessionStatePayload = {
   cwd: null,
   model: null,
   permission_mode: null,
+  effort: null,
+  ultracode: false,
   activity: null,
   awaiting_permission: false,
   ended: false,

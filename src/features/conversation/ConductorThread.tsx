@@ -4,6 +4,7 @@ import { useAnswerPermission } from "../../ipc/useCommands";
 import {
   useConversationStore,
   useError,
+  useNotice,
   usePendingPermissions,
   useSessionState,
   useTimeline,
@@ -65,6 +66,27 @@ function MsgError({ session, errorId }: { session: string; errorId: string }) {
     <div className={styles.errorBubble} role="alert">
       <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
       <span>{err.message}</span>
+    </div>
+  );
+}
+
+/** A control-channel rejection surfaced from the core (a `control_error` notice):
+ *  a model/effort/permission change the CLI refused. Making it visible is what
+ *  keeps the controls free of silent failures. Other notice subtypes stay quiet. */
+function NoticeRow({ session, noticeId }: { session: string; noticeId: string }) {
+  const notice = useNotice(session, noticeId);
+  if (!notice || notice.subtype !== "control_error") return null;
+  const d = (notice.detail ?? null) as unknown as {
+    control?: string;
+    message?: string;
+  } | null;
+  return (
+    <div className={styles.errorBubble} role="alert">
+      <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
+      <span>
+        Réglage « {d?.control ?? "contrôle"} » refusé par Claude Code
+        {d?.message ? ` : ${d.message}` : ""}.
+      </span>
     </div>
   );
 }
@@ -297,6 +319,8 @@ export function ConductorThread({
                 return <TurnRow key={entry.id} session={session} turnId={entry.id} />;
               if (entry.kind === "error")
                 return <MsgError key={entry.id} session={session} errorId={entry.id} />;
+              if (entry.kind === "notice")
+                return <NoticeRow key={entry.id} session={session} noticeId={entry.id} />;
               return null;
             })}
             {pending.map((req) => (

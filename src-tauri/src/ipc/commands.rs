@@ -9,9 +9,9 @@ use tauri::Manager;
 
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
-use crate::supervisor::control::{PermissionDecision, PermissionMode};
+use crate::supervisor::control::{self, PermissionDecision, PermissionMode};
 use crate::supervisor::model::{ContextFill, ConversationItem, SlashCommand};
-use crate::supervisor::session::{self, SessionHandle};
+use crate::supervisor::session::{self, InitialControls, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
 
 /// Typed return value of `ping`. Proves React -> Rust (typed command).
@@ -69,8 +69,11 @@ fn unknown_session() -> String {
     "unknown session".to_string()
 }
 
-/// Start a new `claude` session rooted at `repo_path`. Returns our session id;
-/// conversation/state/permission events are emitted on the Tauri event bus.
+/// Start a new `claude` session rooted at `repo_path`, applying this conversation's
+/// controls (model / effort / permission mode / ultracode) at spawn so the live
+/// stream starts in EXACTLY the state the UI shows — never the old hardcoded
+/// defaults. Returns our session id; conversation/state/permission events are
+/// emitted on the Tauri event bus.
 #[tauri::command]
 #[specta::specta]
 pub async fn spawn_session(
@@ -78,13 +81,31 @@ pub async fn spawn_session(
     sessions: tauri::State<'_, Sessions>,
     repo_path: String,
     resume: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    permission_mode: Option<String>,
+    ultracode: bool,
 ) -> Result<String, String> {
     let id = sessions.next_id();
     let mut cfg = SpawnConfig::new(PathBuf::from(repo_path));
     cfg.resume = resume;
-    // Product defaults: new sessions open on Opus 4.8 with Extra (xhigh) effort.
-    cfg.model = Some("opus".into());
-    cfg.effort = Some("xhigh".into());
+    // Product defaults when unset: Opus 4.8 + Extra (xhigh) effort + the CLI's
+    // `default` permission mode. An unknown/invalid effort falls back to xhigh (the
+    // CLI would otherwise swallow it silently). "ultracode" is NOT a spawn flag —
+    // the spawn carries effort=xhigh and the session re-enables the ultracode flag
+    // after init (see `InitialControls.ultracode`).
+    let effort = effort
+        .filter(|e| control::is_valid_effort_level(e))
+        .unwrap_or_else(|| "xhigh".into());
+    cfg.model = Some(model.unwrap_or_else(|| "opus".into()));
+    cfg.effort = Some(effort);
+    cfg.permission_mode = Some(permission_mode.unwrap_or_else(|| "default".into()));
+    let initial = InitialControls {
+        model: cfg.model.clone(),
+        effort: cfg.effort.clone(),
+        permission_mode: cfg.permission_mode.clone(),
+        ultracode,
+    };
     let emitter = Arc::new(TauriEmitter { app: app.clone() });
     // When the actor fully exits (process gone / stopped), evict the dead handle
     // from the registry so entries never leak.
@@ -95,7 +116,8 @@ pub async fn spawn_session(
             app.state::<Sessions>().remove(&id);
         }) as Box<dyn FnOnce() + Send + 'static>
     };
-    let handle = session::spawn_session(id.clone(), cfg, emitter, on_exit).map_err(|e| e.to_string())?;
+    let handle = session::spawn_session(id.clone(), cfg, initial, emitter, on_exit)
+        .map_err(|e| e.to_string())?;
     sessions.insert(id.clone(), handle);
     Ok(id)
 }
@@ -228,6 +250,9 @@ pub async fn set_model(
 }
 
 /// Set the session's reasoning effort level at runtime (`apply_flag_settings`).
+/// Rejects an invalid level BEFORE sending: the CLI silently swallows anything
+/// outside low/medium/high/xhigh, so an unvalidated value would no-op without any
+/// error — exactly the silent failure we must avoid.
 #[tauri::command]
 #[specta::specta]
 pub async fn set_effort_level(
@@ -235,11 +260,29 @@ pub async fn set_effort_level(
     session: String,
     level: String,
 ) -> Result<(), String> {
+    if !control::is_valid_effort_level(&level) {
+        return Err(format!(
+            "niveau d'effort invalide « {level} » (attendu : low, medium, high, xhigh)"
+        ));
+    }
     let handle = sessions.get(&session).ok_or_else(unknown_session)?;
     handle
         .set_effort_level(level)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Enable "ultracode" (xhigh effort + standing dynamic-workflow orchestration) at
+/// runtime. Disabling is done by selecting any plain effort level via
+/// [`set_effort_level`], which clears the flag.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_ultracode(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.enable_ultracode().await.map_err(|e| e.to_string())
 }
 
 /// Interrupt the current turn (without killing the process).
