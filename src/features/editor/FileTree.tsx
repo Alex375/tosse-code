@@ -4,13 +4,7 @@ import type { FsEntry } from "../../ipc/client";
 import { Ico } from "../../ui/kit";
 import { baseName } from "./language";
 import { useEditorStore } from "./editorStore";
-import {
-  fileIconUrl,
-  folderIconUrl,
-  useFileIconStore,
-  useFileIcons,
-  type IconMap,
-} from "./fileIcons";
+import { fileIconUrl, folderIconUrl, useFileIcons, type IconMap } from "./fileIcons";
 import styles from "./editor.module.css";
 
 /** Indentation per tree depth, px. */
@@ -57,10 +51,9 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
   const openFile = useEditorStore((s) => s.openFile);
   const setTreeCollapsed = useEditorStore((s) => s.setTreeCollapsed);
 
-  // Material file/folder icons (loaded once, lazily, from public/file-icons).
+  // Material file/folder icons (the map is loaded by EditorPanel, which stays
+  // mounted while the editor is shown — even when this tree is collapsed).
   const iconMap = useFileIcons();
-  const loadIcons = useFileIconStore((s) => s.load);
-  useEffect(() => loadIcons(), [loadIcons]);
 
   // Load + expand the root the first time it's shown (or after a root move). The
   // `!dirErrors[root]` guard is essential: without it, a failing read (deleted

@@ -17,7 +17,12 @@ export interface IconMap {
 
 interface IconState {
   map: IconMap | null;
-  /** Fetch the icon map once (idempotent). Failure is logged, not thrown. */
+  /** Last load failure, kept inspectable (mirrors updater.lastCheckError — a
+   *  failure is never a silent dead-end). Null while pending or on success. */
+  error: string | null;
+  /** Fetch the icon map once it's not already loading/loaded (idempotent). A
+   *  failure is logged, recorded in `error`, and re-armed so a later call retries
+   *  — it never permanently strands the tree on the generic glyphs. */
   load: () => void;
 }
 
@@ -25,13 +30,21 @@ let started = false;
 
 export const useFileIconStore = create<IconState>((set) => ({
   map: null,
+  error: null,
   load: () => {
     if (started) return;
     started = true;
     fetch("/file-icons/icons.json")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((m: IconMap) => set({ map: m }))
-      .catch((e) => console.error("[file-icons] failed to load icon map:", e));
+      .then((m: IconMap) => set({ map: m, error: null }))
+      .catch((e) => {
+        // Re-arm so the next mount can retry, and surface the failure instead of
+        // swallowing it into the console only.
+        started = false;
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("[file-icons] failed to load icon map:", e);
+        set({ error: msg });
+      });
   },
 }));
 

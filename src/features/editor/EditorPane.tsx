@@ -159,7 +159,7 @@ function ActiveFile({
       ) : buffer.error ? (
         <div className={styles.placeholder}>{buffer.error}</div>
       ) : buffer.tooLarge ? (
-        <div className={styles.placeholder}>Fichier trop volumineux pour être affiché (&gt; 64 Mo).</div>
+        <div className={styles.placeholder}>Fichier trop volumineux pour être affiché (&gt; 16 Mo).</div>
       ) : buffer.binary ? (
         <div className={styles.placeholder}>Fichier binaire — aperçu non disponible.</div>
       ) : isMd && buffer.preview ? (
