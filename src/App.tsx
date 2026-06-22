@@ -55,14 +55,16 @@ export default function App() {
   }, []);
 
   // ⌘/Ctrl+1 → Conversation, ⌘/Ctrl+2 → Flight Deck. Works from anywhere (even the
-  // composer): ⌘+digit never types a character, so it won't clash with editing.
+  // composer): ⌘+digit never types a character, so it won't clash with editing. We
+  // match the PHYSICAL key by `e.code` ("Digit1"/"Digit2"), not the produced
+  // character, so it works on AZERTY (where 1/2 are Shift positions) and any layout.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
-      if (e.key === "1") {
+      if (e.code === "Digit1") {
         e.preventDefault();
         setView("conversation");
-      } else if (e.key === "2") {
+      } else if (e.code === "Digit2") {
         e.preventDefault();
         setView("flightdeck");
       }
