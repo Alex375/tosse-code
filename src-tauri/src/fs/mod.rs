@@ -26,8 +26,10 @@ use tauri_specta::Event;
 use crate::ipc::events::FsChangeEvent;
 
 /// Files larger than this are not read into the editor (returned as `too_large`).
-/// 2 MiB comfortably covers source files while keeping the webview responsive.
-const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+/// A long source/code file is text, not binary, so the cap is generous (64 MiB) —
+/// it exists only to refuse a pathological file (a multi-GB log/dump) that would
+/// read into memory and freeze the webview. Real code files open regardless of length.
+const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// How long the watcher batches incoming change events before emitting them as a
 /// single coalesced `FsChangeEvent`. A burst (e.g. `git checkout`, a formatter)
