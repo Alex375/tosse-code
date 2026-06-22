@@ -22,7 +22,7 @@ import { useShallow } from "zustand/react/shallow";
 import { commands } from "../ipc/client";
 import type { ConversationRecord, RepoRecord } from "../ipc/client";
 import { useConversationStore } from "./conversationStore";
-import { getCachedWindow, clearCachedWindow } from "./contextWindowCache";
+import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
 
@@ -619,6 +619,7 @@ export async function wipeAllData(): Promise<void> {
   );
   await commands.wipeAllData();
   historyLoaded.clear();
+  clearAllCachedWindows();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
 }

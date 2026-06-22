@@ -51,3 +51,12 @@ export function clearCachedWindow(convId: string): void {
     console.warn("contextWindowCache: failed to persist", e);
   }
 }
+
+/** Drop every cached window — call on a full data wipe ("Tout supprimer"). */
+export function clearAllCachedWindows(): void {
+  try {
+    localStorage.removeItem(KEY);
+  } catch (e) {
+    console.warn("contextWindowCache: failed to clear", e);
+  }
+}
