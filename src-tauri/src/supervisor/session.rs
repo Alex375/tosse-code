@@ -60,7 +60,9 @@ pub struct InitialControls {
 #[derive(Debug, Clone, Copy)]
 enum PendingControl {
     GetSettings,
-    SetPermissionMode,
+    /// Carries the mode we requested, so a bare `success` ack (no echoed `mode`)
+    /// still drives the confirmed-mode announce instead of silently dropping it.
+    SetPermissionMode(PermissionMode),
     SetModel,
     SetEffort,
     SetUltracode,
@@ -72,7 +74,7 @@ impl PendingControl {
     fn label(self) -> &'static str {
         match self {
             PendingControl::GetSettings => "lecture des réglages",
-            PendingControl::SetPermissionMode => "mode de permission",
+            PendingControl::SetPermissionMode(_) => "mode de permission",
             PendingControl::SetModel => "modèle",
             PendingControl::SetEffort => "effort",
             PendingControl::SetUltracode => "ultracode",
@@ -406,13 +408,16 @@ impl SessionCore {
                 }
             }
             // The ack echoes the mode the CLI ACTUALLY applied (may differ from the
-            // requested one, e.g. a downgrade) — trust it over the optimistic value,
-            // and announce the confirmed transition.
-            PendingControl::SetPermissionMode => {
-                if let Some(mode) = control::parse_set_permission_mode_ack(&v) {
-                    for ev in self.assembler.confirm_permission_mode(&mode) {
-                        self.emit(ev);
-                    }
+            // requested one, e.g. a downgrade) — trust it over the optimistic value.
+            // Some CLI builds reply with a bare `success` and no `mode`; falling
+            // back to the requested mode keeps the confirmed-transition announce
+            // from vanishing silently (the four reachable modes are never
+            // downgraded, so requested == applied on that path).
+            PendingControl::SetPermissionMode(requested) => {
+                let mode = control::parse_set_permission_mode_ack(&v)
+                    .unwrap_or_else(|| requested.as_wire().to_string());
+                for ev in self.assembler.confirm_permission_mode(&mode) {
+                    self.emit(ev);
                 }
             }
             // The bare success of set_model / apply_flag_settings carries no payload;
@@ -507,13 +512,9 @@ impl SessionCore {
             SessionCommand::SetPermissionMode(mode) => {
                 // Optimistic for snappy UX (the four reachable modes are never
                 // downgraded); the ack then confirms the mode the CLI really applied.
-                let mode_str = serde_json::to_value(mode)
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_string))
-                    .unwrap_or_default();
-                let ev = self.assembler.set_permission_mode(&mode_str);
+                let ev = self.assembler.set_permission_mode(mode.as_wire());
                 self.emit(ev);
-                self.send_tracked(PendingControl::SetPermissionMode, |rid| {
+                self.send_tracked(PendingControl::SetPermissionMode(mode), |rid| {
                     control::set_permission_mode_request(rid, mode)
                 });
             }
@@ -700,6 +701,58 @@ mod tests {
             decision: PermissionDecision::Deny { message: "x".to_string() },
         });
         assert!(drain(&mut out).is_empty(), "no control_response for an unknown request");
+    }
+
+    /// REGRESSION (silent error): a `set_permission_mode` ack that succeeds but
+    /// carries NO echoed `mode` must still announce the confirmed transition,
+    /// falling back to the requested mode — the timeline notice must never vanish.
+    #[test]
+    fn set_permission_mode_announces_even_when_ack_omits_mode() {
+        let (event_tx, mut events) = mpsc::unbounded_channel();
+        let (out_tx, mut out) = mpsc::unbounded_channel();
+        let mut core = SessionCore::new(
+            "s".to_string(),
+            InitialControls {
+                permission_mode: Some("auto".to_string()),
+                ..InitialControls::default()
+            },
+            Arc::new(ChannelEmitter { tx: event_tx }),
+            out_tx,
+        );
+
+        core.on_command(SessionCommand::SetPermissionMode(PermissionMode::Plan));
+
+        // The request_id of the outbound set_permission_mode we must ack.
+        let sent = drain(&mut out);
+        let rid = find_req(&sent, "set_permission_mode")
+            .expect("a set_permission_mode request")["request_id"]
+            .as_str()
+            .expect("request_id")
+            .to_string();
+
+        // The CLI acks success but WITHOUT echoing a `mode` field.
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": { "subtype": "success", "request_id": rid }
+            }))
+            .unwrap(),
+        );
+
+        let detail = drain(&mut events)
+            .into_iter()
+            .find_map(|e| match e {
+                SessionEvent::Item(ConversationItem::Notice { subtype, detail })
+                    if subtype == "control_change" =>
+                {
+                    Some(detail)
+                }
+                _ => None,
+            })
+            .expect("a permission control_change notice should be emitted");
+        assert_eq!(detail["control"], json!("Mode de permission"));
+        assert_eq!(detail["from"], json!("Auto mode"));
+        assert_eq!(detail["to"], json!("Plan mode"));
     }
 
     #[test]

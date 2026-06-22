@@ -30,6 +30,21 @@ pub enum PermissionMode {
     Plan,
 }
 
+impl PermissionMode {
+    /// The exact camelCase wire token (matches the serde rename). Infallible, so
+    /// callers never fall back to an empty string on a serialisation hiccup.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            PermissionMode::AcceptEdits => "acceptEdits",
+            PermissionMode::Auto => "auto",
+            PermissionMode::BypassPermissions => "bypassPermissions",
+            PermissionMode::Default => "default",
+            PermissionMode::DontAsk => "dontAsk",
+            PermissionMode::Plan => "plan",
+        }
+    }
+}
+
 /// A UI decision for a `can_use_tool` prompt (the `answer_permission` command
 /// input). Tagged on `behavior` to mirror the protocol's result shape.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

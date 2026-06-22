@@ -26,10 +26,14 @@ use tauri_specta::Event;
 use crate::ipc::events::FsChangeEvent;
 
 /// Files larger than this are not read into the editor (returned as `too_large`).
-/// A long source/code file is text, not binary, so the cap is generous (64 MiB) —
-/// it exists only to refuse a pathological file (a multi-GB log/dump) that would
-/// read into memory and freeze the webview. Real code files open regardless of length.
-const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// The cap is about COST, not binariness: `read_file` loads the whole file into
+/// memory, `from_utf8_lossy` decodes a second copy, the IPC layer serialises a
+/// third (JSON), the webview deserialises a fourth, and Monaco then builds a model
+/// from it. Tens of MiB through that pipeline stalls the webview for seconds —
+/// against the core "stay responsive" requirement. 16 MiB comfortably opens real
+/// source, lockfiles and generated files while still refusing a pathological dump
+/// (a multi-hundred-MB log) that would freeze the UI.
+const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// How long the watcher batches incoming change events before emitting them as a
 /// single coalesced `FsChangeEvent`. A burst (e.g. `git checkout`, a formatter)

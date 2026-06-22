@@ -60,15 +60,31 @@ for (const svg of Object.values(slim.defaults)) if (svg) used.add(svg);
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 let copied = 0;
+const missing = new Set();
 for (const svg of used) {
   try {
     copyFileSync(resolve(pkgDir, "icons", svg), resolve(outDir, svg));
     copied++;
   } catch {
-    // A referenced icon missing from the package is skipped (the resolver falls
-    // back to the default icon for that name).
+    // A referenced icon whose SVG is absent from the package: record it so we can
+    // both warn (no silent skip) and prune it from the map below — the map must
+    // never point at an SVG we did not copy (that renders a broken <img>, the
+    // resolver only falls back for an UNMAPPED name, not a dangling reference).
+    missing.add(svg);
   }
 }
+
+// Drop every reference to an SVG that failed to copy, so icons.json stays
+// consistent with what is actually on disk.
+if (missing.size) {
+  for (const m of [slim.fileNames, slim.fileExtensions, slim.folderNames, slim.folderNamesExpanded]) {
+    for (const [key, svg] of Object.entries(m)) if (missing.has(svg)) delete m[key];
+  }
+  for (const [key, svg] of Object.entries(slim.defaults)) {
+    if (svg && missing.has(svg)) slim.defaults[key] = null;
+  }
+}
+
 writeFileSync(resolve(outDir, "icons.json"), JSON.stringify(slim));
 
 const stat = (m) => Object.keys(m).length;
@@ -77,3 +93,10 @@ console.log(
     `fileExt=${stat(slim.fileExtensions)} folders=${stat(slim.folderNames)} ` +
     `foldersOpen=${stat(slim.folderNamesExpanded)}`,
 );
+if (missing.size) {
+  console.warn(
+    `⚠️  file-icons: ${missing.size} SVG introuvable(s) dans le package, ` +
+      `référence(s) purgée(s) de la map (pas d'icône cassée) : ` +
+      `${[...missing].join(", ")}`,
+  );
+}

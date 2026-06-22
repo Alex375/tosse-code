@@ -4,6 +4,7 @@ import { EditorPane } from "./EditorPane";
 import { Splitter } from "./Splitter";
 import { useFsWatch } from "./useFsWatch";
 import { useEditorStore } from "./editorStore";
+import { useFileIconStore } from "./fileIcons";
 import styles from "./editor.module.css";
 
 /**
@@ -26,12 +27,18 @@ export function EditorPanel({
   const setTreeWidth = useEditorStore((s) => s.setTreeWidth);
   const treeCollapsed = useEditorStore((s) => s.treeCollapsed);
   const ensureConv = useEditorStore((s) => s.ensureConv);
+  const loadIcons = useFileIconStore((s) => s.load);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Initialise / re-root this conversation's tree at the current cwd.
   useEffect(() => {
     ensureConv(convId, cwd);
   }, [convId, cwd, ensureConv]);
+
+  // Load the Material icon map here (not in FileTree): the panel is always mounted
+  // while the editor is shown, so the tabs get real icons even when the file tree
+  // is collapsed (FileTree unmounted). Idempotent.
+  useEffect(() => loadIcons(), [loadIcons]);
 
   // Live filesystem watch while the panel is shown.
   useFsWatch(convId, cwd, true);
