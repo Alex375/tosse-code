@@ -2,28 +2,33 @@ import { useRef } from "react";
 import { ChipBtn, Menu } from "../../ui/kit";
 
 /**
- * Claude Code reasoning-effort levels (low → high), plus the top "Ultra code"
- * tier. Which ones a model supports is per-model — mirrors Claude Code's table
- * (and its rule: Ultra code only on xhigh-capable models).
+ * Claude Code reasoning-effort levels (low → xhigh), plus the top "Ultra code"
+ * tier. The CLI's runtime `effortLevel` enum is EXACTLY low/medium/high/xhigh
+ * (verified against the binary); there is NO "max" wire value — it was a phantom
+ * the CLI silently swallowed. "Ultra code" is NOT an effort value either: it is
+ * xhigh + a separate `ultracode` flag, handled by the composer. Which levels a
+ * model supports is per-model (Ultra code only on xhigh-capable models).
  */
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode";
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "ultracode";
 
 const LABELS: Record<EffortLevel, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",
   xhigh: "Extra high",
-  max: "Max",
   ultracode: "Ultra code",
 };
-const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
+const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "ultracode"];
 
-/** Effort levels a model supports (Claude Code per-model table; [] = no effort). */
+/** Effort levels a model supports (Claude Code per-model table; [] = no effort).
+ *  Conservative on purpose: a level the model doesn't accept would be silently
+ *  swallowed by the CLI, so we only offer what's safe. The live `get_settings`
+ *  read-back keeps the gauge honest if reality ever differs. */
 export function effortLevelsForModel(model: string | null | undefined): EffortLevel[] {
   const m = (model || "").toLowerCase();
   if (m.includes("haiku")) return []; // Haiku 4.5 has no effort support → slider hidden
-  if (m.includes("opus")) return ["low", "medium", "high", "xhigh", "max"]; // xhigh-capable
-  if (m.includes("sonnet")) return ["low", "medium", "high", "max"]; // no xhigh
+  if (m.includes("opus")) return ["low", "medium", "high", "xhigh"]; // xhigh-capable
+  if (m.includes("sonnet")) return ["low", "medium", "high"]; // no xhigh
   return ["low", "medium", "high"]; // safe fallback
 }
 

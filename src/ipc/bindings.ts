@@ -10,12 +10,15 @@ async ping(msg: string) : Promise<Pong> {
     return await TAURI_INVOKE("ping", { msg });
 },
 /**
- * Start a new `claude` session rooted at `repo_path`. Returns our session id;
- * conversation/state/permission events are emitted on the Tauri event bus.
+ * Start a new `claude` session rooted at `repo_path`, applying this conversation's
+ * controls (model / effort / permission mode / ultracode) at spawn so the live
+ * stream starts in EXACTLY the state the UI shows — never the old hardcoded
+ * defaults. Returns our session id; conversation/state/permission events are
+ * emitted on the Tauri event bus.
  */
-async spawnSession(repoPath: string, resume: string | null) : Promise<Result<string, string>> {
+async spawnSession(repoPath: string, resume: string | null, model: string | null, effort: string | null, permissionMode: string | null, ultracode: boolean) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("spawn_session", { repoPath, resume }) };
+    return { status: "ok", data: await TAURI_INVOKE("spawn_session", { repoPath, resume, model, effort, permissionMode, ultracode }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -117,10 +120,26 @@ async setModel(session: string, model: string) : Promise<Result<null, string>> {
 },
 /**
  * Set the session's reasoning effort level at runtime (`apply_flag_settings`).
+ * Rejects an invalid level BEFORE sending: the CLI silently swallows anything
+ * outside low/medium/high/xhigh, so an unvalidated value would no-op without any
+ * error — exactly the silent failure we must avoid.
  */
 async setEffortLevel(session: string, level: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_effort_level", { session, level }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable "ultracode" (xhigh effort + standing dynamic-workflow orchestration) at
+ * runtime. Disabling is done by selecting any plain effort level via
+ * [`set_effort_level`], which clears the flag.
+ */
+async setUltracode(session: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_ultracode", { session }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -478,7 +497,19 @@ last_activity_at: number;
 /**
  * Claude's own session UUID (from system/init) — used for `--resume`.
  */
-session_id: string | null }
+session_id: string | null; 
+/**
+ * Per-conversation controls, persisted so they survive a restart and are
+ * re-applied at the next (lazy) spawn. While a session is LIVE its own state
+ * (get_settings / system/init) is the source of truth; these hold the
+ * last-known values to restore from. `None`/`false` fall back to the product
+ * defaults at spawn (opus / xhigh / default).
+ * 
+ * `model` is the CLI alias chosen in the UI (e.g. "opus"); `effort` is one of
+ * low/medium/high/xhigh; `ultracode` is the separate xhigh+orchestration tier;
+ * `permission_mode` is one of the CLI modes (default/plan/acceptEdits/auto/…).
+ */
+model: string | null; effort: string | null; ultracode: boolean; permission_mode: string | null }
 /**
  * A file's contents plus the guards the editor needs: `too_large` (skipped, over
  * [`MAX_FILE_BYTES`]) and `binary` (a NUL byte was found — not shown as text).
@@ -615,13 +646,25 @@ session_id: string | null;
  */
 cwd: string | null; 
 /**
- * Current model id (from `system/init`).
+ * Current model id (from `system/init`, refined by the `get_settings`
+ * read-back to the resolved id, e.g. `claude-opus-4-8[1m]`).
  */
 model: string | null; 
 /**
- * Current permission mode (from `system/init` / `set_permission_mode`).
+ * Current permission mode (from `system/init` / the `set_permission_mode` ack).
  */
 permission_mode: string | null; 
+/**
+ * Current reasoning-effort level (`low`/`medium`/`high`/`xhigh`). NOT carried
+ * by `system/init` — sourced from the `get_settings` control read-back (and the
+ * spawn seed). `None` until the first read-back. Drives the effort gauge.
+ */
+effort: string | null; 
+/**
+ * Whether "ultracode" (xhigh effort + standing dynamic-workflow orchestration)
+ * is active right now. A SEPARATE boolean flag in the CLI, not an effort value.
+ */
+ultracode: boolean; 
 /**
  * Fine-grained activity hint from `system/status` (e.g. `"requesting"`).
  */

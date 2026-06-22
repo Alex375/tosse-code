@@ -43,6 +43,19 @@ pub struct ConversationRecord {
     pub last_activity_at: i64,
     /// Claude's own session UUID (from system/init) — used for `--resume`.
     pub session_id: Option<String>,
+    /// Per-conversation controls, persisted so they survive a restart and are
+    /// re-applied at the next (lazy) spawn. While a session is LIVE its own state
+    /// (get_settings / system/init) is the source of truth; these hold the
+    /// last-known values to restore from. `None`/`false` fall back to the product
+    /// defaults at spawn (opus / xhigh / default).
+    ///
+    /// `model` is the CLI alias chosen in the UI (e.g. "opus"); `effort` is one of
+    /// low/medium/high/xhigh; `ultracode` is the separate xhigh+orchestration tier;
+    /// `permission_mode` is one of the CLI modes (default/plan/acceptEdits/auto/…).
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub ultracode: bool,
+    pub permission_mode: Option<String>,
 }
 
 /// The full persisted snapshot the UI hydrates from at boot.

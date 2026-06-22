@@ -23,7 +23,7 @@ use super::model::{ConversationRecord, PersistedState, RepoRecord};
 
 /// Bump when the schema changes in a way that needs a migration. Today the dev
 /// policy is wipe-and-recreate, so this is informational.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const ACTIVE_ID_KEY: &str = "active_id";
 
 /// Owns the single SQLite connection. Held behind a `Mutex` because `rusqlite`
@@ -90,7 +90,11 @@ impl Store {
                  cwd              TEXT NOT NULL,
                  created_at       INTEGER NOT NULL,
                  last_activity_at INTEGER NOT NULL DEFAULT 0,
-                 session_id       TEXT
+                 session_id       TEXT,
+                 model            TEXT,
+                 effort           TEXT,
+                 ultracode        INTEGER NOT NULL DEFAULT 0,
+                 permission_mode  TEXT
              );",
         )?;
         // Additive migration: a db created before `last_activity_at` keeps its
@@ -102,6 +106,25 @@ impl Store {
                 "ALTER TABLE conversations ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
+        }
+        // Additive migration (schema v2): per-conversation controls. A db created
+        // before these columns keeps its rows; new columns default to NULL/0, which
+        // map to the product defaults at spawn (opus / xhigh / default).
+        for (col, ddl) in [
+            ("model", "ALTER TABLE conversations ADD COLUMN model TEXT"),
+            ("effort", "ALTER TABLE conversations ADD COLUMN effort TEXT"),
+            (
+                "ultracode",
+                "ALTER TABLE conversations ADD COLUMN ultracode INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "permission_mode",
+                "ALTER TABLE conversations ADD COLUMN permission_mode TEXT",
+            ),
+        ] {
+            if !column_exists(&conn, "conversations", col)? {
+                conn.execute(ddl, [])?;
+            }
         }
         conn.execute(
             "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?1)",
@@ -130,7 +153,8 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut conv_stmt = conn.prepare(
-            "SELECT id, name, repo_id, cwd, created_at, last_activity_at, session_id
+            "SELECT id, name, repo_id, cwd, created_at, last_activity_at, session_id,
+                    model, effort, ultracode, permission_mode
              FROM conversations ORDER BY created_at ASC",
         )?;
         let conversations = conv_stmt
@@ -143,6 +167,10 @@ impl Store {
                     created_at: row.get(4)?,
                     last_activity_at: row.get(5)?,
                     session_id: row.get(6)?,
+                    model: row.get(7)?,
+                    effort: row.get(8)?,
+                    ultracode: row.get(9)?,
+                    permission_mode: row.get(10)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -185,15 +213,20 @@ impl Store {
     pub fn upsert_conversation(&self, c: &ConversationRecord) -> rusqlite::Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT INTO conversations
-                 (id, name, repo_id, cwd, created_at, last_activity_at, session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 (id, name, repo_id, cwd, created_at, last_activity_at, session_id,
+                  model, effort, ultracode, permission_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(id) DO UPDATE SET
                  name             = excluded.name,
                  repo_id          = excluded.repo_id,
                  cwd              = excluded.cwd,
                  created_at       = excluded.created_at,
                  last_activity_at = excluded.last_activity_at,
-                 session_id       = excluded.session_id",
+                 session_id       = excluded.session_id,
+                 model            = excluded.model,
+                 effort           = excluded.effort,
+                 ultracode        = excluded.ultracode,
+                 permission_mode  = excluded.permission_mode",
             params![
                 c.id,
                 c.name,
@@ -201,7 +234,11 @@ impl Store {
                 c.cwd,
                 c.created_at,
                 c.last_activity_at,
-                c.session_id
+                c.session_id,
+                c.model,
+                c.effort,
+                c.ultracode,
+                c.permission_mode
             ],
         )?;
         Ok(())
@@ -327,6 +364,10 @@ mod tests {
             // Default to created_at: a freshly created conversation is active "now".
             last_activity_at: created_at,
             session_id: session_id.map(str::to_string),
+            model: None,
+            effort: None,
+            ultracode: false,
+            permission_mode: None,
         }
     }
 
@@ -400,6 +441,36 @@ mod tests {
         assert_eq!(state.conversations.len(), 1);
         assert_eq!(state.conversations[0].name, "Renamed");
         assert_eq!(state.conversations[0].session_id.as_deref(), Some("sess"));
+    }
+
+    #[test]
+    fn per_conversation_controls_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        let mut c = conv("c1", "r1", None);
+        c.model = Some("sonnet".into());
+        c.effort = Some("xhigh".into());
+        c.ultracode = true;
+        c.permission_mode = Some("plan".into());
+        store.upsert_conversation(&c).unwrap();
+
+        let got = store.load_state().unwrap().conversations.remove(0);
+        assert_eq!(got.model.as_deref(), Some("sonnet"));
+        assert_eq!(got.effort.as_deref(), Some("xhigh"));
+        assert!(got.ultracode);
+        assert_eq!(got.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn controls_default_to_none_when_unset() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        store.upsert_conversation(&conv("c1", "r1", None)).unwrap();
+        let got = store.load_state().unwrap().conversations.remove(0);
+        assert_eq!(got.model, None);
+        assert_eq!(got.effort, None);
+        assert!(!got.ultracode);
+        assert_eq!(got.permission_mode, None);
     }
 
     #[test]

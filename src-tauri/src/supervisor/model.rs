@@ -25,10 +25,18 @@ pub struct SessionStatePayload {
     /// the UI reads this — not the static spawn cwd — to show which worktree the
     /// conversation is in right now.
     pub cwd: Option<String>,
-    /// Current model id (from `system/init`).
+    /// Current model id (from `system/init`, refined by the `get_settings`
+    /// read-back to the resolved id, e.g. `claude-opus-4-8[1m]`).
     pub model: Option<String>,
-    /// Current permission mode (from `system/init` / `set_permission_mode`).
+    /// Current permission mode (from `system/init` / the `set_permission_mode` ack).
     pub permission_mode: Option<String>,
+    /// Current reasoning-effort level (`low`/`medium`/`high`/`xhigh`). NOT carried
+    /// by `system/init` — sourced from the `get_settings` control read-back (and the
+    /// spawn seed). `None` until the first read-back. Drives the effort gauge.
+    pub effort: Option<String>,
+    /// Whether "ultracode" (xhigh effort + standing dynamic-workflow orchestration)
+    /// is active right now. A SEPARATE boolean flag in the CLI, not an effort value.
+    pub ultracode: bool,
     /// Fine-grained activity hint from `system/status` (e.g. `"requesting"`).
     pub activity: Option<String>,
     /// `true` while waiting on the user to answer a permission prompt.

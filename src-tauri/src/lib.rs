@@ -9,9 +9,9 @@ use ipc::commands::{
     interrupt_session, list_worktrees, load_persisted_state, load_session_context,
     load_session_history, open_in_terminal, path_exists, ping, read_dir, read_file,
     remove_worktree, request_user_attention, send_message, set_active_conversation,
-    set_effort_level, set_model, set_permission_mode, spawn_session, stop_session, unwatch_dir,
-    upsert_conversation, upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file,
-    Sessions,
+    set_effort_level, set_model, set_permission_mode, set_ultracode, spawn_session, stop_session,
+    unwatch_dir, upsert_conversation, upsert_repo, watch_dir, wipe_all_data, worktree_status,
+    write_file, Sessions,
 };
 use ipc::events::{
     FsChangeEvent, SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent,
@@ -34,6 +34,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             set_permission_mode,
             set_model,
             set_effort_level,
+            set_ultracode,
             interrupt_session,
             stop_session,
             open_in_terminal,

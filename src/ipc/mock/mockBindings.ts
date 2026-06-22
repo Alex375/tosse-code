@@ -136,14 +136,27 @@ export const mockCommands = {
   async spawnSession(
     _repoPath: string,
     _resume: string | null,
+    model: string | null,
+    effort: string | null,
+    permissionMode: string | null,
+    ultracode: boolean,
   ): Promise<Result<string, string>> {
     // Unique id per spawn so multiple browser conversations don't collide.
     const session = `mock-session-${++mockCounter}`;
     const rec = getRecord(session);
     // Emit the initial idle state + the slash-command catalogue once listeners
     // have had a tick to subscribe (mirrors the core's initialize handshake).
+    // Seed the controls from the spawn args (mirrors the real core's seeding +
+    // get_settings read-back), so the indicator reflects the spawned state.
     setTimeout(() => {
-      rec.lastState = idleState();
+      const base = idleState();
+      rec.lastState = {
+        ...base,
+        model: model ?? base.model,
+        effort: effort ?? base.effort,
+        ultracode,
+        permission_mode: permissionMode ?? base.permission_mode,
+      };
       sessionStateEvent.emit({ session, state: rec.lastState });
       sessionCommandsEvent.emit({ session, commands: MOCK_COMMANDS });
     }, 30);
@@ -188,10 +201,22 @@ export const mockCommands = {
   },
 
   async setEffortLevel(
-    _session: string,
-    _level: string,
+    session: string,
+    level: string,
   ): Promise<Result<null, string>> {
-    // No server-side effort state; the UI owns the selected level locally.
+    // Mirror the real core's read-back: a plain level clears ultracode, then the
+    // state reflects the applied effort.
+    const rec = getRecord(session);
+    rec.lastState = { ...rec.lastState, effort: level, ultracode: false };
+    sessionStateEvent.emit({ session, state: rec.lastState });
+    return ok(null);
+  },
+
+  async setUltracode(session: string): Promise<Result<null, string>> {
+    // Ultra code = xhigh effort + the separate flag (read-back equivalent).
+    const rec = getRecord(session);
+    rec.lastState = { ...rec.lastState, effort: "xhigh", ultracode: true };
+    sessionStateEvent.emit({ session, state: rec.lastState });
     return ok(null);
   },
 

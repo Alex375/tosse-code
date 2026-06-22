@@ -3,7 +3,8 @@
 //! The control channel multiplexes `control_request` / `control_response`
 //! JSON-lines over the *same* stdio stream as the conversation (spec §4). It is
 //! bidirectional:
-//!   - **outbound** (we → CLI): `initialize`, `interrupt`, `set_permission_mode`.
+//!   - **outbound** (we → CLI): `initialize`, `interrupt`, `set_permission_mode`,
+//!     `set_model`, `apply_flag_settings` (effort + ultracode), `get_settings`.
 //!   - **inbound** (CLI → we): `can_use_tool` (a permission prompt), plus other
 //!     subtypes we do not support yet and answer with an error.
 //!
@@ -124,6 +125,61 @@ pub fn parse_initialize_commands(line: &Value) -> Option<Vec<SlashCommand>> {
     )
 }
 
+/// A correlated outbound-request acknowledgement (`control_response`). `request_id`
+/// echoes the request we sent; `ok` is true for `subtype:"success"`. On failure
+/// `error` carries the CLI's message (a plain string, spec §4.1). We MUST read this
+/// for our own requests (set_model / apply_flag_settings / set_permission_mode):
+/// otherwise a rejection would be a silent failure.
+pub struct ControlResponse {
+    pub request_id: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// Parse the outer envelope of any `control_response` into its correlation key and
+/// success/error. Returns `None` when there is no nested `request_id` (so it can't
+/// be matched to an outbound request).
+pub fn parse_control_response(line: &Value) -> Option<ControlResponse> {
+    let resp = line.get("response")?;
+    let request_id = resp.get("request_id")?.as_str()?.to_string();
+    let ok = resp.get("subtype").and_then(Value::as_str) == Some("success");
+    let error = resp.get("error").and_then(Value::as_str).map(str::to_string);
+    Some(ControlResponse { request_id, ok, error })
+}
+
+/// The live applied settings carried by a successful `get_settings` response
+/// (`response.response.applied = {model, effort, ultracode}`). Each field is
+/// optional — the CLI may omit one. This is the authoritative live read-back.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AppliedSettings {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub ultracode: Option<bool>,
+}
+
+/// Parse the `applied` block out of a `get_settings` control response. Returns
+/// `None` when there is no `applied` object (e.g. a non-`get_settings` response).
+pub fn parse_get_settings_applied(line: &Value) -> Option<AppliedSettings> {
+    let applied = line.get("response")?.get("response")?.get("applied")?;
+    Some(AppliedSettings {
+        model: applied.get("model").and_then(Value::as_str).map(str::to_string),
+        effort: applied.get("effort").and_then(Value::as_str).map(str::to_string),
+        ultracode: applied.get("ultracode").and_then(Value::as_bool),
+    })
+}
+
+/// The effective mode echoed by a successful `set_permission_mode` ack
+/// (`response.response.mode`). The CLI confirms the mode it ACTUALLY applied, which
+/// can differ from what we asked (e.g. `bypassPermissions` downgraded to `default`
+/// without `--allow-dangerously-skip-permissions`). `None` if absent.
+pub fn parse_set_permission_mode_ack(line: &Value) -> Option<String> {
+    line.get("response")?
+        .get("response")?
+        .get("mode")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// Wrap a `request` body into a full `control_request` envelope (spec §4.1).
 fn control_request(request_id: &str, request: Value) -> Value {
     json!({ "request_id": request_id, "type": "control_request", "request": request })
@@ -156,14 +212,54 @@ pub fn set_model_request(request_id: &str, model: &str) -> Value {
     control_request(request_id, json!({ "subtype": "set_model", "model": model }))
 }
 
-/// `apply_flag_settings` — push a session flag/setting change. Used here to set
-/// the reasoning effort level (e.g. "low", "medium", "high", "xhigh", "max").
-/// Mirrors the extension SDK (`{subtype:"apply_flag_settings", settings:{effortLevel}}`).
+/// The reasoning-effort levels the CLI's `apply_flag_settings{effortLevel}` runtime
+/// control accepts. Verified against the binary (2.1.185) and the extension settings
+/// schema (`effortLevel: enum["low","medium","high","xhigh"]`): anything else is
+/// silently coerced away (`.catch(void 0)`) — an ack of `success` does NOT prove a
+/// value was applied. NOTE: `"max"` is a `--effort` SPAWN-flag alias only, NOT a
+/// runtime settings value; `"ultracode"` is a SEPARATE boolean flag (see
+/// [`set_ultracode_request`]), never an effort value. So the app must validate
+/// before sending and read the result back via [`get_settings_request`].
+pub const VALID_EFFORT_LEVELS: [&str; 4] = ["low", "medium", "high", "xhigh"];
+
+/// Whether `level` is a valid runtime `effortLevel` (see [`VALID_EFFORT_LEVELS`]).
+pub fn is_valid_effort_level(level: &str) -> bool {
+    VALID_EFFORT_LEVELS.contains(&level)
+}
+
+/// `apply_flag_settings` — push a session flag/setting change. Used here to set the
+/// reasoning effort level (one of [`VALID_EFFORT_LEVELS`]). Mirrors the extension
+/// SDK (`{subtype:"apply_flag_settings", settings:{effortLevel}}`). Callers MUST
+/// validate `level` first ([`is_valid_effort_level`]): the CLI swallows an invalid
+/// value silently, so an unvalidated send would no-op without any error.
 pub fn set_effort_level_request(request_id: &str, level: &str) -> Value {
     control_request(
         request_id,
         json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": level } }),
     )
+}
+
+/// `apply_flag_settings` toggling the **ultracode** flag (xhigh effort + standing
+/// dynamic-workflow orchestration). The CLI models this as a SEPARATE boolean flag,
+/// not an `effortLevel` value: enabling sends `{ultracode:true}` (the caller first
+/// sets `effortLevel:"xhigh"`); disabling sends `{ultracode:null}` — `null` deletes
+/// the key, which is exactly how the extension turns it off (NOT `false`). Requires
+/// an xhigh-capable model with workflows enabled. Verified live against the binary.
+pub fn set_ultracode_request(request_id: &str, on: bool) -> Value {
+    let value = if on { Value::Bool(true) } else { Value::Null };
+    control_request(
+        request_id,
+        json!({ "subtype": "apply_flag_settings", "settings": { "ultracode": value } }),
+    )
+}
+
+/// `get_settings` — query the session's live applied settings. The response carries
+/// `response.response.applied = {model, effort, ultracode}` — the ONLY reliable live
+/// source of the effort level (it is absent from `system/init`) and the
+/// authoritative read-back after any change, since the CLI silently coerces invalid
+/// values. Verified live against the binary.
+pub fn get_settings_request(request_id: &str) -> Value {
+    control_request(request_id, json!({ "subtype": "get_settings" }))
 }
 
 /// A successful `control_response` carrying a permission ALLOW result (spec §5.2).
@@ -289,5 +385,83 @@ mod tests {
         assert_eq!(r["response"]["response"]["behavior"], json!("deny"));
         assert_eq!(r["response"]["response"]["message"], json!("not allowed in tests"));
         assert_eq!(r["response"]["response"]["toolUseID"], json!("toolu_9"));
+    }
+
+    #[test]
+    fn effort_level_validation_matches_the_cli_enum() {
+        // The four the runtime control accepts — and the two the gauge once offered
+        // that the CLI silently swallows.
+        for ok in ["low", "medium", "high", "xhigh"] {
+            assert!(is_valid_effort_level(ok), "{ok} should be valid");
+        }
+        assert!(!is_valid_effort_level("max"), "'max' is a --effort alias, not a wire value");
+        assert!(!is_valid_effort_level("ultracode"), "'ultracode' is a separate flag, not an effort");
+        assert!(!is_valid_effort_level("banana"));
+    }
+
+    #[test]
+    fn effort_request_carries_camelcase_key() {
+        let r = set_effort_level_request("e-1", "high");
+        assert_eq!(r["request"]["subtype"], json!("apply_flag_settings"));
+        assert_eq!(r["request"]["settings"]["effortLevel"], json!("high"));
+    }
+
+    #[test]
+    fn ultracode_on_is_true_off_is_null() {
+        // Enabling sends `true`; disabling sends `null` (deletes the key) — NOT false.
+        let on = set_ultracode_request("u-1", true);
+        assert_eq!(on["request"]["settings"]["ultracode"], json!(true));
+        let off = set_ultracode_request("u-2", false);
+        assert_eq!(off["request"]["settings"]["ultracode"], Value::Null);
+        // The key must be PRESENT-and-null, so the CLI deletes it (not absent).
+        assert!(off["request"]["settings"].as_object().unwrap().contains_key("ultracode"));
+    }
+
+    #[test]
+    fn get_settings_request_shape() {
+        let r = get_settings_request("g-1");
+        assert_eq!(r["type"], json!("control_request"));
+        assert_eq!(r["request"]["subtype"], json!("get_settings"));
+    }
+
+    #[test]
+    fn parses_get_settings_applied() {
+        let line = json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "g-1",
+                "response": { "applied": { "model": "claude-sonnet-4-6", "effort": "high", "ultracode": false } }
+            }
+        });
+        let applied = parse_get_settings_applied(&line).expect("applied present");
+        assert_eq!(applied.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(applied.effort.as_deref(), Some("high"));
+        assert_eq!(applied.ultracode, Some(false));
+        // A response with no `applied` yields None (so the caller skips it).
+        let bare = json!({ "response": { "subtype": "success", "request_id": "x", "response": {} } });
+        assert!(parse_get_settings_applied(&bare).is_none());
+    }
+
+    #[test]
+    fn parses_control_response_success_and_error() {
+        let ok = json!({ "response": { "subtype": "success", "request_id": "a-1" } });
+        let r = parse_control_response(&ok).expect("parses");
+        assert_eq!(r.request_id, "a-1");
+        assert!(r.ok);
+        assert!(r.error.is_none());
+
+        let err = json!({ "response": { "subtype": "error", "request_id": "a-2", "error": "nope" } });
+        let r = parse_control_response(&err).expect("parses");
+        assert!(!r.ok);
+        assert_eq!(r.error.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn parses_permission_mode_ack() {
+        let line = json!({
+            "response": { "subtype": "success", "request_id": "p-1", "response": { "mode": "plan" } }
+        });
+        assert_eq!(parse_set_permission_mode_ack(&line).as_deref(), Some("plan"));
     }
 }
