@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::assembler::{context_used_from_usage, default_context_window, normalize_blocks};
+use super::assembler::{context_used_from_usage, normalize_blocks};
 use super::model::{ContextFill, ConversationItem};
 
 /// Claude's config dir: `$CLAUDE_CONFIG_DIR` if set, else `$HOME/.claude`.
@@ -78,12 +78,15 @@ fn load_history_in(config_dir: &Path, session_id: &str) -> Vec<ConversationItem>
     }
 }
 
-/// Read a conversation's current context fill from its transcript, so the UI can
-/// render the ring the moment the conversation is opened / its stream turned on —
-/// before any new live turn reports usage. Uses the most recent MAIN-thread
-/// assistant `usage` (input + cache = prompt size) for the tokens and the model it
-/// ran on for the provisional window (the transcript carries no authoritative
-/// `modelUsage`; the first live `result` later refines it). Absent/empty transcript
+/// Read a conversation's current context FILL (used tokens only) from its transcript,
+/// so the UI can render the ring the moment the conversation is opened — before any
+/// new live turn reports usage. Uses the most recent MAIN-thread, real-model assistant
+/// `usage` (input + cache = prompt size).
+///
+/// `context_window` is deliberately left `None`: the transcript carries NO authoritative
+/// window, and the model name can't tell e.g. Opus-200k from Opus-1M apart (both are
+/// `claude-opus-4-8`). The window comes from the live `modelUsage` and the persisted
+/// per-conversation cache on the front, never guessed here. Absent/empty transcript
 /// → all-`None`.
 pub fn load_context_fill(session_id: &str) -> ContextFill {
     match claude_config_dir() {
@@ -116,12 +119,16 @@ fn load_context_fill_in(config_dir: &Path, session_id: &str) -> ContextFill {
         let Some(message) = entry.get("message") else {
             continue;
         };
+        // Skip non-real-model lines (a trailing `<synthetic>` compact-boundary / injected
+        // message isn't a real model call and would mis-measure the fill).
+        match message.get("model").and_then(Value::as_str) {
+            Some(m) if !m.is_empty() && m != "<synthetic>" => {}
+            _ => continue,
+        }
         // The freshest main-thread usage wins (largest accumulated context); keep
         // scanning so the LAST one sticks.
         if let Some(used) = message.get("usage").and_then(context_used_from_usage) {
             fill.context_tokens = Some(used);
-            fill.context_window =
-                Some(default_context_window(message.get("model").and_then(Value::as_str)));
         }
     }
     fill
@@ -331,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn context_fill_uses_last_main_thread_usage_and_model() {
+    fn context_fill_uses_latest_real_main_thread_usage() {
         let base = std::env::temp_dir().join(format!("tosse-ctx-{}", std::process::id()));
         let proj = base.join("projects").join("-some-cwd");
         std::fs::create_dir_all(&proj).unwrap();
@@ -340,10 +347,13 @@ mod tests {
         let lines = [
             // An early small turn…
             r#"{"type":"assistant","uuid":"a1","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}"#,
-            // …then the latest main-thread turn — this one must win.
+            // …then the latest real main-thread turn — this one must win.
             r#"{"type":"assistant","uuid":"a2","message":{"id":"m2","model":"claude-opus-4-8","usage":{"input_tokens":5000,"cache_creation_input_tokens":9000,"cache_read_input_tokens":15000,"output_tokens":12}}}"#,
             // A sidechain turn with bigger numbers must be ignored.
             r#"{"type":"assistant","isSidechain":true,"uuid":"a3","message":{"id":"m9","model":"claude-haiku-4-5","usage":{"input_tokens":999999,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}"#,
+            // A trailing `<synthetic>` line (compact boundary / injection) must NOT
+            // reset the fill — it isn't a real model call.
+            r#"{"type":"assistant","uuid":"a4","message":{"id":"s","model":"<synthetic>","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}"#,
         ];
         for l in lines {
             writeln!(f, "{l}").unwrap();
@@ -353,9 +363,11 @@ mod tests {
         let fill = load_context_fill_in(&base, session_id);
         std::fs::remove_dir_all(&base).ok();
 
-        // 5000 + 9000 + 15000 = 29000 from the latest main-thread turn.
+        // 5000 + 9000 + 15000 = 29000 from the latest real main-thread turn (the
+        // sidechain and the trailing synthetic line are both skipped).
         assert_eq!(fill.context_tokens, Some(29_000));
-        // Opus → 1M provisional window.
-        assert_eq!(fill.context_window, Some(1_000_000));
+        // The window is NEVER inferred from the transcript (name can't tell 200k from
+        // 1M) — it's sourced live / from the front cache.
+        assert_eq!(fill.context_window, None);
     }
 }

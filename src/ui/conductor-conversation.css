@@ -22,6 +22,13 @@
 .cv-sess-row { position:relative; display:flex; align-items:center; border-radius:var(--wf-r); }
 .cv-sess-row:hover { background:var(--wf-panel-2); }
 .cv-sess-row.on { background:var(--wf-panel-3); }
+/* Whole-row attention tint + left accent bar (see agent/status.ts `rowAttention`).
+   `need input` is the loudest (orange), then review (blue), then error (red).
+   Placed after :hover/.on so the tint wins when an agent needs the user. */
+.cv-sess-row[data-attn="input"]  { background:var(--wf-att-bg);  box-shadow:inset 3px 0 0 var(--wf-att); }
+.cv-sess-row[data-attn="review"] { background:var(--wf-wait-bg); box-shadow:inset 3px 0 0 var(--wf-wait); }
+.cv-sess-row[data-attn="error"]  { background:var(--wf-err-bg);  box-shadow:inset 3px 0 0 var(--wf-err); }
+.cv-sess-row[data-attn]:hover { filter:brightness(1.12); }
 .cv-sess { flex:1; min-width:0; display:flex; align-items:center; gap:9px; padding:7px 8px; border:0; background:transparent; font:inherit; color:inherit; text-align:left; cursor:pointer; }
 .cv-sess-n { font-size:12.5px; color:var(--wf-tx-hi); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
 .cv-sess .wf-badge { margin-left:auto; }
@@ -29,6 +36,12 @@
 .cv-sess-menu { flex:0 0 auto; width:22px; height:22px; margin-right:5px; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease; }
 .cv-sess-row:hover .cv-sess-menu, .cv-sess-menu[data-open] { opacity:1; }
 .cv-sess-menu:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+/* "Vu": acknowledge a non-blocking reminder (review / error / open-question) to
+   clear it back to idle. Always visible while the row needs attention so it can
+   be dismissed without hovering; also revealed on plain hover. */
+.cv-sess-seen { flex:0 0 auto; width:22px; height:22px; margin-right:2px; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease; }
+.cv-sess-row:hover .cv-sess-seen, .cv-sess-row[data-attn] .cv-sess-seen { opacity:1; }
+.cv-sess-seen:hover { background:var(--wf-panel-3); color:var(--wf-run); }
 /* Worktree badge: shown (always) when a conversation runs in a linked worktree. */
 .cv-wt-badge { flex:0 0 auto; width:20px; height:20px; margin-right:2px; border:0; background:transparent; color:var(--wf-accent); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:.8; transition:opacity .12s ease, background .12s ease; }
 .cv-wt-badge:hover { opacity:1; background:var(--wf-panel-3); }
@@ -203,6 +216,30 @@
 .cv-check.done { background:var(--wf-run); border-color:var(--wf-run); color:#06281b; }
 .cv-check.doing { border-color:var(--wf-att); border-style:dashed; }
 .cv-check.todo { border-color:var(--wf-line-2); }
+
+/* ---- barre de validation "review" : carte flottante au-dessus du composer ----
+   Rend l'action "Marquer comme vu" évidente (le ✓ de la sidebar n'est qu'un
+   raccourci). Teintée selon l'état (bleu review / orange question / rouge erreur). */
+.cv-reviewbar {
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:10px 14px 4px;
+  padding:9px 13px;
+  border-radius:12px;
+  border:1px solid;
+  font-size:12.5px;
+  box-shadow:0 10px 26px -16px #000, 0 2px 8px -6px #000a, inset 0 1px 0 #ffffff08;
+}
+.cv-reviewbar[data-tone="review"] { background:var(--wf-wait-bg); border-color:#314463; color:var(--wf-wait); }
+.cv-reviewbar[data-tone="input"]  { background:var(--wf-att-bg);  border-color:#5a4527; color:var(--wf-att); }
+.cv-reviewbar[data-tone="error"]  { background:var(--wf-err-bg);  border-color:#5c3036; color:var(--wf-err); }
+.cv-reviewbar-dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex:0 0 auto; box-shadow:0 0 0 3px color-mix(in srgb, currentColor 22%, transparent); }
+.cv-reviewbar-label { min-width:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cv-reviewbar-btn { margin-left:auto; flex:0 0 auto; display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border-radius:8px; border:1px solid currentColor; background:transparent; color:inherit; font:inherit; font-size:12px; font-weight:600; cursor:pointer; transition:background .12s ease; }
+.cv-reviewbar-btn:hover { background:color-mix(in srgb, currentColor 16%, transparent); }
+.cv-reviewbar-btn .wf-ico { width:14px; height:14px; }
 
 /* ---- barre de tâches (todo list de l'agent) : carte flottante au-dessus du composer ---- */
 .cv-todobar {

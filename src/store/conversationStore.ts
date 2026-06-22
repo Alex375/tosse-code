@@ -65,6 +65,9 @@ function emptyEntry(session: string): SessionEntry {
     openBubble: {},
     subThreads: {},
     todos: [],
+    // No finished turn yet → nothing to review (an idle, never-run session reads
+    // as idle/off, not "ready for review").
+    turnSeen: true,
     seq: 0,
   };
 }
@@ -115,6 +118,9 @@ interface ConversationState {
   addErrorTurn: (session: string, message: string) => void;
   enqueuePermission: (session: string, request: PermissionRequestPayload) => void;
   removePermission: (session: string, requestId: string) => void;
+  /** Acknowledge the last finished turn ("Vu" button): mark it seen so the
+   *  conversation drops from review / open-question back to idle. */
+  markSeen: (session: string) => void;
   resetSession: (session: string) => void;
   /** Forget a session's timeline entirely (e.g. its conversation was deleted). */
   dropSession: (session: string) => void;
@@ -259,6 +265,9 @@ export const useConversationStore = create<ConversationState>((set) => {
           seq: entry.seq + 1,
           turns: { ...entry.turns, [id]: turn },
           timeline: [...entry.timeline, { kind: "turn", id }],
+          // Sending the next message consumes any pending review/question: the
+          // user has clearly moved on from the previous result.
+          turnSeen: true,
         };
       }),
 
@@ -294,6 +303,11 @@ export const useConversationStore = create<ConversationState>((set) => {
           ),
         };
       }),
+
+    markSeen: (session) =>
+      withEntry(session, (entry) =>
+        entry.turnSeen ? entry : { ...entry, turnSeen: true },
+      ),
 
     resetSession: (session) =>
       set((s) => ({ sessions: { ...s.sessions, [session]: emptyEntry(session) } })),
@@ -441,6 +455,9 @@ export const useConversationStore = create<ConversationState>((set) => {
               timeline: [...entry.timeline, { kind: "turn_result", id }],
               openBubble: {},
               pendingPermissions: [],
+              // A turn just finished → it's now "to review", UNLESS it was
+              // interrupted (the user did that, so they're already aware).
+              turnSeen: item.subtype === "interrupted",
             });
           }
 

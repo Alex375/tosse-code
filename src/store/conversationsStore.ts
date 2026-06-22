@@ -20,13 +20,9 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "../ipc/client";
-import type {
-  ConversationRecord,
-  RepoRecord,
-  SessionStatePayload,
-} from "../ipc/client";
+import type { ConversationRecord, RepoRecord } from "../ipc/client";
 import { useConversationStore } from "./conversationStore";
-import type { StreamState } from "../ui/kit";
+import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
 
@@ -230,8 +226,10 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     if (conv?.handle) {
       syncToCore("stopSession", () => commands.stopSession(conv.handle!));
     }
-    // Drop its (now unreachable) message timeline from the message store.
+    // Drop its (now unreachable) message timeline from the message store, and its
+    // persisted context-window so the localStorage cache doesn't keep orphans.
     useConversationStore.getState().dropSession(id);
+    clearCachedWindow(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
@@ -546,15 +544,26 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   if (!conv || !conv.sessionId) return;
   const res = await commands.loadSessionHistory(conv.sessionId);
   if (res.status !== "ok" || res.data.length === 0) return;
-  const { ensureSession, applyItem, applyContextFill } = useConversationStore.getState();
+  const { ensureSession, applyItem, applyContextFill, markSeen } =
+    useConversationStore.getState();
   ensureSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // The replayed transcript ends on a past turn_result, which arms "review". But a
+  // historical completion is not a fresh "Claude just finished, go look" — mark it
+  // seen so only genuine LIVE completions surface as review.
+  markSeen(convId);
   // Seed the context ring from the transcript so it shows immediately on open,
   // before any new live turn reports usage. A missing/unreadable transcript is NOT
   // an error (the core returns an empty fill), so a status "error" here is a real
   // failure worth surfacing rather than swallowing.
   const ctx = await commands.loadSessionContext(conv.sessionId);
-  if (ctx.status === "ok") applyContextFill(convId, ctx.data);
+  if (ctx.status === "ok")
+    // Tokens from the transcript; window from the persisted cache (the only place the
+    // real 200k-vs-1M window is known before the first live turn).
+    applyContextFill(convId, {
+      context_tokens: ctx.data.context_tokens,
+      context_window: getCachedWindow(convId),
+    });
   else console.error("loadSessionContext failed:", ctx.error);
 }
 
@@ -574,12 +583,22 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
   if (!conv?.sessionId) return;
   const res = await commands.loadSessionHistory(conv.sessionId);
   if (res.status !== "ok" || res.data.length === 0) return; // keep timeline on error/empty
-  const { resetSession, applyItem, applyContextFill } = useConversationStore.getState();
+  const { resetSession, applyItem, applyContextFill, markSeen } =
+    useConversationStore.getState();
   resetSession(convId);
   for (const item of res.data) applyItem(convId, item);
-  // Re-seed the context ring from the transcript (resetSession cleared it).
+  // Replayed history ends on a past turn_result; mark it seen so turning the
+  // stream on doesn't flash an old conversation as "review" (only fresh LIVE
+  // completions should).
+  markSeen(convId);
+  // Re-seed the context ring from the transcript (resetSession cleared it); window
+  // from the persisted cache (the real 200k-vs-1M value learned on a prior turn).
   const ctx = await commands.loadSessionContext(conv.sessionId);
-  if (ctx.status === "ok") applyContextFill(convId, ctx.data);
+  if (ctx.status === "ok")
+    applyContextFill(convId, {
+      context_tokens: ctx.data.context_tokens,
+      context_window: getCachedWindow(convId),
+    });
   else console.error("loadSessionContext failed:", ctx.error);
   historyLoaded.add(convId); // the select-time loader is now satisfied for this run
 }
@@ -600,6 +619,7 @@ export async function wipeAllData(): Promise<void> {
   );
   await commands.wipeAllData();
   historyLoaded.clear();
+  clearAllCachedWindows();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
 }
@@ -617,19 +637,8 @@ export function useConversationRepo(convId: string | null): Repo | null {
   });
 }
 
-/**
- * Map a conversation's stream onto the design's status model (for the status dot
- * / title-bar control). The `handle` is the source of truth for on/off: with the
- * lazy policy a conversation has no live `claude` process until its first message,
- * and a stopped/exited one drops its handle (see `setHandle(null)` on `ended`).
- * So a null handle is `off` — this subsumes "never started", "stopped by the
- * user", and "the process exited", which the protocol does not distinguish (both
- * a Shutdown and a natural exit travel the same `emit_ended` path in the core).
- * When live, the sub-state reflects what the session is doing.
- */
-export function streamStatus(handle: string | null, s?: SessionStatePayload): StreamState {
-  if (!handle) return "off"; // no live process: never started, stopped, or exited
-  if (s?.awaiting_permission) return "ask";
-  if (s?.busy) return "work";
-  return "done"; // live and idle = ready to take a message
-}
+// NOTE: the conversation status model now lives in `src/agent/status.ts`
+// (`deriveAgentStatus` + `agentStatusToDot`), consumed via the `useAgentStatus`
+// hook. It replaces the old flat `streamStatus(handle, state)` so the sidebar,
+// the title-bar control, and the upcoming fleet view share one rich source of
+// truth (running / idle / need-input / need-intervention / review / error / off).

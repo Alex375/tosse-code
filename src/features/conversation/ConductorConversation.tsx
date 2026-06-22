@@ -17,6 +17,7 @@ import { TodoBar } from "../todos/TodoBar";
 import { ConductorComposer, type ComposerHandle } from "./ConductorComposer";
 import { ConductorSidebar } from "./ConductorSidebar";
 import { ConductorThread } from "./ConductorThread";
+import { ReviewBar } from "./ReviewBar";
 import { useStickToBottom } from "./useStickToBottom";
 
 // Interactive elements whose clicks must NOT be hijacked to focus the composer
@@ -192,6 +193,7 @@ function ConversationPane({
     <div className="wf-col" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
       <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
       <TodoBar session={session} />
+      <ReviewBar session={session} />
       <ConductorComposer ref={composerRef} session={session} onSent={scrollToBottom} />
     </div>
   );
