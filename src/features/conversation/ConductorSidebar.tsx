@@ -3,7 +3,6 @@ import { pickFolder } from "../../ipc/pickFolder";
 import {
   createConversationInRepo,
   repoName,
-  streamStatus,
   useActiveConversationId,
   useConversations,
   useConversationsStore,
@@ -11,7 +10,9 @@ import {
   type Conversation,
   type Repo,
 } from "../../store/conversationsStore";
-import { useSessionState } from "../../store/conversationStore";
+import { useConversationStore } from "../../store/conversationStore";
+import { useAgentStatus } from "../../agent/useAgentStatus";
+import { agentStatusToDot, isDismissable, rowAttention } from "../../agent/status";
 import { useSettingsUi } from "../../store/settingsUi";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
@@ -20,9 +21,12 @@ import { WorktreeBadge } from "../git/WorktreeBadge";
 import { useWorktreeUi } from "../git/worktreeUiStore";
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
-  // State is keyed by the conversation's stable id (the message store routes
-  // live events back to it); undefined until it has been live at least once.
-  const state = useSessionState(conv.id);
+  // Rich status keyed by the conversation's stable id (the message store routes
+  // live events back to it). Drives the dot colour, the whole-row highlight, and
+  // the "Vu" acknowledge button.
+  const status = useAgentStatus(conv.id);
+  const attn = rowAttention(status);
+  const markSeen = useConversationStore((s) => s.markSeen);
   const select = useConversationsStore((s) => s.selectConversation);
   const rename = useConversationsStore((s) => s.renameConversation);
   const remove = useConversationsStore((s) => s.removeConversation);
@@ -52,9 +56,9 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
 
   if (editing) {
     return (
-      <div className={"cv-sess-row" + (active ? " on" : "")}>
+      <div className={"cv-sess-row" + (active ? " on" : "")} data-attn={attn ?? undefined}>
         <span className="cv-sess" style={{ cursor: "default" }}>
-          <Dot s={streamStatus(conv.handle, state)} pulse />
+          <Dot s={agentStatusToDot(status)} pulse />
           <input
             className="cv-sess-edit"
             value={draft}
@@ -73,17 +77,31 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   }
 
   return (
-    <div className={"cv-sess-row" + (active ? " on" : "")}>
+    <div className={"cv-sess-row" + (active ? " on" : "")} data-attn={attn ?? undefined}>
       <button
         type="button"
         className="cv-sess"
         onClick={() => select(conv.id)}
         onDoubleClick={startEdit}
       >
-        <Dot s={streamStatus(conv.handle, state)} pulse />
+        <Dot s={agentStatusToDot(status)} pulse />
         <span className="cv-sess-n">{conv.name}</span>
       </button>
       <WorktreeBadge conv={conv} />
+      {isDismissable(status) ? (
+        <button
+          type="button"
+          className="cv-sess-seen"
+          title="Marquer comme vu"
+          aria-label="Marquer comme vu"
+          onClick={(e) => {
+            e.stopPropagation();
+            markSeen(conv.id);
+          }}
+        >
+          <Ico name="check" className="sm" />
+        </button>
+      ) : null}
       <Menu
         align="right"
         trigger={
