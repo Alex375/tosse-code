@@ -5,6 +5,7 @@ import App from "./App";
 // Conductor design system (global, class-based) + token bridge for reused content components.
 import "./ui/conductor-wirekit.css";
 import "./ui/conductor-conversation.css";
+import "./ui/conductor-flightdeck.css";
 import "./ui/conductor-aliases.css";
 
 const queryClient = new QueryClient({

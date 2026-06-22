@@ -19,6 +19,7 @@ import {
 } from "../../store/conversationsStore";
 import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
 import { ChipBtn, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
+import { useContextData } from "../../store/contextData";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
 import {
   SlashCommandMenu,
@@ -87,20 +88,6 @@ function modelLabel(id?: string | null): string {
   if (s.includes("sonnet")) return "Sonnet 4.6";
   if (s.includes("haiku")) return "Haiku 4.5";
   return id;
-}
-
-/** Compact token count for the context ring: 29756 → "29.8k", 200000 → "200k", 1e6 → "1M". */
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) {
-    const m = n / 1_000_000;
-    return (Number.isInteger(m) ? m.toFixed(0) : m.toFixed(1)) + "M";
-  }
-  if (n >= 1_000) {
-    const k = n / 1_000;
-    if (k >= 999.95) return "1M"; // avoid "1000.0k" right below the 1M boundary
-    return (Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)) + "k";
-  }
-  return String(n);
 }
 
 export interface ComposerHandle {
@@ -217,29 +204,9 @@ export const ConductorComposer = forwardRef<
     DEFAULT_PERMISSION_MODE) as PermissionMode;
   const permLabel = PERM_LABEL[permMode] ?? PERM_LABEL[DEFAULT_PERMISSION_MODE];
 
-  // Context ring: real fill from the last model call's input usage over the model's
-  // context window (both surfaced by the core in SessionStatePayload). Until the first
-  // turn reports usage, the ring renders a quiet stub (`disabled`).
-  const ctxTokens = state?.context_tokens ?? null;
-  const ctxWindow = state?.context_window ?? null;
-  const ctxReady = ctxTokens != null && ctxWindow != null && ctxWindow > 0;
-  const ctxData = ctxReady
-    ? {
-        pct: Math.min(100, Math.round((ctxTokens / ctxWindow) * 100)),
-        used: fmtTokens(ctxTokens),
-        max: fmtTokens(ctxWindow),
-      }
-    : { pct: 0, used: "—", max: "—" };
-  // Subscription plan snapshot (status + reset). Percentage of plan usage is NOT in
-  // the stream — only what `rate_limit_event` carries.
-  const planData = state?.rate_limit
-    ? {
-        status: state.rate_limit.status,
-        resetsAt: state.rate_limit.resets_at,
-        limitType: state.rate_limit.limit_type,
-        usingOverage: state.rate_limit.using_overage,
-      }
-    : null;
+  // Context fill (ring) — shared derivation keyed by stable id, reused by the
+  // FlightDeck card's context bar (see useContextData).
+  const { ctx: ctxData, ready: ctxReady, plan: planData } = useContextData(session);
 
   // Every control routes through the conversations store: it persists the choice
   // (so a pre-spawn pick survives and is applied at spawn) AND pushes it to the live

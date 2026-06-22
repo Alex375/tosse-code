@@ -4,11 +4,9 @@ import {
   createConversationInRepo,
   repoName,
   useActiveConversationId,
-  useConversations,
+  useConversationsByRepo,
   useConversationsStore,
-  useRepos,
   type Conversation,
-  type Repo,
 } from "../../store/conversationsStore";
 import { useConversationStore } from "../../store/conversationStore";
 import { useAgentStatus } from "../../agent/useAgentStatus";
@@ -147,30 +145,14 @@ async function newConversationInPickedFolder() {
 }
 
 export function ConductorSidebar() {
-  const repos = useRepos();
-  const conversations = useConversations();
+  // Repo-grouped, recency-ordered conversations — the shared selector used by both
+  // this sidebar and the FlightDeck grid (see useConversationsByRepo).
+  const groups = useConversationsByRepo();
   const activeId = useActiveConversationId();
   const openManager = useWorktreeUi((s) => s.openManager);
   const settingsOpen = useSettingsUi((s) => s.open);
   const openSettings = useSettingsUi((s) => s.openSettings);
   const closeSettings = useSettingsUi((s) => s.closeSettings);
-
-  // Group conversations by their repo, then order everything by recency: within a
-  // repo the most recently active conversation comes first, and repos are ordered
-  // by their most recent conversation (an empty repo falls back to when it was
-  // added). So the conversation with the latest message — sent or received — sits
-  // at the very top.
-  const byRepo = new Map<string, Conversation[]>();
-  for (const c of conversations) {
-    const arr = byRepo.get(c.repoId) ?? [];
-    arr.push(c);
-    byRepo.set(c.repoId, arr);
-  }
-  for (const arr of byRepo.values()) {
-    arr.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-  }
-  const repoRecency = (r: Repo) => byRepo.get(r.id)?.[0]?.lastActivityAt ?? r.addedAt;
-  const ordered = [...repos].sort((a, b) => repoRecency(b) - repoRecency(a));
 
   return (
     <div
@@ -193,7 +175,7 @@ export function ConductorSidebar() {
           }
         >
           <MenuLabel>Nouvelle conversation dans…</MenuLabel>
-          {ordered.map((r) => (
+          {groups.map(({ repo: r }) => (
             <MenuItem key={r.id} icon="folder" onClick={() => void createConversationInRepo(r.path)}>
               {repoName(r.path)}
             </MenuItem>
@@ -212,13 +194,12 @@ export function ConductorSidebar() {
       </div>
 
       <div className="cv-sess-scroll wf-fade-b">
-        {ordered.length === 0 ? (
+        {groups.length === 0 ? (
           <div style={{ padding: "20px 12px", color: "var(--wf-tx-lo)", fontSize: 12, lineHeight: 1.6 }}>
             Aucun dépôt. Clique sur <span className="wf-hi">＋</span> pour ouvrir un dossier.
           </div>
         ) : (
-          ordered.map((repo) => {
-            const items = byRepo.get(repo.id) ?? [];
+          groups.map(({ repo, conversations: items }) => {
             return (
               <div key={repo.id} className="cv-repo">
                 <div className="cv-repo-h">

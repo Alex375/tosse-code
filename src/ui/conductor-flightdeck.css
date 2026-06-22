@@ -1,0 +1,59 @@
+/* conductor-flightdeck.css — the FlightDeck (agent dashboard) view.
+   Cards per stream, grouped by repo, with a top attention bar. Ported from the
+   Conductor design handoff's view-agents.css (V1 "par dépôt, cartes"). The leaf
+   bits (.wf-card, .wf-ask, .wf-act, .wf-ctxm, .wf-todobar, status dots/pills)
+   come from the shared kit (conductor-wirekit.css); only the grid/layout lives
+   here. Two adaptations vs the static artboard: the scroller really scrolls, and
+   the grid is auto-fill (3 columns at typical widths, reflows when resized). */
+
+.ag-page { flex:1; min-height:0; background:var(--wf-bg); }
+.ag-scroll { flex:1; min-height:0; overflow-y:auto; padding:6px 20px 20px; }
+
+/* --- attention bar --- */
+.ag-attn { display:flex; align-items:center; gap:12px; padding:12px 20px; border-bottom:1px solid var(--wf-line); background:linear-gradient(90deg,var(--wf-att-bg),var(--wf-bg-2) 70%); }
+.ag-attn.calm { background:var(--wf-bg-2); }
+.ag-attn-chip { display:inline-flex; align-items:center; gap:7px; font-size:11.5px; color:var(--wf-tx); padding:5px 11px; border:1px solid var(--wf-line-2); border-radius:999px; background:var(--wf-panel); }
+.ag-attn-jump { font:inherit; font-size:11.5px; color:var(--wf-att); font-weight:600; cursor:pointer; background:transparent; border:0; display:inline-flex; align-items:center; gap:5px; padding:0; }
+.ag-attn-jump:hover { text-decoration:underline; }
+
+/* --- repo group --- */
+.ag-repo { padding-top:18px; }
+.ag-repo-h { display:flex; align-items:center; gap:9px; padding:0 2px 11px; color:var(--wf-tx-lo); }
+.ag-repo-counts { margin-left:auto; display:flex; align-items:center; gap:8px; }
+.ag-repo-empty { color:var(--wf-tx-xlo); font-size:11.5px; padding:0 2px 8px; }
+
+/* --- per-repo lane: cards in up to 2 rows, scrolling HORIZONTALLY through the
+   repo's history. The page scrolls vertically between repos; each lane scrolls
+   sideways. Cards are pre-sorted active-first (status), so what matters sits on the
+   left and the inactive history trails off to the right. --- */
+.ag-grid {
+  display:grid;
+  grid-auto-flow:column;
+  grid-template-rows:repeat(2, min-content);
+  grid-auto-columns:348px;
+  align-items:start;
+  gap:12px;
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding-bottom:8px;
+  overscroll-behavior-x:contain;
+  scrollbar-width:thin;
+  scrollbar-color:var(--wf-line-2) transparent;
+}
+.ag-grid::-webkit-scrollbar { height:9px; }
+.ag-grid::-webkit-scrollbar-thumb { background:var(--wf-line-2); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
+.ag-grid::-webkit-scrollbar-track { background:transparent; }
+.ag-card { padding:14px; display:flex; flex-direction:column; gap:11px; }
+.ag-card.dim { opacity:.58; }
+.ag-card.rev { border-color:#314463; }
+.ag-card-h { display:flex; align-items:center; gap:9px; }
+.ag-card-name { font:inherit; font-size:13px; font-weight:600; flex:1; min-width:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--wf-tx-hi); background:transparent; border:0; cursor:pointer; padding:0; }
+.ag-card-name:hover { text-decoration:underline; }
+.ag-card-tags { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.ag-card-act { padding:9px 11px; background:var(--wf-bg-2); border:1px solid var(--wf-line); border-radius:var(--wf-r); min-height:38px; display:flex; align-items:center; }
+.ag-card-foot { display:flex; align-items:center; flex-wrap:wrap; gap:8px 13px; min-width:0; font-size:11px; color:var(--wf-tx-lo); }
+.ag-card-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:11px; border-top:1px solid var(--wf-line); }
+
+/* whole-view empty state (no repos / no conversations yet) */
+.ag-empty { margin:auto; text-align:center; color:var(--wf-tx-lo); max-width:440px; padding:40px; line-height:1.7; }
+.ag-empty-title { font-size:15px; color:var(--wf-tx); margin:10px 0 6px; }

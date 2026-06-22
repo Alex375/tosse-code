@@ -23,6 +23,7 @@ import { commands } from "../ipc/client";
 import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
+import { useMemo } from "react";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
 
@@ -740,6 +741,44 @@ export function useConversationRepo(convId: string | null): Repo | null {
     const conv = s.conversations.find((c) => c.id === convId);
     return conv ? (s.repos.find((r) => r.id === conv.repoId) ?? null) : null;
   });
+}
+
+export interface RepoGroup {
+  repo: Repo;
+  conversations: Conversation[];
+}
+
+/**
+ * Group conversations under their repo and order by recency: within a repo the
+ * most recently active conversation comes first, and repos are ordered by their
+ * most recent conversation (an empty repo falls back to when it was added). Pure +
+ * testable — the SINGLE grouping definition shared by the sidebar and the
+ * FlightDeck grid, so the two never order differently.
+ */
+export function groupConversationsByRepo(
+  repos: Repo[],
+  conversations: Conversation[],
+): RepoGroup[] {
+  const byRepo = new Map<string, Conversation[]>();
+  for (const c of conversations) {
+    const arr = byRepo.get(c.repoId) ?? [];
+    arr.push(c);
+    byRepo.set(c.repoId, arr);
+  }
+  for (const arr of byRepo.values()) {
+    arr.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  }
+  const recency = (r: Repo) => byRepo.get(r.id)?.[0]?.lastActivityAt ?? r.addedAt;
+  return [...repos]
+    .sort((a, b) => recency(b) - recency(a))
+    .map((repo) => ({ repo, conversations: byRepo.get(repo.id) ?? [] }));
+}
+
+/** Reactive repo-grouped conversations (recency-ordered). */
+export function useConversationsByRepo(): RepoGroup[] {
+  const repos = useRepos();
+  const conversations = useConversations();
+  return useMemo(() => groupConversationsByRepo(repos, conversations), [repos, conversations]);
 }
 
 // NOTE: the conversation status model now lives in `src/agent/status.ts`

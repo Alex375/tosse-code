@@ -407,3 +407,44 @@ export function ContextRing({
     </Menu>
   );
 }
+
+/** Compact context-fill meter — a tiny bar + percentage (the card variant of the
+ *  ContextRing). Pass `full` to show "used / max" instead of just the percent. */
+export function ContextMeter({ ctx, full }: { ctx: Ctx; full?: boolean }) {
+  const warn = ctx.pct >= 70;
+  return (
+    <span className={"wf-ctxm" + (warn ? " warn" : "")} title={`Contexte ${ctx.used} / ${ctx.max}`}>
+      <Ico name="gauge" className="sm" />
+      <span className="wf-ctx">
+        <i style={{ width: ctx.pct + "%" }} />
+      </span>
+      <span className="wf-mono" style={{ fontSize: 10.5 }}>
+        {full ? `${ctx.used} / ${ctx.max}` : `${ctx.pct}%`}
+      </span>
+    </span>
+  );
+}
+
+/** A todo segment's state for the {@link TodoPips} bar. */
+export type TodoSeg = "todo" | "doing" | "done";
+
+/** The to-do progress pips + ratio: one dash per task — grey (not started),
+ *  amber (in progress), green (done) — followed by "done/total". */
+export function TodoPips({ segs, done, total }: { segs: TodoSeg[]; done: number; total: number }) {
+  return (
+    <span
+      className="wf-row"
+      style={{ gap: 6, color: "var(--wf-tx-lo)", fontSize: 11 }}
+      title="Avancement des tâches"
+    >
+      <span className="wf-todobar">
+        {segs.map((s, i) => (
+          <i key={i} className={"wf-todoseg " + s} />
+        ))}
+      </span>
+      <span className="wf-mono">
+        {done}/{total}
+      </span>
+    </span>
+  );
+}

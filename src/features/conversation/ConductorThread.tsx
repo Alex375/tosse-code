@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState } from "react";
 import type { JsonValue, NormalizedBlock, PermissionRequestPayload } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
+import { classifyAsk, field } from "../../agent/ask";
 import {
   useConversationStore,
   useError,
@@ -20,14 +21,6 @@ import { ToolResultBody } from "./ToolResultBody";
 import { toolMeta } from "./toolMeta";
 import type { StickToBottom } from "./useStickToBottom";
 import styles from "./ConductorThread.module.css";
-
-function field(input: JsonValue, key: string): string | undefined {
-  if (input && typeof input === "object" && !Array.isArray(input)) {
-    const v = (input as Record<string, JsonValue>)[key];
-    if (typeof v === "string") return v;
-  }
-  return undefined;
-}
 
 const TOOL_ICON: Record<string, string> = {
   Read: "file",
@@ -243,30 +236,13 @@ function MsgAI({ session, turnId }: { session: string; turnId: string }) {
 
 // ---- Ask box (the real request: question / permission / questionnaire) ----
 
-interface Ask {
-  kind: "question" | "permission" | "error" | "blocked";
-  text?: string;
-  cmd?: string;
-}
-
-function toAsk(req: PermissionRequestPayload): Ask {
-  if (req.tool_name === "Bash") {
-    return { kind: "permission", text: "Autoriser l'exécution de la commande ?", cmd: field(req.input, "command") };
-  }
-  const target = field(req.input, "file_path");
-  return {
-    kind: "permission",
-    text: req.description || (target ? `Autoriser la modification de ${target} ?` : `Autoriser ${req.tool_name} ?`),
-  };
-}
-
 function AskTurn({ session, request }: { session: string; request: PermissionRequestPayload }) {
   const answer = useAnswerPermission(session);
   // AskUserQuestion is an interactive questionnaire, not a yes/no prompt.
   if (request.tool_name === "AskUserQuestion") {
     return <QuestionnaireAsk session={session} request={request} />;
   }
-  const ask = toAsk(request);
+  const ask = classifyAsk(request);
   const allow = () =>
     answer.mutate({ requestId: request.request_id, decision: { behavior: "allow", updated_input: null } });
   const deny = () =>

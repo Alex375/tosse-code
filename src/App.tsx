@@ -5,7 +5,7 @@ import { StreamControl } from "./features/conversation/StreamControl";
 import { WorktreeIndicator } from "./features/git/WorktreeIndicator";
 import { WorktreeManager } from "./features/git/WorktreeManager";
 import { EditorToggle } from "./features/editor/EditorToggle";
-import { FleetPlaceholder } from "./features/fleet/FleetPlaceholder";
+import { FlightDeck } from "./features/flightdeck/FlightDeck";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
 import { startUpdaterAutoCheck } from "./store/updater";
@@ -17,10 +17,11 @@ import {
   useActiveConversationId,
   useConversationRepo,
   useConversations,
+  useConversationsStore,
 } from "./store/conversationsStore";
 import { NavBtn, Tag, Win } from "./ui/kit";
 
-type View = "conversation" | "agents";
+type View = "conversation" | "flightdeck";
 
 export default function App() {
   useGlobalSessionEvents();
@@ -30,6 +31,12 @@ export default function App() {
   const active = conversations.find((c) => c.id === activeId) ?? null;
   const activeRepo = useConversationRepo(activeId);
   const booted = useRef(false);
+
+  // Focusing an agent from the FlightDeck = select it and switch to its thread.
+  const openConversation = (id: string) => {
+    useConversationsStore.getState().selectConversation(id);
+    setView("conversation");
+  };
 
   // On first mount: hydrate from the core's persisted state. Lazy policy — boot
   // spawns nothing; a conversation's history loads when it's shown and its
@@ -49,12 +56,17 @@ export default function App() {
 
   return (
     <Win
-      title={view === "agents" ? "Conductor — agents" : active?.name ?? "Conductor"}
+      title={view === "flightdeck" ? "Flight Deck" : active?.name ?? "Conductor"}
       banner={<UpdateBanner />}
       nav={
         <>
           <NavBtn icon="chat" label="Conversation" on={view === "conversation"} onClick={() => setView("conversation")} />
-          <NavBtn icon="grid" label="Agents" on={view === "agents"} onClick={() => setView("agents")} />
+          <NavBtn
+            icon="grid"
+            label="Flight Deck"
+            on={view === "flightdeck"}
+            onClick={() => setView("flightdeck")}
+          />
         </>
       }
       right={
@@ -74,7 +86,7 @@ export default function App() {
       {view === "conversation" ? (
         <ConductorConversation active={active} />
       ) : (
-        <FleetPlaceholder />
+        <FlightDeck onOpen={openConversation} />
       )}
       {/* Mounted once, globally: opens for whichever repo the indicator/badge asks. */}
       <WorktreeManager />

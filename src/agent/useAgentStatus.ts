@@ -81,6 +81,19 @@ function gather(entry: SessionEntry | undefined): InnerSignals {
 }
 
 /**
+ * Compose the rich status for a conversation from its live `handle` + message-store
+ * `entry` — the NON-hook form. The fleet aggregate uses this to derive every agent's
+ * status without mounting one hook per card; `useAgentStatus` below runs the SAME
+ * `gather` + `deriveAgentStatus`, so the per-card and fleet-wide views never drift.
+ */
+export function agentStatusForEntry(
+  handle: string | null,
+  entry: SessionEntry | undefined,
+): AgentStatus {
+  return deriveAgentStatus({ handle, ...gather(entry) });
+}
+
+/**
  * The rich {@link AgentStatus} for a conversation (by stable id). Subscribes to
  * both stores; `useShallow` keeps the inner slice stable across unrelated changes
  * so the memoized status is referentially stable until a real signal moves.
