@@ -27,6 +27,22 @@ pub struct Assembler {
     state: SessionStatePayload,
     /// Id of the assistant message currently streaming (for delta correlation).
     current_message_id: Option<String>,
+    /// Last CONFIRMED (model-felt) control values we announced in the timeline, as
+    /// friendly labels. Distinct from `state` (which updates optimistically on a
+    /// click): a "control changed" notice fires ONLY when a confirmed source moves
+    /// one of these — the `get_settings` read-back (effort + model), the
+    /// `set_permission_mode` ack, or `system/init` (model + permission, per turn) —
+    /// never on the optimistic click. So the line always reflects what the model
+    /// actually got, and it also catches a change made from the chat (e.g. /model).
+    announced: Announced,
+}
+
+/// The last-announced friendly labels for the three controls (see [`Assembler`]).
+#[derive(Debug, Default)]
+struct Announced {
+    model: Option<String>,
+    effort: Option<String>,
+    permission: Option<String>,
 }
 
 impl Assembler {
@@ -65,9 +81,10 @@ impl Assembler {
     }
 
     /// Seed the live state with the spawn controls, so the FIRST emitted state event
-    /// already carries them (before the round-trips land). `system/init` later
-    /// refines model + permission; the `get_settings` read-back refines effort +
-    /// ultracode. Does NOT emit — the session emits its first state on a real event.
+    /// already carries them (before the round-trips land). Also seeds the announced
+    /// baseline, so the INITIAL state — and the first confirming `get_settings` /
+    /// `system/init` — never produces a spurious "control changed" notice. Does NOT
+    /// emit — the session emits its first state on a real event.
     pub fn seed_controls(
         &mut self,
         model: Option<String>,
@@ -75,31 +92,113 @@ impl Assembler {
         permission_mode: Option<String>,
         ultracode: bool,
     ) {
+        self.announced.model = model.as_deref().map(model_label);
+        self.announced.effort = effort_label(effort.as_deref(), ultracode);
+        self.announced.permission = permission_mode.as_deref().map(permission_label);
         self.state.model = model;
         self.state.effort = effort;
         self.state.permission_mode = permission_mode;
         self.state.ultracode = ultracode;
     }
 
+    /// Optimistically reflect an effort/ultracode change from a UI click: updates the
+    /// display state immediately, but does NOT announce — the timeline line waits for
+    /// the `get_settings` read-back ([`apply_settings`]), so it shows the CONFIRMED
+    /// value, never the optimistic one.
+    pub fn set_effort_optimistic(
+        &mut self,
+        effort: Option<String>,
+        ultracode: bool,
+    ) -> SessionEvent {
+        if let Some(e) = effort {
+            self.state.effort = Some(e);
+        }
+        self.state.ultracode = ultracode;
+        SessionEvent::State(self.state.clone())
+    }
+
     /// Apply a live `get_settings` read-back: the authoritative model / effort /
     /// ultracode the CLI reports. A field absent from the response (`None`) is left
-    /// untouched, so a partial reply never clobbers a known value.
+    /// untouched. Returns the state event PLUS a "control changed" notice for each
+    /// value that actually MOVED (the model-felt source of truth).
     pub fn apply_settings(
         &mut self,
         model: Option<String>,
         effort: Option<String>,
         ultracode: Option<bool>,
-    ) -> SessionEvent {
-        if let Some(m) = model {
-            self.state.model = Some(m);
+    ) -> Vec<SessionEvent> {
+        if let Some(m) = &model {
+            self.state.model = Some(m.clone());
         }
-        if let Some(e) = effort {
-            self.state.effort = Some(e);
+        if let Some(e) = &effort {
+            self.state.effort = Some(e.clone());
         }
         if let Some(u) = ultracode {
             self.state.ultracode = u;
         }
-        SessionEvent::State(self.state.clone())
+        let mut out = vec![SessionEvent::State(self.state.clone())];
+        if let Some(m) = &model {
+            self.announce_model(m, &mut out);
+        }
+        if effort.is_some() || ultracode.is_some() {
+            self.announce_effort(&mut out);
+        }
+        out
+    }
+
+    /// Apply the CONFIRMED permission mode from a `set_permission_mode` ack (it echoes
+    /// the mode the CLI actually applied, which can differ from the requested one).
+    /// Returns the state event plus a "control changed" notice if it moved.
+    pub fn confirm_permission_mode(&mut self, mode: &str) -> Vec<SessionEvent> {
+        self.state.permission_mode = Some(mode.to_string());
+        let mut out = vec![SessionEvent::State(self.state.clone())];
+        self.announce_permission(mode, &mut out);
+        out
+    }
+
+    /// Emit a "Modèle : X → Y" notice if the confirmed model moved (compared by
+    /// friendly label, so an alias vs the resolved id never false-positives and a
+    /// per-turn re-report of the same model is silent). The first sighting only
+    /// records the baseline.
+    fn announce_model(&mut self, id: &str, out: &mut Vec<SessionEvent>) {
+        let to = model_label(id);
+        match self.announced.model.clone() {
+            Some(from) if from == to => {}
+            Some(from) => {
+                out.push(change_notice("Modèle", "diamond", &from, &to));
+                self.announced.model = Some(to);
+            }
+            None => self.announced.model = Some(to),
+        }
+    }
+
+    /// Emit an "Effort de réflexion : X → Y" notice if the confirmed effort/ultracode
+    /// moved (the Ultra code tier folds in as its own label).
+    fn announce_effort(&mut self, out: &mut Vec<SessionEvent>) {
+        let Some(to) = effort_label(self.state.effort.as_deref(), self.state.ultracode) else {
+            return;
+        };
+        match self.announced.effort.clone() {
+            Some(from) if from == to => {}
+            Some(from) => {
+                out.push(change_notice("Effort de réflexion", "bolt", &from, &to));
+                self.announced.effort = Some(to);
+            }
+            None => self.announced.effort = Some(to),
+        }
+    }
+
+    /// Emit a "Mode de permission : X → Y" notice if the confirmed mode moved.
+    fn announce_permission(&mut self, mode: &str, out: &mut Vec<SessionEvent>) {
+        let to = permission_label(mode);
+        match self.announced.permission.clone() {
+            Some(from) if from == to => {}
+            Some(from) => {
+                out.push(change_notice("Mode de permission", "shield", &from, &to));
+                self.announced.permission = Some(to);
+            }
+            None => self.announced.permission = Some(to),
+        }
     }
 
     /// Mark the session as ended and return the terminal state event.
@@ -145,6 +244,15 @@ impl Assembler {
                 // but busy is driven by user-send (set_busy) + message_start /
                 // result so the composer is never wedged "busy" without a turn.
                 out.push(SessionEvent::State(self.state.clone()));
+                // `system/init` carries the authoritative model + permission each
+                // turn: announce a change made from the chat (e.g. /model) too. Same
+                // value → silent (announce_* dedupes).
+                if let Some(m) = &init.model {
+                    self.announce_model(m, out);
+                }
+                if let Some(pm) = &init.permission_mode {
+                    self.announce_permission(pm, out);
+                }
             }
             SystemMsg::Status {
                 status,
@@ -159,6 +267,9 @@ impl Assembler {
                 }
                 self.state.activity = status.clone();
                 out.push(SessionEvent::State(self.state.clone()));
+                if let Some(pm) = permission_mode {
+                    self.announce_permission(pm, out);
+                }
             }
             // Other subtypes are discarded by the protocol layer's catch-all; we
             // surface nothing for them yet.
@@ -330,6 +441,63 @@ impl Assembler {
             out.push(SessionEvent::State(self.state.clone()));
         }
     }
+}
+
+/// Build a "control changed" timeline notice (`{control} : {from} → {to}`) — the
+/// model-felt signal that a control actually moved. The front renders it as a subtle
+/// inline line (mirrors the VS Code extension's settings lines).
+fn change_notice(control: &str, icon: &str, from: &str, to: &str) -> SessionEvent {
+    SessionEvent::Item(ConversationItem::Notice {
+        subtype: "control_change".to_string(),
+        detail: serde_json::json!({ "control": control, "icon": icon, "from": from, "to": to }),
+    })
+}
+
+/// Friendly label for a model id (alias OR resolved id) — matches the composer's.
+fn model_label(id: &str) -> String {
+    let s = id.to_lowercase();
+    if s.contains("opus") {
+        "Opus 4.8".to_string()
+    } else if s.contains("sonnet") {
+        "Sonnet 4.6".to_string()
+    } else if s.contains("haiku") {
+        "Haiku 4.5".to_string()
+    } else if s.contains("fable") {
+        "Fable 5".to_string()
+    } else {
+        id.to_string()
+    }
+}
+
+/// Friendly effort label, folding the ultracode tier in. `None` when there is no
+/// known effort yet (so we never announce a phantom transition).
+fn effort_label(effort: Option<&str>, ultracode: bool) -> Option<String> {
+    if ultracode {
+        return Some("Ultra code".to_string());
+    }
+    Some(
+        match effort? {
+            "low" => "Low",
+            "medium" => "Medium",
+            "high" => "High",
+            "xhigh" => "Extra high",
+            other => return Some(other.to_string()),
+        }
+        .to_string(),
+    )
+}
+
+/// Friendly permission-mode label — matches the composer's PERM_LABEL.
+fn permission_label(mode: &str) -> String {
+    match mode {
+        "auto" => "Auto mode",
+        "default" => "Default",
+        "acceptEdits" => "Auto-accept edits",
+        "plan" => "Plan mode",
+        "bypassPermissions" | "dontAsk" => "Bypass permissions",
+        other => other,
+    }
+    .to_string()
 }
 
 /// Sum the tokens that occupy the context window from a `usage` object:
@@ -634,5 +802,79 @@ mod tests {
         // ...re-emitting the same snapshot is a no-op (no churn).
         let again = asm.ingest(&msg);
         assert!(again.is_empty(), "unchanged rate limit should emit nothing");
+    }
+
+    // ---- "control changed" announcements -----------------------------------
+
+    fn first_notice(events: Vec<SessionEvent>) -> Option<(String, Value)> {
+        events.into_iter().find_map(|e| match e {
+            SessionEvent::Item(ConversationItem::Notice { subtype, detail }) => Some((subtype, detail)),
+            _ => None,
+        })
+    }
+
+    fn seeded() -> Assembler {
+        let mut asm = Assembler::new();
+        // Spawn baseline: Opus / Extra high / Default.
+        asm.seed_controls(Some("opus".into()), Some("xhigh".into()), Some("default".into()), false);
+        asm
+    }
+
+    /// A read-back that MATCHES the seed must not announce (no notice on spawn /
+    /// resume); a real effort move must announce exactly one transition.
+    #[test]
+    fn effort_change_announces_only_a_real_move() {
+        let mut asm = seeded();
+        // The initial get_settings confirms the seed → state only, no notice.
+        let evs = asm.apply_settings(Some("claude-opus-4-8[1m]".into()), Some("xhigh".into()), Some(false));
+        assert!(first_notice(evs).is_none(), "confirming the seed must stay silent");
+        // Now a genuine change xhigh → high.
+        let (subtype, detail) = first_notice(asm.apply_settings(None, Some("high".into()), Some(false)))
+            .expect("a control_change notice");
+        assert_eq!(subtype, "control_change");
+        assert_eq!(detail["control"], serde_json::json!("Effort de réflexion"));
+        assert_eq!(detail["from"], serde_json::json!("Extra high"));
+        assert_eq!(detail["to"], serde_json::json!("High"));
+        // Re-reading the same value is silent (idempotent).
+        assert!(first_notice(asm.apply_settings(None, Some("high".into()), Some(false))).is_none());
+    }
+
+    /// Ultra code is announced as its own label, not as "Extra high".
+    #[test]
+    fn ultracode_change_announces_its_own_label() {
+        let mut asm = seeded();
+        let (_, detail) = first_notice(asm.apply_settings(None, Some("xhigh".into()), Some(true)))
+            .expect("a notice");
+        assert_eq!(detail["from"], serde_json::json!("Extra high"));
+        assert_eq!(detail["to"], serde_json::json!("Ultra code"));
+    }
+
+    /// A confirmed permission move announces; re-confirming the same mode is silent.
+    #[test]
+    fn permission_confirm_announces_then_is_idempotent() {
+        let mut asm = seeded();
+        let (_, detail) = first_notice(asm.confirm_permission_mode("plan")).expect("a notice");
+        assert_eq!(detail["control"], serde_json::json!("Mode de permission"));
+        assert_eq!(detail["from"], serde_json::json!("Default"));
+        assert_eq!(detail["to"], serde_json::json!("Plan mode"));
+        assert!(first_notice(asm.confirm_permission_mode("plan")).is_none());
+    }
+
+    /// A model change reported by `system/init` (e.g. switched via /model in chat)
+    /// is announced; the permission, unchanged from the seed, stays silent.
+    #[test]
+    fn model_change_from_system_init_is_announced() {
+        let mut asm = seeded();
+        let init: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "init",
+            "session_id": "s", "uuid": "u", "cwd": "/x",
+            "model": "claude-sonnet-4-6", "permissionMode": "default",
+            "tools": ["Bash"], "slash_commands": []
+        }))
+        .unwrap();
+        let (_, detail) = first_notice(asm.ingest(&init)).expect("a model change notice");
+        assert_eq!(detail["control"], serde_json::json!("Modèle"));
+        assert_eq!(detail["from"], serde_json::json!("Opus 4.8"));
+        assert_eq!(detail["to"], serde_json::json!("Sonnet 4.6"));
     }
 }
