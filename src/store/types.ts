@@ -157,6 +157,16 @@ export interface SessionEntry {
    * writes one. Read via `useTodos` / `useTodoSummary`.
    */
   todos: TodoItem[];
+  /**
+   * Has the user consumed (replied to / acknowledged) the LAST finished turn?
+   * The protocol only says "busy" or "not busy"; it cannot tell "just finished,
+   * go look" (→ review) apart from "already seen, dormant" (→ idle) — that
+   * distinction is about the USER, not Claude. So we track it ourselves, like an
+   * unread badge: set false when a turn finishes (`turn_result`), set true when
+   * the user sends the next message or clicks "Vu" (`markSeen`). Drives the
+   * review / need-input(open-question) states (see agent/status.ts).
+   */
+  turnSeen: boolean;
   /** Monotonic counter for generated ids (user turns, notices, turn footers). */
   seq: number;
 }

@@ -1,0 +1,16 @@
+{
+  "productName": "Tosse Code Test State",
+  "identifier": "com.tosse.desktop.teststate",
+  "app": {
+    "windows": [
+      {
+        "title": "Tosse Code Test State",
+        "width": 1200,
+        "height": 800
+      }
+    ]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}

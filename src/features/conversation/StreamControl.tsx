@@ -3,10 +3,10 @@ import {
   restartConversationSession,
   startConversationSession,
   stopConversationSession,
-  streamStatus,
   type Conversation,
 } from "../../store/conversationsStore";
-import { useSessionState } from "../../store/conversationStore";
+import { useAgentStatus } from "../../agent/useAgentStatus";
+import { agentStatusToDot } from "../../agent/status";
 import { Dot, Ico, Menu, MenuItem, WF_STATUS } from "../../ui/kit";
 
 /**
@@ -20,11 +20,10 @@ import { Dot, Ico, Menu, MenuItem, WF_STATUS } from "../../ui/kit";
  * "allumer" when off, "relancer"/"éteindre" when on.
  */
 export function StreamControl({ conv }: { conv: Conversation }) {
-  // State is keyed by the conversation's stable id; the handle (reactive via the
-  // prop) is the source of truth for on/off.
-  const state = useSessionState(conv.id);
+  // Rich status keyed by the conversation's stable id; the handle (reactive via
+  // the prop) is the source of truth for on/off, folded into the status.
+  const status = agentStatusToDot(useAgentStatus(conv.id));
   const live = conv.handle !== null;
-  const status = streamStatus(conv.handle, state);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
