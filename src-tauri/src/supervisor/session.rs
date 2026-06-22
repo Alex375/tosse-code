@@ -393,21 +393,26 @@ impl SessionCore {
             return;
         }
         match kind {
-            // The authoritative read-back: model + effort + ultracode, live.
+            // The authoritative read-back: model + effort + ultracode, live. Emits the
+            // state PLUS a "control changed" notice for whatever actually moved.
             PendingControl::GetSettings => {
                 if let Some(applied) = control::parse_get_settings_applied(&v) {
-                    let ev = self
-                        .assembler
-                        .apply_settings(applied.model, applied.effort, applied.ultracode);
-                    self.emit(ev);
+                    for ev in
+                        self.assembler
+                            .apply_settings(applied.model, applied.effort, applied.ultracode)
+                    {
+                        self.emit(ev);
+                    }
                 }
             }
             // The ack echoes the mode the CLI ACTUALLY applied (may differ from the
-            // requested one, e.g. a downgrade) — trust it over the optimistic value.
+            // requested one, e.g. a downgrade) — trust it over the optimistic value,
+            // and announce the confirmed transition.
             PendingControl::SetPermissionMode => {
                 if let Some(mode) = control::parse_set_permission_mode_ack(&v) {
-                    let ev = self.assembler.set_permission_mode(&mode);
-                    self.emit(ev);
+                    for ev in self.assembler.confirm_permission_mode(&mode) {
+                        self.emit(ev);
+                    }
                 }
             }
             // The bare success of set_model / apply_flag_settings carries no payload;
@@ -531,7 +536,9 @@ impl SessionCore {
                 self.send_tracked(PendingControl::SetEffort, |rid| {
                     control::set_effort_level_request(rid, &level)
                 });
-                let ev = self.assembler.apply_settings(None, Some(level), Some(false));
+                // Optimistic (snappy chip) WITHOUT announcing — the timeline line is
+                // emitted by the get_settings read-back below, i.e. the confirmed value.
+                let ev = self.assembler.set_effort_optimistic(Some(level), false);
                 self.emit(ev);
                 self.refresh_settings();
             }
@@ -546,7 +553,7 @@ impl SessionCore {
                 });
                 let ev = self
                     .assembler
-                    .apply_settings(None, Some("xhigh".to_string()), Some(true));
+                    .set_effort_optimistic(Some("xhigh".to_string()), true);
                 self.emit(ev);
                 self.refresh_settings();
             }

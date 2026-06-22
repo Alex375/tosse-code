@@ -70,25 +70,47 @@ function MsgError({ session, errorId }: { session: string; errorId: string }) {
   );
 }
 
-/** A control-channel rejection surfaced from the core (a `control_error` notice):
- *  a model/effort/permission change the CLI refused. Making it visible is what
- *  keeps the controls free of silent failures. Other notice subtypes stay quiet. */
+/** Control-channel notices surfaced from the core:
+ *  - `control_change`: a model/effort/permission change CONFIRMED by the CLI — a
+ *    subtle inline line (like the VS Code extension). Emitted only on the model-felt
+ *    transition (get_settings read-back / set_permission_mode ack / system/init),
+ *    never on the optimistic click, so it is reliable.
+ *  - `control_error`: a change the CLI refused — visible, never silent.
+ *  Other notice subtypes stay quiet. */
 function NoticeRow({ session, noticeId }: { session: string; noticeId: string }) {
   const notice = useNotice(session, noticeId);
-  if (!notice || notice.subtype !== "control_error") return null;
+  if (!notice) return null;
   const d = (notice.detail ?? null) as unknown as {
     control?: string;
+    icon?: string;
+    from?: string;
+    to?: string;
     message?: string;
   } | null;
-  return (
-    <div className={styles.errorBubble} role="alert">
-      <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
-      <span>
-        Réglage « {d?.control ?? "contrôle"} » refusé par Claude Code
-        {d?.message ? ` : ${d.message}` : ""}.
-      </span>
-    </div>
-  );
+
+  if (notice.subtype === "control_change") {
+    return (
+      <div className={styles.controlChange}>
+        <Ico name={d?.icon ?? "spark"} className="sm" />
+        <span>
+          {d?.control} : <b>{d?.from}</b> → <b>{d?.to}</b>
+        </span>
+      </div>
+    );
+  }
+
+  if (notice.subtype === "control_error") {
+    return (
+      <div className={styles.errorBubble} role="alert">
+        <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
+        <span>
+          Réglage « {d?.control ?? "contrôle"} » refusé par Claude Code
+          {d?.message ? ` : ${d.message}` : ""}.
+        </span>
+      </div>
+    );
+  }
+  return null;
 }
 
 function ConductorToolCard({
