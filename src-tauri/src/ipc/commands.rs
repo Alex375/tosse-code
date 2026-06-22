@@ -89,17 +89,20 @@ pub async fn spawn_session(
     let id = sessions.next_id();
     let mut cfg = SpawnConfig::new(PathBuf::from(repo_path));
     cfg.resume = resume;
-    // Product defaults when unset: Opus 4.8 + Extra (xhigh) effort + the CLI's
-    // `default` permission mode. An unknown/invalid effort falls back to xhigh (the
-    // CLI would otherwise swallow it silently). "ultracode" is NOT a spawn flag —
-    // the spawn carries effort=xhigh and the session re-enables the ultracode flag
-    // after init (see `InitialControls.ultracode`).
+    // Product defaults when unset: Opus 4.8 + Extra (xhigh) effort + Auto (`auto`)
+    // permission mode. `auto` is the binary's OWN native default (verified: spawning
+    // with no --permission-mode reports permissionMode "auto"; --permission-mode auto
+    // reports "auto"), and it matches the front-end seed `DEFAULT_PERMISSION_MODE` so
+    // a new conversation, the persisted null fallback, and the live session all agree.
+    // An unknown/invalid effort falls back to xhigh (the CLI would otherwise swallow
+    // it silently). "ultracode" is NOT a spawn flag — the spawn carries effort=xhigh
+    // and the session re-enables the ultracode flag after init (`InitialControls`).
     let effort = effort
         .filter(|e| control::is_valid_effort_level(e))
         .unwrap_or_else(|| "xhigh".into());
     cfg.model = Some(model.unwrap_or_else(|| "opus".into()));
     cfg.effort = Some(effort);
-    cfg.permission_mode = Some(permission_mode.unwrap_or_else(|| "default".into()));
+    cfg.permission_mode = Some(permission_mode.unwrap_or_else(|| "auto".into()));
     let initial = InitialControls {
         model: cfg.model.clone(),
         effort: cfg.effort.clone(),

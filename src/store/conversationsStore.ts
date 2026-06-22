@@ -31,7 +31,9 @@ export const DEFAULT_CONV_NAME = "Nouvelle conversation";
 // uses the same values as its display fallback, so UI and stream never disagree.
 export const DEFAULT_MODEL = "opus";
 export const DEFAULT_EFFORT = "xhigh";
-export const DEFAULT_PERMISSION_MODE = "default";
+// "auto" is the binary's own native default and what the live session reports;
+// keeping the seed/fallback on "auto" makes the chip show "Auto mode" by default.
+export const DEFAULT_PERMISSION_MODE = "auto";
 
 /** A working folder / repository a conversation can be opened in. */
 export interface Repo {
