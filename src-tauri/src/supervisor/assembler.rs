@@ -315,21 +315,28 @@ pub(crate) fn context_used_from_usage(usage: &Value) -> Option<u64> {
 /// (both are `claude-opus-4-8`; only the `[1m]` variant — and its `contextWindow`
 /// value — tells them apart).
 ///
-/// We match the entry whose key is (or starts with) `session_model`, since the key
-/// may carry a beta suffix (`claude-opus-4-8[1m]`). We deliberately DO NOT fall back
-/// to "some other model in the map": a turn that only ran a sub-agent (e.g. haiku
-/// 200k) must not shrink an Opus conversation's window — returning `None` there tells
-/// the caller to KEEP the last known window instead of clobbering it.
+/// We match the entry whose key is `session_model` exactly, or `session_model`
+/// followed by a bracketed beta suffix (`claude-opus-4-8[1m]`). Requiring the `[`
+/// boundary (rather than a bare prefix) keeps a short id from matching a longer
+/// sibling version — `claude-opus-4` must NOT swallow `claude-opus-4-8`. We
+/// deliberately DO NOT fall back to "some other model in the map": a turn that only
+/// ran a sub-agent (e.g. haiku 200k) must not shrink an Opus conversation's window —
+/// returning `None` there tells the caller to KEEP the last known window instead of
+/// clobbering it.
 pub(crate) fn context_window_from_model_usage(
     model_usage: &Value,
     session_model: Option<&str>,
 ) -> Option<u64> {
     let obj = model_usage.as_object()?;
     let model = session_model?;
-    // Exact key first, then prefix (to absorb a `[1m]`-style suffix).
+    // Exact key first, then `model[…]` (absorbs a `[1m]`-style beta suffix without
+    // matching a longer version id).
     obj.iter()
         .find(|(k, _)| k.as_str() == model)
-        .or_else(|| obj.iter().find(|(k, _)| k.starts_with(model)))
+        .or_else(|| {
+            obj.iter()
+                .find(|(k, _)| k.strip_prefix(model).is_some_and(|rest| rest.starts_with('[')))
+        })
         .and_then(|(_, entry)| entry.get("contextWindow"))
         .and_then(Value::as_u64)
 }
@@ -514,6 +521,13 @@ mod tests {
         // so a sub-agent-only turn can't shrink an Opus conversation).
         assert_eq!(
             context_window_from_model_usage(&model_usage, Some("claude-sonnet-4-6")),
+            None
+        );
+        // A shorter version id must NOT match a longer sibling by bare prefix: the
+        // suffix has to start with `[`, so `claude-opus-4` doesn't swallow
+        // `claude-opus-4-8[1m]`.
+        assert_eq!(
+            context_window_from_model_usage(&model_usage, Some("claude-opus-4")),
             None
         );
         assert_eq!(context_window_from_model_usage(&model_usage, None), None);

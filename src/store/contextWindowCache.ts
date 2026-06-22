@@ -38,3 +38,16 @@ export function setCachedWindow(convId: string, window: number): void {
     console.warn("contextWindowCache: failed to persist", e);
   }
 }
+
+/** Forget a conversation's cached window — call when it's deleted so the cache
+ *  doesn't accumulate orphan entries. No-op if there's nothing cached for it. */
+export function clearCachedWindow(convId: string): void {
+  const cache = read();
+  if (!(convId in cache)) return;
+  delete cache[convId];
+  try {
+    localStorage.setItem(KEY, JSON.stringify(cache));
+  } catch (e) {
+    console.warn("contextWindowCache: failed to persist", e);
+  }
+}

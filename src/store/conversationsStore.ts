@@ -22,7 +22,7 @@ import { useShallow } from "zustand/react/shallow";
 import { commands } from "../ipc/client";
 import type { ConversationRecord, RepoRecord } from "../ipc/client";
 import { useConversationStore } from "./conversationStore";
-import { getCachedWindow } from "./contextWindowCache";
+import { getCachedWindow, clearCachedWindow } from "./contextWindowCache";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
 
@@ -226,8 +226,10 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     if (conv?.handle) {
       syncToCore("stopSession", () => commands.stopSession(conv.handle!));
     }
-    // Drop its (now unreachable) message timeline from the message store.
+    // Drop its (now unreachable) message timeline from the message store, and its
+    // persisted context-window so the localStorage cache doesn't keep orphans.
     useConversationStore.getState().dropSession(id);
+    clearCachedWindow(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
