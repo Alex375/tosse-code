@@ -46,8 +46,15 @@ pub struct SpawnConfig {
     pub add_dirs: Vec<PathBuf>,
     /// Override the session model (`--model`).
     pub model: Option<String>,
-    /// Initial reasoning effort level (`--effort`, e.g. "xhigh").
+    /// Initial reasoning effort level (`--effort`, e.g. "xhigh"). The "ultracode"
+    /// tier is NOT set here (it has no spawn flag) — the session re-enables it after
+    /// init via the control channel; see [`super::session::InitialControls`].
     pub effort: Option<String>,
+    /// Initial permission mode (`--permission-mode`, e.g. "default", "plan"). `None`
+    /// lets the CLI use its own default. NOTE: `bypassPermissions` is downgraded to
+    /// `default` server-side unless `--allow-dangerously-skip-permissions` is also
+    /// passed (which we deliberately do NOT — the UI keeps bypass disabled).
+    pub permission_mode: Option<String>,
 }
 
 impl SpawnConfig {
@@ -63,6 +70,7 @@ impl SpawnConfig {
             add_dirs: Vec::new(),
             model: None,
             effort: None,
+            permission_mode: None,
         }
     }
 }
@@ -226,6 +234,9 @@ impl Transport {
         }
         if let Some(effort) = &cfg.effort {
             cmd.arg("--effort").arg(effort);
+        }
+        if let Some(mode) = &cfg.permission_mode {
+            cmd.arg("--permission-mode").arg(mode);
         }
 
         cmd.current_dir(&cfg.cwd)

@@ -8,15 +8,15 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { PermissionMode, SlashCommand } from "../../ipc/client";
-import {
-  useInterrupt,
-  useSendMessage,
-  useSetEffortLevel,
-  useSetModel,
-  useSetPermissionMode,
-} from "../../ipc/useCommands";
+import { useShallow } from "zustand/react/shallow";
+import { useInterrupt, useSendMessage } from "../../ipc/useCommands";
 import { useSessionState } from "../../store/conversationStore";
-import { useConversationsStore } from "../../store/conversationsStore";
+import {
+  DEFAULT_EFFORT,
+  DEFAULT_MODEL,
+  DEFAULT_PERMISSION_MODE,
+  useConversationsStore,
+} from "../../store/conversationsStore";
 import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
 import { ChipBtn, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
@@ -35,8 +35,6 @@ const MODEL_OPTS: [string, string, string?][] = [
   ["Sonnet 4.6", "sonnet"],
   ["Haiku 4.5", "haiku"],
 ];
-const DEFAULT_MODEL = "opus";
-const DEFAULT_EFFORT: EffortLevel = "xhigh";
 
 // Exact Claude Code permission modes (Shift+Tab selector), in the same order/labels.
 // `bypassPermissions` is disabled: the server downgrades it to `default` unless the
@@ -68,6 +66,18 @@ const PERM_TONE: Record<string, string> = {
 };
 // Modes the user can cycle through with Shift+Tab (bypass is disabled — see PERM_OPTS).
 const PERM_CYCLE = PERM_OPTS.filter(([, , disabled]) => !disabled).map(([, value]) => value);
+
+/** Map any model id (a UI alias OR the resolved id `claude-opus-4-8[1m]`) to its
+ *  picker alias, so the menu can highlight the live model even when the core
+ *  reports a long resolved id. */
+function modelFamily(id?: string | null): string | null {
+  if (!id) return null;
+  const s = id.toLowerCase();
+  if (s.includes("opus")) return "opus";
+  if (s.includes("sonnet")) return "sonnet";
+  if (s.includes("haiku")) return "haiku";
+  return null;
+}
 
 /** Pretty label for the session's current model id (matches a MODEL_OPTS label). */
 function modelLabel(id?: string | null): string {
@@ -105,12 +115,27 @@ export const ConductorComposer = forwardRef<
   const state = useSessionState(session);
   const send = useSendMessage(session);
   const interrupt = useInterrupt(session);
-  const setMode = useSetPermissionMode(session);
-  const setModel = useSetModel(session);
-  const setEffortLevel = useSetEffortLevel(session);
   const [text, setText] = useState("");
-  const [model, setModelLocal] = useState(DEFAULT_MODEL);
-  const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
+  // The controls are NOT component-local state (that would reset on every
+  // conversation switch and lie about the stream). DISPLAY source of truth, in
+  // order: the LIVE session state while running, else this conversation's persisted
+  // record, else the product default. The live session's get_settings/system/init
+  // keep the live values honest; the persisted record carries them across (re)spawns.
+  const ctl = useConversationsStore(
+    useShallow((s) => {
+      const c = s.conversations.find((cv) => cv.id === session);
+      return {
+        model: c?.model ?? null,
+        effort: c?.effort ?? null,
+        ultracode: c?.ultracode ?? false,
+        permissionMode: c?.permissionMode ?? null,
+      };
+    }),
+  );
+  const modelId = state?.model ?? ctl.model ?? DEFAULT_MODEL;
+  const effortLevel = (state?.effort ?? ctl.effort ?? DEFAULT_EFFORT) as EffortLevel;
+  const ultracodeOn = state?.ultracode ?? ctl.ultracode;
+  const gaugeValue: EffortLevel = ultracodeOn ? "ultracode" : effortLevel;
   // "Start this conversation in a fresh worktree" toggle — only meaningful on the
   // FIRST message (before the session spawns); it disappears once spawned.
   const [useWorktree, setUseWorktree] = useState(false);
@@ -184,10 +209,13 @@ export const ConductorComposer = forwardRef<
   };
 
   const busy = state?.busy ?? false;
-  // The generated contract types permission_mode loosely as string; the core only
-  // ever emits valid modes, so narrow it back to PermissionMode for the helpers below.
-  const permMode = (state?.permission_mode ?? "auto") as PermissionMode;
-  const permLabel = PERM_LABEL[permMode] ?? "Auto mode";
+  // Permission DISPLAY source of truth, in order: live state, persisted record,
+  // product default. The generated contract types permission_mode loosely as
+  // string; narrow it back to PermissionMode for the helpers below.
+  const permMode = (state?.permission_mode ??
+    ctl.permissionMode ??
+    DEFAULT_PERMISSION_MODE) as PermissionMode;
+  const permLabel = PERM_LABEL[permMode] ?? PERM_LABEL[DEFAULT_PERMISSION_MODE];
 
   // Context ring: real fill from the last model call's input usage over the model's
   // context window (both surfaced by the core in SessionStatePayload). Until the first
@@ -213,26 +241,33 @@ export const ConductorComposer = forwardRef<
       }
     : null;
 
+  // Every control routes through the conversations store: it persists the choice
+  // (so a pre-spawn pick survives and is applied at spawn) AND pushes it to the live
+  // stream when running. The live get_settings read-back then confirms reality.
+  const choosePerm = (mode: PermissionMode) =>
+    useConversationsStore.getState().setConvPermission(session, mode);
+
   // Shift+Tab cycles the permission mode, like the Claude Code terminal.
   const cyclePermMode = () => {
     const idx = PERM_CYCLE.indexOf(permMode);
-    setMode.mutate(PERM_CYCLE[(idx + 1) % PERM_CYCLE.length]);
+    choosePerm(PERM_CYCLE[(idx + 1) % PERM_CYCLE.length]);
+  };
+
+  const applyEffort = (lvl: EffortLevel) => {
+    const store = useConversationsStore.getState();
+    // "Ultra code" is not an effort value — it's xhigh + a separate flag.
+    if (lvl === "ultracode") store.setConvUltracode(session);
+    else store.setConvEffort(session, lvl);
   };
 
   const chooseModel = (value: string) => {
-    setModelLocal(value);
-    setModel.mutate(value);
-    // Some models drop the current effort (e.g. xhigh / Ultra code on Sonnet).
-    const clamped = clampEffort(effort, value);
-    if (clamped !== effort) {
-      setEffort(clamped);
-      setEffortLevel.mutate(clamped);
-    }
+    useConversationsStore.getState().setConvModel(session, value);
+    // Some models drop the current effort (e.g. xhigh / Ultra code on Sonnet) —
+    // clamp the gauge value to what the new model supports and apply it.
+    const clamped = clampEffort(gaugeValue, value);
+    if (clamped !== gaugeValue) applyEffort(clamped);
   };
-  const chooseEffort = (lvl: EffortLevel) => {
-    setEffort(lvl);
-    setEffortLevel.mutate(lvl);
-  };
+  const chooseEffort = (lvl: EffortLevel) => applyEffort(lvl);
 
   const autoGrow = () => {
     const ta = taRef.current;
@@ -390,17 +425,24 @@ export const ConductorComposer = forwardRef<
       </div>
 
       <div className="cv-comp-foot">
-        {/* Model picker — wired to set_model. */}
-        <Menu up trigger={<ChipBtn icon="diamond">{modelLabel(model)}</ChipBtn>}>
+        {/* Model picker — reads the LIVE model (resolved id mapped to its alias),
+            falls back to the persisted/default; wired to set_model + persistence. */}
+        <Menu up trigger={<ChipBtn icon="diamond">{modelLabel(modelId)}</ChipBtn>}>
           <MenuLabel>Modèle</MenuLabel>
           {MODEL_OPTS.map(([label, value, hint]) => (
-            <MenuItem key={value} on={model === value} hint={hint} onClick={() => chooseModel(value)}>
+            <MenuItem
+              key={value}
+              on={modelFamily(modelId) === value}
+              hint={hint}
+              onClick={() => chooseModel(value)}
+            >
               {label}
             </MenuItem>
           ))}
         </Menu>
-        {/* Effort gauge — per-model levels; wired to apply_flag_settings{effortLevel}. */}
-        <EffortGauge model={model} value={effort} onChange={chooseEffort} />
+        {/* Effort gauge — reads the LIVE effort/ultracode (get_settings read-back),
+            per-model levels; wired to apply_flag_settings + persistence. */}
+        <EffortGauge model={modelId} value={gaugeValue} onChange={chooseEffort} />
         <span className="cv-foot-sep" />
         {/* Permissions IS wired (set_permission_mode). Shift+Tab cycles modes (see onKeyDown).
             Opens upward — the composer sits at the bottom. Colour-coded per mode. */}
@@ -418,7 +460,7 @@ export const ConductorComposer = forwardRef<
               key={value}
               on={permMode === value}
               disabled={disabled}
-              onClick={disabled ? undefined : () => setMode.mutate(value)}
+              onClick={disabled ? undefined : () => choosePerm(value)}
             >
               <span className="cv-perm-dot" style={{ background: PERM_TONE[value] }} />
               {label}
@@ -433,6 +475,7 @@ export const ConductorComposer = forwardRef<
             type="button"
             role="checkbox"
             aria-checked={useWorktree}
+            className="cv-wt-toggle"
             onClick={() => setUseWorktree((v) => !v)}
             title="Démarrer cette conversation dans un nouveau worktree git"
             style={{
@@ -468,7 +511,7 @@ export const ConductorComposer = forwardRef<
               {useWorktree ? "✓" : ""}
             </span>
             <Ico name="branch" className="sm" />
-            Worktree
+            <span className="cv-wt-label">Worktree</span>
           </button>
         ) : null}
         <ContextRing

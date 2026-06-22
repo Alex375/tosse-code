@@ -4,6 +4,7 @@ import { OpenInTerminalButton } from "./features/conversation/OpenInTerminalButt
 import { StreamControl } from "./features/conversation/StreamControl";
 import { WorktreeIndicator } from "./features/git/WorktreeIndicator";
 import { WorktreeManager } from "./features/git/WorktreeManager";
+import { EditorToggle } from "./features/editor/EditorToggle";
 import { FleetPlaceholder } from "./features/fleet/FleetPlaceholder";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
@@ -61,6 +62,7 @@ export default function App() {
           <>
             {active ? <WorktreeIndicator conv={active} repoPath={activeRepo.path} /> : null}
             {active ? <StreamControl key={active.id} conv={active} /> : null}
+            {active ? <EditorToggle /> : null}
             {active ? <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} /> : null}
             <Tag icon="folder" title={activeRepo.path}>
               {repoName(activeRepo.path)}

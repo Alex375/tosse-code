@@ -154,7 +154,7 @@
 .cv-meta-grid span:first-child { font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--wf-tx-xlo); }
 .cv-meta-grid span:last-child { font-size:12px; }
 
-.cv-composer { position:relative; padding:12px 18px 14px; border-top:1px solid var(--wf-line); background:var(--wf-bg-2); }
+.cv-composer { position:relative; padding:12px 18px 14px; border-top:1px solid var(--wf-line); background:var(--wf-bg-2); container:composer / inline-size; }
 .cv-input { display:flex; align-items:center; gap:8px; padding:9px 10px; background:var(--wf-panel); border:1px solid var(--wf-line-2); border-radius:10px; }
 
 /* ---- menu d'autocomplétion des slash commands (popover au-dessus du composer) ---- */
@@ -177,6 +177,19 @@
 .cv-send { width:30px; height:30px; flex:0 0 auto; border:0; border-radius:8px; background:var(--wf-accent); color:#1a0f0a; display:inline-flex; align-items:center; justify-content:center; cursor:default; }
 .cv-comp-foot { display:flex; align-items:center; gap:3px; padding:9px 0 0; font-size:11px; color:var(--wf-tx-lo); }
 .cv-foot-sep { width:1px; height:16px; background:var(--wf-line); margin:0 5px; }
+.cv-wt-toggle { white-space:nowrap; }
+
+/* Responsive footer: when the conversation column is narrow (e.g. split view with
+   a wide editor), collapse the chips to icon-only — the menus still open and show
+   the current state, the bottom bar just stops getting crushed. */
+@container composer (max-width: 500px) {
+  .cv-comp-foot .wf-chip-t,
+  .cv-comp-foot .wf-chip-chev,
+  .cv-comp-foot .cv-wt-label { display:none; }
+  .cv-comp-foot .wf-chip { padding:5px; gap:0; }
+  .cv-comp-foot .cv-wt-toggle { padding:5px; gap:0; }
+  .cv-comp-foot .cv-foot-sep { margin:0 3px; }
+}
 
 .cv-ctx-h { display:flex; align-items:center; justify-content:space-between; padding:13px 14px; border-bottom:1px solid var(--wf-line); }
 .cv-ctx-top { padding:13px 14px; border-bottom:1px solid var(--wf-line); }

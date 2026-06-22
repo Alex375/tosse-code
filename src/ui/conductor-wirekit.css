@@ -187,6 +187,10 @@
 .wf-icon-btn:disabled {
   opacity: .38; cursor: default; color: var(--wf-tx-lo);
 }
+/* Active/toggled state (e.g. the editor panel is open). */
+.wf-icon-btn[data-on] {
+  background: var(--wf-accent-dim); border-color: var(--wf-accent); color: var(--wf-tx-hi);
+}
 
 .wf-ico { width: 15px; height: 15px; display: inline-block; flex: 0 0 auto; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .wf-ico.sm { width: 13px; height: 13px; }

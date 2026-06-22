@@ -29,6 +29,8 @@ const baseState: SessionStatePayload = {
   cwd: null,
   model: MODEL,
   permission_mode: "auto",
+  effort: "xhigh",
+  ultracode: false,
   activity: null,
   awaiting_permission: false,
   ended: false,

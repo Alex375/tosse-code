@@ -1,3 +1,4 @@
+pub mod fs;
 pub mod git;
 mod ipc;
 pub mod store;
@@ -6,13 +7,15 @@ pub mod supervisor;
 use ipc::commands::{
     answer_permission, create_worktree, delete_conversation, delete_repo, fetch_slash_commands,
     interrupt_session, list_worktrees, load_persisted_state, load_session_context,
-    load_session_history, open_in_terminal, path_exists, ping, remove_worktree,
-    request_user_attention, send_message, set_active_conversation, set_effort_level, set_model,
-    set_permission_mode, spawn_session, stop_session, upsert_conversation, upsert_repo,
-    wipe_all_data, worktree_status, Sessions,
+    load_session_history, open_in_terminal, path_exists, ping, read_dir, read_file,
+    remove_worktree, request_user_attention, send_message, set_active_conversation,
+    set_effort_level, set_model, set_permission_mode, set_ultracode, spawn_session, stop_session,
+    unwatch_dir, upsert_conversation, upsert_repo, watch_dir, wipe_all_data, worktree_status,
+    write_file, Sessions,
 };
 use ipc::events::{
-    SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent, SessionStateEvent, TickEvent,
+    FsChangeEvent, SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent,
+    SessionStateEvent, TickEvent,
 };
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
@@ -31,6 +34,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             set_permission_mode,
             set_model,
             set_effort_level,
+            set_ultracode,
             interrupt_session,
             stop_session,
             open_in_terminal,
@@ -40,6 +44,11 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             create_worktree,
             remove_worktree,
             path_exists,
+            read_dir,
+            read_file,
+            write_file,
+            watch_dir,
+            unwatch_dir,
             load_persisted_state,
             upsert_repo,
             delete_repo,
@@ -54,6 +63,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionMessageEvent,
             SessionPermissionEvent,
             SessionCommandsEvent,
+            FsChangeEvent,
         ])
 }
 
@@ -197,11 +207,48 @@ pub fn run() {
         .invoke_handler(specta_builder.invoke_handler())
         // The live session registry, reachable from every command.
         .manage(Sessions::new())
+        // The editor's single active filesystem watch (live file/tree refresh).
+        .manage(fs::FsWatcher::new())
         .setup(move |app| {
             use tauri::Manager;
 
             // Mount the Specta events on this app instance (REQUIRED for events).
             specta_builder.mount_events(app);
+
+            // macOS menu: rebuild the standard menu but WITHOUT "Close Window"
+            // (Cmd+W). The default menu binds Cmd+W to closing the window, which on
+            // this single-window app quits it — and a native menu accelerator fires
+            // before the webview, so the editor's "close the active tab" Cmd+W could
+            // never win. Dropping the item frees Cmd+W for the editor (and prevents
+            // an accidental quit); Quit (Cmd+Q), Edit (copy/paste/undo…) and Minimize
+            // stay intact.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{MenuBuilder, SubmenuBuilder};
+                let app_menu = SubmenuBuilder::new(app, "Tosse Code")
+                    .hide()
+                    .hide_others()
+                    .show_all()
+                    .separator()
+                    .quit()
+                    .build()?;
+                let edit_menu = SubmenuBuilder::new(app, "Edit")
+                    .undo()
+                    .redo()
+                    .separator()
+                    .cut()
+                    .copy()
+                    .paste()
+                    .select_all()
+                    .build()?;
+                let window_menu = SubmenuBuilder::new(app, "Window")
+                    .minimize()
+                    .build()?;
+                let menu = MenuBuilder::new(app)
+                    .items(&[&app_menu, &edit_menu, &window_menu])
+                    .build()?;
+                app.set_menu(menu)?;
+            }
 
             // Open the persistence store in the app data dir (created if absent).
             // The store is the single owner of SQLite; the rest of the core and

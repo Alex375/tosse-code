@@ -33,6 +33,11 @@ serde_json = "1"
 # path, so we skip sqlx's async machinery (see `store/db.rs`).
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# Filesystem watching for the editor panel: live-refresh open files / the file
+# tree when the agent (or anything) writes under the conversation's working dir.
+# macOS FSEvents under the hood — one cheap recursive watch (see `fs/mod.rs`).
+notify = "6"
+
 # Async runtime for the supervisor: spawn `claude`, pipe stdio, drive tasks.
 # Tauri 2 already runs on tokio; we depend on it directly for the features we use.
 tokio = { version = "1", features = [

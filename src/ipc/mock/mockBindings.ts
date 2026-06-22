@@ -6,6 +6,9 @@ import type {
   ContextFill,
   ConversationItem,
   ConversationRecord,
+  FileContent,
+  FsChangeEvent,
+  FsEntry,
   PermissionDecision,
   PermissionMode,
   PersistedState,
@@ -75,6 +78,9 @@ const sessionPermissionEvent = new MockEmitter<SessionPermissionEvent>();
 const sessionStateEvent = new MockEmitter<SessionStateEvent>();
 const sessionCommandsEvent = new MockEmitter<SessionCommandsEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
+// No real filesystem in the browser mock — this never fires, but must exist so
+// the editor's `useFsWatch` can subscribe without crashing.
+const fsChangeEvent = new MockEmitter<FsChangeEvent>();
 
 export const mockEvents = {
   sessionMessageEvent,
@@ -82,6 +88,7 @@ export const mockEvents = {
   sessionStateEvent,
   sessionCommandsEvent,
   tickEvent,
+  fsChangeEvent,
 };
 
 // ---- Per-session scenario wiring -------------------------------------------
@@ -129,14 +136,27 @@ export const mockCommands = {
   async spawnSession(
     _repoPath: string,
     _resume: string | null,
+    model: string | null,
+    effort: string | null,
+    permissionMode: string | null,
+    ultracode: boolean,
   ): Promise<Result<string, string>> {
     // Unique id per spawn so multiple browser conversations don't collide.
     const session = `mock-session-${++mockCounter}`;
     const rec = getRecord(session);
     // Emit the initial idle state + the slash-command catalogue once listeners
     // have had a tick to subscribe (mirrors the core's initialize handshake).
+    // Seed the controls from the spawn args (mirrors the real core's seeding +
+    // get_settings read-back), so the indicator reflects the spawned state.
     setTimeout(() => {
-      rec.lastState = idleState();
+      const base = idleState();
+      rec.lastState = {
+        ...base,
+        model: model ?? base.model,
+        effort: effort ?? base.effort,
+        ultracode,
+        permission_mode: permissionMode ?? base.permission_mode,
+      };
       sessionStateEvent.emit({ session, state: rec.lastState });
       sessionCommandsEvent.emit({ session, commands: MOCK_COMMANDS });
     }, 30);
@@ -181,10 +201,22 @@ export const mockCommands = {
   },
 
   async setEffortLevel(
-    _session: string,
-    _level: string,
+    session: string,
+    level: string,
   ): Promise<Result<null, string>> {
-    // No server-side effort state; the UI owns the selected level locally.
+    // Mirror the real core's read-back: a plain level clears ultracode, then the
+    // state reflects the applied effort.
+    const rec = getRecord(session);
+    rec.lastState = { ...rec.lastState, effort: level, ultracode: false };
+    sessionStateEvent.emit({ session, state: rec.lastState });
+    return ok(null);
+  },
+
+  async setUltracode(session: string): Promise<Result<null, string>> {
+    // Ultra code = xhigh effort + the separate flag (read-back equivalent).
+    const rec = getRecord(session);
+    rec.lastState = { ...rec.lastState, effort: "xhigh", ultracode: true };
+    sessionStateEvent.emit({ session, state: rec.lastState });
     return ok(null);
   },
 
@@ -298,7 +330,63 @@ export const mockCommands = {
     // spawn flow runs (the deleted-worktree recovery is exercised in the real app).
     return true;
   },
+
+  // ---- Editor filesystem: a tiny synthetic tree so the editor panel renders in
+  // the browser/dev build (the real fs is only reachable in the Tauri app).
+  // Sentinels `__fail__` (error Result) and `__throw__` (thrown rejection, like a
+  // real transport Error) let the unit tests exercise the editor's error paths.
+  async readDir(path: string): Promise<Result<FsEntry[], string>> {
+    if (path.includes("__throw__")) throw new Error("mock readDir transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock readDir failed" };
+    return ok(mockDir(path));
+  },
+
+  async readFile(path: string): Promise<Result<FileContent, string>> {
+    if (path.includes("__throw__")) throw new Error("mock readFile transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock readFile failed" };
+    return ok(mockFile(path));
+  },
+
+  async writeFile(_path: string, _content: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async watchDir(_path: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async unwatchDir(): Promise<Result<null, string>> {
+    return ok(null);
+  },
 };
+
+/** A two-level synthetic directory listing for the browser/dev editor. */
+function mockDir(path: string): FsEntry[] {
+  const base = path.replace(/\/+$/, "");
+  if (base.endsWith("/src")) {
+    return [
+      { name: "App.tsx", path: `${base}/App.tsx`, is_dir: false },
+      { name: "main.tsx", path: `${base}/main.tsx`, is_dir: false },
+    ];
+  }
+  return [
+    { name: "src", path: `${base}/src`, is_dir: true },
+    { name: "README.md", path: `${base}/README.md`, is_dir: false },
+    { name: "package.json", path: `${base}/package.json`, is_dir: false },
+  ];
+}
+
+/** Synthetic file content for the browser/dev editor. */
+function mockFile(path: string): FileContent {
+  const name = path.split("/").pop() ?? path;
+  let content = `// ${name}\n// (mock file — browser/dev build, no real filesystem)\n`;
+  if (name.endsWith(".md")) {
+    content = `# ${name}\n\nMock markdown for the dev build.\n\n- one\n- two\n`;
+  } else if (name.endsWith(".json")) {
+    content = `{\n  "name": "mock",\n  "version": "0.0.0"\n}\n`;
+  }
+  return { path, content, too_large: false, binary: false, size: content.length };
+}
 
 // Per-repo worktree set, seeded lazily with just the main worktree (== repoPath).
 const mockWorktrees = new Map<string, WorktreeInfo[]>();

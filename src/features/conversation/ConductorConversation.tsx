@@ -8,6 +8,11 @@ import {
   loadConversationHistory,
   type Conversation,
 } from "../../store/conversationsStore";
+import { useSessionState } from "../../store/conversationStore";
+import { effectiveCwd } from "../git/worktree";
+import { EditorPanel } from "../editor/EditorPanel";
+import { Splitter } from "../editor/Splitter";
+import { clamp, useEditorLayout, useEditorStore } from "../editor/editorStore";
 import { TodoBar } from "../todos/TodoBar";
 import { ConductorComposer, type ComposerHandle } from "./ConductorComposer";
 import { ConductorSidebar } from "./ConductorSidebar";
@@ -53,12 +58,8 @@ export function ConductorConversation({ active }: { active: Conversation | null 
     <>
       <ConductorSidebar />
       {active ? (
-        // Keyed by the STABLE id so the pane (thread + composer + its stick-to-bottom
-        // state) remounts per conversation and survives the live handle being
-        // (re)bound underneath it.
-        <ConversationPane
-          key={active.id}
-          session={active.id}
+        <MainArea
+          conv={active}
           composerRef={composerRef}
           onBackgroundClick={focusComposerOnClick}
         />
@@ -82,6 +83,91 @@ export function ConductorConversation({ active }: { active: Conversation | null 
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * The area to the right of the conversations sidebar: the conversation column
+ * and, when the editor panel is open, a resizable editor beside it (side-by-side)
+ * or below it (stacked). The split is dragged via the divider; its fraction and
+ * orientation are remembered globally (editor store). The editor is rooted at the
+ * conversation's LIVE working directory (follows EnterWorktree/ExitWorktree).
+ */
+function MainArea({
+  conv,
+  composerRef,
+  onBackgroundClick,
+}: {
+  conv: Conversation;
+  composerRef: RefObject<ComposerHandle>;
+  onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
+}) {
+  const { open, orientation, editorFraction } = useEditorLayout();
+  const setEditorFraction = useEditorStore((s) => s.setEditorFraction);
+  const liveState = useSessionState(conv.id);
+  const cwd = effectiveCwd(conv, liveState);
+  const areaRef = useRef<HTMLDivElement>(null);
+  const sideBySide = orientation === "row";
+
+  const onSplitDrag = (clientX: number, clientY: number) => {
+    const rect = areaRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    // Fraction the EDITOR occupies = remaining space past the pointer.
+    const frac = sideBySide
+      ? 1 - (clientX - rect.left) / rect.width
+      : 1 - (clientY - rect.top) / rect.height;
+    setEditorFraction(clamp(frac, 0.15, 0.85));
+  };
+
+  return (
+    <div
+      ref={areaRef}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: sideBySide ? "row" : "column",
+      }}
+    >
+      <div
+        style={{
+          // Grow-ratio split (not a rigid basis) so both panes honour their
+          // min-size: the conversation never gets crushed below a usable width.
+          // When the editor is CLOSED the grow factor must be 1 (not 1-fraction):
+          // a single flex child whose grow factors sum to < 1 only fills that
+          // fraction of the row, leaving the rest blank. So full width on close.
+          flex: `${open ? 1 - editorFraction : 1} 1 0`,
+          minWidth: sideBySide ? 320 : 0,
+          minHeight: sideBySide ? 0 : 200,
+          display: "flex",
+        }}
+      >
+        {/* Keyed by the STABLE id so the pane (thread + composer + its
+            stick-to-bottom state) remounts per conversation. */}
+        <ConversationPane
+          key={conv.id}
+          session={conv.id}
+          composerRef={composerRef}
+          onBackgroundClick={onBackgroundClick}
+        />
+      </div>
+      {open ? (
+        <>
+          <Splitter axis={sideBySide ? "x" : "y"} onMove={onSplitDrag} />
+          <div
+            style={{
+              flex: `${editorFraction} 1 0`,
+              minWidth: sideBySide ? 280 : 0,
+              minHeight: sideBySide ? 0 : 160,
+              display: "flex",
+            }}
+          >
+            <EditorPanel convId={conv.id} cwd={cwd} stacked={!sideBySide} />
+          </div>
+        </>
+      ) : null}
+    </div>
   );
 }
 

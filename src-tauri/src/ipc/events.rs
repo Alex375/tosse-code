@@ -43,6 +43,15 @@ pub struct SessionCommandsEvent {
     pub commands: Vec<SlashCommand>,
 }
 
+/// Coalesced filesystem change notification for the editor panel: the (de-noised,
+/// debounced) set of paths that changed under the watched working directory. The
+/// UI reloads any open file in this set and refreshes any expanded tree dirs it
+/// touches. Not session-keyed: there is a single active watch (the shown cwd).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct FsChangeEvent {
+    pub paths: Vec<String>,
+}
+
 /// Bridges a session's [`SessionEmitter`] sink onto the Tauri event bus: each
 /// session event becomes the matching tauri-specta event on the `AppHandle`.
 pub struct TauriEmitter {
