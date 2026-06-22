@@ -3,6 +3,7 @@ import { StreamMarkdown } from "../conversation/StreamMarkdown";
 import { Ico } from "../../ui/kit";
 import { EditorErrorBoundary } from "./EditorErrorBoundary";
 import { baseName, fileBadge, isMarkdownPath } from "./language";
+import { fileIconUrl, useFileIcons } from "./fileIcons";
 import { useConvEditor, useEditorStore, type FileBuffer } from "./editorStore";
 import styles from "./editor.module.css";
 
@@ -17,6 +18,7 @@ export function EditorPane({ convId }: { convId: string }) {
   const pinTab = useEditorStore((s) => s.pinTab);
   const toggleTree = useEditorStore((s) => s.toggleTree);
   const treeCollapsed = useEditorStore((s) => s.treeCollapsed);
+  const iconMap = useFileIcons();
 
   if (!conv) return null;
   const active = conv.activeTab ? conv.buffers[conv.activeTab] ?? null : null;
@@ -38,6 +40,7 @@ export function EditorPane({ convId }: { convId: string }) {
           const b = conv.buffers[p];
           const on = conv.activeTab === p;
           const preview = conv.previewTab === p;
+          const iconUrl = iconMap ? fileIconUrl(iconMap, p) : null;
           const badge = fileBadge(p);
           return (
             <div
@@ -51,9 +54,13 @@ export function EditorPane({ convId }: { convId: string }) {
               onDoubleClick={() => pinTab(convId, p)}
               title={p}
             >
-              <span className={styles.tabBadge} style={{ color: badge.color }}>
-                {badge.label}
-              </span>
+              {iconUrl ? (
+                <img src={iconUrl} className={styles.entryIcon} alt="" draggable={false} />
+              ) : (
+                <span className={styles.tabBadge} style={{ color: badge.color }}>
+                  {badge.label}
+                </span>
+              )}
               <span className={styles.tabName}>{b?.name ?? baseName(p)}</span>
               {b?.dirty ? <span className={styles.tabDirty}>•</span> : null}
               <button

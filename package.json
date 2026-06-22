@@ -12,7 +12,8 @@
     "tauri:build": "tauri build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "bump": "node scripts/bump-version.mjs"
+    "bump": "node scripts/bump-version.mjs",
+    "gen:file-icons": "node scripts/gen-file-icons.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.0",

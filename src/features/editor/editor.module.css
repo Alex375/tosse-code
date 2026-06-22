@@ -115,6 +115,14 @@
   align-items: center;
   color: var(--wf-tx-lo);
 }
+/* Real Material file/folder icon (SVG <img>). */
+.entryIcon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: block;
+  object-fit: contain;
+}
 .dirIcon {
   color: var(--wf-wait);
 }

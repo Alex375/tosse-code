@@ -4,10 +4,33 @@ import type { FsEntry } from "../../ipc/client";
 import { Ico } from "../../ui/kit";
 import { baseName } from "./language";
 import { useEditorStore } from "./editorStore";
+import {
+  fileIconUrl,
+  folderIconUrl,
+  useFileIconStore,
+  useFileIcons,
+  type IconMap,
+} from "./fileIcons";
 import styles from "./editor.module.css";
 
 /** Indentation per tree depth, px. */
 const INDENT = 12;
+
+/** Real Material icon for a tree entry, with a generic-glyph fallback while the
+ *  icon map is still loading (or for a name it doesn't cover). */
+function EntryIcon({ entry, isOpen, iconMap }: { entry: FsEntry; isOpen: boolean; iconMap: IconMap | null }) {
+  const url = iconMap
+    ? entry.is_dir
+      ? folderIconUrl(iconMap, entry.path, isOpen)
+      : fileIconUrl(iconMap, entry.path)
+    : null;
+  if (url) return <img src={url} className={styles.entryIcon} alt="" draggable={false} />;
+  return (
+    <span className={styles.rowIcon + " " + (entry.is_dir ? styles.dirIcon : "")}>
+      <Ico name={entry.is_dir ? "folder" : "file"} className="sm" />
+    </span>
+  );
+}
 
 /**
  * The file tree for a conversation, rooted at its working directory. Lazily
@@ -34,6 +57,11 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
   const openFile = useEditorStore((s) => s.openFile);
   const setTreeCollapsed = useEditorStore((s) => s.setTreeCollapsed);
 
+  // Material file/folder icons (loaded once, lazily, from public/file-icons).
+  const iconMap = useFileIcons();
+  const loadIcons = useFileIconStore((s) => s.load);
+  useEffect(() => loadIcons(), [loadIcons]);
+
   // Load + expand the root the first time it's shown (or after a root move). The
   // `!dirErrors[root]` guard is essential: without it, a failing read (deleted
   // cwd, permissions) would re-fire this effect forever (read → fail → re-render
@@ -45,11 +73,16 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
   }, [convId, root, dirs, loadingDirs, dirErrors, toggleDir]);
 
   const rootEntries = dirs[root];
+  const rootIcon = iconMap ? folderIconUrl(iconMap, root, true) : null;
 
   return (
     <div className={styles.tree} style={{ width, flex: `0 0 ${width}px` }}>
       <div className={styles.treeHead} title={root}>
-        <Ico name="folder" className="sm" />
+        {rootIcon ? (
+          <img src={rootIcon} className={styles.entryIcon} alt="" draggable={false} />
+        ) : (
+          <Ico name="folder" className="sm" />
+        )}
         <span className={styles.rowName} style={{ flex: 1, minWidth: 0 }}>
           {baseName(root)}
         </span>
@@ -87,6 +120,7 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
               loadingDirs={loadingDirs}
               dirErrors={dirErrors}
               activeTab={activeTab}
+              iconMap={iconMap}
               onToggleDir={(p) => void toggleDir(convId, p)}
               onOpenFile={(p) => void openFile(convId, p, { preview: true })}
               onPinFile={(p) => void openFile(convId, p, { preview: false })}
@@ -110,6 +144,7 @@ interface NodeProps {
   loadingDirs: Record<string, boolean>;
   dirErrors: Record<string, string>;
   activeTab: string | null;
+  iconMap: IconMap | null;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onPinFile: (path: string) => void;
@@ -123,6 +158,7 @@ function TreeNode({
   loadingDirs,
   dirErrors,
   activeTab,
+  iconMap,
   onToggleDir,
   onOpenFile,
   onPinFile,
@@ -149,9 +185,7 @@ function TreeNode({
         ) : (
           <span className={styles.twisty} />
         )}
-        <span className={styles.rowIcon + " " + (entry.is_dir ? styles.dirIcon : "")}>
-          <Ico name={entry.is_dir ? "folder" : "file"} className="sm" />
-        </span>
+        <EntryIcon entry={entry} isOpen={isOpen} iconMap={iconMap} />
         <span className={styles.rowName}>{entry.name}</span>
       </button>
       {err ? (
@@ -180,6 +214,7 @@ function TreeNode({
               loadingDirs={loadingDirs}
               dirErrors={dirErrors}
               activeTab={activeTab}
+              iconMap={iconMap}
               onToggleDir={onToggleDir}
               onOpenFile={onOpenFile}
               onPinFile={onPinFile}
