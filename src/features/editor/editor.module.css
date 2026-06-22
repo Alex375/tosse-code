@@ -1,0 +1,395 @@
+/* Lightweight editor panel. Uses the global theme tokens (--wf-*) so it sits
+   seamlessly next to the conversation view. */
+
+.panel {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wf-bg);
+  border-left: 1px solid var(--wf-line);
+  overflow: hidden;
+}
+/* In stacked (column) layout the divider is on top, not the left. */
+.panelStacked {
+  border-left: 0;
+  border-top: 1px solid var(--wf-line);
+}
+
+/* ---- File tree ---- */
+.tree {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 0;
+  background: var(--wf-bg-2);
+  border-right: 1px solid var(--wf-line);
+  overflow: auto;
+}
+.treeHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  flex: 0 0 30px;
+  padding: 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--wf-tx-xlo);
+  border-bottom: 1px solid var(--wf-line);
+  position: sticky;
+  top: 0;
+  background: var(--wf-bg-2);
+  z-index: 1;
+}
+.treeClose {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wf-tx-lo);
+  cursor: pointer;
+}
+.treeClose:hover {
+  background: var(--wf-panel-3);
+  color: var(--wf-tx-hi);
+}
+.treeBody {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 12px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--wf-tx);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  padding: 3px 8px 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 5px;
+}
+.row:hover {
+  background: var(--wf-panel-2);
+}
+.rowActive {
+  background: var(--wf-panel-3);
+  color: var(--wf-tx-hi);
+}
+.rowName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.twisty {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wf-tx-lo);
+  transition: transform 0.12s ease;
+  /* Collapsed (closed) folder → chevron points right. The base glyph points down. */
+  transform: rotate(-90deg);
+}
+.twistyOpen {
+  /* Expanded folder → chevron points down. */
+  transform: rotate(0deg);
+}
+.rowIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--wf-tx-lo);
+}
+.dirIcon {
+  color: var(--wf-wait);
+}
+.treeEmpty,
+.treeLoading {
+  padding: 14px 12px;
+  color: var(--wf-tx-lo);
+  font-size: 12px;
+}
+.treeError {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  color: var(--wf-err);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.treeRetry {
+  margin-left: 4px;
+  border: 1px solid var(--wf-line-2);
+  background: var(--wf-panel-2);
+  color: var(--wf-tx-hi);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.treeRetry:hover {
+  background: var(--wf-panel-3);
+}
+
+/* ---- Editor side (tabs + content) ---- */
+.editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.tabs {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  flex: 0 0 40px;
+  background: var(--wf-bg-2);
+  border-bottom: 1px solid var(--wf-line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Hide the scrollbar entirely so the tab height stays constant whether the
+     tabs overflow (scrollbar present) or not. Still scrollable via trackpad/shift-wheel. */
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+/* Toggle the file tree from the tab strip (leftmost), so it's reachable even when
+   the tree is hidden (focus-on-files mode). */
+.treeToggle {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-right: 1px solid var(--wf-line);
+  background: transparent;
+  color: var(--wf-tx-lo);
+  cursor: pointer;
+}
+.treeToggle:hover {
+  background: var(--wf-panel);
+  color: var(--wf-tx);
+}
+.treeToggle[data-on] {
+  color: var(--wf-tx-hi);
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 12px;
+  max-width: 230px;
+  border: 0;
+  border-right: 1px solid var(--wf-line);
+  background: transparent;
+  color: var(--wf-tx-lo);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.tab:hover {
+  background: var(--wf-panel);
+  color: var(--wf-tx);
+}
+.tabActive {
+  background: var(--wf-bg);
+  color: var(--wf-tx-hi);
+  box-shadow: inset 0 -2px 0 var(--wf-accent);
+}
+/* Preview (temporary) tab — italic, à la VS Code. A double-click or an edit pins it. */
+.tabPreview .tabName {
+  font-style: italic;
+}
+/* Language badge (open tabs only): short uppercase tag in the language's colour. */
+.tabBadge {
+  flex: 0 0 auto;
+  font-family: var(--wf-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1;
+}
+.tabName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tabDirty {
+  color: var(--wf-att);
+  font-size: 16px;
+  line-height: 0;
+}
+.tabClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wf-tx-lo);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.tabClose:hover {
+  background: var(--wf-panel-3);
+  color: var(--wf-tx-hi);
+}
+
+.content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.monacoHost {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--wf-tx-lo);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Markdown rendered preview reuses the conversation markdown styles; this just
+   gives it scrolling + comfortable padding. */
+.mdPreview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 22px;
+}
+
+/* ---- "Modified on disk" banner ---- */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--wf-att);
+  background: var(--wf-att-bg);
+  border-bottom: 1px solid var(--wf-line);
+}
+.bannerMsg {
+  flex: 1;
+}
+.bannerBtn {
+  border: 1px solid var(--wf-line-2);
+  background: var(--wf-panel-2);
+  color: var(--wf-tx-hi);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.bannerBtn:hover {
+  background: var(--wf-panel-3);
+}
+
+/* ---- Toolbar (preview toggle, save state) ---- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--wf-tx-lo);
+  background: var(--wf-bg-2);
+  border-bottom: 1px solid var(--wf-line);
+}
+.toolbarSpace {
+  flex: 1;
+}
+.toolBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--wf-tx-lo);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.toolBtn:hover {
+  background: var(--wf-panel-2);
+  color: var(--wf-tx);
+}
+.toolBtnOn {
+  background: var(--wf-panel-3);
+  color: var(--wf-tx-hi);
+  border-color: var(--wf-line-2);
+}
+
+/* ---- Splitters ---- */
+.splitterX {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+}
+.splitterY {
+  flex: 0 0 6px;
+  cursor: row-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+}
+.splitterX::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: var(--wf-line);
+  transition: background 0.12s ease;
+}
+.splitterY::after {
+  content: "";
+  position: absolute;
+  inset: 2px 0;
+  background: var(--wf-line);
+  transition: background 0.12s ease;
+}
+.splitterX:hover::after,
+.splitterY:hover::after {
+  background: var(--wf-accent);
+}

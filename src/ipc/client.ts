@@ -8,6 +8,9 @@ export { commands, events, isTauri } from "./provider";
 export type {
   ConversationItem,
   ConversationRecord,
+  FileContent,
+  FsChangeEvent,
+  FsEntry,
   JsonValue,
   NormalizedBlock,
   PermissionDecision,

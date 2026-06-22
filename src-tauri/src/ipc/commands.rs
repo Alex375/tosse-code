@@ -449,6 +449,66 @@ pub fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+// ---- Editor filesystem ----------------------------------------------------
+//
+// The front's single boundary to the editor's filesystem service. They forward
+// to [`crate::fs`] (the only service that reads/writes files for the editor) and
+// run the blocking IO off the async runtime via `spawn_blocking`. The tree is
+// read one level at a time (lazy expansion), so even a huge repo only ever reads
+// what the user actually opens.
+
+/// List one directory level (dirs first, then files, alpha) for the file tree.
+#[tauri::command]
+#[specta::specta]
+pub async fn read_dir(path: String) -> Result<Vec<crate::fs::FsEntry>, String> {
+    tokio::task::spawn_blocking(move || crate::fs::read_dir(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Read a file into the editor (guards binary / oversize — see `fs::read_file`).
+#[tauri::command]
+#[specta::specta]
+pub async fn read_file(path: String) -> Result<crate::fs::FileContent, String> {
+    tokio::task::spawn_blocking(move || crate::fs::read_file(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Write the editor buffer back to disk (save).
+#[tauri::command]
+#[specta::specta]
+pub async fn write_file(path: String, content: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::write_file(&path, &content))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Start (or replace) the live watch on `path` — the editor's current working
+/// directory. Changes under it arrive as a debounced `FsChangeEvent`.
+#[tauri::command]
+#[specta::specta]
+pub fn watch_dir(
+    app: tauri::AppHandle,
+    watcher: tauri::State<'_, crate::fs::FsWatcher>,
+    path: String,
+) -> Result<(), String> {
+    watcher
+        .watch(app, PathBuf::from(path))
+        .map_err(|e| e.to_string())
+}
+
+/// Stop the live filesystem watch (editor panel closed / no conversation shown).
+#[tauri::command]
+#[specta::specta]
+pub fn unwatch_dir(watcher: tauri::State<'_, crate::fs::FsWatcher>) -> Result<(), String> {
+    watcher.unwatch();
+    Ok(())
+}
+
 // ---- Persistence (conversation metadata) ----------------------------------
 //
 // These commands are the front's single boundary to the store. They forward to

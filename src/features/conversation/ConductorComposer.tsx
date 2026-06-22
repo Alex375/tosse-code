@@ -433,6 +433,7 @@ export const ConductorComposer = forwardRef<
             type="button"
             role="checkbox"
             aria-checked={useWorktree}
+            className="cv-wt-toggle"
             onClick={() => setUseWorktree((v) => !v)}
             title="Démarrer cette conversation dans un nouveau worktree git"
             style={{
@@ -468,7 +469,7 @@ export const ConductorComposer = forwardRef<
               {useWorktree ? "✓" : ""}
             </span>
             <Ico name="branch" className="sm" />
-            Worktree
+            <span className="cv-wt-label">Worktree</span>
           </button>
         ) : null}
         <ContextRing

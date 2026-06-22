@@ -237,6 +237,62 @@ async pathExists(path: string) : Promise<boolean> {
     return await TAURI_INVOKE("path_exists", { path });
 },
 /**
+ * List one directory level (dirs first, then files, alpha) for the file tree.
+ */
+async readDir(path: string) : Promise<Result<FsEntry[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_dir", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Read a file into the editor (guards binary / oversize — see `fs::read_file`).
+ */
+async readFile(path: string) : Promise<Result<FileContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_file", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Write the editor buffer back to disk (save).
+ */
+async writeFile(path: string, content: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("write_file", { path, content }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start (or replace) the live watch on `path` — the editor's current working
+ * directory. Changes under it arrive as a debounced `FsChangeEvent`.
+ */
+async watchDir(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("watch_dir", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Stop the live filesystem watch (editor panel closed / no conversation shown).
+ */
+async unwatchDir() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("unwatch_dir") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Load the persisted repos + conversations + active selection (UI hydration at boot).
  */
 async loadPersistedState() : Promise<Result<PersistedState, string>> {
@@ -320,12 +376,14 @@ async wipeAllData() : Promise<Result<null, string>> {
 
 
 export const events = __makeEvents__<{
+fsChangeEvent: FsChangeEvent,
 sessionCommandsEvent: SessionCommandsEvent,
 sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionStateEvent: SessionStateEvent,
 tickEvent: TickEvent
 }>({
+fsChangeEvent: "fs-change-event",
 sessionCommandsEvent: "session-commands-event",
 sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
@@ -421,6 +479,24 @@ last_activity_at: number;
  * Claude's own session UUID (from system/init) — used for `--resume`.
  */
 session_id: string | null }
+/**
+ * A file's contents plus the guards the editor needs: `too_large` (skipped, over
+ * [`MAX_FILE_BYTES`]) and `binary` (a NUL byte was found — not shown as text).
+ * In both guard cases `content` is empty.
+ */
+export type FileContent = { path: string; content: string; too_large: boolean; binary: boolean; size: number }
+/**
+ * Coalesced filesystem change notification for the editor panel: the (de-noised,
+ * debounced) set of paths that changed under the watched working directory. The
+ * UI reloads any open file in this set and refreshes any expanded tree dirs it
+ * touches. Not session-keyed: there is a single active watch (the shown cwd).
+ */
+export type FsChangeEvent = { paths: string[] }
+/**
+ * One immediate child of a listed directory. The tree expands lazily (a click
+ * reads exactly one level), so a huge repo never reads more than what is shown.
+ */
+export type FsEntry = { name: string; path: string; is_dir: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
 /**
  * One authoritative content block of an assistant message.
