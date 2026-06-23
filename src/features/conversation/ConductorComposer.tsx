@@ -18,6 +18,7 @@ import {
   useConversationsStore,
 } from "../../store/conversationsStore";
 import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
+import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts";
 import { ChipBtn, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { useContextData } from "../../store/contextData";
 import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
@@ -103,7 +104,12 @@ export const ConductorComposer = forwardRef<
   const state = useSessionState(session);
   const send = useSendMessage(session);
   const interrupt = useInterrupt(session);
-  const [text, setText] = useState("");
+  // The unsent draft is NOT component-local state: the conversation pane is keyed by
+  // conv.id and remounts on every switch, which would wipe a useState("") and lose
+  // what the user was typing. It lives in a per-conversation, localStorage-persisted
+  // store instead — so switching away and back keeps the text, and it survives a quit.
+  const text = useComposerDraft(session);
+  const setText = (v: string) => useComposerDrafts.getState().setDraft(session, v);
   // The controls are NOT component-local state (that would reset on every
   // conversation switch and lie about the stream). DISPLAY source of truth, in
   // order: the LIVE session state while running, else this conversation's persisted
@@ -257,6 +263,14 @@ export const ConductorComposer = forwardRef<
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   };
+
+  // A restored draft can be multi-line; the textarea defaults to one row, so size it
+  // to the content on mount (and whenever we switch to another conversation's draft)
+  // rather than leaving it scrolled. autoGrow() reads taRef, set by render time.
+  useEffect(() => {
+    autoGrow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
 
   const sendText = (raw: string) => {
     const t = raw.trim();

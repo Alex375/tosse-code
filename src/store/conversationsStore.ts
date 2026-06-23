@@ -25,6 +25,7 @@ import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
+import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useMemo } from "react";
 
@@ -314,6 +315,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       if (c.repoId === repo.id) {
         disposeTerminal(c.id);
         clearTodoBarOpen(c.id);
+        clearComposerDraft(c.id);
       }
     }
     set((s) => {
@@ -362,6 +364,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     useConversationStore.getState().dropSession(id);
     clearCachedWindow(id);
     clearTodoBarOpen(id);
+    clearComposerDraft(id);
     autoTitlePending.delete(id);
     titleContext.delete(id);
     titleGenCount.delete(id);
@@ -919,6 +922,7 @@ export async function wipeAllData(): Promise<void> {
   historyLoaded.clear();
   clearAllCachedWindows();
   clearAllTodoBarOpen();
+  clearAllComposerDrafts();
   autoTitlePending.clear();
   titleContext.clear();
   titleGenCount.clear();
