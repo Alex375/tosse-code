@@ -3,10 +3,11 @@ pub mod git;
 mod ipc;
 pub mod store;
 pub mod supervisor;
+pub mod usage;
 
 use ipc::commands::{
     answer_permission, create_worktree, delete_conversation, delete_repo, fetch_slash_commands,
-    interrupt_session, list_worktrees, load_persisted_state, load_session_context,
+    get_plan_usage, interrupt_session, list_worktrees, load_persisted_state, load_session_context,
     load_session_history, load_subagent_transcript, load_workflow_run, open_in_terminal,
     path_exists, ping, read_dir, read_file, read_task_output, remove_worktree,
     request_user_attention, send_message, set_active_conversation, set_effort_level, set_model,
@@ -33,6 +34,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             load_subagent_transcript,
             load_workflow_run,
             read_task_output,
+            get_plan_usage,
             send_message,
             answer_permission,
             set_permission_mode,

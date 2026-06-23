@@ -12,6 +12,7 @@ import type {
   PermissionDecision,
   PermissionMode,
   PersistedState,
+  PlanUsage,
   Pong,
   RepoRecord,
   Result,
@@ -22,6 +23,7 @@ import type {
   SessionStateEvent,
   SlashCommand,
   TickEvent,
+  UsageError,
   WorktreeInfo,
   WorktreeStatus,
 } from "../bindings";
@@ -250,6 +252,22 @@ export const mockCommands = {
     // No transcript in the browser mock; the scenario's baseState already carries a
     // context fill, so nothing to seed here.
     return ok({ context_tokens: null, context_window: null });
+  },
+
+  async getPlanUsage(): Promise<Result<PlanUsage, UsageError>> {
+    // No real OAuth endpoint in the browser; return plausible fills so the Forfait
+    // section of the context popover renders in dev/Playwright. Reset ~2h / ~3d out,
+    // as ISO 8601 strings (matching the live endpoint shape).
+    const iso = (offsetSec: number) => new Date(Date.now() + offsetSec * 1000).toISOString();
+    // Build the ok-arm directly: `ok()` fixes the error type to string, but this
+    // command's Result error is UsageError. The mock never takes the error path.
+    return {
+      status: "ok",
+      data: {
+        five_hour: { used_percentage: 42, resets_at: iso(2 * 3600) },
+        seven_day: { used_percentage: 67, resets_at: iso(3 * 86400) },
+      },
+    };
   },
 
   // ---- Persistence: in-memory only (no real db in the browser). The store

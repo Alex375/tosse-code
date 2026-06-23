@@ -13,6 +13,7 @@ use crate::supervisor::control::{self, PermissionDecision, PermissionMode};
 use crate::supervisor::model::{ContextFill, ConversationItem, SlashCommand, WorkflowRun};
 use crate::supervisor::session::{self, InitialControls, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
+use crate::usage::{PlanUsage, UsageError};
 
 /// Typed return value of `ping`. Proves React -> Rust (typed command).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -248,6 +249,19 @@ pub async fn read_task_output(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Fetch the real subscription usage percentages (5h + weekly windows). The stream
+/// only carries a coarse rate-limit status, so this replicates the CLI's internal
+/// `GET /api/oauth/usage` (OAuth token read from `~/.claude/.credentials.json` then
+/// the macOS Keychain). Read-only — never refreshes/writes the token. Account-global
+/// (not per-session); on error the UI degrades to the coarse `rate_limit` status. The
+/// endpoint is itself rate-limited, so the caller throttles (poll + on-open + manual).
+/// Errors are typed ([`UsageError`]) so the UI can show a tailored next step.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_plan_usage() -> Result<PlanUsage, UsageError> {
+    crate::usage::fetch_plan_usage().await
 }
 
 /// Send a user turn to a session.

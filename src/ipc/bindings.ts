@@ -111,6 +111,23 @@ async readTaskOutput(sessionId: string, taskId: string) : Promise<Result<string 
 }
 },
 /**
+ * Fetch the real subscription usage percentages (5h + weekly windows). The stream
+ * only carries a coarse rate-limit status, so this replicates the CLI's internal
+ * `GET /api/oauth/usage` (OAuth token read from `~/.claude/.credentials.json` then
+ * the macOS Keychain). Read-only — never refreshes/writes the token. Account-global
+ * (not per-session); on error the UI degrades to the coarse `rate_limit` status. The
+ * endpoint is itself rate-limited, so the caller throttles (poll + on-open + manual).
+ * Errors are typed ([`UsageError`]) so the UI can show a tailored next step.
+ */
+async getPlanUsage() : Promise<Result<PlanUsage, UsageError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_plan_usage") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Send a user turn to a session.
  */
 async sendMessage(session: string, text: string) : Promise<Result<null, string>> {
@@ -727,6 +744,11 @@ export type PersistedState = { repos: RepoRecord[]; conversations: ConversationR
  */
 active_id: string | null }
 /**
+ * Real plan-usage snapshot: the two subscription windows, each with a fill %.
+ * A window is `None` when the endpoint did not report it.
+ */
+export type PlanUsage = { five_hour: UsageWindow | null; seven_day: UsageWindow | null }
+/**
  * Typed return value of `ping`. Proves React -> Rust (typed command).
  */
 export type Pong = { ok: boolean; echo: string; at_ms: number }
@@ -876,6 +898,46 @@ argument_hint: string }
  * Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
  */
 export type TickEvent = { seq: number; message: string }
+/**
+ * Why fetching the real usage % failed, typed so the UI can give a tailored next
+ * step instead of a dead-end "unavailable". Tagged on `kind` → a clean TS union.
+ */
+export type UsageError = 
+/**
+ * No token in the file nor the Keychain (user never logged in via the CLI).
+ */
+{ kind: "no_token" } | 
+/**
+ * The Keychain refused access (unsigned app not in the item ACL, or cancelled).
+ */
+{ kind: "keychain_denied"; detail: string } | 
+/**
+ * Endpoint rejected the token (HTTP 401/403): expired or revoked.
+ */
+{ kind: "unauthorized"; status: number } | 
+/**
+ * The usage endpoint is itself rate-limited (HTTP 429). `retry_after` = seconds
+ * from the `Retry-After` header when present. Do NOT hammer it — back off.
+ */
+{ kind: "rate_limited"; retry_after: number | null } | 
+/**
+ * Any other non-success HTTP status from the endpoint (carries status + body).
+ */
+{ kind: "http"; status: number; body: string } | 
+/**
+ * Network-level failure (DNS, TLS, timeout, offline).
+ */
+{ kind: "network"; detail: string } | 
+/**
+ * Response received but unparseable into the expected shape (carries body).
+ */
+{ kind: "parse"; body: string }
+/**
+ * One rate-limit window's real fill: `used_percentage` (0–100) + optional reset as a
+ * raw timestamp string (ISO 8601, or epoch-seconds digits for the alternate shape) —
+ * the frontend converts it with the JS `Date` parser.
+ */
+export type UsageWindow = { used_percentage: number; resets_at: string | null }
 /**
  * One phase of a workflow run, from a `workflows/wf_<id>.json` manifest.
  */

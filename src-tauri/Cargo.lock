@@ -4567,7 +4567,9 @@ version = "0.7.0"
 dependencies = [
  "libc",
  "notify",
+ "reqwest",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "specta",
