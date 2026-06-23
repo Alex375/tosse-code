@@ -622,6 +622,61 @@ pub fn unwatch_dir(watcher: tauri::State<'_, crate::fs::FsWatcher>) -> Result<()
     Ok(())
 }
 
+// ---- Integrated terminal (PTY) --------------------------------------------
+//
+// The front's boundary to `terminal::Terminals` (the single PTY-speaking service).
+// One terminal per conversation; output/exit come back as Tauri events.
+
+/// Open (or replace) the integrated terminal `id`: spawn the user's login shell
+/// under a PTY rooted at `cwd`, sized `cols`×`rows`. Output streams as
+/// `TerminalOutputEvent`; the shell exiting fires `TerminalExitEvent`.
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_open(
+    app: tauri::AppHandle,
+    terminals: tauri::State<'_, crate::terminal::Terminals>,
+    id: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    terminals.open(app, id, cwd, cols, rows)
+}
+
+/// Feed keystrokes / pasted text to a terminal's shell.
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_write(
+    terminals: tauri::State<'_, crate::terminal::Terminals>,
+    id: String,
+    data: String,
+) -> Result<(), String> {
+    terminals.write(&id, &data)
+}
+
+/// Report a terminal's new grid size (xterm fitted to the panel).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_resize(
+    terminals: tauri::State<'_, crate::terminal::Terminals>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    terminals.resize(&id, cols, rows)
+}
+
+/// Kill a terminal's shell and forget it.
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_close(
+    terminals: tauri::State<'_, crate::terminal::Terminals>,
+    id: String,
+) -> Result<(), String> {
+    terminals.close(&id);
+    Ok(())
+}
+
 // ---- Persistence (conversation metadata) ----------------------------------
 //
 // These commands are the front's single boundary to the store. They forward to

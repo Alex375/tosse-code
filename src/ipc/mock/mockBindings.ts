@@ -22,6 +22,8 @@ import type {
   SessionStatePayload,
   SessionStateEvent,
   SlashCommand,
+  TerminalExitEvent,
+  TerminalOutputEvent,
   TickEvent,
   UsageError,
   WorktreeInfo,
@@ -83,6 +85,10 @@ const tickEvent = new MockEmitter<TickEvent>();
 // No real filesystem in the browser mock — this never fires, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
 const fsChangeEvent = new MockEmitter<FsChangeEvent>();
+// No real PTY in the browser mock — these never fire, but must exist so the
+// integrated terminal can subscribe without crashing.
+const terminalOutputEvent = new MockEmitter<TerminalOutputEvent>();
+const terminalExitEvent = new MockEmitter<TerminalExitEvent>();
 
 export const mockEvents = {
   sessionMessageEvent,
@@ -91,6 +97,8 @@ export const mockEvents = {
   sessionCommandsEvent,
   tickEvent,
   fsChangeEvent,
+  terminalOutputEvent,
+  terminalExitEvent,
 };
 
 // ---- Per-session scenario wiring -------------------------------------------
@@ -374,6 +382,30 @@ export const mockCommands = {
   },
 
   async unwatchDir(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  // ---- Integrated terminal: no real PTY in the browser mock. The commands are
+  // no-ops so the terminal panel mounts without crashing (it just shows an empty
+  // shell — output/exit events never fire here).
+  async terminalOpen(
+    _id: string,
+    _cwd: string,
+    _cols: number,
+    _rows: number,
+  ): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async terminalWrite(_id: string, _data: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async terminalResize(_id: string, _cols: number, _rows: number): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async terminalClose(_id: string): Promise<Result<null, string>> {
     return ok(null);
   },
 };

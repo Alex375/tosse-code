@@ -365,6 +365,52 @@ async unwatchDir() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Open (or replace) the integrated terminal `id`: spawn the user's login shell
+ * under a PTY rooted at `cwd`, sized `cols`×`rows`. Output streams as
+ * `TerminalOutputEvent`; the shell exiting fires `TerminalExitEvent`.
+ */
+async terminalOpen(id: string, cwd: string, cols: number, rows: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_open", { id, cwd, cols, rows }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Feed keystrokes / pasted text to a terminal's shell.
+ */
+async terminalWrite(id: string, data: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_write", { id, data }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Report a terminal's new grid size (xterm fitted to the panel).
+ */
+async terminalResize(id: string, cols: number, rows: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_resize", { id, cols, rows }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Kill a terminal's shell and forget it.
+ */
+async terminalClose(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_close", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Load the persisted repos + conversations + active selection (UI hydration at boot).
  */
 async loadPersistedState() : Promise<Result<PersistedState, string>> {
@@ -454,6 +500,8 @@ sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionStateEvent: SessionStateEvent,
 sessionTaskEvent: SessionTaskEvent,
+terminalExitEvent: TerminalExitEvent,
+terminalOutputEvent: TerminalOutputEvent,
 tickEvent: TickEvent
 }>({
 fsChangeEvent: "fs-change-event",
@@ -462,6 +510,8 @@ sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionStateEvent: "session-state-event",
 sessionTaskEvent: "session-task-event",
+terminalExitEvent: "terminal-exit-event",
+terminalOutputEvent: "terminal-output-event",
 tickEvent: "tick-event"
 })
 
@@ -894,6 +944,18 @@ description: string;
  * Hint for the command's arguments (e.g. `"<task_id>"`), empty when none.
  */
 argument_hint: string }
+/**
+ * An integrated terminal's shell exited (EOF on the PTY). One-shot, keyed by id;
+ * the front marks that terminal done and offers to restart it on re-open.
+ */
+export type TerminalExitEvent = { id: string }
+/**
+ * A chunk of output from an integrated terminal's PTY, base64-encoded. Base64
+ * (not a `number[]` or a per-chunk lossy string) keeps the byte stream exact and
+ * compact — xterm's own decoder reassembles UTF-8 sequences split across chunks.
+ * Keyed by the terminal `id` so the front routes it to the right xterm instance.
+ */
+export type TerminalOutputEvent = { id: string; data: string }
 /**
  * Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
  */

@@ -10,9 +10,9 @@ import {
 } from "../../store/conversationsStore";
 import { useSessionState } from "../../store/conversationStore";
 import { effectiveCwd } from "../git/worktree";
-import { EditorPanel } from "../editor/EditorPanel";
 import { Splitter } from "../editor/Splitter";
 import { clamp, useEditorLayout, useEditorStore } from "../editor/editorStore";
+import { SidePanel } from "./SidePanel";
 import { TodoBar } from "../todos/TodoBar";
 import { ConductorComposer, type ComposerHandle } from "./ConductorComposer";
 import { ConductorSidebar } from "./ConductorSidebar";
@@ -88,10 +88,11 @@ export function ConductorConversation({ active }: { active: Conversation | null 
 
 /**
  * The area to the right of the conversations sidebar: the conversation column
- * and, when the editor panel is open, a resizable editor beside it (side-by-side)
- * or below it (stacked). The split is dragged via the divider; its fraction and
- * orientation are remembered globally (editor store). The editor is rooted at the
- * conversation's LIVE working directory (follows EnterWorktree/ExitWorktree).
+ * and, when the editor and/or the integrated terminal is open, a resizable side
+ * region beside it (side-by-side) or below it (stacked). The split is dragged via
+ * the divider; its fraction and orientation are remembered globally (editor
+ * store). The side region is rooted at the conversation's LIVE working directory
+ * (follows EnterWorktree/ExitWorktree).
  */
 function MainArea({
   conv,
@@ -102,17 +103,19 @@ function MainArea({
   composerRef: RefObject<ComposerHandle>;
   onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
-  const { open, orientation, editorFraction } = useEditorLayout();
+  const { open, terminalOpen, orientation, editorFraction } = useEditorLayout();
   const setEditorFraction = useEditorStore((s) => s.setEditorFraction);
   const liveState = useSessionState(conv.id);
   const cwd = effectiveCwd(conv, liveState);
   const areaRef = useRef<HTMLDivElement>(null);
   const sideBySide = orientation === "row";
+  // The side region shows when EITHER the editor or the terminal is open.
+  const sideOpen = open || terminalOpen;
 
   const onSplitDrag = (clientX: number, clientY: number) => {
     const rect = areaRef.current?.getBoundingClientRect();
     if (!rect) return;
-    // Fraction the EDITOR occupies = remaining space past the pointer.
+    // Fraction the SIDE REGION occupies = remaining space past the pointer.
     const frac = sideBySide
       ? 1 - (clientX - rect.left) / rect.width
       : 1 - (clientY - rect.top) / rect.height;
@@ -134,10 +137,11 @@ function MainArea({
         style={{
           // Grow-ratio split (not a rigid basis) so both panes honour their
           // min-size: the conversation never gets crushed below a usable width.
-          // When the editor is CLOSED the grow factor must be 1 (not 1-fraction):
-          // a single flex child whose grow factors sum to < 1 only fills that
-          // fraction of the row, leaving the rest blank. So full width on close.
-          flex: `${open ? 1 - editorFraction : 1} 1 0`,
+          // When the side region is CLOSED the grow factor must be 1 (not
+          // 1-fraction): a single flex child whose grow factors sum to < 1 only
+          // fills that fraction of the row, leaving the rest blank. So full width
+          // on close.
+          flex: `${sideOpen ? 1 - editorFraction : 1} 1 0`,
           minWidth: sideBySide ? 320 : 0,
           minHeight: sideBySide ? 0 : 200,
           display: "flex",
@@ -152,7 +156,7 @@ function MainArea({
           onBackgroundClick={onBackgroundClick}
         />
       </div>
-      {open ? (
+      {sideOpen ? (
         <>
           <Splitter axis={sideBySide ? "x" : "y"} onMove={onSplitDrag} />
           <div
@@ -163,7 +167,7 @@ function MainArea({
               display: "flex",
             }}
           >
-            <EditorPanel convId={conv.id} cwd={cwd} stacked={!sideBySide} />
+            <SidePanel convId={conv.id} cwd={cwd} sideBySide={sideBySide} />
           </div>
         </>
       ) : null}
