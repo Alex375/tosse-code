@@ -24,6 +24,7 @@ import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/clie
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
+import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useMemo } from "react";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
@@ -306,6 +307,11 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
   removeRepo: (path) => {
     const repo = get().repos.find((r) => r.path === path);
     if (!repo) return;
+    // Kill the integrated terminal of every conversation under this repo (the rows
+    // are about to be cascade-deleted) so no PTY shell is orphaned.
+    for (const c of get().conversations) {
+      if (c.repoId === repo.id) disposeTerminal(c.id);
+    }
     set((s) => {
       const conversations = s.conversations.filter((c) => c.repoId !== repo.id);
       return {
@@ -355,6 +361,9 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     titleContext.delete(id);
     titleGenCount.delete(id);
     lastAppliedSeq.delete(id);
+    // Kill its integrated terminal (PTY shell + xterm instance) too — same no-orphan
+    // policy as the claude session above. No-op if it never opened a terminal.
+    disposeTerminal(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
@@ -899,6 +908,8 @@ export async function wipeAllData(): Promise<void> {
       .filter((c): c is Conversation & { handle: string } => c.handle !== null)
       .map((c) => commands.stopSession(c.handle)),
   );
+  // Kill every integrated terminal (PTY shells + xterm instances) before clearing.
+  disposeAllTerminals();
   await commands.wipeAllData();
   historyLoaded.clear();
   clearAllCachedWindows();

@@ -9,6 +9,7 @@ import type {
   FileContent,
   FsChangeEvent,
   FsEntry,
+  ImageContent,
   PermissionDecision,
   PermissionMode,
   PersistedState,
@@ -23,6 +24,8 @@ import type {
   SessionStateEvent,
   SessionTitleEvent,
   SlashCommand,
+  TerminalExitEvent,
+  TerminalOutputEvent,
   TickEvent,
   UsageError,
   WorktreeInfo,
@@ -85,6 +88,10 @@ const tickEvent = new MockEmitter<TickEvent>();
 // No real filesystem in the browser mock — this never fires, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
 const fsChangeEvent = new MockEmitter<FsChangeEvent>();
+// No real PTY in the browser mock — these never fire, but must exist so the
+// integrated terminal can subscribe without crashing.
+const terminalOutputEvent = new MockEmitter<TerminalOutputEvent>();
+const terminalExitEvent = new MockEmitter<TerminalExitEvent>();
 
 export const mockEvents = {
   sessionMessageEvent,
@@ -94,6 +101,8 @@ export const mockEvents = {
   sessionTitleEvent,
   tickEvent,
   fsChangeEvent,
+  terminalOutputEvent,
+  terminalExitEvent,
 };
 
 // ---- Per-session scenario wiring -------------------------------------------
@@ -384,6 +393,16 @@ export const mockCommands = {
     return ok(mockFile(path));
   },
 
+  async readImage(path: string): Promise<Result<ImageContent, string>> {
+    if (path.includes("__throw__")) throw new Error("mock readImage transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock readImage failed" };
+    // A 1×1 transparent PNG — enough for the dev/browser build to exercise the
+    // image viewer path without a real filesystem.
+    const data_base64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    return ok({ path, data_base64, too_large: false, size: 70 });
+  },
+
   async writeFile(_path: string, _content: string): Promise<Result<null, string>> {
     return ok(null);
   },
@@ -393,6 +412,30 @@ export const mockCommands = {
   },
 
   async unwatchDir(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  // ---- Integrated terminal: no real PTY in the browser mock. The commands are
+  // no-ops so the terminal panel mounts without crashing (it just shows an empty
+  // shell — output/exit events never fire here).
+  async terminalOpen(
+    _id: string,
+    _cwd: string,
+    _cols: number,
+    _rows: number,
+  ): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async terminalWrite(_id: string, _data: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async terminalResize(_id: string, _cols: number, _rows: number): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  async terminalClose(_id: string): Promise<Result<null, string>> {
     return ok(null);
   },
 };

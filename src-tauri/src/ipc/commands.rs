@@ -612,6 +612,17 @@ pub async fn read_file(path: String) -> Result<crate::fs::FileContent, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Read an image file for the viewer, base64-encoded (see `fs::read_image`). The
+/// front renders it as a `data:` URL instead of routing the file to Monaco.
+#[tauri::command]
+#[specta::specta]
+pub async fn read_image(path: String) -> Result<crate::fs::ImageContent, String> {
+    tokio::task::spawn_blocking(move || crate::fs::read_image(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 /// Write the editor buffer back to disk (save).
 #[tauri::command]
 #[specta::specta]
@@ -641,6 +652,61 @@ pub fn watch_dir(
 #[specta::specta]
 pub fn unwatch_dir(watcher: tauri::State<'_, crate::fs::FsWatcher>) -> Result<(), String> {
     watcher.unwatch();
+    Ok(())
+}
+
+// ---- Integrated terminal (PTY) --------------------------------------------
+//
+// The front's boundary to `terminal::Terminals` (the single PTY-speaking service).
+// One terminal per conversation; output/exit come back as Tauri events.
+
+/// Open (or replace) the integrated terminal `id`: spawn the user's login shell
+/// under a PTY rooted at `cwd`, sized `cols`×`rows`. Output streams as
+/// `TerminalOutputEvent`; the shell exiting fires `TerminalExitEvent`.
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_open(
+    app: tauri::AppHandle,
+    terminals: tauri::State<'_, crate::terminal::Terminals>,
+    id: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    terminals.open(app, id, cwd, cols, rows)
+}
+
+/// Feed keystrokes / pasted text to a terminal's shell.
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_write(
+    terminals: tauri::State<'_, crate::terminal::Terminals>,
+    id: String,
+    data: String,
+) -> Result<(), String> {
+    terminals.write(&id, &data)
+}
+
+/// Report a terminal's new grid size (xterm fitted to the panel).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_resize(
+    terminals: tauri::State<'_, crate::terminal::Terminals>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    terminals.resize(&id, cols, rows)
+}
+
+/// Kill a terminal's shell and forget it.
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_close(
+    terminals: tauri::State<'_, crate::terminal::Terminals>,
+    id: String,
+) -> Result<(), String> {
+    terminals.close(&id);
     Ok(())
 }
 

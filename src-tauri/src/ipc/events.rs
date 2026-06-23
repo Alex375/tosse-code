@@ -75,6 +75,23 @@ pub struct FsChangeEvent {
     pub paths: Vec<String>,
 }
 
+/// A chunk of output from an integrated terminal's PTY, base64-encoded. Base64
+/// (not a `number[]` or a per-chunk lossy string) keeps the byte stream exact and
+/// compact — xterm's own decoder reassembles UTF-8 sequences split across chunks.
+/// Keyed by the terminal `id` so the front routes it to the right xterm instance.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct TerminalOutputEvent {
+    pub id: String,
+    pub data: String,
+}
+
+/// An integrated terminal's shell exited (EOF on the PTY). One-shot, keyed by id;
+/// the front marks that terminal done and offers to restart it on re-open.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct TerminalExitEvent {
+    pub id: String,
+}
+
 /// Bridges a session's [`SessionEmitter`] sink onto the Tauri event bus: each
 /// session event becomes the matching tauri-specta event on the `AppHandle`.
 pub struct TauriEmitter {

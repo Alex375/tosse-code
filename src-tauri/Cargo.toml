@@ -47,6 +47,17 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # macOS FSEvents under the hood — one cheap recursive watch (see `fs/mod.rs`).
 notify = "6"
 
+# Integrated terminal: a real interactive PTY (the user's login shell) per
+# conversation. `portable-pty` (the wezterm PTY layer) opens the pty, spawns the
+# shell, pipes bytes both ways and handles resize — the side we must build (the
+# product), see `terminal/mod.rs`. `base64` frames the raw PTY byte stream onto
+# the JSON event bus losslessly (xterm's own decoder reassembles UTF-8 across
+# chunks); cheaper + correct vs a `number[]` array or a per-chunk lossy decode.
+# It also base64-encodes image bytes for the editor's image viewer (served to the
+# webview as a `data:` URL — see `fs::read_image`).
+portable-pty = "0.8"
+base64 = "0.22"
+
 # Async runtime for the supervisor: spawn `claude`, pipe stdio, drive tasks.
 # Tauri 2 already runs on tokio; we depend on it directly for the features we use.
 tokio = { version = "1", features = [

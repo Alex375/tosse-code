@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { useTodos, useTodoSummary } from "../../store/conversationStore";
+import { useTodoBarOpen, useTodoBarUi } from "../../store/todoBarUi";
 import { Ico } from "../../ui/kit";
 import { TodoList } from "./TodoList";
 
@@ -12,11 +12,15 @@ import { TodoList } from "./TodoList";
  * stable id and delegates the actual rendering to the reusable <TodoList>. When
  * collapsed it still surfaces the count and the current item; it renders nothing
  * until the agent has written a list.
+ *
+ * The open/collapsed state is persisted per conversation (keyed by the same stable
+ * id) so it survives navigating away and back, and app restarts — see todoBarUi.
  */
 export function TodoBar({ session }: { session: string }) {
   const todos = useTodos(session);
   const summary = useTodoSummary(session);
-  const [open, setOpen] = useState(true);
+  const open = useTodoBarOpen(session);
+  const setOpen = useTodoBarUi((s) => s.setOpen);
 
   if (todos.length === 0) return null;
 
@@ -25,7 +29,7 @@ export function TodoBar({ session }: { session: string }) {
       <button
         type="button"
         className="cv-todobar-h"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(session, !open)}
         aria-expanded={open}
       >
         <Ico name="list" className="sm" />
