@@ -619,6 +619,9 @@ export function ContextRing({
                 <button
                   className="wf-pop-refresh"
                   title="Rafraîchir l'usage"
+                  aria-label="Rafraîchir l'usage"
+                  aria-busy={usageLoading}
+                  disabled={usageLoading}
                   onClick={(e) => {
                     e.stopPropagation();
                     onRefreshUsage();

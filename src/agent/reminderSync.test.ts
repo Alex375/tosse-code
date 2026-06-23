@@ -133,6 +133,23 @@ describe("syncReminderFromLive — arming the persisted reminder from the live s
     expect(commands.upsertConversation).not.toHaveBeenCalled();
   });
 
+  it("ended-edge sequence: arms while the handle is live, then preserves across the unbind", () => {
+    // Mirrors useGlobalSessionEvents.onState on a session-end state: it calls
+    // syncReminderFromLive (handle STILL bound) BEFORE the `ended` setHandle(null). This
+    // locks the load-bearing ORDER — a future reorder (unbind first) would make the sync
+    // hit the off-guard and silently drop the off-restart reminder.
+    seed(conv(), entry({ turnSeen: false, text: "C'est fait ✅" }));
+    // 1) the settle-edge sync, handle live → arms 'review'.
+    syncReminderFromLive("c1");
+    expect(persisted()).toBe("review");
+    // 2) the `ended` unbind: handle → null must NOT erase the persisted reminder.
+    useConversationsStore.getState().setHandle("c1", null);
+    expect(persisted()).toBe("review");
+    // 3) any later sync is now a no-op (off-guard) — still preserved.
+    syncReminderFromLive("c1");
+    expect(persisted()).toBe("review");
+  });
+
   it("converges regardless of which edge lands first (busy-edge before the turn settles)", () => {
     // Edge 1: the busy→false state event arrives BEFORE the turn_result message, so the
     // entry isn't settled yet (still busy) → running → reminder cleared.

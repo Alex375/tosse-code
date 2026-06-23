@@ -211,8 +211,11 @@ export const ConductorComposer = forwardRef<
 
   // Real plan-usage % (account-global, NOT per-conversation). Background-polled here
   // so the figure stays warm; the ring popover shows it + a manual refresh. On open
-  // we refetch only when stale, to spare the rate-limited usage endpoint.
-  const planUsage = usePlanUsage();
+  // we refetch only when stale, to spare the rate-limited usage endpoint. Gated on
+  // `ctxReady`: the popover is unreachable (ring disabled) until the first turn reports
+  // context anyway, so don't read credentials / risk a Keychain prompt the instant a
+  // brand-new conversation is merely selected.
+  const planUsage = usePlanUsage({ enabled: ctxReady });
   const onOpenUsage = () => {
     // Throttle against the last attempt — success OR failure — so opening the popover
     // after an error (e.g. a 429) doesn't immediately hammer the endpoint again.

@@ -948,7 +948,14 @@ export type WorkflowPhase = { title: string; detail: string | null }
  * dynamic, per-entry-shaped `workflowProgress` and `result` are kept raw
  * ([`Value`]) — the Workflow display task types them.
  */
-export type WorkflowRun = { runId: string; taskId: string | null; status: string | null; workflowName: string | null; defaultModel: string | null; durationMs: number | null; agentCount: number | null; totalTokens: number | null; totalToolCalls: number | null; summary: string | null; phases?: WorkflowPhase[]; 
+export type WorkflowRun = { runId: string; taskId: string | null; status: string | null; workflowName: string | null; defaultModel: string | null; durationMs: number | null; agentCount: number | null; totalTokens: number | null; totalToolCalls: number | null; summary: string | null; 
+/**
+ * `#[serde(default)]` alone covers a MISSING key, but an explicit `"phases":null`
+ * would still fail the WHOLE manifest parse (blanking the entire workflow view).
+ * `deserialize_null_default` maps null → empty, mirroring the stream structs'
+ * `Option` null-tolerance ([`super::protocol::TaskNotificationMsg::usage`]).
+ */
+phases?: WorkflowPhase[]; 
 /**
  * Array of `{type:"workflow_phase"|"workflow_agent", …}` entries — kept raw.
  */

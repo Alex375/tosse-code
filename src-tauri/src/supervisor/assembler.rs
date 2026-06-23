@@ -303,23 +303,42 @@ impl Assembler {
             .and_then(|id| self.tool_names.get(id))
             .map(String::as_str);
         let kind = classify_task(t.task_type.as_deref(), tool_name);
-        let task = BackgroundTask {
-            task_id: t.task_id.clone(),
-            kind,
-            tool_use_id: t.tool_use_id.clone(),
-            label: t.description.clone(),
-            subagent_type: t.subagent_type.clone(),
-            agent_id: None,
-            status: BackgroundTaskStatus::Running,
-            progress: None,
-            tokens: None,
-            tool_uses: None,
-            duration_ms: None,
-            summary: None,
-            output_file: None,
-        };
-        self.background_tasks.insert(t.task_id.clone(), task.clone());
-        out.push(SessionEvent::Task(task));
+        // `task_started` normally arrives FIRST, so the common path inserts a fresh entry.
+        // If a lazy entry already exists (the stream was joined mid-run and a
+        // `task_updated`/`task_progress` was seen first), MERGE the authoritative identity
+        // in rather than clobbering any status/progress already accumulated — and backfill
+        // `tool_use_id` so a later tool name can still reach it via `record_tool_name`.
+        let task = self
+            .background_tasks
+            .entry(t.task_id.clone())
+            .or_insert_with(|| BackgroundTask {
+                task_id: t.task_id.clone(),
+                kind,
+                tool_use_id: t.tool_use_id.clone(),
+                label: t.description.clone(),
+                subagent_type: t.subagent_type.clone(),
+                agent_id: None,
+                status: BackgroundTaskStatus::Running,
+                progress: None,
+                tokens: None,
+                tool_uses: None,
+                duration_ms: None,
+                summary: None,
+                output_file: None,
+            });
+        if task.tool_use_id.is_none() {
+            task.tool_use_id = t.tool_use_id.clone();
+        }
+        if task.kind == BackgroundTaskKind::Other {
+            task.kind = kind;
+        }
+        if task.label.is_none() {
+            task.label = t.description.clone();
+        }
+        if task.subagent_type.is_none() {
+            task.subagent_type = t.subagent_type.clone();
+        }
+        out.push(SessionEvent::Task(task.clone()));
     }
 
     /// A live progress tick. Stash the latest `description` (a `Workflow` emits
@@ -380,11 +399,20 @@ impl Assembler {
             }
         }
         // For a sub-agent, the only place the agent id appears on the wire is inside
-        // `output_file` (`subagents/agent-<agentId>.jsonl`). Surface it as a first-class
-        // field so a drill-down can call `load_subagent_transcript` without re-parsing.
-        if task.kind == BackgroundTaskKind::Agent && task.agent_id.is_none() {
-            if let Some(of) = task.output_file.as_deref() {
-                task.agent_id = agent_id_from_output_file(of);
+        // `output_file` (`subagents/agent-<agentId>.jsonl`). A path matching that shape
+        // unambiguously identifies a sub-agent, so surface the id (for a drill-down to
+        // call `load_subagent_transcript` without re-parsing) AND, if the task was only
+        // joined mid-run and never classified, upgrade Other → Agent off that same signal.
+        if task.agent_id.is_none() {
+            if let Some(id) = task
+                .output_file
+                .as_deref()
+                .and_then(agent_id_from_output_file)
+            {
+                task.agent_id = Some(id);
+                if task.kind == BackgroundTaskKind::Other {
+                    task.kind = BackgroundTaskKind::Agent;
+                }
             }
         }
         out.push(SessionEvent::Task(task.clone()));
@@ -503,10 +531,17 @@ impl Assembler {
     /// Record a background-capable tool_use's `id → name` for later `task_*`
     /// correlation, and — belt-and-suspenders — re-classify an ALREADY-tracked task
     /// that turns out to belong to it (covers the rare wire ordering where a
-    /// `task_started` beat the tool name). Only background-capable tools are kept, which
-    /// bounds the map to the handful of task-spawning calls instead of every tool_use.
+    /// `task_started` beat the tool name). Only background-CAPABLE tools are kept, which
+    /// keeps the map small — though note `Bash` qualifies even when run in the foreground,
+    /// so it is NOT strictly bounded to calls that actually spawn a task.
     fn record_tool_name(&mut self, id: &str, name: &str, out: &mut Vec<SessionEvent>) {
         if id.is_empty() || !is_bg_capable_tool(name) {
+            return;
+        }
+        // Called twice for the same tool_use (streamed `content_block_start`, then the
+        // assembled assistant message). Once `id → name` is recorded, the second call is a
+        // no-op — skip re-inserting and the redundant re-classification scan below.
+        if self.tool_names.get(id).map(String::as_str) == Some(name) {
             return;
         }
         self.tool_names.insert(id.to_string(), name.to_string());
@@ -643,9 +678,12 @@ fn change_notice(control: &str, icon: &str, from: &str, to: &str) -> SessionEven
     })
 }
 
-/// The tools that spawn background tasks. Only these are remembered in `tool_names`
-/// (the correlation map), which bounds it to the few task-spawning calls rather than
-/// every tool_use in the session.
+/// The tools CAPABLE of spawning a background task. Only these are remembered in
+/// `tool_names` (the correlation map), keeping it far smaller than "every tool_use" —
+/// though `Bash` qualifies even in the foreground (`run_in_background` is not visible
+/// here), so the map is not strictly limited to calls that truly spawn a task. The
+/// per-session assembler is torn down with its session, so this is not a process-lifetime
+/// leak; terminal-task pruning is deferred to whoever (the fleet view) consumes them.
 fn is_bg_capable_tool(name: &str) -> bool {
     matches!(name, "Agent" | "Workflow" | "Bash" | "Monitor")
 }

@@ -162,7 +162,7 @@
 /* The whole composer is ONE floating rounded card — like the Claude app: the text
    row AND the controls row live inside the same elevated block, centred on the
    conversation width and lifted off the window edge with a soft shadow. */
-.cv-composer { position:relative; margin:6px auto 14px; max-width:var(--cv-max,840px); width:calc(100% - 28px); padding:6px 8px 7px; background:var(--wf-panel); border:1px solid var(--wf-line-2); border-radius:20px; box-shadow:0 18px 44px -20px #000, 0 6px 16px -10px #0009, inset 0 1px 0 #ffffff0a; container:composer / inline-size; }
+.cv-composer { position:relative; margin:6px auto 14px; max-width:var(--cv-max,840px); width:calc(100% - 52px); padding:6px 8px 7px; background:var(--wf-panel); border:1px solid var(--wf-line-2); border-radius:20px; box-shadow:0 18px 44px -20px #000, 0 6px 16px -10px #0009, inset 0 1px 0 #ffffff0a; container:composer / inline-size; }
 /* Text row inside the card: no border/background of its own — the card is the box. */
 .cv-input { display:flex; align-items:center; gap:8px; padding:5px 6px; background:transparent; border:0; }
 
@@ -238,7 +238,7 @@
   gap:10px;
   margin:10px auto 4px;
   max-width:var(--cv-max,840px);
-  width:calc(100% - 28px);
+  width:calc(100% - 52px);
   padding:9px 13px;
   border-radius:12px;
   border:1px solid;
@@ -259,7 +259,7 @@
   flex:0 0 auto;
   margin:10px auto 4px;
   max-width:var(--cv-max,840px);
-  width:calc(100% - 28px);
+  width:calc(100% - 52px);
   background:var(--wf-panel);
   border:1px solid var(--wf-line-2);
   border-radius:12px;

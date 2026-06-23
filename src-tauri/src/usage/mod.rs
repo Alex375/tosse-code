@@ -40,6 +40,11 @@ const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 /// Mimic the CLI's User-Agent so the endpoint sees a familiar client. The version is
 /// pinned to a known-good CLI release; a drift here is very unlikely to be rejected
 /// (the endpoint authenticates on the Bearer token + `oauth-2025-04-20` beta).
+///
+/// MAINTENANCE: this version is hand-pinned and duplicated from the protocol fixture's
+/// capture version (`supervisor::protocol` `TASKS_CAPTURE`, captured on `2.1.186`). Bump
+/// it together with the fixture re-capture on every `claude` CLI upgrade — no test or
+/// build step catches a stale value here.
 const USER_AGENT: &str = "claude-cli/2.1.186 (external, cli)";
 
 /// Real plan-usage snapshot: the two subscription windows, each with a fill %.
@@ -168,21 +173,38 @@ fn ensure_crypto_provider() {
 /// token is found.
 fn read_oauth_token() -> Result<String, UsageError> {
     if let Some(blob) = read_credentials_file() {
-        if let Some(tok) = parse_access_token(&blob) {
-            return Ok(tok);
+        match parse_access_token(&blob) {
+            Some(tok) => return Ok(tok),
+            // The file is PRESENT but carries no usable token (truncated mid-write, a
+            // renamed field, …). That is a real failure, NOT the normal "absent" state —
+            // surface it loudly before falling back to the Keychain (the "never silently
+            // equate broken with missing" policy), so a corrupt file doesn't masquerade
+            // as a misleading NoToken/KeychainDenied.
+            None => eprintln!(
+                "[usage] ~/.claude/.credentials.json is present but has no usable accessToken; falling back to Keychain"
+            ),
         }
     }
     read_keychain_token()
 }
 
-/// Read `~/.claude/.credentials.json` if present. `None` on any IO error (absent file
-/// is the common case on macOS, where the token lives in the Keychain).
+/// Read `~/.claude/.credentials.json` if present. An ABSENT file → `None` silently (the
+/// common case on macOS, where the token lives in the Keychain); a present-but-unreadable
+/// file (permissions/IO) is a real failure → logged before `None`, never silently equated
+/// with "absent".
 fn read_credentials_file() -> Option<String> {
     let home = std::env::var_os("HOME")?;
     let path = std::path::Path::new(&home)
         .join(".claude")
         .join(".credentials.json");
-    std::fs::read_to_string(path).ok()
+    match std::fs::read_to_string(&path) {
+        Ok(blob) => Some(blob),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            eprintln!("[usage] cannot read {}: {e}", path.display());
+            None
+        }
+    }
 }
 
 /// Read the Keychain credentials blob via `/usr/bin/security` (finds the item by
@@ -296,14 +318,14 @@ mod tests {
 
     #[test]
     fn parses_access_token_from_nested_shape() {
-        let blob = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-abc","refreshToken":"r"}}"#;
-        assert_eq!(parse_access_token(blob).as_deref(), Some("sk-ant-oat01-abc"));
+        let blob = r#"{"claudeAiOauth":{"accessToken":"fake-token-nested","refreshToken":"r"}}"#;
+        assert_eq!(parse_access_token(blob).as_deref(), Some("fake-token-nested"));
     }
 
     #[test]
     fn parses_access_token_from_flat_shape() {
-        let blob = r#"{"accessToken":"sk-ant-oat01-flat"}"#;
-        assert_eq!(parse_access_token(blob).as_deref(), Some("sk-ant-oat01-flat"));
+        let blob = r#"{"accessToken":"fake-token-flat"}"#;
+        assert_eq!(parse_access_token(blob).as_deref(), Some("fake-token-flat"));
     }
 
     #[test]

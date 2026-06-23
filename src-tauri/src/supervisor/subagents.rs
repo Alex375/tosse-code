@@ -29,7 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::history::{claude_config_dir, parse_transcript_str};
+use super::history::{claude_config_dir, parse_transcript_str, project_dirs};
 use super::model::{ConversationItem, WorkflowRun};
 
 /// Cap on how deep we recurse under `subagents/` looking for a transcript — enough
@@ -37,30 +37,30 @@ use super::model::{ConversationItem, WorkflowRun};
 /// never walking an unbounded tree.
 const MAX_SUBAGENT_DEPTH: usize = 4;
 
+/// Reject an id that could escape the session directory once interpolated into a path.
+/// Ids on the wire are UUIDs / `wf_…` / `tk_…` / agent slugs — ASCII alphanumerics plus
+/// `-`/`_`. Anything carrying a path separator, `..`, or any other byte is refused, so a
+/// crafted id (e.g. `../../../../etc/passwd`) can never walk outside `<session_dir>`.
+/// Defense-in-depth: today the only id source is the trusted `claude` binary, but these
+/// readers must stay the validated gatekeepers (same principle as `git::mod` /
+/// `store::db`). Cost is nil for the legitimate UUID/slug case.
+fn is_safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Find a session's artifact directory (`<config>/projects/<slug>/<session_id>`) by
-/// scanning every project dir for a subdirectory named `session_id`.
-///
-/// A genuinely-absent `projects/` dir → `None` (the normal "nothing on disk yet"
-/// state). A permission/IO error reading it is DISTINCT — it is logged before
-/// returning `None`, so a real failure is never silently equated with "absent"
-/// (finding #4).
+/// scanning every project dir for a subdirectory named `session_id`. The loud-on-IO-error
+/// scan lives in [`super::history::project_dirs`] (shared with the transcript lookup), so
+/// a permission/IO error is never silently equated with "absent" (finding #4).
 fn find_session_dir(config_dir: &Path, session_id: &str) -> Option<PathBuf> {
-    let projects = config_dir.join("projects");
-    let entries = match std::fs::read_dir(&projects) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(e) => {
-            eprintln!("[subagents] cannot read projects dir {}: {e}", projects.display());
-            return None;
-        }
-    };
-    for entry in entries.flatten() {
-        let candidate = entry.path().join(session_id);
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-    }
-    None
+    project_dirs(config_dir)
+        .into_iter()
+        .map(|dir| dir.join(session_id))
+        .find(|candidate| candidate.is_dir())
 }
 
 /// Load and normalize a sub-agent's full transcript into the same
@@ -82,6 +82,10 @@ fn load_subagent_transcript_in(
     session_id: &str,
     agent_id: &str,
 ) -> Vec<ConversationItem> {
+    if !is_safe_id(session_id) || !is_safe_id(agent_id) {
+        eprintln!("[subagents] refusing unsafe id (session={session_id:?}, agent={agent_id:?})");
+        return Vec::new();
+    }
     let Some(session_dir) = find_session_dir(config_dir, session_id) else {
         return Vec::new();
     };
@@ -111,15 +115,23 @@ pub fn load_workflow_run(session_id: &str, run_id: &str) -> Option<WorkflowRun> 
 }
 
 fn load_workflow_run_in(config_dir: &Path, session_id: &str, run_id: &str) -> Option<WorkflowRun> {
+    if !is_safe_id(session_id) || !is_safe_id(run_id) {
+        eprintln!("[subagents] refusing unsafe id (session={session_id:?}, run={run_id:?})");
+        return None;
+    }
     let workflows = find_session_dir(config_dir, session_id)?.join("workflows");
-    let primary = workflows.join(format!("{run_id}.json"));
-    let path = if primary.is_file() {
-        primary
-    } else if !run_id.starts_with("wf_") {
-        workflows.join(format!("wf_{run_id}.json"))
-    } else {
-        primary
-    };
+    // Try `<run_id>.json`; a bare id (no `wf_`) also tries the `wf_`-prefixed name. The
+    // first existing file wins; if none exists we fall through to the read below, which
+    // maps NotFound → None.
+    let mut candidates = vec![workflows.join(format!("{run_id}.json"))];
+    if !run_id.starts_with("wf_") {
+        candidates.push(workflows.join(format!("wf_{run_id}.json")));
+    }
+    let path = candidates
+        .iter()
+        .find(|p| p.is_file())
+        .cloned()
+        .unwrap_or_else(|| candidates[0].clone());
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         // Absent manifest = normal ("no run to show"). A non-NotFound IO error on an
@@ -153,6 +165,10 @@ pub fn read_task_output(session_id: &str, task_id: &str) -> Option<String> {
 }
 
 fn read_task_output_in(config_dir: &Path, session_id: &str, task_id: &str) -> Option<String> {
+    if !is_safe_id(session_id) || !is_safe_id(task_id) {
+        eprintln!("[subagents] refusing unsafe id (session={session_id:?}, task={task_id:?})");
+        return None;
+    }
     let path = find_session_dir(config_dir, session_id)?
         .join("tasks")
         .join(format!("{task_id}.output"));
@@ -179,7 +195,18 @@ fn find_file_recursive(root: &Path, file_name: &str, depth: usize) -> Option<Pat
     if depth == 0 {
         return None;
     }
-    for entry in std::fs::read_dir(root).ok()?.flatten() {
+    // An absent dir → `None` (nothing to find); a permission/IO error is DISTINCT and
+    // logged before `None`, never silently equated with "not found" (mirrors the policy
+    // of `find_session_dir` / `project_dirs`).
+    let entries = match std::fs::read_dir(root) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!("[subagents] cannot scan {} for {file_name}: {e}", root.display());
+            return None;
+        }
+    };
+    for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             if let Some(found) = find_file_recursive(&path, file_name, depth - 1) {
@@ -284,5 +311,33 @@ mod tests {
         assert!(load_subagent_transcript_in(&base, "nope", "x").is_empty());
         assert!(load_workflow_run_in(&base, "nope", "wf_x").is_none());
         assert!(read_task_output_in(&base, "nope", "x").is_none());
+    }
+
+    #[test]
+    fn workflow_manifest_with_explicit_null_phases_still_parses() {
+        // Mirror of the stream's `explicit_null_patch_and_usage_do_not_drop_the_line`:
+        // an explicit `"phases":null` in the manifest must NOT fail the whole parse
+        // (which would blank the entire workflow view) — it degrades to an empty list.
+        let run: WorkflowRun = serde_json::from_str(r#"{"runId":"wf_z","phases":null}"#)
+            .expect("explicit null phases must be tolerated");
+        assert_eq!(run.run_id, "wf_z");
+        assert!(run.phases.is_empty());
+    }
+
+    #[test]
+    fn unsafe_ids_are_rejected_without_touching_disk() {
+        // A path-traversal-shaped id never reaches `format!`/`join` — it is refused.
+        assert!(!is_safe_id("../../../../etc/passwd"));
+        assert!(!is_safe_id("a/b"));
+        assert!(!is_safe_id(".."));
+        assert!(!is_safe_id(""));
+        // Legitimate wire ids (UUID, `wf_`/`tk_` slugs, agent ids) pass unchanged.
+        assert!(is_safe_id("ssssssss-1111-2222-3333-444444444444"));
+        assert!(is_safe_id("wf_abc"));
+        assert!(is_safe_id("tk_bash"));
+        let base = std::env::temp_dir().join("tosse-sub-unsafe");
+        assert!(load_subagent_transcript_in(&base, "..", "x").is_empty());
+        assert!(load_workflow_run_in(&base, "ok", "../escape").is_none());
+        assert!(read_task_output_in(&base, "ok", "a/b").is_none());
     }
 }

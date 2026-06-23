@@ -280,7 +280,11 @@ pub struct WorkflowRun {
     pub total_tokens: Option<u64>,
     pub total_tool_calls: Option<u64>,
     pub summary: Option<String>,
-    #[serde(default)]
+    /// `#[serde(default)]` alone covers a MISSING key, but an explicit `"phases":null`
+    /// would still fail the WHOLE manifest parse (blanking the entire workflow view).
+    /// `deserialize_null_default` maps null → empty, mirroring the stream structs'
+    /// `Option` null-tolerance ([`super::protocol::TaskNotificationMsg::usage`]).
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub phases: Vec<WorkflowPhase>,
     /// Array of `{type:"workflow_phase"|"workflow_agent", …}` entries — kept raw.
     #[serde(default)]
@@ -288,6 +292,18 @@ pub struct WorkflowRun {
     /// The workflow's final return value — kept raw.
     #[serde(default)]
     pub result: Value,
+}
+
+/// Deserialize that maps an explicit JSON `null` to `T::default()`. `#[serde(default)]`
+/// alone only substitutes the default for a MISSING key — an explicit `"field": null`
+/// still fails the whole struct. Pair the two (`#[serde(default, deserialize_with = …)]`)
+/// for a manifest field the CLI may write as `null`.
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// What a session emits to the outside world.

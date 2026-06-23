@@ -134,8 +134,13 @@ impl Store {
                 conn.execute(ddl, [])?;
             }
         }
+        // Upsert (not INSERT OR IGNORE): after the additive migrations above run on an
+        // existing db, the on-disk schema really IS the new version, so `schema_version`
+        // must advance too — otherwise it stays frozen at its first-created value and a
+        // future version-keyed migration would mis-detect the state.
         conn.execute(
-            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?1)",
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![SCHEMA_VERSION.to_string()],
         )?;
         Ok(())

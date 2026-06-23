@@ -50,9 +50,14 @@ function asUsageError(e: unknown): UsageError {
   return { kind: "network", detail: e instanceof Error ? e.message : String(e) };
 }
 
-export function usePlanUsage() {
+/** `enabled` gates the very first fetch: pass `false` until the figure is actually
+ *  reachable (the ring popover is live), so merely selecting a never-spawned conversation
+ *  doesn't read the OAuth credentials / pop the macOS Keychain prompt before the user has
+ *  done anything. A manual `refetch()` still works while disabled. Defaults to `true`. */
+export function usePlanUsage(opts?: { enabled?: boolean }) {
   return useQuery<PlanUsage, UsageError>({
     queryKey: PLAN_USAGE_KEY,
+    enabled: opts?.enabled ?? true,
     queryFn: async (): Promise<PlanUsage> => {
       let res;
       try {

@@ -32,18 +32,32 @@ pub(crate) fn claude_config_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude"))
 }
 
+/// List the project directories under `<config>/projects` — the parent of every
+/// session's transcript and its sibling task-artifact dir. A genuinely-absent
+/// `projects/` dir → empty (the normal "nothing on disk yet" state); a permission/IO
+/// error reading it is DISTINCT and logged before returning empty, so a real failure is
+/// never silently equated with "absent" (finding #4). Shared with [`super::subagents`]
+/// so this error policy lives in ONE place.
+pub(crate) fn project_dirs(config_dir: &Path) -> Vec<PathBuf> {
+    let projects = config_dir.join("projects");
+    match std::fs::read_dir(&projects) {
+        Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            eprintln!("[history] cannot read projects dir {}: {e}", projects.display());
+            Vec::new()
+        }
+    }
+}
+
 /// Find the transcript for `session_id` by scanning every project dir under
 /// `config_dir/projects` for `<session_id>.jsonl`.
 fn find_transcript(config_dir: &Path, session_id: &str) -> Option<PathBuf> {
-    let projects = config_dir.join("projects");
     let file_name = format!("{session_id}.jsonl");
-    for entry in std::fs::read_dir(&projects).ok()?.flatten() {
-        let candidate = entry.path().join(&file_name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    project_dirs(config_dir)
+        .into_iter()
+        .map(|dir| dir.join(&file_name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Load and normalize the conversation history for `session_id`, returning the

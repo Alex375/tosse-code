@@ -14,6 +14,8 @@ vi.mock("../ipc/client", () => {
       setPermissionMode: vi.fn(() => ok()),
       spawnSession: vi.fn(() => ok("session-1")),
       createWorktree: vi.fn(() => ok({ path: "/tmp/wt" })),
+      loadSessionHistory: vi.fn(() => ok([])),
+      loadSessionContext: vi.fn(() => ok({ context_tokens: 0 })),
     },
   };
 });
@@ -22,6 +24,7 @@ import { commands } from "../ipc/client";
 import {
   acknowledgeConversation,
   ensureConversationSession,
+  loadConversationHistory,
   useConversationsStore,
   type Conversation,
 } from "./conversationsStore";
@@ -112,6 +115,36 @@ describe("conversationsStore — persisted reminder", () => {
     vi.clearAllMocks();
     useConversationsStore.getState().setReminder("c1", "error");
     expect(commands.upsertConversation).not.toHaveBeenCalled();
+  });
+
+  it("loadConversationHistory marks the turn seen but PRESERVES the persisted reminder (opening ≠ acknowledging)", async () => {
+    // Opening a conversation replays its on-disk transcript and marks it seen (so a
+    // HISTORICAL completion doesn't read as a fresh "Claude just finished, go look") —
+    // but it must NOT clear the persisted reminder. Only startConversationSession (going
+    // live) clears it. This asymmetry is the survive-a-restart guarantee; lock it so a
+    // future "unify the loaders" can't silently regress it.
+    seed(baseConv({ id: "c-load", sessionId: "sess-load", pendingReminder: "review" }));
+    const cs = useConversationStore.getState();
+    const ensureSession = vi.spyOn(cs, "ensureSession").mockImplementation(() => {});
+    const applyItem = vi.spyOn(cs, "applyItem").mockImplementation(() => {});
+    const applyContextFill = vi.spyOn(cs, "applyContextFill").mockImplementation(() => {});
+    const markSeen = vi.spyOn(cs, "markSeen").mockImplementation(() => {});
+    // Non-empty history so the loader runs past its early return and reaches markSeen.
+    vi.mocked(commands.loadSessionHistory).mockResolvedValueOnce({
+      status: "ok",
+      data: [{}],
+    } as never);
+
+    await loadConversationHistory("c-load");
+
+    expect(markSeen).toHaveBeenCalledWith("c-load");
+    expect(conv0().pendingReminder).toBe("review"); // NOT cleared
+    expect(commands.setActiveConversation).not.toHaveBeenCalled();
+
+    ensureSession.mockRestore();
+    applyItem.mockRestore();
+    applyContextFill.mockRestore();
+    markSeen.mockRestore();
   });
 
   it("acknowledgeConversation clears the persisted reminder AND marks the live turn seen", () => {
