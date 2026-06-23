@@ -102,11 +102,97 @@ pub enum SystemMsg {
         permission_mode: Option<String>,
         session_id: Option<String>,
     },
-    /// Other system subtypes (`compact_boundary`, `task_*`, `thinking_tokens`, …)
-    /// are assembled in subtask 3; tolerated here so they never drop to
-    /// [`CliMessage::Unknown`].
+    /// A background task was created (a sub-agent `Agent` run, a `Workflow` run, a
+    /// `Bash run_in_background`, or a `Monitor` watch). Carries the `task_type` and
+    /// the correlating `tool_use_id` so the assembler can classify the producer.
+    TaskStarted(TaskStartedMsg),
+    /// Live progress for a running task (the only one a `Workflow` emits per agent:
+    /// `description = "<phase>: <label>"`). Coarse on the wire by design — the rich
+    /// detail (tokens, transcripts) is read from disk.
+    TaskProgress(TaskProgressMsg),
+    /// A task's state changed (`patch.status` = `completed` / `failed` / …). The
+    /// terminal transition for `Bash`/`Monitor`/`Agent`; `end_time` is ignored.
+    TaskUpdated(TaskUpdatedMsg),
+    /// A task finished, with the summary and (for sub-agents) the usage roll-up and
+    /// the `output_file` to read its full result from on disk.
+    TaskNotification(TaskNotificationMsg),
+    /// Other system subtypes (`compact_boundary`, `thinking_tokens`, …) are tolerated
+    /// here so they never drop to [`CliMessage::Unknown`].
     #[serde(other)]
     Unknown,
+}
+
+/// `system/task_started` — a background task was created. The four producers share
+/// this shape; they are told apart by `task_type` plus the `tool_use` named by
+/// `tool_use_id` (`local_agent`→Agent; `Workflow`→workflow run; `local_bash`+`Bash`
+/// →background shell; `local_bash`+`Monitor`→watch). The large `prompt` field (when
+/// present) is ignored — the full transcript lives on disk.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskStartedMsg {
+    pub task_id: String,
+    pub tool_use_id: Option<String>,
+    pub description: Option<String>,
+    /// Only sub-agent (`Agent`) tasks carry this (e.g. `"Explore"`).
+    pub subagent_type: Option<String>,
+    /// `"local_agent"` (sub-agent) or `"local_bash"` (Bash-bg AND Monitor); a
+    /// `Workflow` run omits it. Combined with the tool name to classify the kind.
+    pub task_type: Option<String>,
+}
+
+/// `system/task_progress` — a live progress tick. Emitted per workflow agent as
+/// `description = "<phase>: <label>"`; rare for the other producers.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskProgressMsg {
+    pub task_id: String,
+    pub tool_use_id: Option<String>,
+    pub description: Option<String>,
+}
+
+/// `system/task_updated` — a state patch. We read `patch.status`; `end_time` and any
+/// other patched fields are tolerated and ignored.
+///
+/// `task_id` is REQUIRED on purpose: it is the stable correlation key tying every
+/// `task_*` of a task together, and a line without it is unaddressable — so a missing
+/// `task_id` deliberately fails this variant and the transport drops the line (logged).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskUpdatedMsg {
+    pub task_id: String,
+    /// `Option` (not `#[serde(default)]`) so BOTH a missing `patch` AND an explicit
+    /// `"patch":null` deserialize to `None` instead of failing the whole line.
+    pub patch: Option<TaskPatch>,
+}
+
+/// The `patch` object of a `task_updated`. Only `status` is read; `end_time` (epoch ms)
+/// is intentionally NOT captured — duration is sourced from the `task_notification`
+/// usage roll-up, and per-producer duration for tasks whose notification omits usage is
+/// a concern of the (future) fleet view, not this socle.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TaskPatch {
+    pub status: Option<String>,
+}
+
+/// `system/task_notification` — a task finished. Carries the final `status`, a human
+/// `summary`, the `output_file` to read the full result from, and (for sub-agents) a
+/// `usage` roll-up.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskNotificationMsg {
+    pub task_id: String,
+    pub tool_use_id: Option<String>,
+    pub status: Option<String>,
+    pub output_file: Option<String>,
+    pub summary: Option<String>,
+    /// `Option` (not `#[serde(default)]`) so BOTH a missing `usage` AND an explicit
+    /// `"usage":null` deserialize to `None` instead of failing the whole line.
+    pub usage: Option<TaskUsage>,
+}
+
+/// The `usage` roll-up on a `task_notification` (present for sub-agents). All fields
+/// are optional — a producer that does not track a metric simply omits it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TaskUsage {
+    pub total_tokens: Option<u64>,
+    pub tool_uses: Option<u64>,
+    pub duration_ms: Option<u64>,
 }
 
 /// `system/init` — the session bootstrap message.
@@ -274,6 +360,98 @@ mod tests {
             }
             other => panic!("last line should be result, got {}", other.kind()),
         }
+    }
+
+    /// Ground truth for the background-task lifecycle (captured on `claude` 2.1.186).
+    /// Every line — the four producers' `task_*` events plus the spawning `assistant`
+    /// tool_use blocks — must deserialize into a KNOWN variant, never `Unknown`, and
+    /// all four `task_*` subtypes must be present. Re-capture on every CLI upgrade.
+    const TASKS_CAPTURE: &str = include_str!("fixtures/capture_tasks.jsonl");
+
+    #[test]
+    fn task_lifecycle_capture_round_trips_into_known_variants() {
+        let (mut started, mut progress, mut updated, mut notified) = (0, 0, 0, 0);
+        for (i, line) in TASKS_CAPTURE.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let msg: CliMessage = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("line {i} failed to parse: {e}\n{line}"));
+            assert!(!msg.is_unknown(), "line {i} fell through to Unknown:\n{line}");
+            if let CliMessage::System(sys) = &msg {
+                assert!(
+                    !matches!(sys, SystemMsg::Unknown),
+                    "line {i} system subtype fell through to Unknown:\n{line}"
+                );
+                match sys {
+                    SystemMsg::TaskStarted(_) => started += 1,
+                    SystemMsg::TaskProgress(_) => progress += 1,
+                    SystemMsg::TaskUpdated(_) => updated += 1,
+                    SystemMsg::TaskNotification(_) => notified += 1,
+                    _ => {}
+                }
+            }
+        }
+        // Four producers each emit started + updated + notification; only the
+        // workflow emits a progress tick.
+        assert_eq!(started, 4, "expected one task_started per producer");
+        assert!(progress >= 1, "expected at least the workflow's task_progress");
+        assert_eq!(updated, 4, "expected one task_updated per producer");
+        assert_eq!(notified, 4, "expected one task_notification per producer");
+    }
+
+    #[test]
+    fn task_started_exposes_classification_fields() {
+        // The sub-agent line carries task_type + subagent_type; the Bash-bg line
+        // carries task_type local_bash (told from Monitor by the tool name later).
+        let agent: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_started","task_id":"t1","tool_use_id":"tu1","description":"d","subagent_type":"Explore","task_type":"local_agent"}"#,
+        )
+        .unwrap();
+        match agent {
+            CliMessage::System(SystemMsg::TaskStarted(t)) => {
+                assert_eq!(t.task_id, "t1");
+                assert_eq!(t.tool_use_id.as_deref(), Some("tu1"));
+                assert_eq!(t.task_type.as_deref(), Some("local_agent"));
+                assert_eq!(t.subagent_type.as_deref(), Some("Explore"));
+            }
+            other => panic!("expected task_started, got {}", other.kind()),
+        }
+    }
+
+    #[test]
+    fn task_notification_reads_usage_rollup() {
+        let n: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_notification","task_id":"t1","status":"completed","summary":"done","usage":{"total_tokens":42,"tool_uses":2,"duration_ms":100}}"#,
+        )
+        .unwrap();
+        match n {
+            CliMessage::System(SystemMsg::TaskNotification(t)) => {
+                assert_eq!(t.status.as_deref(), Some("completed"));
+                let usage = t.usage.expect("usage present");
+                assert_eq!(usage.total_tokens, Some(42));
+                assert_eq!(usage.tool_uses, Some(2));
+                assert_eq!(usage.duration_ms, Some(100));
+            }
+            other => panic!("expected task_notification, got {}", other.kind()),
+        }
+    }
+
+    /// An explicit `"patch":null` / `"usage":null` (not just a missing key) must NOT
+    /// fail the whole line — it deserializes to `None` (finding #7).
+    #[test]
+    fn explicit_null_patch_and_usage_do_not_drop_the_line() {
+        let updated: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_updated","task_id":"t1","patch":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(updated, CliMessage::System(SystemMsg::TaskUpdated(t)) if t.patch.is_none()));
+        let notif: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_notification","task_id":"t1","status":"completed","usage":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(notif, CliMessage::System(SystemMsg::TaskNotification(t)) if t.usage.is_none()));
     }
 
     #[test]

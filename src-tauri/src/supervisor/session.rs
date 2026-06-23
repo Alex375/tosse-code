@@ -312,6 +312,7 @@ impl SessionCore {
             SessionEvent::Item(i) => self.emitter.emit_item(&self.id, &i),
             SessionEvent::Permission(p) => self.emitter.emit_permission(&self.id, &p),
             SessionEvent::Commands(c) => self.emitter.emit_commands(&self.id, &c),
+            SessionEvent::Task(t) => self.emitter.emit_task(&self.id, &t),
         }
     }
 
@@ -590,6 +591,9 @@ mod tests {
         }
         fn emit_commands(&self, _session: &str, commands: &[crate::supervisor::model::SlashCommand]) {
             let _ = self.tx.send(SessionEvent::Commands(commands.to_vec()));
+        }
+        fn emit_task(&self, _session: &str, task: &crate::supervisor::model::BackgroundTask) {
+            let _ = self.tx.send(SessionEvent::Task(task.clone()));
         }
     }
 
@@ -1001,5 +1005,105 @@ mod tests {
 
         assert!(saw_tool_result, "expected a tool_result from the Bash call");
         assert_eq!(turn_ok, Some(true), "expected a successful turn");
+    }
+
+    /// LIVE end-to-end for the BACKGROUND-TASK socle: spawn a real `claude`, ask it
+    /// to run a `Bash` command with `run_in_background:true`, and prove the whole new
+    /// pipeline works against the real binary —
+    ///   1. the `task_*` lifecycle is INGESTED (it used to drop to `SystemMsg::Unknown`):
+    ///      we receive normalized [`SessionEvent::Task`] events,
+    ///   2. the producer is CLASSIFIED as [`BackgroundTaskKind::Bash`],
+    ///   3. the task reaches a terminal status with an `output_file`, and
+    ///   4. the DISK READER ([`super::subagents::read_task_output`]) reads that file back.
+    ///
+    /// Ignored by default (needs the binary, network, auth, quota). Run with:
+    ///   cargo test -p tosse-code --lib -- --ignored live_background_task --nocapture
+    #[tokio::test]
+    #[ignore = "spawns the real claude binary (network + auth + quota)"]
+    async fn live_background_task_is_ingested_and_readable() {
+        use crate::supervisor::model::BackgroundTaskKind;
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SessionEvent>();
+        let emitter = Arc::new(ChannelEmitter { tx });
+        let cwd = std::env::current_dir().unwrap();
+        let handle = spawn_session(
+            "test-bg".to_string(),
+            SpawnConfig::new(cwd),
+            InitialControls::default(),
+            emitter,
+            Box::new(|| {}),
+        )
+        .expect("session should spawn");
+
+        handle
+            .send_user_text(
+                "Use the Bash tool to run this command IN THE BACKGROUND \
+                 (set run_in_background to true): `sleep 3; echo tosse-bg-done`. \
+                 Do NOT run it in the foreground. You MUST call the Bash tool with \
+                 run_in_background true.",
+            )
+            .await
+            .expect("send should queue");
+
+        let mut session_id: Option<String> = None;
+        let mut bg_task: Option<crate::supervisor::model::BackgroundTask> = None;
+
+        let drain_loop = async {
+            while let Some(ev) = rx.recv().await {
+                match ev {
+                    SessionEvent::Permission(p) => {
+                        // Auto-allow (the background command is harmless).
+                        handle
+                            .answer_permission(p.request_id, PermissionDecision::Allow { updated_input: None })
+                            .await
+                            .ok();
+                    }
+                    SessionEvent::State(s) => {
+                        if s.session_id.is_some() {
+                            session_id = s.session_id.clone();
+                        }
+                    }
+                    SessionEvent::Task(t) => {
+                        // Keep the latest snapshot of our background Bash task. The
+                        // lifecycle is task_started → task_updated{completed} →
+                        // task_notification{output_file,summary}, so we wait for the
+                        // NOTIFICATION (the richest, final snapshot) before stopping —
+                        // breaking on the earlier task_updated would miss output_file.
+                        if t.kind == BackgroundTaskKind::Bash {
+                            let got_notification = t.output_file.is_some() || t.summary.is_some();
+                            bg_task = Some(t);
+                            if got_notification {
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        tokio::time::timeout(std::time::Duration::from_secs(120), drain_loop)
+            .await
+            .expect("a background task should be ingested within the deadline");
+        handle.shutdown().await.ok();
+
+        let task = bg_task.expect("a SessionEvent::Task with kind Bash should be emitted");
+        eprintln!("[live] ingested background task: {task:#?}");
+        assert_eq!(task.kind, BackgroundTaskKind::Bash);
+
+        // The disk reader should read the task's output file back. Prefer reading via
+        // the session-scoped reader (the same path the IPC command uses); fall back to
+        // the absolute output_file the notification carried.
+        if let Some(sid) = &session_id {
+            if let Some(out) = crate::supervisor::subagents::read_task_output(sid, &task.task_id) {
+                eprintln!("[live] read_task_output:\n{out}");
+                assert!(out.contains("tosse-bg-done"), "output file should hold the echo");
+                return;
+            }
+        }
+        let output_file = task.output_file.expect("a finished background task carries an output_file");
+        let out = std::fs::read_to_string(&output_file).expect("output file should be readable");
+        eprintln!("[live] output_file {output_file}:\n{out}");
+        assert!(out.contains("tosse-bg-done"), "output file should hold the echo");
     }
 }

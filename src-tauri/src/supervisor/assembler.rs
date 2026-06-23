@@ -12,13 +12,17 @@
 //! The assembler owns the coarse [`SessionStatePayload`]; the session asks it to
 //! reflect permission / mode changes so all state lives in one place.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use super::model::{
-    ConversationItem, NormalizedBlock, RateLimitSnapshot, SessionEvent, SessionStatePayload,
+    BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ConversationItem, NormalizedBlock,
+    RateLimitSnapshot, SessionEvent, SessionStatePayload,
 };
 use super::protocol::{
-    AssistantMsg, CliMessage, RateLimitMsg, ResultMsg, StreamEventMsg, SystemMsg, UserMsg,
+    AssistantMsg, CliMessage, RateLimitMsg, ResultMsg, StreamEventMsg, SystemMsg,
+    TaskNotificationMsg, TaskProgressMsg, TaskStartedMsg, TaskUpdatedMsg, UserMsg,
 };
 
 /// Stateful normalizer for one session.
@@ -35,6 +39,15 @@ pub struct Assembler {
     /// never on the optimistic click. So the line always reflects what the model
     /// actually got, and it also catches a change made from the chat (e.g. /model).
     announced: Announced,
+    /// `tool_use.id` → tool `name`, recorded from each assistant `tool_use` block.
+    /// The ONLY way to tell a background `Bash` from a `Monitor` apart (both carry
+    /// `task_type:"local_bash"`): we correlate a `task_*`'s `tool_use_id` back to the
+    /// tool that spawned it. Populated before the matching `task_started` (the tool
+    /// must be requested before it runs).
+    tool_names: HashMap<String, String>,
+    /// Live background tasks keyed by `task_id`, updated in place on every `task_*`
+    /// transition (spec §6.2).
+    background_tasks: HashMap<String, BackgroundTask>,
 }
 
 /// The last-announced friendly labels for the three controls (see [`Assembler`]).
@@ -271,10 +284,137 @@ impl Assembler {
                     self.announce_permission(pm, out);
                 }
             }
+            SystemMsg::TaskStarted(t) => self.ingest_task_started(t, out),
+            SystemMsg::TaskProgress(t) => self.ingest_task_progress(t, out),
+            SystemMsg::TaskUpdated(t) => self.ingest_task_updated(t, out),
+            SystemMsg::TaskNotification(t) => self.ingest_task_notification(t, out),
             // Other subtypes are discarded by the protocol layer's catch-all; we
             // surface nothing for them yet.
             SystemMsg::Unknown => {}
         }
+    }
+
+    /// A background task was created: classify its producer (from `task_type` + the
+    /// correlated tool name), seed a [`BackgroundTask`] keyed by `task_id`, and emit.
+    fn ingest_task_started(&mut self, t: &TaskStartedMsg, out: &mut Vec<SessionEvent>) {
+        let tool_name = t
+            .tool_use_id
+            .as_deref()
+            .and_then(|id| self.tool_names.get(id))
+            .map(String::as_str);
+        let kind = classify_task(t.task_type.as_deref(), tool_name);
+        let task = BackgroundTask {
+            task_id: t.task_id.clone(),
+            kind,
+            tool_use_id: t.tool_use_id.clone(),
+            label: t.description.clone(),
+            subagent_type: t.subagent_type.clone(),
+            agent_id: None,
+            status: BackgroundTaskStatus::Running,
+            progress: None,
+            tokens: None,
+            tool_uses: None,
+            duration_ms: None,
+            summary: None,
+            output_file: None,
+        };
+        self.background_tasks.insert(t.task_id.clone(), task.clone());
+        out.push(SessionEvent::Task(task));
+    }
+
+    /// A live progress tick. Stash the latest `description` (a `Workflow` emits
+    /// `"<phase>: <label>"`) and re-emit. Tolerates a tick for an unseen task.
+    fn ingest_task_progress(&mut self, t: &TaskProgressMsg, out: &mut Vec<SessionEvent>) {
+        let task = self.task_entry(&t.task_id, t.tool_use_id.as_deref());
+        if t.description.is_some() {
+            task.progress = t.description.clone();
+        }
+        out.push(SessionEvent::Task(task.clone()));
+    }
+
+    /// A state patch (the terminal transition for Bash/Monitor/Agent). Map the patch
+    /// status onto our coarse status and re-emit.
+    fn ingest_task_updated(&mut self, t: &TaskUpdatedMsg, out: &mut Vec<SessionEvent>) {
+        let task = self.task_entry(&t.task_id, None);
+        if let Some(status) = t.patch.as_ref().and_then(|p| p.status.as_deref()) {
+            task.status = map_status(status);
+        }
+        out.push(SessionEvent::Task(task.clone()));
+    }
+
+    /// A task finished: fold in the final status, summary, output file and usage
+    /// roll-up, then re-emit the terminal state.
+    fn ingest_task_notification(&mut self, t: &TaskNotificationMsg, out: &mut Vec<SessionEvent>) {
+        let task = self.task_entry(&t.task_id, t.tool_use_id.as_deref());
+        // A notification ALWAYS means the task finished. So never leave it Running: a
+        // recognized status maps as usual; a present-but-UNRECOGNIZED terminal status
+        // (a future CLI vocab like "timed_out") must NOT silently stay Running — fall
+        // back to Completed and log it so the unknown vocab surfaces and gets captured.
+        task.status = match t.status.as_deref() {
+            Some(status) => match map_status(status) {
+                BackgroundTaskStatus::Running => {
+                    eprintln!(
+                        "[assembler] task_notification with unrecognized terminal status {status:?}; treating as completed"
+                    );
+                    BackgroundTaskStatus::Completed
+                }
+                terminal => terminal,
+            },
+            None => BackgroundTaskStatus::Completed,
+        };
+        if t.summary.is_some() {
+            task.summary = t.summary.clone();
+        }
+        if t.output_file.is_some() {
+            task.output_file = t.output_file.clone();
+        }
+        if let Some(usage) = &t.usage {
+            if usage.total_tokens.is_some() {
+                task.tokens = usage.total_tokens;
+            }
+            if usage.tool_uses.is_some() {
+                task.tool_uses = usage.tool_uses;
+            }
+            if usage.duration_ms.is_some() {
+                task.duration_ms = usage.duration_ms;
+            }
+        }
+        // For a sub-agent, the only place the agent id appears on the wire is inside
+        // `output_file` (`subagents/agent-<agentId>.jsonl`). Surface it as a first-class
+        // field so a drill-down can call `load_subagent_transcript` without re-parsing.
+        if task.kind == BackgroundTaskKind::Agent && task.agent_id.is_none() {
+            if let Some(of) = task.output_file.as_deref() {
+                task.agent_id = agent_id_from_output_file(of);
+            }
+        }
+        out.push(SessionEvent::Task(task.clone()));
+    }
+
+    /// Get (or lazily create) the tracked task for `task_id`. A `task_updated` /
+    /// `task_notification` for a task whose `task_started` we missed (e.g. the stream
+    /// was joined mid-run) still yields a usable entry, classified from whatever the
+    /// late event carries.
+    fn task_entry(&mut self, task_id: &str, tool_use_id: Option<&str>) -> &mut BackgroundTask {
+        let tool_name = tool_use_id
+            .and_then(|id| self.tool_names.get(id))
+            .map(String::clone);
+        self.background_tasks
+            .entry(task_id.to_string())
+            .or_insert_with(|| BackgroundTask {
+                task_id: task_id.to_string(),
+                kind: classify_task(None, tool_name.as_deref()),
+                tool_use_id: tool_use_id.map(str::to_string),
+                label: None,
+                subagent_type: None,
+                agent_id: None,
+                status: BackgroundTaskStatus::Running,
+                progress: None,
+                tokens: None,
+                tool_uses: None,
+                duration_ms: None,
+                summary: None,
+                output_file: None,
+            })
     }
 
     fn ingest_stream_event(&mut self, se: &StreamEventMsg, out: &mut Vec<SessionEvent>) {
@@ -341,9 +481,48 @@ impl Assembler {
                     }
                 }
             }
-            // message_start handled above; content_block_start/stop, message_delta,
-            // message_stop carry no incremental text we surface yet.
+            "content_block_start" => {
+                // A tool_use block is announced here (id + name) BEFORE the assembled
+                // assistant message and well before the tool runs / emits `task_started`.
+                // Recording the name now guarantees a background task is classified
+                // correctly the moment it starts (Bash vs Monitor hinges on this name).
+                if let Some(cb) = event.get("content_block") {
+                    if cb.get("type").and_then(Value::as_str) == Some("tool_use") {
+                        let id = cb.get("id").and_then(Value::as_str).unwrap_or_default();
+                        let name = cb.get("name").and_then(Value::as_str).unwrap_or_default();
+                        self.record_tool_name(id, name, out);
+                    }
+                }
+            }
+            // content_block_stop, message_delta, message_stop carry no incremental
+            // text we surface yet.
             _ => {}
+        }
+    }
+
+    /// Record a background-capable tool_use's `id → name` for later `task_*`
+    /// correlation, and — belt-and-suspenders — re-classify an ALREADY-tracked task
+    /// that turns out to belong to it (covers the rare wire ordering where a
+    /// `task_started` beat the tool name). Only background-capable tools are kept, which
+    /// bounds the map to the handful of task-spawning calls instead of every tool_use.
+    fn record_tool_name(&mut self, id: &str, name: &str, out: &mut Vec<SessionEvent>) {
+        if id.is_empty() || !is_bg_capable_tool(name) {
+            return;
+        }
+        self.tool_names.insert(id.to_string(), name.to_string());
+        // If a task for this tool_use already exists but was classified before the name
+        // was known (ambiguous `local_bash` → Bash fallback, or `Other`), correct it now
+        // — the tool name is the authoritative signal — and re-emit so the UI updates.
+        if let Some(task) = self
+            .background_tasks
+            .values_mut()
+            .find(|t| t.tool_use_id.as_deref() == Some(id))
+        {
+            let corrected = classify_task(None, Some(name));
+            if corrected != task.kind {
+                task.kind = corrected;
+                out.push(SessionEvent::Task(task.clone()));
+            }
         }
     }
 
@@ -355,6 +534,17 @@ impl Assembler {
             .unwrap_or_default()
             .to_string();
         let blocks = normalize_blocks(a.message.get("content"));
+        // Remember each background-capable tool_use's name so a later `task_*` (which
+        // only carries the tool_use_id) can be classified — e.g. Bash vs Monitor. The
+        // assembled `assistant` message is the AUTHORITATIVE source; the streamed
+        // `content_block_start` (handled in ingest_stream_event) records it EARLIER, so
+        // the name is known before `task_started` even though this message arrives at
+        // end-of-turn.
+        for b in &blocks {
+            if let NormalizedBlock::ToolUse { id, name, .. } = b {
+                self.record_tool_name(id, name, out);
+            }
+        }
         out.push(SessionEvent::Item(ConversationItem::AssistantMessage {
             id,
             blocks,
@@ -451,6 +641,59 @@ fn change_notice(control: &str, icon: &str, from: &str, to: &str) -> SessionEven
         subtype: "control_change".to_string(),
         detail: serde_json::json!({ "control": control, "icon": icon, "from": from, "to": to }),
     })
+}
+
+/// The tools that spawn background tasks. Only these are remembered in `tool_names`
+/// (the correlation map), which bounds it to the few task-spawning calls rather than
+/// every tool_use in the session.
+fn is_bg_capable_tool(name: &str) -> bool {
+    matches!(name, "Agent" | "Workflow" | "Bash" | "Monitor")
+}
+
+/// Extract a sub-agent's id from its transcript `output_file`
+/// (`…/subagents/agent-<agentId>.jsonl` → `<agentId>`). `None` if the path does not
+/// match that shape.
+fn agent_id_from_output_file(path: &str) -> Option<String> {
+    let file = path.rsplit('/').next()?;
+    file.strip_suffix(".jsonl")?
+        .strip_prefix("agent-")
+        .map(str::to_string)
+}
+
+/// Classify a background task's producer. The tool NAME is the strongest signal
+/// (it is the only thing that separates a background `Bash` from a `Monitor`, which
+/// share `task_type:"local_bash"`); `task_type` is the fallback when the tool name
+/// is not yet known.
+fn classify_task(task_type: Option<&str>, tool_name: Option<&str>) -> BackgroundTaskKind {
+    match tool_name {
+        Some("Agent") => return BackgroundTaskKind::Agent,
+        Some("Workflow") => return BackgroundTaskKind::Workflow,
+        Some("Bash") => return BackgroundTaskKind::Bash,
+        Some("Monitor") => return BackgroundTaskKind::Monitor,
+        _ => {}
+    }
+    match task_type {
+        // `local_bash` is ambiguous without the tool name (Bash bg AND Monitor) —
+        // default to Bash, the common case; a later event with the name refines it.
+        Some("local_bash") => BackgroundTaskKind::Bash,
+        Some("local_agent") => BackgroundTaskKind::Agent,
+        _ => BackgroundTaskKind::Other,
+    }
+}
+
+/// Map a wire status string onto our coarse [`BackgroundTaskStatus`]. Anything we do
+/// not recognize is treated as still-running (a conservative default — a real
+/// terminal state always sends `completed`/`failed`/etc.).
+fn map_status(status: &str) -> BackgroundTaskStatus {
+    match status {
+        "completed" | "success" | "done" => BackgroundTaskStatus::Completed,
+        "failed" | "error" | "timeout" | "timed_out" | "expired" => BackgroundTaskStatus::Failed,
+        "stopped" | "cancelled" | "canceled" | "killed" => BackgroundTaskStatus::Stopped,
+        // Non-terminal (`in_progress`, `running`, `queued`, …) or an unknown vocab. A
+        // `task_notification` caller treats this as terminal (and logs it); a
+        // `task_updated` legitimately stays Running until a terminal patch arrives.
+        _ => BackgroundTaskStatus::Running,
+    }
 }
 
 /// Friendly label for a model id (alias OR resolved id) — matches the composer's.
@@ -772,6 +1015,166 @@ mod tests {
         // last iteration: 2000 + 18000 + 0 = 20000 (NOT the top-level 1).
         assert_eq!(asm.state().context_tokens, Some(20_000));
         assert_eq!(asm.state().context_window, Some(1_000_000));
+    }
+
+    const TASKS_CAPTURE: &str = include_str!("fixtures/capture_tasks.jsonl");
+
+    /// Feed the captured task lifecycle through the assembler and collect the final
+    /// [`BackgroundTask`] per id. Asserts the four producers are classified — crucially
+    /// Bash vs Monitor (same `task_type:"local_bash"`, told apart by tool name) — and
+    /// that the terminal status + usage roll-up land.
+    #[test]
+    fn ingests_background_tasks_and_classifies_producers() {
+        use std::collections::HashMap;
+        let mut asm = Assembler::new();
+        let mut tasks: HashMap<String, BackgroundTask> = HashMap::new();
+        let mut emissions = 0;
+        for line in TASKS_CAPTURE.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let msg: CliMessage = serde_json::from_str(line).unwrap();
+            for ev in asm.ingest(&msg) {
+                if let SessionEvent::Task(t) = ev {
+                    emissions += 1;
+                    tasks.insert(t.task_id.clone(), t);
+                }
+            }
+        }
+        // Every task_* transition emits (4 producers × {started, updated, notif} +
+        // the workflow's progress tick = 13).
+        assert_eq!(emissions, 13, "one Task event per task_* transition");
+        assert_eq!(tasks.len(), 4, "four distinct background tasks");
+
+        let agent = &tasks["task_agent_1"];
+        assert_eq!(agent.kind, BackgroundTaskKind::Agent);
+        assert_eq!(agent.subagent_type.as_deref(), Some("Explore"));
+        assert_eq!(agent.status, BackgroundTaskStatus::Completed);
+        assert_eq!(agent.tokens, Some(11174));
+        assert_eq!(agent.tool_uses, Some(3));
+        assert_eq!(agent.duration_ms, Some(859));
+        assert_eq!(agent.tool_use_id.as_deref(), Some("toolu_agent"));
+        // agent_id parsed from the notification's output_file (…/subagents/agent-aa11.jsonl).
+        assert_eq!(agent.agent_id.as_deref(), Some("aa11"));
+
+        let wf = &tasks["task_wf_1"];
+        assert_eq!(wf.kind, BackgroundTaskKind::Workflow);
+        assert_eq!(wf.progress.as_deref(), Some("Research: r-alpha"));
+        assert_eq!(wf.status, BackgroundTaskStatus::Completed);
+
+        let bash = &tasks["task_bash_1"];
+        assert_eq!(bash.kind, BackgroundTaskKind::Bash, "local_bash + Bash tool → Bash");
+        assert_eq!(bash.status, BackgroundTaskStatus::Completed);
+        assert!(bash.output_file.as_deref().unwrap().ends_with("task_bash_1.output"));
+
+        let mon = &tasks["task_mon_1"];
+        assert_eq!(
+            mon.kind,
+            BackgroundTaskKind::Monitor,
+            "local_bash + Monitor tool → Monitor (NOT Bash)"
+        );
+        assert_eq!(mon.status, BackgroundTaskStatus::Completed);
+    }
+
+    /// The classifier prefers the tool name (the only Bash/Monitor discriminator),
+    /// falls back to `task_type`, and the status mapper folds wire strings onto the
+    /// coarse states.
+    #[test]
+    fn classify_and_status_mapping() {
+        assert_eq!(classify_task(Some("local_bash"), Some("Monitor")), BackgroundTaskKind::Monitor);
+        assert_eq!(classify_task(Some("local_bash"), Some("Bash")), BackgroundTaskKind::Bash);
+        assert_eq!(classify_task(None, Some("Workflow")), BackgroundTaskKind::Workflow);
+        assert_eq!(classify_task(Some("local_agent"), None), BackgroundTaskKind::Agent);
+        // Ambiguous local_bash with no tool name yet defaults to Bash (refined later).
+        assert_eq!(classify_task(Some("local_bash"), None), BackgroundTaskKind::Bash);
+        assert_eq!(classify_task(None, None), BackgroundTaskKind::Other);
+
+        assert_eq!(map_status("completed"), BackgroundTaskStatus::Completed);
+        assert_eq!(map_status("failed"), BackgroundTaskStatus::Failed);
+        assert_eq!(map_status("timed_out"), BackgroundTaskStatus::Failed);
+        assert_eq!(map_status("stopped"), BackgroundTaskStatus::Stopped);
+        assert_eq!(map_status("in_progress"), BackgroundTaskStatus::Running);
+
+        assert_eq!(agent_id_from_output_file("/x/s/subagents/agent-aa11.jsonl").as_deref(), Some("aa11"));
+        assert_eq!(agent_id_from_output_file("/x/s/tasks/t.output"), None);
+    }
+
+    /// A Monitor's tool name, recorded from `content_block_start`, must classify the
+    /// task as Monitor (NOT Bash) even though `task_started` arrives before the
+    /// assembled assistant message — the ordering hazard (finding #2).
+    #[test]
+    fn monitor_classified_from_content_block_start_before_assistant_message() {
+        let mut asm = Assembler::new();
+        let cbs: CliMessage = serde_json::from_str(
+            r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_mon","name":"Monitor","input":{}}},"session_id":"s"}"#,
+        )
+        .unwrap();
+        asm.ingest(&cbs);
+        let started: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_started","task_id":"tk_mon","tool_use_id":"tu_mon","description":"watch","task_type":"local_bash"}"#,
+        )
+        .unwrap();
+        let task = asm.ingest(&started).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        assert_eq!(task.expect("a Task event").kind, BackgroundTaskKind::Monitor);
+    }
+
+    /// If `task_started` truly beats the tool name, the task starts as the ambiguous
+    /// Bash fallback but is RE-CLASSIFIED (and re-emitted) the moment the name arrives.
+    #[test]
+    fn late_tool_name_reclassifies_an_ambiguous_local_bash_task() {
+        let mut asm = Assembler::new();
+        let started: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_started","task_id":"tk_late","tool_use_id":"tu_late","description":"watch","task_type":"local_bash"}"#,
+        )
+        .unwrap();
+        let first = asm.ingest(&started).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        // No name yet → ambiguous local_bash defaults to Bash.
+        assert_eq!(first.expect("a Task event").kind, BackgroundTaskKind::Bash);
+
+        // The name arrives late (assistant message); the task is corrected to Monitor.
+        let assistant: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "assistant",
+            "message": {"id": "m", "role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_late", "name": "Monitor", "input": {}}
+            ]},
+            "session_id": "s"
+        }))
+        .unwrap();
+        let corrected = asm.ingest(&assistant).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        assert_eq!(
+            corrected.expect("a re-classify Task event").kind,
+            BackgroundTaskKind::Monitor
+        );
+    }
+
+    /// A late `task_updated` for a task whose `task_started` we missed still yields a
+    /// usable (Running→Completed) entry — the stream can be joined mid-run.
+    #[test]
+    fn task_updated_without_prior_started_is_tolerated() {
+        let mut asm = Assembler::new();
+        let msg: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_updated","task_id":"orphan","patch":{"status":"completed"}}"#,
+        )
+        .unwrap();
+        let ev = asm.ingest(&msg);
+        let task = ev.into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        let task = task.expect("a Task event even without a prior task_started");
+        assert_eq!(task.task_id, "orphan");
+        assert_eq!(task.status, BackgroundTaskStatus::Completed);
+        assert_eq!(task.kind, BackgroundTaskKind::Other);
     }
 
     #[test]

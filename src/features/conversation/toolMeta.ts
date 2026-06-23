@@ -71,6 +71,9 @@ export function toolMeta(name: string, input: JsonValue): ToolMeta {
       // Suppressed from the transcript: the to-do list is rendered by the
       // dedicated pinned <TodoBar>, so the raw tool card would be a duplicate.
       return { icon: ListTodo, primaryArg: null, suppressed: true, kind: "plain" };
+    // `Agent` is the wire name of the sub-agent tool (was `Task`); keep `Task` as an
+    // alias so resumed/old transcripts still render correctly.
+    case "Agent":
     case "Task":
       return { icon: Bot, primaryArg: str(obj.description), suppressed: false, kind: "plain" };
     default:

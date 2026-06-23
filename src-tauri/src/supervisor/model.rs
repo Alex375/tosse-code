@@ -185,6 +185,111 @@ pub struct SlashCommand {
     pub argument_hint: String,
 }
 
+/// Which producer a background task came from. The `claude` binary runs ONE generic
+/// background-task system for four producers; we tell them apart from `task_type`
+/// plus the correlated `tool_use` name (see [`super::assembler`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskKind {
+    /// A sub-agent launched by the `Agent` tool (`task_type:"local_agent"`).
+    Agent,
+    /// A dynamic-workflow run launched by the `Workflow` tool.
+    Workflow,
+    /// A shell command launched by `Bash` with `run_in_background:true`.
+    Bash,
+    /// A live watch launched by the `Monitor` tool.
+    Monitor,
+    /// A background task whose producer could not be classified yet.
+    Other,
+}
+
+/// Coarse lifecycle status of a background task, normalized from `task_*` events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskStatus {
+    /// Created and not yet finished (`task_started`, or a non-terminal patch).
+    Running,
+    /// Finished successfully (`patch.status`/notification `"completed"`).
+    Completed,
+    /// Finished with an error (`"failed"`/`"error"`).
+    Failed,
+    /// Cancelled via `TaskStop` / session end (`"stopped"`/`"cancelled"`).
+    Stopped,
+}
+
+/// A normalized background task, keyed by `task_id` and updated in place as its
+/// `task_*` lifecycle events arrive. The single model behind the (future) sub-agent /
+/// workflow / Monitor / background-Bash views — the rich per-producer detail (full
+/// transcript, manifest, output) is read from disk on demand (see
+/// [`super::subagents`]), never carried here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+pub struct BackgroundTask {
+    /// Stable id that ties every `task_*` event of this task together.
+    pub task_id: String,
+    pub kind: BackgroundTaskKind,
+    /// The `tool_use` block that spawned the task (== `parent_tool_use_id` of any
+    /// streamed child content). Lets the UI anchor the task under its tool card.
+    pub tool_use_id: Option<String>,
+    /// Human label (the `description`: a sub-agent's task, a Bash command, …).
+    pub label: Option<String>,
+    /// Sub-agent type (`Agent` only, e.g. `"Explore"`).
+    pub subagent_type: Option<String>,
+    /// The sub-agent's id (`Agent` only), i.e. the key for [`super::subagents::load_subagent_transcript`].
+    /// Derived from the `output_file` basename (`subagents/agent-<agentId>.jsonl`), since
+    /// the wire carries it only inside that path. Lets the UI drill into the transcript
+    /// without re-parsing the path itself.
+    pub agent_id: Option<String>,
+    pub status: BackgroundTaskStatus,
+    /// Latest live progress text (`Workflow`: `"<phase>: <label>"`).
+    pub progress: Option<String>,
+    /// Total tokens used (from the `task_notification` usage roll-up).
+    pub tokens: Option<u64>,
+    /// Tool-call count (from the usage roll-up).
+    pub tool_uses: Option<u64>,
+    /// Wall-clock duration in ms (from the usage roll-up).
+    pub duration_ms: Option<u64>,
+    /// End-of-task human summary (from the `task_notification`).
+    pub summary: Option<String>,
+    /// On-disk file holding the task's full output: `tasks/<id>.output` for
+    /// Bash-bg/Monitor, the sub-agent transcript for `Agent`.
+    pub output_file: Option<String>,
+}
+
+/// One phase of a workflow run, from a `workflows/wf_<id>.json` manifest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowPhase {
+    pub title: String,
+    pub detail: Option<String>,
+}
+
+/// A workflow run's manifest (`workflows/wf_<id>.json`), the data model behind the
+/// `/workflows`-style view. Field names mirror the on-disk camelCase manifest. The
+/// dynamic, per-entry-shaped `workflowProgress` and `result` are kept raw
+/// ([`Value`]) — the Workflow display task types them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRun {
+    pub run_id: String,
+    pub task_id: Option<String>,
+    pub status: Option<String>,
+    pub workflow_name: Option<String>,
+    pub default_model: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub agent_count: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub total_tool_calls: Option<u64>,
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub phases: Vec<WorkflowPhase>,
+    /// Array of `{type:"workflow_phase"|"workflow_agent", …}` entries — kept raw.
+    #[serde(default)]
+    pub workflow_progress: Value,
+    /// The workflow's final return value — kept raw.
+    #[serde(default)]
+    pub result: Value,
+}
+
 /// What a session emits to the outside world.
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
@@ -194,6 +299,10 @@ pub enum SessionEvent {
     /// The session's available slash commands (one-shot, from the `initialize`
     /// control response). Drives the composer's `/` autocomplete.
     Commands(Vec<SlashCommand>),
+    /// A background task was created or changed state. Emitted on every `task_*`
+    /// transition, keyed by `task_id`, so the UI tracks the live fleet of
+    /// sub-agents / workflows / watches / background shells.
+    Task(BackgroundTask),
 }
 
 /// Sink for a session's events. The IPC layer implements this over a Tauri
@@ -203,4 +312,5 @@ pub trait SessionEmitter: Send + Sync + 'static {
     fn emit_item(&self, session: &str, item: &ConversationItem);
     fn emit_permission(&self, session: &str, request: &PermissionRequestPayload);
     fn emit_commands(&self, session: &str, commands: &[SlashCommand]);
+    fn emit_task(&self, session: &str, task: &BackgroundTask);
 }

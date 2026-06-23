@@ -23,8 +23,9 @@ use serde_json::Value;
 use super::assembler::{context_used_from_usage, normalize_blocks};
 use super::model::{ContextFill, ConversationItem};
 
-/// Claude's config dir: `$CLAUDE_CONFIG_DIR` if set, else `$HOME/.claude`.
-fn claude_config_dir() -> Option<PathBuf> {
+/// Claude's config dir: `$CLAUDE_CONFIG_DIR` if set, else `$HOME/.claude`. Shared
+/// with [`super::subagents`], which reads the sibling task-artifact directories.
+pub(crate) fn claude_config_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
     }
@@ -135,9 +136,21 @@ fn load_context_fill_in(config_dir: &Path, session_id: &str) -> ContextFill {
 }
 
 fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    match std::fs::read_to_string(path) {
+        // The main conversation transcript: skip sidechain (sub-agent) turns — the
+        // root Task/Agent tool_use + its result still show, and the sub-agent's own
+        // transcript is read separately (see [`super::subagents`]).
+        Ok(content) => parse_transcript_str(&content, true),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Normalize a JSON-lines transcript into [`ConversationItem`]s. When
+/// `skip_sidechain` is true, sub-agent (`isSidechain:true`) turns are dropped — the
+/// behavior the main conversation restore wants. A SUB-AGENT's own transcript is
+/// itself entirely sidechain, so [`super::subagents`] calls this with
+/// `skip_sidechain = false` to keep every line.
+pub(crate) fn parse_transcript_str(content: &str, skip_sidechain: bool) -> Vec<ConversationItem> {
     let mut items = Vec::new();
     for line in content.lines() {
         let line = line.trim();
@@ -147,10 +160,7 @@ fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue; // tolerate a malformed line, never abort the restore
         };
-        // Skip sub-agent (sidechain) turns: the transcript threads them via a
-        // `parentUuid` chain we don't reconstruct here (the live path scopes them
-        // by `parent_tool_use_id`). The root Task tool_use + its result still show.
-        if entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        if skip_sidechain && entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             continue;
         }
         match entry.get("type").and_then(Value::as_str) {

@@ -75,6 +75,42 @@ async loadSessionContext(sessionId: string) : Promise<Result<ContextFill, string
 }
 },
 /**
+ * Load a sub-agent's (`Agent` tool, or a workflow agent) full transcript,
+ * normalized into the same items the live conversation renders. Empty if absent.
+ */
+async loadSubagentTranscript(sessionId: string, agentId: string) : Promise<Result<ConversationItem[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_subagent_transcript", { sessionId, agentId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Load a workflow run's manifest (`workflows/<run_id>.json`). `null` if absent.
+ */
+async loadWorkflowRun(sessionId: string, runId: string) : Promise<Result<WorkflowRun | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_run", { sessionId, runId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Read the current contents of a background task's output file
+ * (`tasks/<task_id>.output`, the sink for background `Bash` and `Monitor`). `null`
+ * if absent. One-shot read — live tailing is layered on by the display task.
+ */
+async readTaskOutput(sessionId: string, taskId: string) : Promise<Result<string | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_task_output", { sessionId, taskId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Send a user turn to a session.
  */
 async sendMessage(session: string, text: string) : Promise<Result<null, string>> {
@@ -400,6 +436,7 @@ sessionCommandsEvent: SessionCommandsEvent,
 sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionStateEvent: SessionStateEvent,
+sessionTaskEvent: SessionTaskEvent,
 tickEvent: TickEvent
 }>({
 fsChangeEvent: "fs-change-event",
@@ -407,6 +444,7 @@ sessionCommandsEvent: "session-commands-event",
 sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionStateEvent: "session-state-event",
+sessionTaskEvent: "session-task-event",
 tickEvent: "tick-event"
 })
 
@@ -416,6 +454,109 @@ tickEvent: "tick-event"
 
 /** user-defined types **/
 
+/**
+ * A normalized background task, keyed by `task_id` and updated in place as its
+ * `task_*` lifecycle events arrive. The single model behind the (future) sub-agent /
+ * workflow / Monitor / background-Bash views — the rich per-producer detail (full
+ * transcript, manifest, output) is read from disk on demand (see
+ * [`super::subagents`]), never carried here.
+ */
+export type BackgroundTask = { 
+/**
+ * Stable id that ties every `task_*` event of this task together.
+ */
+task_id: string; kind: BackgroundTaskKind; 
+/**
+ * The `tool_use` block that spawned the task (== `parent_tool_use_id` of any
+ * streamed child content). Lets the UI anchor the task under its tool card.
+ */
+tool_use_id: string | null; 
+/**
+ * Human label (the `description`: a sub-agent's task, a Bash command, …).
+ */
+label: string | null; 
+/**
+ * Sub-agent type (`Agent` only, e.g. `"Explore"`).
+ */
+subagent_type: string | null; 
+/**
+ * The sub-agent's id (`Agent` only), i.e. the key for [`super::subagents::load_subagent_transcript`].
+ * Derived from the `output_file` basename (`subagents/agent-<agentId>.jsonl`), since
+ * the wire carries it only inside that path. Lets the UI drill into the transcript
+ * without re-parsing the path itself.
+ */
+agent_id: string | null; status: BackgroundTaskStatus; 
+/**
+ * Latest live progress text (`Workflow`: `"<phase>: <label>"`).
+ */
+progress: string | null; 
+/**
+ * Total tokens used (from the `task_notification` usage roll-up).
+ */
+tokens: number | null; 
+/**
+ * Tool-call count (from the usage roll-up).
+ */
+tool_uses: number | null; 
+/**
+ * Wall-clock duration in ms (from the usage roll-up).
+ */
+duration_ms: number | null; 
+/**
+ * End-of-task human summary (from the `task_notification`).
+ */
+summary: string | null; 
+/**
+ * On-disk file holding the task's full output: `tasks/<id>.output` for
+ * Bash-bg/Monitor, the sub-agent transcript for `Agent`.
+ */
+output_file: string | null }
+/**
+ * Which producer a background task came from. The `claude` binary runs ONE generic
+ * background-task system for four producers; we tell them apart from `task_type`
+ * plus the correlated `tool_use` name (see [`super::assembler`]).
+ */
+export type BackgroundTaskKind = 
+/**
+ * A sub-agent launched by the `Agent` tool (`task_type:"local_agent"`).
+ */
+"agent" | 
+/**
+ * A dynamic-workflow run launched by the `Workflow` tool.
+ */
+"workflow" | 
+/**
+ * A shell command launched by `Bash` with `run_in_background:true`.
+ */
+"bash" | 
+/**
+ * A live watch launched by the `Monitor` tool.
+ */
+"monitor" | 
+/**
+ * A background task whose producer could not be classified yet.
+ */
+"other"
+/**
+ * Coarse lifecycle status of a background task, normalized from `task_*` events.
+ */
+export type BackgroundTaskStatus = 
+/**
+ * Created and not yet finished (`task_started`, or a non-terminal patch).
+ */
+"running" | 
+/**
+ * Finished successfully (`patch.status`/notification `"completed"`).
+ */
+"completed" | 
+/**
+ * Finished with an error (`"failed"`/`"error"`).
+ */
+"failed" | 
+/**
+ * Cancelled via `TaskStop` / session end (`"stopped"`/`"cancelled"`).
+ */
+"stopped"
 /**
  * Context-meter seed for a conversation, read from its on-disk transcript so the
  * ring shows the real fill the moment a conversation is opened / its stream turned
@@ -698,6 +839,12 @@ context_window: number | null;
  */
 rate_limit: RateLimitSnapshot | null }
 /**
+ * A background task (sub-agent / workflow / Monitor / background Bash) was created
+ * or changed state. Emitted on every `task_*` transition, keyed (inside the
+ * payload) by `task_id`, so the UI tracks the live fleet of background tasks.
+ */
+export type SessionTaskEvent = { session: string; task: BackgroundTask }
+/**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code
  * extension consumes to drive its `/` autocomplete menu. `name` carries NO
@@ -717,6 +864,25 @@ argument_hint: string }
  * Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
  */
 export type TickEvent = { seq: number; message: string }
+/**
+ * One phase of a workflow run, from a `workflows/wf_<id>.json` manifest.
+ */
+export type WorkflowPhase = { title: string; detail: string | null }
+/**
+ * A workflow run's manifest (`workflows/wf_<id>.json`), the data model behind the
+ * `/workflows`-style view. Field names mirror the on-disk camelCase manifest. The
+ * dynamic, per-entry-shaped `workflowProgress` and `result` are kept raw
+ * ([`Value`]) — the Workflow display task types them.
+ */
+export type WorkflowRun = { runId: string; taskId: string | null; status: string | null; workflowName: string | null; defaultModel: string | null; durationMs: number | null; agentCount: number | null; totalTokens: number | null; totalToolCalls: number | null; summary: string | null; phases?: WorkflowPhase[]; 
+/**
+ * Array of `{type:"workflow_phase"|"workflow_agent", …}` entries — kept raw.
+ */
+workflowProgress?: JsonValue; 
+/**
+ * The workflow's final return value — kept raw.
+ */
+result?: JsonValue }
 /**
  * Identity of one worktree of a repository (the cheap, always-listed part).
  * 

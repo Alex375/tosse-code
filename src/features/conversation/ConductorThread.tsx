@@ -32,6 +32,9 @@ const TOOL_ICON: Record<string, string> = {
   Grep: "search",
   Glob: "search",
   WebFetch: "layers",
+  // The sub-agent tool is `Agent` on the wire (was `Task`); keep `Task` as an alias
+  // so old transcripts still render the right icon.
+  Agent: "spark",
   Task: "spark",
   TodoWrite: "list",
 };

@@ -3,7 +3,8 @@ use specta::Type;
 use tauri_specta::Event;
 
 use crate::supervisor::model::{
-    ConversationItem, PermissionRequestPayload, SessionEmitter, SessionStatePayload, SlashCommand,
+    BackgroundTask, ConversationItem, PermissionRequestPayload, SessionEmitter,
+    SessionStatePayload, SlashCommand,
 };
 
 /// Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
@@ -41,6 +42,15 @@ pub struct SessionPermissionEvent {
 pub struct SessionCommandsEvent {
     pub session: String,
     pub commands: Vec<SlashCommand>,
+}
+
+/// A background task (sub-agent / workflow / Monitor / background Bash) was created
+/// or changed state. Emitted on every `task_*` transition, keyed (inside the
+/// payload) by `task_id`, so the UI tracks the live fleet of background tasks.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionTaskEvent {
+    pub session: String,
+    pub task: BackgroundTask,
 }
 
 /// Coalesced filesystem change notification for the editor panel: the (de-noised,
@@ -87,6 +97,14 @@ impl SessionEmitter for TauriEmitter {
         let ev = SessionCommandsEvent {
             session: session.to_string(),
             commands: commands.to_vec(),
+        };
+        let _ = ev.emit(&self.app);
+    }
+
+    fn emit_task(&self, session: &str, task: &BackgroundTask) {
+        let ev = SessionTaskEvent {
+            session: session.to_string(),
+            task: task.clone(),
         };
         let _ = ev.emit(&self.app);
     }
