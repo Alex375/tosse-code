@@ -11,6 +11,8 @@
 //!   - [`assembler`] — turn the raw stream into normalized events (subtask 3).
 //!   - [`history`] — rebuild a past conversation from Claude's on-disk
 //!     transcript on resume (the CLI does not re-stream history).
+//!   - [`subagents`] — disk readers for background-task artifacts (sub-agent
+//!     transcripts, workflow manifests, background-task output files).
 //!   - [`session`] — the actor that wires transport + control + assembler + an
 //!     event sink, exposed to the IPC layer (subtask 3).
 
@@ -20,6 +22,7 @@ pub mod history;
 pub mod model;
 pub mod protocol;
 pub mod session;
+pub mod subagents;
 pub mod transport;
 
 pub use control::{PermissionDecision, PermissionMode};

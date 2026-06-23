@@ -17,6 +17,7 @@ export type {
   PermissionMode,
   PermissionRequestPayload,
   PersistedState,
+  PlanUsage,
   Pong,
   RepoRecord,
   Result,
@@ -27,6 +28,8 @@ export type {
   SessionStatePayload,
   SlashCommand,
   TickEvent,
+  UsageError,
+  UsageWindow,
   WorktreeInfo,
   WorktreeStatus,
 } from "./bindings";

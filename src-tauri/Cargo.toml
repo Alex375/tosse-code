@@ -1,6 +1,6 @@
 [package]
 name = "tosse-code"
-version = "0.7.0"
+version = "0.8.0"
 description = "Tosse Code — desktop app to pilot Claude Code"
 authors = ["Tosse"]
 edition = "2021"
@@ -27,6 +27,15 @@ tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# HTTP client for the internal `GET /api/oauth/usage` endpoint (real plan-usage %,
+# absent from stream-json). Already in the tree transitively (via tauri-plugin-updater)
+# with the EXACT same config — `rustls-no-provider` + the `ring` crypto provider from
+# the separate `rustls` dep — so this adds no new crates / TLS stack / build cost. The
+# provider is installed at runtime (idempotent guard, mirroring the updater) before the
+# first client is built. Used only for rare, off-hot-path calls.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Persistence: SQLite compiled into the binary (`bundled`) — nothing to install,
 # no system dependency. Synchronous and tiny; our writes are rare and off the hot

@@ -65,6 +65,8 @@ describe("toolActivityLabel", () => {
     expect(toolActivityLabel("MultiEdit", { file_path: "a/b/x.ts" })).toBe("Modifie x.ts");
     expect(toolActivityLabel("Glob", { pattern: "**/*.ts" })).toBe("Liste **/*.ts");
     expect(toolActivityLabel("Task", { description: "Audit auth" })).toBe("Sous-agent : Audit auth");
+    // `Agent` is the current wire name of the sub-agent tool (alias of `Task`).
+    expect(toolActivityLabel("Agent", { description: "Audit auth" })).toBe("Sous-agent : Audit auth");
     expect(toolActivityLabel("WebFetch", { url: "https://x" })).toBe("Récupère une page web");
     expect(toolActivityLabel("WebSearch", { query: "tauri updater" })).toBe(
       "Recherche « tauri updater »",

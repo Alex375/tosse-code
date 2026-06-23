@@ -32,6 +32,9 @@ const TOOL_ICON: Record<string, string> = {
   Grep: "search",
   Glob: "search",
   WebFetch: "layers",
+  // The sub-agent tool is `Agent` on the wire (was `Task`); keep `Task` as an alias
+  // so old transcripts still render the right icon.
+  Agent: "spark",
   Task: "spark",
   TodoWrite: "list",
 };
@@ -107,6 +110,19 @@ function NoticeRow({ session, noticeId }: { session: string; noticeId: string })
   return null;
 }
 
+/** MultiEdit carries an `edits: [{old_string, new_string}, …]` array instead of the
+ *  top-level old/new pair an Edit has. Pull each hunk out so every one renders a diff
+ *  (reading the top-level fields would yield an empty `+0/−0` diff). */
+function multiEdits(input: JsonValue): { old: string; next: string }[] {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
+  const edits = (input as Record<string, JsonValue>).edits;
+  if (!Array.isArray(edits)) return [];
+  return edits.map((e) => ({
+    old: field(e, "old_string") ?? "",
+    next: field(e, "new_string") ?? "",
+  }));
+}
+
 function ConductorToolCard({
   session,
   toolUseId,
@@ -124,6 +140,9 @@ function ConductorToolCard({
   if (meta.suppressed) return null;
 
   const isEdit = meta.kind === "edit";
+  // MultiEdit shares the "edit" kind but carries an `edits[]` array instead of a
+  // top-level old/new pair — render one diff per hunk (see `multiEdits`).
+  const isMultiEdit = name === "MultiEdit";
   const isWrite = meta.kind === "write";
   const isBash = meta.kind === "bash";
   // AskUserQuestion renders a clean Q→A recap instead of raw result text.
@@ -183,11 +202,22 @@ function ConductorToolCard({
             <pre className="cv-tool-cmd wf-mono">{meta.primaryArg}</pre>
           ) : null}
           {isEdit ? (
-            <DiffView
-              path={field(input, "file_path")}
-              oldText={field(input, "old_string") ?? ""}
-              newText={field(input, "new_string") ?? ""}
-            />
+            isMultiEdit ? (
+              multiEdits(input).map((e, k) => (
+                <DiffView
+                  key={k}
+                  path={field(input, "file_path")}
+                  oldText={e.old}
+                  newText={e.next}
+                />
+              ))
+            ) : (
+              <DiffView
+                path={field(input, "file_path")}
+                oldText={field(input, "old_string") ?? ""}
+                newText={field(input, "new_string") ?? ""}
+              />
+            )
           ) : isWrite ? (
             <DiffView path={field(input, "file_path")} newText={field(input, "content") ?? ""} />
           ) : isQuestionnaire ? (
@@ -279,12 +309,10 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
 
 export function ConductorThread({
   session,
-  wide,
   scrollRef,
   onRender,
 }: {
   session: string;
-  wide?: boolean;
   // The stick-to-bottom instance is owned by the parent pane so the composer can
   // snap the thread to the bottom on send (see ConductorConversation).
   scrollRef: StickToBottom["scrollRef"];
@@ -300,10 +328,7 @@ export function ConductorThread({
   return (
     <div className="cv-thread" ref={scrollRef}>
       <StreamFollow session={session} onRender={onRender} />
-      <div
-        className="cv-thread-inner"
-        style={wide ? { maxWidth: 720 } : { maxWidth: 760 }}
-      >
+      <div className="cv-thread-inner">
         {empty && !busy ? (
           <div className={styles.empty}>Démarre la conversation en envoyant un message.</div>
         ) : (

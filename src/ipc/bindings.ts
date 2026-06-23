@@ -75,6 +75,59 @@ async loadSessionContext(sessionId: string) : Promise<Result<ContextFill, string
 }
 },
 /**
+ * Load a sub-agent's (`Agent` tool, or a workflow agent) full transcript,
+ * normalized into the same items the live conversation renders. Empty if absent.
+ */
+async loadSubagentTranscript(sessionId: string, agentId: string) : Promise<Result<ConversationItem[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_subagent_transcript", { sessionId, agentId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Load a workflow run's manifest (`workflows/<run_id>.json`). `null` if absent.
+ */
+async loadWorkflowRun(sessionId: string, runId: string) : Promise<Result<WorkflowRun | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_run", { sessionId, runId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Read the current contents of a background task's output file
+ * (`tasks/<task_id>.output`, the sink for background `Bash` and `Monitor`). `null`
+ * if absent. One-shot read — live tailing is layered on by the display task.
+ */
+async readTaskOutput(sessionId: string, taskId: string) : Promise<Result<string | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_task_output", { sessionId, taskId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Fetch the real subscription usage percentages (5h + weekly windows). The stream
+ * only carries a coarse rate-limit status, so this replicates the CLI's internal
+ * `GET /api/oauth/usage` (OAuth token read from `~/.claude/.credentials.json` then
+ * the macOS Keychain). Read-only — never refreshes/writes the token. Account-global
+ * (not per-session); on error the UI degrades to the coarse `rate_limit` status. The
+ * endpoint is itself rate-limited, so the caller throttles (poll + on-open + manual).
+ * Errors are typed ([`UsageError`]) so the UI can show a tailored next step.
+ */
+async getPlanUsage() : Promise<Result<PlanUsage, UsageError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_plan_usage") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Send a user turn to a session.
  */
 async sendMessage(session: string, text: string) : Promise<Result<null, string>> {
@@ -400,6 +453,7 @@ sessionCommandsEvent: SessionCommandsEvent,
 sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionStateEvent: SessionStateEvent,
+sessionTaskEvent: SessionTaskEvent,
 tickEvent: TickEvent
 }>({
 fsChangeEvent: "fs-change-event",
@@ -407,6 +461,7 @@ sessionCommandsEvent: "session-commands-event",
 sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionStateEvent: "session-state-event",
+sessionTaskEvent: "session-task-event",
 tickEvent: "tick-event"
 })
 
@@ -416,6 +471,109 @@ tickEvent: "tick-event"
 
 /** user-defined types **/
 
+/**
+ * A normalized background task, keyed by `task_id` and updated in place as its
+ * `task_*` lifecycle events arrive. The single model behind the (future) sub-agent /
+ * workflow / Monitor / background-Bash views — the rich per-producer detail (full
+ * transcript, manifest, output) is read from disk on demand (see
+ * [`super::subagents`]), never carried here.
+ */
+export type BackgroundTask = { 
+/**
+ * Stable id that ties every `task_*` event of this task together.
+ */
+task_id: string; kind: BackgroundTaskKind; 
+/**
+ * The `tool_use` block that spawned the task (== `parent_tool_use_id` of any
+ * streamed child content). Lets the UI anchor the task under its tool card.
+ */
+tool_use_id: string | null; 
+/**
+ * Human label (the `description`: a sub-agent's task, a Bash command, …).
+ */
+label: string | null; 
+/**
+ * Sub-agent type (`Agent` only, e.g. `"Explore"`).
+ */
+subagent_type: string | null; 
+/**
+ * The sub-agent's id (`Agent` only), i.e. the key for [`super::subagents::load_subagent_transcript`].
+ * Derived from the `output_file` basename (`subagents/agent-<agentId>.jsonl`), since
+ * the wire carries it only inside that path. Lets the UI drill into the transcript
+ * without re-parsing the path itself.
+ */
+agent_id: string | null; status: BackgroundTaskStatus; 
+/**
+ * Latest live progress text (`Workflow`: `"<phase>: <label>"`).
+ */
+progress: string | null; 
+/**
+ * Total tokens used (from the `task_notification` usage roll-up).
+ */
+tokens: number | null; 
+/**
+ * Tool-call count (from the usage roll-up).
+ */
+tool_uses: number | null; 
+/**
+ * Wall-clock duration in ms (from the usage roll-up).
+ */
+duration_ms: number | null; 
+/**
+ * End-of-task human summary (from the `task_notification`).
+ */
+summary: string | null; 
+/**
+ * On-disk file holding the task's full output: `tasks/<id>.output` for
+ * Bash-bg/Monitor, the sub-agent transcript for `Agent`.
+ */
+output_file: string | null }
+/**
+ * Which producer a background task came from. The `claude` binary runs ONE generic
+ * background-task system for four producers; we tell them apart from `task_type`
+ * plus the correlated `tool_use` name (see [`super::assembler`]).
+ */
+export type BackgroundTaskKind = 
+/**
+ * A sub-agent launched by the `Agent` tool (`task_type:"local_agent"`).
+ */
+"agent" | 
+/**
+ * A dynamic-workflow run launched by the `Workflow` tool.
+ */
+"workflow" | 
+/**
+ * A shell command launched by `Bash` with `run_in_background:true`.
+ */
+"bash" | 
+/**
+ * A live watch launched by the `Monitor` tool.
+ */
+"monitor" | 
+/**
+ * A background task whose producer could not be classified yet.
+ */
+"other"
+/**
+ * Coarse lifecycle status of a background task, normalized from `task_*` events.
+ */
+export type BackgroundTaskStatus = 
+/**
+ * Created and not yet finished (`task_started`, or a non-terminal patch).
+ */
+"running" | 
+/**
+ * Finished successfully (`patch.status`/notification `"completed"`).
+ */
+"completed" | 
+/**
+ * Finished with an error (`"failed"`/`"error"`).
+ */
+"failed" | 
+/**
+ * Cancelled via `TaskStop` / session end (`"stopped"`/`"cancelled"`).
+ */
+"stopped"
 /**
  * Context-meter seed for a conversation, read from its on-disk transcript so the
  * ring shows the real fill the moment a conversation is opened / its stream turned
@@ -509,7 +667,19 @@ session_id: string | null;
  * low/medium/high/xhigh; `ultracode` is the separate xhigh+orchestration tier;
  * `permission_mode` is one of the CLI modes (default/plan/acceptEdits/auto/…).
  */
-model: string | null; effort: string | null; ultracode: boolean; permission_mode: string | null }
+model: string | null; effort: string | null; ultracode: boolean; permission_mode: string | null; 
+/**
+ * An unacknowledged, non-blocking status reminder to re-surface across
+ * restarts: `"review"` (a turn finished and was never seen), `"error"` (the
+ * last turn ended in error), or `"openQuestion"` (the heuristic flagged the
+ * last turn as a question awaiting a reply). `None` once acknowledged ("Vu")
+ * or superseded by the next message. Blocking states (a pending permission or
+ * questionnaire) are deliberately NOT persisted — they only exist while the
+ * process is live and must be answered in the thread. Mirrors the dismissable
+ * part of the derived `AgentStatus` (see the front's `agent/status.ts`), the
+ * single thing that, when off, can't be re-derived from the on-disk transcript.
+ */
+pending_reminder: string | null }
 /**
  * A file's contents plus the guards the editor needs: `too_large` (skipped, over
  * [`MAX_FILE_BYTES`]) and `binary` (a NUL byte was found — not shown as text).
@@ -573,6 +743,11 @@ export type PersistedState = { repos: RepoRecord[]; conversations: ConversationR
  * Stable id of the conversation that was active when last persisted.
  */
 active_id: string | null }
+/**
+ * Real plan-usage snapshot: the two subscription windows, each with a fill %.
+ * A window is `None` when the endpoint did not report it.
+ */
+export type PlanUsage = { five_hour: UsageWindow | null; seven_day: UsageWindow | null }
 /**
  * Typed return value of `ping`. Proves React -> Rust (typed command).
  */
@@ -698,6 +873,12 @@ context_window: number | null;
  */
 rate_limit: RateLimitSnapshot | null }
 /**
+ * A background task (sub-agent / workflow / Monitor / background Bash) was created
+ * or changed state. Emitted on every `task_*` transition, keyed (inside the
+ * payload) by `task_id`, so the UI tracks the live fleet of background tasks.
+ */
+export type SessionTaskEvent = { session: string; task: BackgroundTask }
+/**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code
  * extension consumes to drive its `/` autocomplete menu. `name` carries NO
@@ -717,6 +898,72 @@ argument_hint: string }
  * Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
  */
 export type TickEvent = { seq: number; message: string }
+/**
+ * Why fetching the real usage % failed, typed so the UI can give a tailored next
+ * step instead of a dead-end "unavailable". Tagged on `kind` → a clean TS union.
+ */
+export type UsageError = 
+/**
+ * No token in the file nor the Keychain (user never logged in via the CLI).
+ */
+{ kind: "no_token" } | 
+/**
+ * The Keychain refused access (unsigned app not in the item ACL, or cancelled).
+ */
+{ kind: "keychain_denied"; detail: string } | 
+/**
+ * Endpoint rejected the token (HTTP 401/403): expired or revoked.
+ */
+{ kind: "unauthorized"; status: number } | 
+/**
+ * The usage endpoint is itself rate-limited (HTTP 429). `retry_after` = seconds
+ * from the `Retry-After` header when present. Do NOT hammer it — back off.
+ */
+{ kind: "rate_limited"; retry_after: number | null } | 
+/**
+ * Any other non-success HTTP status from the endpoint (carries status + body).
+ */
+{ kind: "http"; status: number; body: string } | 
+/**
+ * Network-level failure (DNS, TLS, timeout, offline).
+ */
+{ kind: "network"; detail: string } | 
+/**
+ * Response received but unparseable into the expected shape (carries body).
+ */
+{ kind: "parse"; body: string }
+/**
+ * One rate-limit window's real fill: `used_percentage` (0–100) + optional reset as a
+ * raw timestamp string (ISO 8601, or epoch-seconds digits for the alternate shape) —
+ * the frontend converts it with the JS `Date` parser.
+ */
+export type UsageWindow = { used_percentage: number; resets_at: string | null }
+/**
+ * One phase of a workflow run, from a `workflows/wf_<id>.json` manifest.
+ */
+export type WorkflowPhase = { title: string; detail: string | null }
+/**
+ * A workflow run's manifest (`workflows/wf_<id>.json`), the data model behind the
+ * `/workflows`-style view. Field names mirror the on-disk camelCase manifest. The
+ * dynamic, per-entry-shaped `workflowProgress` and `result` are kept raw
+ * ([`Value`]) — the Workflow display task types them.
+ */
+export type WorkflowRun = { runId: string; taskId: string | null; status: string | null; workflowName: string | null; defaultModel: string | null; durationMs: number | null; agentCount: number | null; totalTokens: number | null; totalToolCalls: number | null; summary: string | null; 
+/**
+ * `#[serde(default)]` alone covers a MISSING key, but an explicit `"phases":null`
+ * would still fail the WHOLE manifest parse (blanking the entire workflow view).
+ * `deserialize_null_default` maps null → empty, mirroring the stream structs'
+ * `Option` null-tolerance ([`super::protocol::TaskNotificationMsg::usage`]).
+ */
+phases?: WorkflowPhase[]; 
+/**
+ * Array of `{type:"workflow_phase"|"workflow_agent", …}` entries — kept raw.
+ */
+workflowProgress?: JsonValue; 
+/**
+ * The workflow's final return value — kept raw.
+ */
+result?: JsonValue }
 /**
  * Identity of one worktree of a repository (the cheap, always-listed part).
  * 

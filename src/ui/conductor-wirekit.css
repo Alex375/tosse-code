@@ -349,6 +349,29 @@
 .wf-pop-sep { height:1px; margin:3px 0; background:var(--wf-line-2); }
 .wf-pop-pill { display:inline-flex; align-items:center; gap:6px; font-size:11.5px; color:var(--wf-tx-hi); }
 .wf-pop-pill > i { width:7px; height:7px; border-radius:999px; flex:0 0 auto; }
+/* Forfait header carries a manual refresh button on the right. */
+.wf-pop-h-row { display:flex; align-items:center; justify-content:space-between; }
+.wf-pop-refresh { display:inline-flex; align-items:center; justify-content:center; padding:2px; margin:-2px; border:0; background:none; color:var(--wf-tx-lo); cursor:pointer; border-radius:5px; }
+.wf-pop-refresh:hover { color:var(--wf-tx-hi); background:var(--wf-panel-3); }
+.wf-spin-fast { animation: wf-spin .8s linear infinite; transform-origin:50% 50%; }
+/* Real plan-usage window: label · % · reset on top, fill bar under. */
+.wf-pop-usage { display:flex; flex-direction:column; gap:4px; }
+.wf-pop-usage-top { display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--wf-tx-lo); }
+.wf-pop-usage-top .wf-mono { color:var(--wf-tx-hi); }
+/* Actionable error card when the real % can't be fetched (cause + next step). */
+.wf-pop-err { display:flex; flex-direction:column; gap:4px; }
+.wf-pop-err-msg { font-size:11.5px; font-weight:600; color:var(--wf-tx-hi); }
+.wf-pop-err-act { font-size:11px; line-height:1.45; color:var(--wf-tx-lo); }
+.wf-pop-err-foot { display:flex; align-items:center; gap:10px; margin-top:2px; flex-wrap:wrap; }
+.wf-pop-err-retry { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border:1px solid var(--wf-line-2); background:var(--wf-panel-3); color:var(--wf-tx-hi); border-radius:6px; font-size:11px; cursor:pointer; }
+.wf-pop-err-retry:hover { background:var(--wf-panel-2); }
+.wf-pop-err-retry:disabled { opacity:.55; cursor:default; }
+.wf-pop-err-det { font-size:10.5px; color:var(--wf-tx-xlo); }
+.wf-pop-err-det > summary { cursor:pointer; user-select:none; }
+.wf-pop-err-det > pre { margin:5px 0 0; padding:6px 7px; max-height:120px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:var(--wf-panel-3); border-radius:5px; font-size:10px; color:var(--wf-tx-lo); }
+/* Compact, non-destructive warning when a refresh fails but stale bars are still shown. */
+.wf-pop-staleerr { display:flex; flex-direction:column; gap:4px; }
+.wf-pop-staleerr-msg { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--wf-att); }
 
 /* ---- à relire (ready for review) --------------------------- */
 .wf-review { border:1px solid #314463; background:var(--wf-wait-bg); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }

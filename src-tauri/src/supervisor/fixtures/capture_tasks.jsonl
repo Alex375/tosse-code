@@ -1,0 +1,17 @@
+{"type":"assistant","message":{"id":"msg_agent","role":"assistant","content":[{"type":"tool_use","id":"toolu_agent","name":"Agent","input":{"description":"Explore the codebase","subagent_type":"Explore","prompt":"Map the supervisor module"}}]},"session_id":"s","uuid":"u_agent"}
+{"type":"system","subtype":"task_started","task_id":"task_agent_1","tool_use_id":"toolu_agent","description":"Explore the codebase","subagent_type":"Explore","task_type":"local_agent","prompt":"Map the supervisor module"}
+{"type":"system","subtype":"task_updated","task_id":"task_agent_1","patch":{"status":"completed","end_time":1780000000123}}
+{"type":"system","subtype":"task_notification","task_id":"task_agent_1","tool_use_id":"toolu_agent","status":"completed","output_file":"/Users/x/.claude/projects/-x/s/subagents/agent-aa11.jsonl","summary":"Subagent \"Explore\" finished","usage":{"total_tokens":11174,"tool_uses":3,"duration_ms":859}}
+{"type":"assistant","message":{"id":"msg_wf","role":"assistant","content":[{"type":"tool_use","id":"toolu_wf","name":"Workflow","input":{"description":"review-pr","script":"export const meta = {}"}}]},"session_id":"s","uuid":"u_wf"}
+{"type":"system","subtype":"task_started","task_id":"task_wf_1","tool_use_id":"toolu_wf","description":"review-pr"}
+{"type":"system","subtype":"task_progress","task_id":"task_wf_1","tool_use_id":"toolu_wf","description":"Research: r-alpha"}
+{"type":"system","subtype":"task_updated","task_id":"task_wf_1","patch":{"status":"completed","end_time":1780000001456}}
+{"type":"system","subtype":"task_notification","task_id":"task_wf_1","tool_use_id":"toolu_wf","status":"completed","summary":"Dynamic workflow \"review-pr\" completed"}
+{"type":"assistant","message":{"id":"msg_bash","role":"assistant","content":[{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{"command":"sleep 4; echo X","description":"slow job","run_in_background":true}}]},"session_id":"s","uuid":"u_bash"}
+{"type":"system","subtype":"task_started","task_id":"task_bash_1","tool_use_id":"toolu_bash","description":"slow job","task_type":"local_bash"}
+{"type":"system","subtype":"task_updated","task_id":"task_bash_1","patch":{"status":"completed","end_time":1780000002789}}
+{"type":"system","subtype":"task_notification","task_id":"task_bash_1","tool_use_id":"toolu_bash","status":"completed","output_file":"/Users/x/.claude/projects/-x/s/tasks/task_bash_1.output","summary":"Background command \"sleep 4; echo X\" completed (exit code 0)"}
+{"type":"assistant","message":{"id":"msg_mon","role":"assistant","content":[{"type":"tool_use","id":"toolu_mon","name":"Monitor","input":{"description":"demo watch","command":"for i in 1 2 3; do echo ev$i; sleep 1; done","persistent":false,"timeout_ms":8000}}]},"session_id":"s","uuid":"u_mon"}
+{"type":"system","subtype":"task_started","task_id":"task_mon_1","tool_use_id":"toolu_mon","description":"demo watch","task_type":"local_bash"}
+{"type":"system","subtype":"task_updated","task_id":"task_mon_1","patch":{"status":"completed","end_time":1780000003999}}
+{"type":"system","subtype":"task_notification","task_id":"task_mon_1","tool_use_id":"toolu_mon","status":"completed","output_file":"/Users/x/.claude/projects/-x/s/tasks/task_mon_1.output","summary":"Monitor \"demo watch\" stream ended"}

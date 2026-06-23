@@ -9,11 +9,22 @@ export interface DiffLine {
   newNo: number | null;
 }
 
+// Above this cell budget the LCS DP (O(n·m) in BOTH time and memory) would allocate
+// millions of cells synchronously on the render thread and can stall or OOM the webview —
+// a single multi-thousand-line block-replace (Edit/MultiEdit) is enough. Past it we skip
+// the alignment and render the block as a plain all-removed-then-all-added diff: correct,
+// just not minimal. The result is memoized, so the guard runs once per block.
+const MAX_DP_CELLS = 2_000_000;
+
 export function lineDiff(oldText: string, newText: string): DiffLine[] {
   const a = oldText.split("\n");
   const b = newText.split("\n");
   const n = a.length;
   const m = b.length;
+
+  if (n * m > MAX_DP_CELLS) {
+    return blockReplaceDiff(a, b);
+  }
 
   // dp[i][j] = LCS length of a[i:] and b[j:]
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -44,6 +55,17 @@ export function lineDiff(oldText: string, newText: string): DiffLine[] {
   }
   while (i < n) out.push({ type: "del", text: a[i], oldNo: oldNo++, newNo: null }), i++;
   while (j < m) out.push({ type: "add", text: b[j], oldNo: null, newNo: newNo++ }), j++;
+  return out;
+}
+
+// Non-LCS fallback for oversized inputs: render every old line removed, then every new
+// line added. Used only past MAX_DP_CELLS, where computing the minimal diff is unsafe.
+function blockReplaceDiff(a: string[], b: string[]): DiffLine[] {
+  const out: DiffLine[] = [];
+  let oldNo = 1;
+  let newNo = 1;
+  for (const text of a) out.push({ type: "del", text, oldNo: oldNo++, newNo: null });
+  for (const text of b) out.push({ type: "add", text, oldNo: null, newNo: newNo++ });
   return out;
 }
 

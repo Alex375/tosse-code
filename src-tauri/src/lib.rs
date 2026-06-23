@@ -3,19 +3,21 @@ pub mod git;
 mod ipc;
 pub mod store;
 pub mod supervisor;
+pub mod usage;
 
 use ipc::commands::{
     answer_permission, create_worktree, delete_conversation, delete_repo, fetch_slash_commands,
-    interrupt_session, list_worktrees, load_persisted_state, load_session_context,
-    load_session_history, open_in_terminal, path_exists, ping, read_dir, read_file,
-    remove_worktree, request_user_attention, send_message, set_active_conversation,
-    set_effort_level, set_model, set_permission_mode, set_ultracode, spawn_session, stop_session,
-    unwatch_dir, upsert_conversation, upsert_repo, watch_dir, wipe_all_data, worktree_status,
-    write_file, Sessions,
+    get_plan_usage, interrupt_session, list_worktrees, load_persisted_state, load_session_context,
+    load_session_history, load_subagent_transcript, load_workflow_run, open_in_terminal,
+    path_exists, ping, read_dir, read_file, read_task_output, remove_worktree,
+    request_user_attention, send_message, set_active_conversation, set_effort_level, set_model,
+    set_permission_mode, set_ultracode, spawn_session, stop_session, unwatch_dir,
+    upsert_conversation, upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file,
+    Sessions,
 };
 use ipc::events::{
     FsChangeEvent, SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent,
-    SessionStateEvent, TickEvent,
+    SessionStateEvent, SessionTaskEvent, TickEvent,
 };
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
@@ -29,6 +31,10 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             fetch_slash_commands,
             load_session_history,
             load_session_context,
+            load_subagent_transcript,
+            load_workflow_run,
+            read_task_output,
+            get_plan_usage,
             send_message,
             answer_permission,
             set_permission_mode,
@@ -63,6 +69,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionMessageEvent,
             SessionPermissionEvent,
             SessionCommandsEvent,
+            SessionTaskEvent,
             FsChangeEvent,
         ])
 }

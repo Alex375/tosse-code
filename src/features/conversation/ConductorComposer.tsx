@@ -20,6 +20,7 @@ import {
 import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
 import { ChipBtn, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { useContextData } from "../../store/contextData";
+import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
 import {
   SlashCommandMenu,
@@ -97,8 +98,8 @@ export interface ComposerHandle {
 
 export const ConductorComposer = forwardRef<
   ComposerHandle,
-  { session: string; wide?: boolean; onSent?: () => void }
->(function ConductorComposer({ session, wide, onSent }, ref) {
+  { session: string; onSent?: () => void }
+>(function ConductorComposer({ session, onSent }, ref) {
   const state = useSessionState(session);
   const send = useSendMessage(session);
   const interrupt = useInterrupt(session);
@@ -207,6 +208,20 @@ export const ConductorComposer = forwardRef<
   // Context fill (ring) — shared derivation keyed by stable id, reused by the
   // FlightDeck card's context bar (see useContextData).
   const { ctx: ctxData, ready: ctxReady, plan: planData } = useContextData(session);
+
+  // Real plan-usage % (account-global, NOT per-conversation). Background-polled here
+  // so the figure stays warm; the ring popover shows it + a manual refresh. On open
+  // we refetch only when stale, to spare the rate-limited usage endpoint. Gated on
+  // `ctxReady`: the popover is unreachable (ring disabled) until the first turn reports
+  // context anyway, so don't read credentials / risk a Keychain prompt the instant a
+  // brand-new conversation is merely selected.
+  const planUsage = usePlanUsage({ enabled: ctxReady });
+  const onOpenUsage = () => {
+    // Throttle against the last attempt — success OR failure — so opening the popover
+    // after an error (e.g. a 429) doesn't immediately hammer the endpoint again.
+    const lastAttempt = Math.max(planUsage.dataUpdatedAt, planUsage.errorUpdatedAt);
+    if (Date.now() - lastAttempt >= PLAN_USAGE_STALE_MS) void planUsage.refetch();
+  };
 
   // Every control routes through the conversations store: it persists the choice
   // (so a pre-spawn pick survives and is applied at spawn) AND pushes it to the live
@@ -339,7 +354,7 @@ export const ConductorComposer = forwardRef<
   };
 
   return (
-    <div className="cv-composer" style={wide ? { maxWidth: 760, margin: "0 auto", width: "100%" } : undefined}>
+    <div className="cv-composer">
       {slashOpen ? (
         <SlashCommandMenu
           items={slashMatches}
@@ -486,6 +501,11 @@ export const ConductorComposer = forwardRef<
           plan={planData}
           disabled={!ctxReady}
           onCompact={() => sendText("/compact")}
+          usage={planUsage.data ?? null}
+          usageLoading={planUsage.isFetching}
+          usageError={planUsage.error}
+          onOpenUsage={onOpenUsage}
+          onRefreshUsage={() => void planUsage.refetch()}
         />
       </div>
     </div>

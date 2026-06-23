@@ -23,7 +23,7 @@ use super::model::{ConversationRecord, PersistedState, RepoRecord};
 
 /// Bump when the schema changes in a way that needs a migration. Today the dev
 /// policy is wipe-and-recreate, so this is informational.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const ACTIVE_ID_KEY: &str = "active_id";
 
 /// Owns the single SQLite connection. Held behind a `Mutex` because `rusqlite`
@@ -94,7 +94,8 @@ impl Store {
                  model            TEXT,
                  effort           TEXT,
                  ultracode        INTEGER NOT NULL DEFAULT 0,
-                 permission_mode  TEXT
+                 permission_mode  TEXT,
+                 pending_reminder TEXT
              );",
         )?;
         // Additive migration: a db created before `last_activity_at` keeps its
@@ -121,13 +122,25 @@ impl Store {
                 "permission_mode",
                 "ALTER TABLE conversations ADD COLUMN permission_mode TEXT",
             ),
+            // Schema v3: a persisted, acknowledgeable status reminder (review /
+            // error / open-question) so it re-surfaces after a restart even though
+            // the live process is gone. Defaults to NULL (nothing pending).
+            (
+                "pending_reminder",
+                "ALTER TABLE conversations ADD COLUMN pending_reminder TEXT",
+            ),
         ] {
             if !column_exists(&conn, "conversations", col)? {
                 conn.execute(ddl, [])?;
             }
         }
+        // Upsert (not INSERT OR IGNORE): after the additive migrations above run on an
+        // existing db, the on-disk schema really IS the new version, so `schema_version`
+        // must advance too — otherwise it stays frozen at its first-created value and a
+        // future version-keyed migration would mis-detect the state.
         conn.execute(
-            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?1)",
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![SCHEMA_VERSION.to_string()],
         )?;
         Ok(())
@@ -154,7 +167,7 @@ impl Store {
 
         let mut conv_stmt = conn.prepare(
             "SELECT id, name, repo_id, cwd, created_at, last_activity_at, session_id,
-                    model, effort, ultracode, permission_mode
+                    model, effort, ultracode, permission_mode, pending_reminder
              FROM conversations ORDER BY created_at ASC",
         )?;
         let conversations = conv_stmt
@@ -171,6 +184,7 @@ impl Store {
                     effort: row.get(8)?,
                     ultracode: row.get(9)?,
                     permission_mode: row.get(10)?,
+                    pending_reminder: row.get(11)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -214,8 +228,8 @@ impl Store {
         self.conn.lock().unwrap().execute(
             "INSERT INTO conversations
                  (id, name, repo_id, cwd, created_at, last_activity_at, session_id,
-                  model, effort, ultracode, permission_mode)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                  model, effort, ultracode, permission_mode, pending_reminder)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
                  name             = excluded.name,
                  repo_id          = excluded.repo_id,
@@ -226,7 +240,8 @@ impl Store {
                  model            = excluded.model,
                  effort           = excluded.effort,
                  ultracode        = excluded.ultracode,
-                 permission_mode  = excluded.permission_mode",
+                 permission_mode  = excluded.permission_mode,
+                 pending_reminder = excluded.pending_reminder",
             params![
                 c.id,
                 c.name,
@@ -238,7 +253,8 @@ impl Store {
                 c.model,
                 c.effort,
                 c.ultracode,
-                c.permission_mode
+                c.permission_mode,
+                c.pending_reminder
             ],
         )?;
         Ok(())
@@ -368,6 +384,7 @@ mod tests {
             effort: None,
             ultracode: false,
             permission_mode: None,
+            pending_reminder: None,
         }
     }
 
@@ -471,6 +488,37 @@ mod tests {
         assert_eq!(got.effort, None);
         assert!(!got.ultracode);
         assert_eq!(got.permission_mode, None);
+    }
+
+    #[test]
+    fn pending_reminder_round_trips_and_clears() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        let mut c = conv("c1", "r1", None);
+        c.pending_reminder = Some("review".into());
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(
+            store.load_state().unwrap().conversations[0].pending_reminder.as_deref(),
+            Some("review")
+        );
+        // Acknowledging ("Vu") clears it back to NULL, durably.
+        c.pending_reminder = None;
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(
+            store.load_state().unwrap().conversations[0].pending_reminder,
+            None
+        );
+    }
+
+    #[test]
+    fn pending_reminder_defaults_to_none() {
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        store.upsert_conversation(&conv("c1", "r1", None)).unwrap();
+        assert_eq!(
+            store.load_state().unwrap().conversations[0].pending_reminder,
+            None
+        );
     }
 
     #[test]
@@ -643,6 +691,62 @@ mod tests {
         assert_eq!(state.repos, vec![repo("r1")]);
         assert_eq!(state.conversations, vec![conv("c1", "r1", Some("sess"))]);
         assert_eq!(state.active_id.as_deref(), Some("c1"));
+    }
+
+    #[test]
+    fn additive_migration_adds_pending_reminder_to_a_pre_v3_db() {
+        // The feature's core promise is the ADDITIVE migration: a DB created before
+        // `pending_reminder` (a pre-v3 schema) must gain the column on reopen, with
+        // existing rows defaulting to NULL and surviving intact. Every other test
+        // starts from the full current CREATE TABLE, so the `ALTER TABLE ... ADD
+        // COLUMN pending_reminder` branch never runs there — exercise it for real.
+        let tmp = TempDb::new("pre-v3-migration");
+        {
+            // Hand-build a v2 conversations table (everything EXCEPT pending_reminder)
+            // with one row, via a raw connection — bypassing Store so no migration runs.
+            let conn = rusqlite::Connection::open(tmp.dir.join("tosse.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE repos (
+                     id TEXT PRIMARY KEY, path TEXT NOT NULL, added_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE conversations (
+                     id               TEXT PRIMARY KEY,
+                     name             TEXT NOT NULL,
+                     repo_id          TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                     cwd              TEXT NOT NULL,
+                     created_at       INTEGER NOT NULL,
+                     last_activity_at INTEGER NOT NULL DEFAULT 0,
+                     session_id       TEXT,
+                     model            TEXT,
+                     effort           TEXT,
+                     ultracode        INTEGER NOT NULL DEFAULT 0,
+                     permission_mode  TEXT
+                 );
+                 INSERT INTO repos (id, path, added_at) VALUES ('r1', '/tmp/r1', 1);
+                 INSERT INTO conversations (id, name, repo_id, cwd, created_at, last_activity_at)
+                     VALUES ('c1', 'Legacy', 'r1', '/tmp/r1', 5, 5);",
+            )
+            .unwrap();
+        }
+
+        // Reopen through Store → the additive migration adds the missing column.
+        let state = tmp.open().load_state().unwrap();
+        assert_eq!(state.conversations.len(), 1, "the pre-v3 row must survive");
+        assert_eq!(state.conversations[0].id, "c1");
+        assert_eq!(
+            state.conversations[0].pending_reminder, None,
+            "an upgraded row defaults to NULL (nothing pending)"
+        );
+
+        // And the new column is fully usable after the in-place upgrade.
+        let store = tmp.open();
+        let mut c = state.conversations[0].clone();
+        c.pending_reminder = Some("error".into());
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(
+            store.load_state().unwrap().conversations[0].pending_reminder.as_deref(),
+            Some("error")
+        );
     }
 
     #[test]

@@ -28,6 +28,15 @@ export type AgentStatus =
   | { kind: "review" }; // turn finished cleanly, not yet seen by the user
 
 /**
+ * The acknowledgeable, non-blocking reminders — the ONLY statuses that persist
+ * across restarts (see `AgentSignals.persistedReminder`). A finished turn awaiting
+ * a look (`review`), a turn that errored (`error`), or a heuristically-flagged open
+ * question (`openQuestion`). Blocking states (questionnaire / permission) are NOT
+ * here: they live only while the process does and must be answered, not dismissed.
+ */
+export type ReminderKind = "review" | "error" | "openQuestion";
+
+/**
  * The minimal raw signals needed to derive an {@link AgentStatus}. All primitives
  * so a store selector can produce them shallow-stably (no nested objects).
  */
@@ -52,6 +61,15 @@ export interface AgentSignals {
   turnSeen: boolean;
   /** Text of the last assistant turn, for the open-question heuristic. */
   lastAssistantText: string | null;
+  /**
+   * A reminder persisted from a previous run (or while live), surfaced ONLY when
+   * the process is off (`handle === null`): it re-displays a finished-but-unseen
+   * turn / error / open question across an app restart, since a settled state is
+   * otherwise live-only and lost when the process dies. Null when nothing is
+   * pending. While the process is live, the live signals above take precedence —
+   * this is purely the off-state fallback. See `conversationsStore.pendingReminder`.
+   */
+  persistedReminder: ReminderKind | null;
 }
 
 /** The native questionnaire tool — the only 100%-reliable "Claude asks a question". */
@@ -84,6 +102,26 @@ function errorMessage(subtype: string | null): string {
 }
 
 /**
+ * Rebuild the off-state {@link AgentStatus} a persisted {@link ReminderKind}
+ * stands for, or null when nothing is pending. The carried detail (exact error
+ * subtype, the question text) isn't persisted — only the kind — so a restored
+ * reminder shows the generic label; the precise text returns once the
+ * conversation is live again. Inverse of {@link statusReminderKind}.
+ */
+function reminderStatus(kind: ReminderKind | null): AgentStatus | null {
+  switch (kind) {
+    case "review":
+      return { kind: "review" };
+    case "error":
+      return { kind: "error", message: errorMessage(null) };
+    case "openQuestion":
+      return { kind: "needInput", via: "openQuestion", prompt: null };
+    default:
+      return null;
+  }
+}
+
+/**
  * Derive the rich status from the raw signals. Order encodes priority:
  * off → blocking permission → running → (settled: error / open-question / review)
  * → idle. The "settled" branch only fires when the session is live, not busy, not
@@ -91,8 +129,11 @@ function errorMessage(subtype: string | null): string {
  */
 export function deriveAgentStatus(s: AgentSignals): AgentStatus {
   // A null handle subsumes "never started", "stopped", and "exited" — the
-  // protocol does not distinguish them, and none has a live state to report.
-  if (!s.handle) return { kind: "off" };
+  // protocol does not distinguish them, and none has a live state to report. But
+  // a settled reminder (review / error / open question) the user never acknowledged
+  // is re-surfaced here even with no live process, so quitting the app doesn't lose
+  // "go look at this". Cleared by "Vu" or the next message (see persistedReminder).
+  if (!s.handle) return reminderStatus(s.persistedReminder) ?? { kind: "off" };
 
   // A pending permission genuinely BLOCKS the agent — it cannot proceed until the
   // user answers. The questionnaire is a need-input; any other tool is a blocking
@@ -184,16 +225,26 @@ export function statusRank(s: AgentStatus): number {
 }
 
 /**
+ * The {@link ReminderKind} a status maps to, or null when it isn't an
+ * acknowledgeable reminder. This is the single definition of "which statuses
+ * persist": the event router writes its result to `pendingReminder`, and
+ * {@link isDismissable} / {@link reminderStatus} are its two faces. A real block
+ * (questionnaire / permission) is NOT a reminder — it must be answered live, not
+ * dismissed — so it maps to null.
+ */
+export function statusReminderKind(s: AgentStatus): ReminderKind | null {
+  if (s.kind === "review") return "review";
+  if (s.kind === "error") return "error";
+  if (s.kind === "needInput" && s.via === "openQuestion") return "openQuestion";
+  return null;
+}
+
+/**
  * Whether the user can acknowledge ("Vu") this status to clear it back to idle.
- * Only the non-blocking REMINDERS qualify: a finished turn awaiting review, an
- * error to acknowledge, or an open question the heuristic flagged (possibly a
- * false positive). A real block — questionnaire or permission — must be ANSWERED
- * in the thread, not dismissed, so it is NOT dismissable.
+ * Exactly the statuses that map to a {@link ReminderKind} — a finished turn
+ * awaiting review, an error to acknowledge, or a heuristically-flagged open
+ * question. A real block (questionnaire / permission) is not dismissable.
  */
 export function isDismissable(s: AgentStatus): boolean {
-  return (
-    s.kind === "review" ||
-    s.kind === "error" ||
-    (s.kind === "needInput" && s.via === "openQuestion")
-  );
+  return statusReminderKind(s) !== null;
 }

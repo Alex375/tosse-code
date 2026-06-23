@@ -10,9 +10,10 @@ use tauri::Manager;
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
 use crate::supervisor::control::{self, PermissionDecision, PermissionMode};
-use crate::supervisor::model::{ContextFill, ConversationItem, SlashCommand};
+use crate::supervisor::model::{ContextFill, ConversationItem, SlashCommand, WorkflowRun};
 use crate::supervisor::session::{self, InitialControls, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
+use crate::usage::{PlanUsage, UsageError};
 
 /// Typed return value of `ping`. Proves React -> Rust (typed command).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -195,6 +196,72 @@ pub async fn load_session_context(session_id: String) -> Result<ContextFill, Str
     tokio::task::spawn_blocking(move || crate::supervisor::history::load_context_fill(&session_id))
         .await
         .map_err(|e| e.to_string())
+}
+
+// ---- Background-task artifacts (disk readers) -----------------------------
+//
+// The front's read-only boundary to a session's on-disk background-task artifacts:
+// a sub-agent's full transcript, a workflow run's manifest, and a background
+// task's output file. These complement the live `SessionTaskEvent` (which carries
+// only the coarse lifecycle) with the rich detail for a drill-down. Pure I/O run
+// off the async runtime via `spawn_blocking`, like `load_session_history`.
+
+/// Load a sub-agent's (`Agent` tool, or a workflow agent) full transcript,
+/// normalized into the same items the live conversation renders. Empty if absent.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_subagent_transcript(
+    session_id: String,
+    agent_id: String,
+) -> Result<Vec<ConversationItem>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::supervisor::subagents::load_subagent_transcript(&session_id, &agent_id)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Load a workflow run's manifest (`workflows/<run_id>.json`). `null` if absent.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_workflow_run(
+    session_id: String,
+    run_id: String,
+) -> Result<Option<WorkflowRun>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::supervisor::subagents::load_workflow_run(&session_id, &run_id)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Read the current contents of a background task's output file
+/// (`tasks/<task_id>.output`, the sink for background `Bash` and `Monitor`). `null`
+/// if absent. One-shot read — live tailing is layered on by the display task.
+#[tauri::command]
+#[specta::specta]
+pub async fn read_task_output(
+    session_id: String,
+    task_id: String,
+) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::supervisor::subagents::read_task_output(&session_id, &task_id)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Fetch the real subscription usage percentages (5h + weekly windows). The stream
+/// only carries a coarse rate-limit status, so this replicates the CLI's internal
+/// `GET /api/oauth/usage` (OAuth token read from `~/.claude/.credentials.json` then
+/// the macOS Keychain). Read-only — never refreshes/writes the token. Account-global
+/// (not per-session); on error the UI degrades to the coarse `rate_limit` status. The
+/// endpoint is itself rate-limited, so the caller throttles (poll + on-open + manual).
+/// Errors are typed ([`UsageError`]) so the UI can show a tailored next step.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_plan_usage() -> Result<PlanUsage, UsageError> {
+    crate::usage::fetch_plan_usage().await
 }
 
 /// Send a user turn to a session.

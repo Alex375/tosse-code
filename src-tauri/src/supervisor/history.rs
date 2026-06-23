@@ -23,26 +23,41 @@ use serde_json::Value;
 use super::assembler::{context_used_from_usage, normalize_blocks};
 use super::model::{ContextFill, ConversationItem};
 
-/// Claude's config dir: `$CLAUDE_CONFIG_DIR` if set, else `$HOME/.claude`.
-fn claude_config_dir() -> Option<PathBuf> {
+/// Claude's config dir: `$CLAUDE_CONFIG_DIR` if set, else `$HOME/.claude`. Shared
+/// with [`super::subagents`], which reads the sibling task-artifact directories.
+pub(crate) fn claude_config_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
     }
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude"))
 }
 
+/// List the project directories under `<config>/projects` — the parent of every
+/// session's transcript and its sibling task-artifact dir. A genuinely-absent
+/// `projects/` dir → empty (the normal "nothing on disk yet" state); a permission/IO
+/// error reading it is DISTINCT and logged before returning empty, so a real failure is
+/// never silently equated with "absent" (finding #4). Shared with [`super::subagents`]
+/// so this error policy lives in ONE place.
+pub(crate) fn project_dirs(config_dir: &Path) -> Vec<PathBuf> {
+    let projects = config_dir.join("projects");
+    match std::fs::read_dir(&projects) {
+        Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            eprintln!("[history] cannot read projects dir {}: {e}", projects.display());
+            Vec::new()
+        }
+    }
+}
+
 /// Find the transcript for `session_id` by scanning every project dir under
 /// `config_dir/projects` for `<session_id>.jsonl`.
 fn find_transcript(config_dir: &Path, session_id: &str) -> Option<PathBuf> {
-    let projects = config_dir.join("projects");
     let file_name = format!("{session_id}.jsonl");
-    for entry in std::fs::read_dir(&projects).ok()?.flatten() {
-        let candidate = entry.path().join(&file_name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    project_dirs(config_dir)
+        .into_iter()
+        .map(|dir| dir.join(&file_name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Load and normalize the conversation history for `session_id`, returning the
@@ -135,9 +150,21 @@ fn load_context_fill_in(config_dir: &Path, session_id: &str) -> ContextFill {
 }
 
 fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    match std::fs::read_to_string(path) {
+        // The main conversation transcript: skip sidechain (sub-agent) turns — the
+        // root Task/Agent tool_use + its result still show, and the sub-agent's own
+        // transcript is read separately (see [`super::subagents`]).
+        Ok(content) => parse_transcript_str(&content, true),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Normalize a JSON-lines transcript into [`ConversationItem`]s. When
+/// `skip_sidechain` is true, sub-agent (`isSidechain:true`) turns are dropped — the
+/// behavior the main conversation restore wants. A SUB-AGENT's own transcript is
+/// itself entirely sidechain, so [`super::subagents`] calls this with
+/// `skip_sidechain = false` to keep every line.
+pub(crate) fn parse_transcript_str(content: &str, skip_sidechain: bool) -> Vec<ConversationItem> {
     let mut items = Vec::new();
     for line in content.lines() {
         let line = line.trim();
@@ -147,10 +174,7 @@ fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue; // tolerate a malformed line, never abort the restore
         };
-        // Skip sub-agent (sidechain) turns: the transcript threads them via a
-        // `parentUuid` chain we don't reconstruct here (the live path scopes them
-        // by `parent_tool_use_id`). The root Task tool_use + its result still show.
-        if entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        if skip_sidechain && entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             continue;
         }
         match entry.get("type").and_then(Value::as_str) {

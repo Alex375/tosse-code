@@ -192,12 +192,15 @@ export function Menu({
   children,
   align,
   up,
+  onOpen,
 }: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   trigger: ReactElement<any>;
   children: ReactNode;
   align?: "right";
   up?: boolean;
+  /** Fired once each time the menu transitions closed → open (e.g. to refresh data). */
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useClickAway(useCallback(() => setOpen(false), []));
@@ -206,6 +209,7 @@ export function Menu({
       {cloneElement(trigger, {
         onClick: (e: React.MouseEvent) => {
           e.stopPropagation();
+          if (!open) onOpen?.();
           setOpen((o) => !o);
         },
         "data-open": open ? "" : undefined,
@@ -282,6 +286,220 @@ export interface PlanInfo {
   usingOverage: boolean;
 }
 
+/** Real usage fill of one rate-limit window (from `GET /api/oauth/usage`). Shape
+ *  mirrors the core's `UsageWindow` so the generated type passes structurally.
+ *  `resets_at` is a raw timestamp string (ISO 8601, or epoch-seconds digits). */
+export interface PlanUsageWindow {
+  used_percentage: number;
+  resets_at: string | null;
+}
+
+/** Normalize a window's raw `resets_at` to Unix epoch SECONDS for `fmtReset`. Handles
+ *  ISO 8601 (the live endpoint) via the native `Date` parser and a digits-only epoch
+ *  (the alternate shape). `null` when absent/unparseable. */
+function resetToEpochSeconds(s: string | null): number | null {
+  if (!s) return null;
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  const ms = Date.parse(s);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
+/** Real plan-usage %, the precise figure the stream does NOT carry. Each window is
+ *  null when the endpoint did not report it. Mirrors the core's `PlanUsage`. */
+export interface PlanUsageInfo {
+  five_hour: PlanUsageWindow | null;
+  seven_day: PlanUsageWindow | null;
+}
+
+/** Why the real plan-usage fetch failed — mirrors the core's `UsageError` union so
+ *  the generated type passes structurally and the popover can branch on `kind`. */
+export type PlanUsageError =
+  | { kind: "no_token" }
+  | { kind: "keychain_denied"; detail: string }
+  | { kind: "unauthorized"; status: number }
+  | { kind: "rate_limited"; retry_after: number | null }
+  | { kind: "http"; status: number; body: string }
+  | { kind: "network"; detail: string }
+  | { kind: "parse"; body: string };
+
+/** French message + actionable next step + retry-applies + raw detail, per cause.
+ *  Single source of the copy so it lives in one place. */
+function usageErrorCopy(e: PlanUsageError): {
+  msg: string;
+  action: string;
+  retry: boolean;
+  detail: string | null;
+} {
+  switch (e.kind) {
+    case "no_token":
+      return {
+        msg: "Aucun jeton Claude trouvé.",
+        action:
+          "Connecte-toi via le CLI : lance « claude » dans un terminal, authentifie-toi, puis réessaie.",
+        retry: true,
+        detail: null,
+      };
+    case "keychain_denied":
+      return {
+        msg: "Accès au trousseau refusé.",
+        action:
+          "L'app n'est pas signée : clique « Toujours autoriser » sur le prompt du trousseau macOS, puis réessaie.",
+        retry: true,
+        detail: e.detail,
+      };
+    case "unauthorized":
+      return {
+        msg: `Jeton expiré ou révoqué (HTTP ${e.status}).`,
+        action: "Relance une session « claude » pour rafraîchir le jeton, puis réessaie.",
+        retry: true,
+        detail: null,
+      };
+    case "rate_limited":
+      return {
+        msg: "Endpoint d'usage temporairement limité.",
+        action: e.retry_after
+          ? `L'endpoint /api/oauth/usage est lui-même rate-limité (il est aussi interrogé par le CLI). Réessaie dans ~${e.retry_after}s.`
+          : "L'endpoint /api/oauth/usage est lui-même rate-limité (il est aussi interrogé par le CLI). Attends quelques minutes avant de réessayer.",
+        retry: true,
+        detail: null,
+      };
+    case "http":
+      return {
+        msg: `Le service d'usage a renvoyé une erreur (HTTP ${e.status}).`,
+        action: "Réessaie dans un instant ; si ça persiste, signale-le avec les détails.",
+        retry: true,
+        detail: e.body,
+      };
+    case "network":
+      return {
+        msg: "Connexion au service d'usage impossible.",
+        action: "Vérifie ta connexion internet, puis réessaie.",
+        retry: true,
+        detail: e.detail,
+      };
+    case "parse":
+      return {
+        msg: "Réponse illisible du service d'usage.",
+        action: "Probablement un bug — signale-le avec les détails ci-dessous.",
+        retry: false,
+        detail: e.body,
+      };
+    default: {
+      // Exhaustiveness guard: a new UsageError kind must be handled above (this line
+      // fails to compile otherwise). At RUNTIME it also catches a foreign thrown value
+      // (e.g. a raw transport Error that slipped past normalization) so the popover
+      // degrades gracefully instead of crashing on `undefined.msg`.
+      const _exhaustive: never = e;
+      void _exhaustive;
+      const detail =
+        e && typeof e === "object" && "message" in e
+          ? String((e as { message: unknown }).message)
+          : String(e);
+      return {
+        msg: "Erreur inattendue du service d'usage.",
+        action: "Réessaie ; si ça persiste, signale-le avec les détails ci-dessous.",
+        retry: true,
+        detail,
+      };
+    }
+  }
+}
+
+/** Turns a failed usage fetch into a concrete next step. Two modes:
+ *  - full (no data yet): message + action + optional « Réessayer » + « Détails ».
+ *  - `stale` (data already shown above): a compact non-destructive warning so a failed
+ *    refresh is NEVER silent — the bars stay, but the user is told they may be stale. */
+function UsageErrorCard({
+  error,
+  loading,
+  onRetry,
+  stale,
+}: {
+  error: PlanUsageError;
+  loading?: boolean;
+  onRetry?: () => void;
+  stale?: boolean;
+}) {
+  const c = usageErrorCopy(error);
+  const retryBtn =
+    c.retry && onRetry ? (
+      <button
+        className="wf-pop-err-retry"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRetry();
+        }}
+        disabled={loading}
+      >
+        <Ico name="refresh" className={"sm" + (loading ? " wf-spin-fast" : "")} />
+        Réessayer
+      </button>
+    ) : null;
+
+  if (stale) {
+    return (
+      <div className="wf-pop-staleerr">
+        <span className="wf-pop-staleerr-msg">
+          <Ico name="alert" className="sm" />
+          Rafraîchissement échoué — chiffres possiblement périmés.
+        </span>
+        <div className="wf-pop-err-foot">
+          {retryBtn}
+          <details className="wf-pop-err-det" onClick={(e) => e.stopPropagation()}>
+            <summary>Détails</summary>
+            <pre className="wf-mono">{c.detail ? `${c.msg}\n${c.detail}` : c.msg}</pre>
+          </details>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="wf-pop-err">
+      <div className="wf-pop-err-msg">{c.msg}</div>
+      <div className="wf-pop-err-act">{c.action}</div>
+      {retryBtn || c.detail ? (
+        <div className="wf-pop-err-foot">
+          {retryBtn}
+          {c.detail ? (
+            <details className="wf-pop-err-det" onClick={(e) => e.stopPropagation()}>
+              <summary>Détails</summary>
+              <pre className="wf-mono">{c.detail}</pre>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** One window's real-usage bar: label · % · reset, with a fill that warns past 80%. */
+function UsageRow({
+  label,
+  w,
+  fallbackReset,
+}: {
+  label: string;
+  w: PlanUsageWindow;
+  fallbackReset: number | null;
+}) {
+  const pct = Math.min(100, Math.max(0, Math.round(w.used_percentage)));
+  const warn = pct >= 80;
+  const reset = resetToEpochSeconds(w.resets_at) ?? fallbackReset;
+  return (
+    <div className="wf-pop-usage">
+      <div className="wf-pop-usage-top">
+        <span>{label}</span>
+        <span className="wf-mono">
+          {pct}%{reset ? ` · ${fmtReset(reset)}` : ""}
+        </span>
+      </div>
+      <div className="wf-pop-bar">
+        <i className={warn ? "warn" : ""} style={{ width: pct + "%" }} />
+      </div>
+    </div>
+  );
+}
+
 /** Map a rate-limit status to a label + colour token. */
 function planStatus(status: string | null): { label: string; color: string } {
   switch (status) {
@@ -324,12 +542,27 @@ export function ContextRing({
   label,
   disabled,
   onCompact,
+  usage,
+  usageLoading,
+  usageError,
+  onOpenUsage,
+  onRefreshUsage,
 }: {
   ctx: Ctx;
   plan?: PlanInfo | null;
   label?: boolean;
   disabled?: boolean;
   onCompact?: () => void;
+  /** Real usage % (5h + weekly), from `GET /api/oauth/usage`. Null/absent → the
+   *  popover falls back to the coarse `plan` status. */
+  usage?: PlanUsageInfo | null;
+  usageLoading?: boolean;
+  /** Structured failure of the last usage fetch — drives a tailored guidance card. */
+  usageError?: PlanUsageError | null;
+  /** Fired when the popover opens — caller throttles (e.g. only if data is stale). */
+  onOpenUsage?: () => void;
+  /** Forced refresh from the manual button; also gates whether the button shows. */
+  onRefreshUsage?: () => void;
 }) {
   const sz = 16;
   const r = sz / 2 - 1.6;
@@ -346,10 +579,12 @@ export function ContextRing({
     );
   }
   const st = plan ? planStatus(plan.status) : null;
+  const hasForfait = !!(plan || usage || usageLoading || usageError);
   return (
     <Menu
       align="right"
       up
+      onOpen={onOpenUsage}
       trigger={
         <button className={"wf-ring" + (warn ? " warn" : "")} title={"Contexte " + ctx.used + " / " + ctx.max}>
           <svg width={sz} height={sz} viewBox={"0 0 " + sz + " " + sz}>
@@ -375,24 +610,74 @@ export function ContextRing({
         <div className="wf-pop-bar">
           <i className={warn ? "warn" : ""} style={{ width: ctx.pct + "%" }} />
         </div>
-        {st && plan ? (
+        {hasForfait ? (
           <>
             <div className="wf-pop-sep" />
-            <div className="wf-pop-h">Forfait{planWindow(plan.limitType) ? ` · ${planWindow(plan.limitType)}` : ""}</div>
-            <div className="wf-pop-row">
-              <span>Statut</span>
-              <span className="wf-pop-pill">
-                <i style={{ background: st.color }} />
-                {st.label}
-              </span>
+            <div className="wf-pop-h wf-pop-h-row">
+              <span>Forfait</span>
+              {onRefreshUsage ? (
+                <button
+                  className="wf-pop-refresh"
+                  title="Rafraîchir l'usage"
+                  aria-label="Rafraîchir l'usage"
+                  aria-busy={usageLoading}
+                  disabled={usageLoading}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRefreshUsage();
+                  }}
+                >
+                  <Ico name="refresh" className={"sm" + (usageLoading ? " wf-spin-fast" : "")} />
+                </button>
+              ) : null}
             </div>
-            <div className="wf-pop-row">
-              <span>Réinitialisation</span>
-              <span className="wf-mono">{fmtReset(plan.resetsAt)}</span>
-            </div>
-            {plan.usingOverage ? (
-              <div className="wf-pop-sub">Overage actif</div>
+            {/* Real usage bars (precise %), when the endpoint reported them. */}
+            {usage?.five_hour ? (
+              <UsageRow
+                label="5h"
+                w={usage.five_hour}
+                fallbackReset={plan?.limitType === "five_hour" ? plan.resetsAt : null}
+              />
             ) : null}
+            {usage?.seven_day ? (
+              <UsageRow
+                label="7j"
+                w={usage.seven_day}
+                fallbackReset={plan?.limitType === "seven_day" ? plan.resetsAt : null}
+              />
+            ) : null}
+            {/* Coarse status pill (warning / rejected) — always informative. */}
+            {st && plan ? (
+              <div className="wf-pop-row">
+                <span>Statut{!usage && planWindow(plan.limitType) ? ` · ${planWindow(plan.limitType)}` : ""}</span>
+                <span className="wf-pop-pill">
+                  <i style={{ background: st.color }} />
+                  {st.label}
+                </span>
+              </div>
+            ) : null}
+            {/* No precise %: keep the coarse reset line (from the stream). */}
+            {!usage && plan ? (
+              <div className="wf-pop-row">
+                <span>Réinitialisation</span>
+                <span className="wf-mono">{fmtReset(plan.resetsAt)}</span>
+              </div>
+            ) : null}
+            {/* A real error: actionable guidance (full card if no data, or a compact
+                non-destructive "stale" warning if bars are already shown above). Never
+                silent — a failed refresh after a prior success still surfaces here. */}
+            {usageError ? (
+              <UsageErrorCard
+                error={usageError}
+                loading={usageLoading}
+                onRetry={onRefreshUsage}
+                stale={!!usage}
+              />
+            ) : null}
+            {!usage && !usageError && usageLoading ? (
+              <div className="wf-pop-sub">Chargement de l'usage…</div>
+            ) : null}
+            {plan?.usingOverage ? <div className="wf-pop-sub">Overage actif</div> : null}
           </>
         ) : null}
         <div

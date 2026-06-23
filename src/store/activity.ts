@@ -47,6 +47,9 @@ export function toolActivityLabel(name: string, input: JsonValue): string {
       const p = field(input, "pattern");
       return p ? `Liste ${truncate(p, 28)}` : "Liste des fichiers";
     }
+    // `Agent` is the wire name of the sub-agent tool (was `Task`); keep `Task` as an
+    // alias so resumed/old transcripts still label correctly.
+    case "Agent":
     case "Task": {
       const d = field(input, "description");
       return d ? `Sous-agent : ${truncate(d, 28)}` : "Délègue à un sous-agent";
