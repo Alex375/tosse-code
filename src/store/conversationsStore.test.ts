@@ -12,6 +12,7 @@ vi.mock("../ipc/client", () => {
       setEffortLevel: vi.fn(() => ok()),
       setUltracode: vi.fn(() => ok()),
       setPermissionMode: vi.fn(() => ok()),
+      generateConversationTitle: vi.fn(() => ok()),
       spawnSession: vi.fn(() => ok("session-1")),
       createWorktree: vi.fn(() => ok({ path: "/tmp/wt" })),
       loadSessionHistory: vi.fn(() => ok([])),
@@ -23,6 +24,7 @@ vi.mock("../ipc/client", () => {
 import { commands } from "../ipc/client";
 import {
   acknowledgeConversation,
+  DEFAULT_CONV_NAME,
   ensureConversationSession,
   loadConversationHistory,
   useConversationsStore,
@@ -100,6 +102,83 @@ describe("conversationsStore — per-conversation controls", () => {
     expect(commands.setEffortLevel).toHaveBeenCalledWith("session-7", "high");
     useConversationsStore.getState().setConvPermission("c1", "acceptEdits");
     expect(commands.setPermissionMode).toHaveBeenCalledWith("session-7", "acceptEdits");
+  });
+});
+
+describe("conversationsStore — auto title (VS Code style)", () => {
+  const store = () => useConversationsStore.getState();
+  // The auto-title state (autoTitlePending / titleContext / titleGenCount /
+  // lastAppliedSeq) is module-level and NOT reset between tests, so each test uses a
+  // DISTINCT conversation id — its behavior never depends on another test's leftovers.
+  const convOf = (id: string) => store().conversations.find((c) => c.id === id)!;
+
+  it("places an optimistic placeholder then applies the generated title", () => {
+    seed(baseConv({ id: "t1", name: DEFAULT_CONV_NAME }));
+    store().noteFirstMessage("t1", "Aide-moi à corriger le bug de login");
+    // Optimistic placeholder (the truncated message) — no longer the default name.
+    expect(convOf("t1").name).not.toBe(DEFAULT_CONV_NAME);
+    store().applyAutoTitle("t1", "Correction du bug de login", 1);
+    expect(convOf("t1").name).toBe("Correction du bug de login");
+  });
+
+  it("a manual rename protects against a late-arriving generated title", () => {
+    seed(baseConv({ id: "t2", name: DEFAULT_CONV_NAME }));
+    store().noteFirstMessage("t2", "première question");
+    store().renameConversation("t2", "Mon titre à moi");
+    // The generated title arrives AFTER the manual rename — it must be ignored.
+    store().applyAutoTitle("t2", "Titre généré", 1);
+    expect(convOf("t2").name).toBe("Mon titre à moi");
+  });
+
+  it("applyAutoTitle is a no-op on a conversation that never became eligible", () => {
+    seed(baseConv({ id: "t3", name: "Titre existant" }));
+    store().applyAutoTitle("t3", "Titre généré", 1);
+    expect(convOf("t3").name).toBe("Titre existant");
+  });
+
+  it("ignores an out-of-order (stale) title response", () => {
+    seed(baseConv({ id: "t4", name: DEFAULT_CONV_NAME }));
+    store().noteFirstMessage("t4", "premier");
+    // The richer (seq 3) response lands first…
+    store().applyAutoTitle("t4", "Titre riche", 3);
+    expect(convOf("t4").name).toBe("Titre riche");
+    // …then the older (seq 1, poorer-context) response arrives late — it must be dropped.
+    store().applyAutoTitle("t4", "Titre pauvre", 1);
+    expect(convOf("t4").name).toBe("Titre riche");
+  });
+
+  it("triggerAutoTitle asks the binary (with its seq) only when eligible AND live", () => {
+    seed(baseConv({ id: "t5", name: DEFAULT_CONV_NAME, handle: "session-7" }));
+    store().noteFirstMessage("t5", "ma description");
+    store().triggerAutoTitle("t5", "ma description");
+    expect(commands.generateConversationTitle).toHaveBeenCalledWith("session-7", "ma description", 1);
+  });
+
+  it("triggerAutoTitle is a no-op without a live session", () => {
+    seed(baseConv({ id: "t6", name: DEFAULT_CONV_NAME, handle: null }));
+    store().noteFirstMessage("t6", "ma description");
+    store().triggerAutoTitle("t6", "ma description");
+    expect(commands.generateConversationTitle).not.toHaveBeenCalled();
+  });
+
+  it("regenerates from the accumulated user messages, capped, then freezes", () => {
+    seed(baseConv({ id: "t7", name: DEFAULT_CONV_NAME, handle: "session-7" }));
+    const s = store();
+    s.noteFirstMessage("t7", "/list-tasks");
+    s.triggerAutoTitle("t7", "/list-tasks");
+    s.triggerAutoTitle("t7", "fais la tâche renommage");
+    s.triggerAutoTitle("t7", "ajoute des tests");
+    s.triggerAutoTitle("t7", "et un quatrième message"); // over the cap of 3
+    // Capped at 3 regenerations.
+    expect(commands.generateConversationTitle).toHaveBeenCalledTimes(3);
+    // The 2nd generation titles from the ACCUMULATED intent (with its seq), not just
+    // the latest msg — this is what unsticks "/list-tasks" → the actual task.
+    expect(commands.generateConversationTitle).toHaveBeenNthCalledWith(
+      2,
+      "session-7",
+      "/list-tasks\nfais la tâche renommage",
+      2,
+    );
   });
 });
 

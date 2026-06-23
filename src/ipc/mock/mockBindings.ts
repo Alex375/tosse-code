@@ -21,6 +21,7 @@ import type {
   SessionPermissionEvent,
   SessionStatePayload,
   SessionStateEvent,
+  SessionTitleEvent,
   SlashCommand,
   TickEvent,
   UsageError,
@@ -79,6 +80,7 @@ const sessionMessageEvent = new MockEmitter<SessionMessageEvent>();
 const sessionPermissionEvent = new MockEmitter<SessionPermissionEvent>();
 const sessionStateEvent = new MockEmitter<SessionStateEvent>();
 const sessionCommandsEvent = new MockEmitter<SessionCommandsEvent>();
+const sessionTitleEvent = new MockEmitter<SessionTitleEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
 // No real filesystem in the browser mock — this never fires, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
@@ -89,6 +91,7 @@ export const mockEvents = {
   sessionPermissionEvent,
   sessionStateEvent,
   sessionCommandsEvent,
+  sessionTitleEvent,
   tickEvent,
   fsChangeEvent,
 };
@@ -219,6 +222,22 @@ export const mockCommands = {
     const rec = getRecord(session);
     rec.lastState = { ...rec.lastState, effort: "xhigh", ultracode: true };
     sessionStateEvent.emit({ session, state: rec.lastState });
+    return ok(null);
+  },
+
+  async generateConversationTitle(
+    session: string,
+    description: string,
+    seq: number,
+  ): Promise<Result<null, string>> {
+    // No real model in the browser mock — synthesize a plausible short title from
+    // the description and emit it (echoing `seq`) like the core would, so the
+    // auto-title behavior is exercised end to end in dev/Playwright.
+    setTimeout(() => {
+      const words = description.trim().replace(/\s+/g, " ").split(" ").slice(0, 6).join(" ");
+      const title = words ? words.charAt(0).toUpperCase() + words.slice(1) : "Nouvelle conversation";
+      sessionTitleEvent.emit({ session, title, seq });
+    }, 40);
     return ok(null);
   },
 

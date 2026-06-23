@@ -199,6 +199,23 @@ async setUltracode(session: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Ask the binary to generate a short conversation title from `description` (the
+ * user's accumulated messages so far), like the official VS Code extension. `seq` is
+ * a monotonic per-conversation tag echoed back in the `SessionTitleEvent` so the
+ * front can drop an out-of-order (stale) response. Fire-and-forget: the title comes
+ * back asynchronously as a `SessionTitleEvent`, which the front applies as the
+ * conversation name (unless the user set a custom title meanwhile). A generation
+ * failure is swallowed in the core — the front keeps its placeholder / last title.
+ */
+async generateConversationTitle(session: string, description: string, seq: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("generate_conversation_title", { session, description, seq }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Interrupt the current turn (without killing the process).
  */
 async interruptSession(session: string) : Promise<Result<null, string>> {
@@ -454,6 +471,7 @@ sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionStateEvent: SessionStateEvent,
 sessionTaskEvent: SessionTaskEvent,
+sessionTitleEvent: SessionTitleEvent,
 tickEvent: TickEvent
 }>({
 fsChangeEvent: "fs-change-event",
@@ -462,6 +480,7 @@ sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionStateEvent: "session-state-event",
 sessionTaskEvent: "session-task-event",
+sessionTitleEvent: "session-title-event",
 tickEvent: "tick-event"
 })
 
@@ -878,6 +897,15 @@ rate_limit: RateLimitSnapshot | null }
  * payload) by `task_id`, so the UI tracks the live fleet of background tasks.
  */
 export type SessionTaskEvent = { session: string; task: BackgroundTask }
+/**
+ * A model-generated conversation title arrived (from a `generate_session_title`
+ * control response). The UI maps `session` (handle) → conversation and applies the
+ * title as the name UNLESS the user set a custom title in the meantime. `seq` is the
+ * monotonic per-conversation tag the UI sent: it applies a title only if `seq` is
+ * newer than the last applied, so an out-of-order (stale) response can't overwrite a
+ * fresher title.
+ */
+export type SessionTitleEvent = { session: string; title: string; seq: number }
 /**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code

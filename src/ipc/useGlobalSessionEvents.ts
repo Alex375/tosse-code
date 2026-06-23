@@ -19,6 +19,7 @@ import type {
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionStateEvent,
+  SessionTitleEvent,
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
@@ -288,6 +289,14 @@ export function useGlobalSessionEvents(): void {
       useConversationStore.getState().enqueuePermission(session, payload.request);
     }
 
+    function onTitle(payload: SessionTitleEvent) {
+      const convId = convIdForHandle(payload.session);
+      if (!convId) return; // unknown / deleted conversation
+      // Applied only if still auto-title-eligible (not renamed since) and the seq is
+      // newer than the last applied (drops out-of-order/stale title responses).
+      useConversationsStore.getState().applyAutoTitle(convId, payload.title, payload.seq);
+    }
+
     function onCommands(payload: SessionCommandsEvent) {
       // Cache the catalogue by cwd (not by session): commands depend on the
       // working folder, and a fresh conversation in the same repo reuses them
@@ -310,6 +319,9 @@ export function useGlobalSessionEvents(): void {
       .then((un) => unlisteners.push(un));
     events.sessionCommandsEvent
       .listen((e) => { if (!disposed) onCommands(e.payload); })
+      .then((un) => unlisteners.push(un));
+    events.sessionTitleEvent
+      .listen((e) => { if (!disposed) onTitle(e.payload); })
       .then((un) => unlisteners.push(un));
 
     return () => {

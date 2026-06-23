@@ -52,6 +52,12 @@ export function useSendMessage(convId: string) {
       // (or its first message after being stopped/ended).
       const handle = await ensureConversationSession(convId, { worktree });
       const res = await unwrap(commands.sendMessage(handle, text));
+      // On each of the first few messages of a still-untitled conversation, ask the
+      // binary to (re)generate a smart title from the accumulated intent (capped, then
+      // frozen; no-op once renamed / over the cap / no live session). Like the VS Code
+      // extension, but tracking the evolving topic. The title arrives via
+      // SessionTitleEvent and replaces the optimistic placeholder name.
+      useConversationsStore.getState().triggerAutoTitle(convId, text);
       if (worktree) {
         // The first spawn just created a worktree — refresh the repo's list so
         // the indicator/manager show it.

@@ -26,6 +26,7 @@ export type {
   SessionPermissionEvent,
   SessionStateEvent,
   SessionStatePayload,
+  SessionTitleEvent,
   SlashCommand,
   TickEvent,
   UsageError,

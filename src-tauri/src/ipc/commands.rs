@@ -355,6 +355,28 @@ pub async fn set_ultracode(
     handle.enable_ultracode().await.map_err(|e| e.to_string())
 }
 
+/// Ask the binary to generate a short conversation title from `description` (the
+/// user's accumulated messages so far), like the official VS Code extension. `seq` is
+/// a monotonic per-conversation tag echoed back in the `SessionTitleEvent` so the
+/// front can drop an out-of-order (stale) response. Fire-and-forget: the title comes
+/// back asynchronously as a `SessionTitleEvent`, which the front applies as the
+/// conversation name (unless the user set a custom title meanwhile). A generation
+/// failure is swallowed in the core — the front keeps its placeholder / last title.
+#[tauri::command]
+#[specta::specta]
+pub async fn generate_conversation_title(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    description: String,
+    seq: u32,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle
+        .generate_title(description, seq)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Interrupt the current turn (without killing the process).
 #[tauri::command]
 #[specta::specta]

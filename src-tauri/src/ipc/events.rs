@@ -53,6 +53,19 @@ pub struct SessionTaskEvent {
     pub task: BackgroundTask,
 }
 
+/// A model-generated conversation title arrived (from a `generate_session_title`
+/// control response). The UI maps `session` (handle) → conversation and applies the
+/// title as the name UNLESS the user set a custom title in the meantime. `seq` is the
+/// monotonic per-conversation tag the UI sent: it applies a title only if `seq` is
+/// newer than the last applied, so an out-of-order (stale) response can't overwrite a
+/// fresher title.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionTitleEvent {
+    pub session: String,
+    pub title: String,
+    pub seq: u32,
+}
+
 /// Coalesced filesystem change notification for the editor panel: the (de-noised,
 /// debounced) set of paths that changed under the watched working directory. The
 /// UI reloads any open file in this set and refreshes any expanded tree dirs it
@@ -105,6 +118,15 @@ impl SessionEmitter for TauriEmitter {
         let ev = SessionTaskEvent {
             session: session.to_string(),
             task: task.clone(),
+        };
+        let _ = ev.emit(&self.app);
+    }
+
+    fn emit_title(&self, session: &str, title: &str, seq: u32) {
+        let ev = SessionTitleEvent {
+            session: session.to_string(),
+            title: title.to_string(),
+            seq,
         };
         let _ = ev.emit(&self.app);
     }
