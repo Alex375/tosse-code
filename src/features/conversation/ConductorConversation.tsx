@@ -190,7 +190,7 @@ function ConversationPane({
 }) {
   const { scrollRef, onRender, scrollToBottom } = useStickToBottom(session);
   return (
-    <div className="wf-col" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
+    <div className="wf-col cv-pane" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
       <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
       <TodoBar session={session} />
       <ReviewBar session={session} />
