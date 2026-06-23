@@ -26,6 +26,7 @@ import { useCommandsStore } from "../store/commandsStore";
 import { setCachedWindow } from "../store/contextWindowCache";
 import { dispatchAgentNotification } from "../notifications/notify";
 import { agentEventFor } from "../notifications/transition";
+import { syncReminderFromLive } from "../agent/reminderSync";
 import type { SessionStatePayload } from "./client";
 import { worktreesKey } from "./useWorktrees";
 
@@ -221,6 +222,12 @@ export function useGlobalSessionEvents(): void {
       }
 
       useConversationStore.getState().applyItem(session, item);
+
+      // A finished turn settles the conversation into review / error / open-question
+      // (or stays idle if interrupted). Persist that the moment the result lands so
+      // the reminder survives the process dying — paired with the busy-edge in
+      // onState to be robust to either event arriving first (see syncReminderFromLive).
+      if (item.kind === "turn_result") syncReminderFromLive(session);
     }
 
     function onState(payload: SessionStateEvent) {
@@ -242,6 +249,17 @@ export function useGlobalSessionEvents(): void {
           notifyTransition(session, prev, payload.state);
         } catch (e) {
           console.error("notification dispatch failed:", e);
+        }
+        // A busy / awaiting edge is exactly when a conversation settles or
+        // un-settles; re-derive its persisted reminder then (the other half of the
+        // turn_result arming in onMessage, robust to whichever event lands first).
+        // Guarded to a real edge, and BEFORE the `ended` unbind below so the handle
+        // is still live — once unbound, syncReminderFromLive would (correctly) skip.
+        if (
+          prev.busy !== payload.state.busy ||
+          prev.awaiting_permission !== payload.state.awaiting_permission
+        ) {
+          syncReminderFromLive(session);
         }
       }
       // The session reports its current cwd via system/init (re-sent per turn).

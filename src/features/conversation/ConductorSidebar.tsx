@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { pickFolder } from "../../ipc/pickFolder";
 import {
+  acknowledgeConversation,
   createConversationInRepo,
   repoName,
   useActiveConversationId,
@@ -8,7 +9,6 @@ import {
   useConversationsStore,
   type Conversation,
 } from "../../store/conversationsStore";
-import { useConversationStore } from "../../store/conversationStore";
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { agentStatusToDot, isDismissable, rowAttention } from "../../agent/status";
 import { useSettingsUi } from "../../store/settingsUi";
@@ -24,7 +24,6 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   // the "Vu" acknowledge button.
   const status = useAgentStatus(conv.id);
   const attn = rowAttention(status);
-  const markSeen = useConversationStore((s) => s.markSeen);
   const select = useConversationsStore((s) => s.selectConversation);
   const rename = useConversationsStore((s) => s.renameConversation);
   const remove = useConversationsStore((s) => s.removeConversation);
@@ -94,7 +93,7 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
           aria-label="Marquer comme vu"
           onClick={(e) => {
             e.stopPropagation();
-            markSeen(conv.id);
+            acknowledgeConversation(conv.id);
           }}
         >
           <Ico name="check" className="sm" />
