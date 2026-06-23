@@ -41,6 +41,10 @@ export function useSendMessage(convId: string) {
       // The core does not echo user turns, so append optimistically (keyed by the
       // stable id) before sending — instant even while the session spawns.
       addUserTurn(convId, text, queued);
+      // Sending the next message consumes any pending reminder: the user has moved
+      // on from the previous result. `addUserTurn` clears the LIVE turnSeen; clear
+      // the PERSISTED reminder too so it doesn't re-surface on the next restart.
+      useConversationsStore.getState().setReminder(convId, null);
       // Sending IS activity: float the conversation to the top now and persist
       // the new timestamp so the recency order survives a restart.
       useConversationsStore.getState().noteActivity(convId, { persist: true });
