@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { StreamMarkdown } from "../conversation/StreamMarkdown";
 import { Ico } from "../../ui/kit";
 import { EditorErrorBoundary } from "./EditorErrorBoundary";
+import { ImageViewer } from "./ImageViewer";
 import { baseName, fileBadge, isMarkdownPath } from "./language";
 import { fileIconUrl, useFileIcons } from "./fileIcons";
 import { useConvEditor, useEditorStore, type FileBuffer } from "./editorStore";
@@ -104,11 +105,13 @@ function ActiveFile({
   const setContent = useEditorStore((s) => s.setContent);
   const saveBuffer = useEditorStore((s) => s.saveBuffer);
   const togglePreview = useEditorStore((s) => s.togglePreview);
+  const setImageView = useEditorStore((s) => s.setImageView);
   const reloadFromDisk = useEditorStore((s) => s.reloadFromDisk);
   const keepLocal = useEditorStore((s) => s.keepLocal);
 
   const isMd = isMarkdownPath(buffer.path);
-  const editable = !buffer.binary && !buffer.tooLarge && !buffer.loading && !buffer.error;
+  const editable =
+    !buffer.binary && !buffer.tooLarge && !buffer.loading && !buffer.error && !buffer.isImage;
 
   return (
     <div className={styles.content}>
@@ -160,6 +163,19 @@ function ActiveFile({
         <div className={styles.placeholder}>{buffer.error}</div>
       ) : buffer.tooLarge ? (
         <div className={styles.placeholder}>Fichier trop volumineux pour être affiché (&gt; 16 Mo).</div>
+      ) : buffer.isImage ? (
+        buffer.imageDataUrl ? (
+          <ImageViewer
+            key={`${convId}:${buffer.path}`}
+            src={buffer.imageDataUrl}
+            size={buffer.imageSize}
+            initialZoom={buffer.imageZoom}
+            initialOffset={buffer.imageOffset}
+            onViewChange={(z, o) => setImageView(convId, buffer.path, z, o)}
+          />
+        ) : (
+          <div className={styles.placeholder}>Aperçu de l'image indisponible.</div>
+        )
       ) : buffer.binary ? (
         <div className={styles.placeholder}>Fichier binaire — aperçu non disponible.</div>
       ) : isMd && buffer.preview ? (

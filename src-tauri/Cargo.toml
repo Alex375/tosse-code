@@ -47,6 +47,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # macOS FSEvents under the hood — one cheap recursive watch (see `fs/mod.rs`).
 notify = "6"
 
+# Base64-encode image bytes for the editor's image viewer (served to the webview
+# as a `data:` URL). Already in the tree transitively (via reqwest/rustls) at this
+# exact version, so pinning it adds no new crate / build cost.
+base64 = "0.21"
+
 # Async runtime for the supervisor: spawn `claude`, pipe stdio, drive tasks.
 # Tauri 2 already runs on tokio; we depend on it directly for the features we use.
 tokio = { version = "1", features = [

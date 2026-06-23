@@ -9,6 +9,7 @@ import type {
   FileContent,
   FsChangeEvent,
   FsEntry,
+  ImageContent,
   PermissionDecision,
   PermissionMode,
   PersistedState,
@@ -363,6 +364,16 @@ export const mockCommands = {
     if (path.includes("__throw__")) throw new Error("mock readFile transport failure");
     if (path.includes("__fail__")) return { status: "error", error: "mock readFile failed" };
     return ok(mockFile(path));
+  },
+
+  async readImage(path: string): Promise<Result<ImageContent, string>> {
+    if (path.includes("__throw__")) throw new Error("mock readImage transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock readImage failed" };
+    // A 1×1 transparent PNG — enough for the dev/browser build to exercise the
+    // image viewer path without a real filesystem.
+    const data_base64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    return ok({ path, data_base64, too_large: false, size: 70 });
   },
 
   async writeFile(_path: string, _content: string): Promise<Result<null, string>> {

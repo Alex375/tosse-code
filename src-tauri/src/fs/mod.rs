@@ -138,6 +138,45 @@ pub fn read_file(path: &str) -> std::io::Result<FileContent> {
     })
 }
 
+/// An image file's bytes, base64-encoded for the webview to render as a `data:`
+/// URL. Unlike [`read_file`], the binary content IS the payload here — images are
+/// never decoded as text. `too_large` (over [`MAX_FILE_BYTES`]) leaves
+/// `data_base64` empty; the front shows a guard instead of the image.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ImageContent {
+    pub path: String,
+    /// Base64 of the raw file bytes, NO `data:` prefix (the front prepends the
+    /// `data:<mime>;base64,` header, choosing the MIME from the extension).
+    pub data_base64: String,
+    pub too_large: bool,
+    pub size: u64,
+}
+
+/// Read an image file for the viewer, base64-encoding its bytes. Same size guard
+/// as [`read_file`] (a multi-hundred-MB file would bloat ~33% more as base64 and
+/// stall the webview) — over [`MAX_FILE_BYTES`] returns `too_large` with empty
+/// data. No binariness check: the caller already routed here BECAUSE the path is a
+/// known image extension, and the bytes are meant to be binary.
+pub fn read_image(path: &str) -> std::io::Result<ImageContent> {
+    use base64::Engine;
+    let size = fs::metadata(path)?.len();
+    if size > MAX_FILE_BYTES {
+        return Ok(ImageContent {
+            path: path.to_string(),
+            data_base64: String::new(),
+            too_large: true,
+            size,
+        });
+    }
+    let bytes = fs::read(path)?;
+    Ok(ImageContent {
+        path: path.to_string(),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        too_large: false,
+        size,
+    })
+}
+
 /// Write the editor buffer back to disk (overwriting). The parent directory must
 /// already exist (we never create files outside the tree the user is editing).
 pub fn write_file(path: &str, content: &str) -> std::io::Result<()> {
@@ -306,6 +345,24 @@ mod tests {
         let got = read_file(bin.to_str().unwrap()).unwrap();
         assert!(got.binary);
         assert!(got.content.is_empty());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn read_image_base64_encodes_bytes() {
+        use base64::Engine;
+        let d = fresh_dir();
+        // A tiny "image" — read_image doesn't care about real format, just bytes.
+        let img = d.join("pixel.png");
+        let bytes = [0x89u8, b'P', b'N', b'G', 0, 1, 2, 3];
+        fs::write(&img, bytes).unwrap();
+        let got = read_image(img.to_str().unwrap()).unwrap();
+        assert!(!got.too_large);
+        assert_eq!(got.size, bytes.len() as u64);
+        assert_eq!(
+            got.data_base64,
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        );
         fs::remove_dir_all(&d).unwrap();
     }
 

@@ -331,6 +331,18 @@ async readFile(path: string) : Promise<Result<FileContent, string>> {
 }
 },
 /**
+ * Read an image file for the viewer, base64-encoded (see `fs::read_image`). The
+ * front renders it as a `data:` URL instead of routing the file to Monaco.
+ */
+async readImage(path: string) : Promise<Result<ImageContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_image", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Write the editor buffer back to disk (save).
  */
 async writeFile(path: string, content: string) : Promise<Result<null, string>> {
@@ -698,6 +710,18 @@ export type FsChangeEvent = { paths: string[] }
  * reads exactly one level), so a huge repo never reads more than what is shown.
  */
 export type FsEntry = { name: string; path: string; is_dir: boolean }
+/**
+ * An image file's bytes, base64-encoded for the webview to render as a `data:`
+ * URL. Unlike [`read_file`], the binary content IS the payload here — images are
+ * never decoded as text. `too_large` (over [`MAX_FILE_BYTES`]) leaves
+ * `data_base64` empty; the front shows a guard instead of the image.
+ */
+export type ImageContent = { path: string; 
+/**
+ * Base64 of the raw file bytes, NO `data:` prefix (the front prepends the
+ * `data:<mime>;base64,` header, choosing the MIME from the extension).
+ */
+data_base64: string; too_large: boolean; size: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
 /**
  * One authoritative content block of an assistant message.

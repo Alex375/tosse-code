@@ -94,6 +94,51 @@ export function isMarkdownPath(path: string): boolean {
   return ext === "md" || ext === "markdown" || ext === "mdx";
 }
 
+/** Image extension → MIME type for a `data:` URL. We cover every raster/vector
+ *  format the OS webview renders natively from a data URL: the universally
+ *  web-supported set (PNG/JPEG/GIF/WebP/AVIF/SVG/BMP/ICO) plus formats macOS
+ *  WebKit handles (TIFF, HEIC/HEIF) — our primary platform. An unknown image-ish
+ *  extension simply isn't routed here and falls back to the text/binary path. */
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  apng: "image/apng",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  jfif: "image/jpeg",
+  pjpeg: "image/jpeg",
+  pjp: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  cur: "image/x-icon",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+  heic: "image/heic",
+  heif: "image/heif",
+};
+
+/** The image extension of a path (lowercased), or "" — also used for a badge. */
+function imageExt(path: string): string {
+  const name = baseName(path).toLowerCase();
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1) : "";
+  return ext in IMAGE_MIME ? ext : "";
+}
+
+/** Whether a path is an image we can render in the viewer (vs Monaco/text). */
+export function isImagePath(path: string): boolean {
+  return imageExt(path) !== "";
+}
+
+/** The MIME type for an image path, or null if it isn't a known image. */
+export function imageMimeForPath(path: string): string | null {
+  const ext = imageExt(path);
+  return ext ? IMAGE_MIME[ext] : null;
+}
+
 /** The parent directory of a path (its everything-but-last segment). */
 export function dirName(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
