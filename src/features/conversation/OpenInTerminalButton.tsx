@@ -37,12 +37,12 @@ export function OpenInTerminalButton({
       disabled={!sessionId || busy}
       title={
         sessionId
-          ? "Ouvrir la conversation dans le terminal"
+          ? "Ouvrir la conversation dans le terminal du système"
           : "Disponible une fois la session démarrée"
       }
-      aria-label="Ouvrir la conversation dans le terminal"
+      aria-label="Ouvrir la conversation dans le terminal du système"
     >
-      <Ico name="term" className="sm" />
+      <Ico name="arrow" className="sm" />
     </button>
   );
 }

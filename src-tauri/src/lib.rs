@@ -3,6 +3,7 @@ pub mod git;
 mod ipc;
 pub mod store;
 pub mod supervisor;
+pub mod terminal;
 pub mod usage;
 
 use ipc::commands::{
@@ -11,13 +12,13 @@ use ipc::commands::{
     load_session_history, load_subagent_transcript, load_workflow_run, open_in_terminal,
     path_exists, ping, read_dir, read_file, read_task_output, remove_worktree,
     request_user_attention, send_message, set_active_conversation, set_effort_level, set_model,
-    set_permission_mode, set_ultracode, spawn_session, stop_session, unwatch_dir,
-    upsert_conversation, upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file,
-    Sessions,
+    set_permission_mode, set_ultracode, spawn_session, stop_session, terminal_close,
+    terminal_open, terminal_resize, terminal_write, unwatch_dir, upsert_conversation, upsert_repo,
+    watch_dir, wipe_all_data, worktree_status, write_file, Sessions,
 };
 use ipc::events::{
     FsChangeEvent, SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent,
-    SessionStateEvent, SessionTaskEvent, TickEvent,
+    SessionStateEvent, SessionTaskEvent, TerminalExitEvent, TerminalOutputEvent, TickEvent,
 };
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
@@ -55,6 +56,10 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             write_file,
             watch_dir,
             unwatch_dir,
+            terminal_open,
+            terminal_write,
+            terminal_resize,
+            terminal_close,
             load_persisted_state,
             upsert_repo,
             delete_repo,
@@ -71,6 +76,8 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionCommandsEvent,
             SessionTaskEvent,
             FsChangeEvent,
+            TerminalOutputEvent,
+            TerminalExitEvent,
         ])
 }
 
@@ -216,6 +223,8 @@ pub fn run() {
         .manage(Sessions::new())
         // The editor's single active filesystem watch (live file/tree refresh).
         .manage(fs::FsWatcher::new())
+        // The live integrated terminals (one PTY-backed shell per conversation).
+        .manage(terminal::Terminals::new())
         .setup(move |app| {
             use tauri::Manager;
 
@@ -312,6 +321,8 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 use std::time::{Duration, Instant};
                 use tauri::Manager;
+                // Kill every integrated-terminal shell so we never orphan one.
+                app_handle.state::<terminal::Terminals>().kill_all();
                 let sessions = app_handle.state::<Sessions>();
                 let handles = sessions.handles();
                 if !handles.is_empty() {
