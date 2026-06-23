@@ -161,6 +161,29 @@ export function rowAttention(s: AgentStatus): "input" | "review" | "error" | nul
 }
 
 /**
+ * Sort key for the FlightDeck: what to surface first. Lower = more important, so
+ * action-required and errors come first (leftmost in a lane / top repo), then
+ * review, then running, then the inactive history (idle, off). Ties are broken by
+ * recency at the call site.
+ */
+export function statusRank(s: AgentStatus): number {
+  switch (s.kind) {
+    case "needInput":
+    case "needIntervention":
+    case "error":
+      return 0; // action requise / erreur
+    case "review":
+      return 1; // à relire
+    case "running":
+      return 2; // en cours
+    case "idle":
+      return 3;
+    case "off":
+      return 4;
+  }
+}
+
+/**
  * Whether the user can acknowledge ("Vu") this status to clear it back to idle.
  * Only the non-blocking REMINDERS qualify: a finished turn awaiting review, an
  * error to acknowledge, or an open question the heuristic flagged (possibly a

@@ -23,6 +23,7 @@ import { commands } from "../ipc/client";
 import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
+import { useMemo } from "react";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
 
@@ -740,6 +741,64 @@ export function useConversationRepo(convId: string | null): Repo | null {
     const conv = s.conversations.find((c) => c.id === convId);
     return conv ? (s.repos.find((r) => r.id === conv.repoId) ?? null) : null;
   });
+}
+
+export interface RepoGroup {
+  repo: Repo;
+  conversations: Conversation[];
+}
+
+/**
+ * The grouping skeleton shared by the sidebar's recency order and the FlightDeck's
+ * status-ordered lanes: bucket conversations under their repo, sort within each
+ * repo (`sortConvs`), then order the groups (`sortRepos`). Pure + testable. The two
+ * call sites differ ONLY in their comparators, so the grouping and empty-repo
+ * handling never drift between them.
+ */
+export function groupByRepo(
+  repos: Repo[],
+  conversations: Conversation[],
+  sortConvs: (a: Conversation, b: Conversation) => number,
+  sortRepos: (a: RepoGroup, b: RepoGroup) => number,
+): RepoGroup[] {
+  const byRepo = new Map<string, Conversation[]>();
+  for (const c of conversations) {
+    const arr = byRepo.get(c.repoId) ?? [];
+    arr.push(c);
+    byRepo.set(c.repoId, arr);
+  }
+  for (const arr of byRepo.values()) arr.sort(sortConvs);
+  return [...repos]
+    .map((repo) => ({ repo, conversations: byRepo.get(repo.id) ?? [] }))
+    .sort(sortRepos);
+}
+
+/**
+ * Group conversations under their repo and order by recency: within a repo the
+ * most recently active conversation comes first, and repos are ordered by their
+ * most recent conversation (an empty repo falls back to when it was added). The
+ * recency-ordered grouping the sidebar shows — the FlightDeck reuses the same
+ * skeleton (`groupByRepo`) but orders status-first instead (see `orderLanes`).
+ */
+export function groupConversationsByRepo(
+  repos: Repo[],
+  conversations: Conversation[],
+): RepoGroup[] {
+  // After the recency sort, a group's first conversation is its most recent one.
+  const recency = (g: RepoGroup) => g.conversations[0]?.lastActivityAt ?? g.repo.addedAt;
+  return groupByRepo(
+    repos,
+    conversations,
+    (a, b) => b.lastActivityAt - a.lastActivityAt,
+    (a, b) => recency(b) - recency(a),
+  );
+}
+
+/** Reactive repo-grouped conversations (recency-ordered). */
+export function useConversationsByRepo(): RepoGroup[] {
+  const repos = useRepos();
+  const conversations = useConversations();
+  return useMemo(() => groupConversationsByRepo(repos, conversations), [repos, conversations]);
 }
 
 // NOTE: the conversation status model now lives in `src/agent/status.ts`

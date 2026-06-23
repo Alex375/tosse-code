@@ -97,16 +97,18 @@ export function NavBtn({
   label,
   on,
   badge,
+  title,
   onClick,
 }: {
   icon?: string;
   label: string;
   on?: boolean;
   badge?: number | null;
+  title?: string;
   onClick?: () => void;
 }) {
   return (
-    <button {...(on ? { "data-on": "" } : {})} onClick={onClick}>
+    <button {...(on ? { "data-on": "" } : {})} title={title} onClick={onClick}>
       {icon ? <Ico name={icon} className="sm" /> : null}
       {label}
       {badge != null ? <span className="wf-badge att">{badge}</span> : null}
@@ -405,5 +407,46 @@ export function ContextRing({
         </div>
       </div>
     </Menu>
+  );
+}
+
+/** Compact context-fill meter — a tiny bar + percentage (the card variant of the
+ *  ContextRing). The exact "used / max" is in the hover title. */
+export function ContextMeter({ ctx }: { ctx: Ctx }) {
+  const warn = ctx.pct >= 70;
+  return (
+    <span className={"wf-ctxm" + (warn ? " warn" : "")} title={`Contexte ${ctx.used} / ${ctx.max}`}>
+      <Ico name="gauge" className="sm" />
+      <span className="wf-ctx">
+        <i style={{ width: ctx.pct + "%" }} />
+      </span>
+      <span className="wf-mono" style={{ fontSize: 10.5 }}>
+        {ctx.pct}%
+      </span>
+    </span>
+  );
+}
+
+/** A todo segment's state for the {@link TodoPips} bar. */
+export type TodoSeg = "todo" | "doing" | "done";
+
+/** The to-do progress pips + ratio: one dash per task — grey (not started),
+ *  amber (in progress), green (done) — followed by "done/total". */
+export function TodoPips({ segs, done, total }: { segs: TodoSeg[]; done: number; total: number }) {
+  return (
+    <span
+      className="wf-row"
+      style={{ gap: 6, color: "var(--wf-tx-lo)", fontSize: 11 }}
+      title="Avancement des tâches"
+    >
+      <span className="wf-todobar">
+        {segs.map((s, i) => (
+          <i key={i} className={"wf-todoseg " + s} />
+        ))}
+      </span>
+      <span className="wf-mono">
+        {done}/{total}
+      </span>
+    </span>
   );
 }

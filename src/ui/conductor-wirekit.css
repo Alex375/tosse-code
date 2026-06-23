@@ -233,8 +233,8 @@
 .wf-act.att .wf-act-t, .wf-act.err .wf-act-t { color:inherit; }
 
 /* ---- to-do ratio (mini) ------------------------------------ */
-.wf-todobar { display:inline-flex; gap:2px; }
-.wf-todoseg { width:10px; height:4px; border-radius:2px; background:var(--wf-panel-3); display:block; }
+.wf-todobar { display:inline-flex; gap:2px; max-width:128px; min-width:0; overflow:hidden; }
+.wf-todoseg { flex:0 1 10px; min-width:3px; height:4px; border-radius:2px; background:var(--wf-panel-3); display:block; }
 .wf-todoseg.done { background:var(--wf-run); }
 .wf-todoseg.doing { background:var(--wf-att); }
 
