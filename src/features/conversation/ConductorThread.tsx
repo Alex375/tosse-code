@@ -2,6 +2,7 @@ import { useLayoutEffect, useState } from "react";
 import type { JsonValue, NormalizedBlock, PermissionRequestPayload } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
 import { classifyAsk, field } from "../../agent/ask";
+import { useLiveActivity } from "../../store/activity";
 import {
   useConversationStore,
   useError,
@@ -324,15 +325,27 @@ export function ConductorThread({
             {pending.map((req) => (
               <AskTurn key={req.request_id} session={session} request={req} />
             ))}
-            {busy && !awaiting && (
-              <div className={styles.activity}>
-                <Ico name="spark" className="sm wf-spin" />
-                <span>{state?.activity ? state.activity : "Travaille…"}</span>
-              </div>
-            )}
+            {busy && !awaiting && <WorkingIndicator session={session} />}
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The live "what's happening now" line shown under the timeline while the agent
+ * works. Its own leaf so the per-token activity recompute (`useLiveActivity`
+ * re-derives on every streamed delta) re-renders only this row, not the message
+ * list. Shares `describeActivity` with the FlightDeck card, so the thread and the
+ * card never describe the agent differently — instead of the raw protocol hint.
+ */
+function WorkingIndicator({ session }: { session: string }) {
+  const activity = useLiveActivity(session);
+  return (
+    <div className={styles.activity}>
+      <Ico name="spark" className="sm wf-spin" />
+      <span>{activity}</span>
     </div>
   );
 }

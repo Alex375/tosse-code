@@ -1,7 +1,10 @@
 // FlightDeck — the agent dashboard view ("Vue Gestion d'agents"). A grid of stream
-// cards grouped by repo, with an attention bar on top. Reuses the shared repo
-// grouping (useConversationsByRepo) so it orders identically to the sidebar, and
-// each card reuses the same status/todo/context selectors as the conversation view.
+// cards grouped by repo, with an attention bar on top. Uses `useFleetLanes`, which
+// shares the repo-grouping skeleton with the sidebar but orders STATUS-first
+// (action-required/error → review → running → idle → off, recency as tiebreak)
+// instead of the sidebar's pure recency — a deliberate difference, so only the
+// grouping is shared, not the order. Each card reuses the same status/todo/context
+// selectors as the conversation view.
 import { useEffect, useState } from "react";
 import { Ico } from "../../ui/kit";
 import { createConversationInRepo, repoName } from "../../store/conversationsStore";

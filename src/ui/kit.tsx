@@ -411,8 +411,8 @@ export function ContextRing({
 }
 
 /** Compact context-fill meter — a tiny bar + percentage (the card variant of the
- *  ContextRing). Pass `full` to show "used / max" instead of just the percent. */
-export function ContextMeter({ ctx, full }: { ctx: Ctx; full?: boolean }) {
+ *  ContextRing). The exact "used / max" is in the hover title. */
+export function ContextMeter({ ctx }: { ctx: Ctx }) {
   const warn = ctx.pct >= 70;
   return (
     <span className={"wf-ctxm" + (warn ? " warn" : "")} title={`Contexte ${ctx.used} / ${ctx.max}`}>
@@ -421,7 +421,7 @@ export function ContextMeter({ ctx, full }: { ctx: Ctx; full?: boolean }) {
         <i style={{ width: ctx.pct + "%" }} />
       </span>
       <span className="wf-mono" style={{ fontSize: 10.5 }}>
-        {full ? `${ctx.used} / ${ctx.max}` : `${ctx.pct}%`}
+        {ctx.pct}%
       </span>
     </span>
   );

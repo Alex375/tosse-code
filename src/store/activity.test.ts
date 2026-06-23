@@ -61,6 +61,43 @@ describe("toolActivityLabel", () => {
     );
   });
 
+  it("labels the remaining known tools (MultiEdit, Glob, Task, WebFetch, WebSearch, TodoWrite)", () => {
+    expect(toolActivityLabel("MultiEdit", { file_path: "a/b/x.ts" })).toBe("Modifie x.ts");
+    expect(toolActivityLabel("Glob", { pattern: "**/*.ts" })).toBe("Liste **/*.ts");
+    expect(toolActivityLabel("Task", { description: "Audit auth" })).toBe("Sous-agent : Audit auth");
+    expect(toolActivityLabel("WebFetch", { url: "https://x" })).toBe("Récupère une page web");
+    expect(toolActivityLabel("WebSearch", { query: "tauri updater" })).toBe(
+      "Recherche « tauri updater »",
+    );
+    expect(toolActivityLabel("TodoWrite", { todos: [] })).toBe("Met à jour le plan");
+  });
+
+  it("uses the no-argument fallback when the input carries no telling field", () => {
+    // What the card shows on a tool_use whose input is still streaming in (built
+    // incrementally) — every arg-dependent branch must have a graceful fallback.
+    expect(toolActivityLabel("Read", {})).toBe("Lit un fichier");
+    expect(toolActivityLabel("Edit", {})).toBe("Modifie un fichier");
+    expect(toolActivityLabel("Write", {})).toBe("Écrit un fichier");
+    expect(toolActivityLabel("NotebookEdit", {})).toBe("Édite un notebook");
+    expect(toolActivityLabel("Bash", {})).toBe("Exécute une commande");
+    expect(toolActivityLabel("Grep", {})).toBe("Cherche dans le code");
+    expect(toolActivityLabel("Glob", {})).toBe("Liste des fichiers");
+    expect(toolActivityLabel("Task", {})).toBe("Délègue à un sous-agent");
+    expect(toolActivityLabel("WebSearch", {})).toBe("Recherche sur le web");
+  });
+
+  it("trims internal whitespace and truncates a long argument with an ellipsis", () => {
+    // 60-char command, over Bash's 38-char limit → sliced to 37 chars + "…" (38 total).
+    const cmd = "echo " + "a".repeat(55);
+    const label = toolActivityLabel("Bash", { command: cmd });
+    expect(label.startsWith("Exécute ")).toBe(true);
+    const shown = [...label.slice("Exécute ".length)];
+    expect(shown[shown.length - 1]).toBe("…");
+    expect(shown.length).toBe(38); // 37 kept chars + the ellipsis
+    // Whitespace runs collapse to a single space BEFORE the length check.
+    expect(toolActivityLabel("Grep", { pattern: "foo    bar" })).toBe("Cherche « foo bar »");
+  });
+
   it("falls back to the tool name for unknown tools", () => {
     expect(toolActivityLabel("Frobnicate", {})).toBe("Frobnicate…");
   });

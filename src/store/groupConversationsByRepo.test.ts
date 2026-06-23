@@ -31,4 +31,12 @@ describe("groupConversationsByRepo", () => {
     expect(groups.map((g) => g.repo.id)).toEqual(["empty", "a"]);
     expect(groups.find((g) => g.repo.id === "empty")!.conversations).toEqual([]);
   });
+
+  it("orders two conversation-less repos by addedAt (most recent first)", () => {
+    // Both empty → the addedAt fallback is the only tiebreak; exercises its direction.
+    const groups = groupConversationsByRepo([repo("old", 100), repo("new", 200)], []);
+
+    expect(groups.map((g) => g.repo.id)).toEqual(["new", "old"]);
+    expect(groups.every((g) => g.conversations.length === 0)).toBe(true);
+  });
 });

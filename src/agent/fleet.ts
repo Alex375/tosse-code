@@ -10,10 +10,12 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "../store/conversationStore";
 import {
+  groupByRepo,
   useConversations,
   useRepos,
   type Conversation,
   type Repo,
+  type RepoGroup,
 } from "../store/conversationsStore";
 import { rowAttention, statusRank, type AgentStatus } from "./status";
 import { agentStatusForEntry } from "./useAgentStatus";
@@ -71,47 +73,57 @@ export function useFleetAttention(): FleetAttention {
 
 // ---- FlightDeck lanes (one horizontal lane per repo, status-ordered) -----------
 
-export interface FleetLane {
-  repo: Repo;
-  conversations: Conversation[];
-}
+// A lane is exactly a repo group; the FlightDeck just orders it status-first. Kept
+// as an alias so the two grids share one type (and one grouping skeleton).
+export type FleetLane = RepoGroup;
 
 /**
  * Order the fleet for the swimlane layout (PURE, testable): group by repo, sort
  * each repo's conversations by status (action-required/error → review → running →
  * idle → off, recency as tiebreak), then order the repos by their most urgent
  * conversation (recency as tiebreak; empty repos last). `rank` is injected so the
- * status source stays out of this pure function.
+ * status source stays out of this pure function. Shares the grouping skeleton with
+ * the sidebar's `groupConversationsByRepo` (`groupByRepo`); only the comparators
+ * differ (status-first here vs recency there).
  */
 export function orderLanes(
   repos: Repo[],
   conversations: Conversation[],
   rank: (c: Conversation) => number,
 ): FleetLane[] {
-  const byRepo = new Map<string, Conversation[]>();
-  for (const c of conversations) {
-    const arr = byRepo.get(c.repoId) ?? [];
-    arr.push(c);
-    byRepo.set(c.repoId, arr);
-  }
-  for (const arr of byRepo.values()) {
-    arr.sort((a, b) => rank(a) - rank(b) || b.lastActivityAt - a.lastActivityAt);
-  }
-  const repoRank = (r: Repo) => {
-    const arr = byRepo.get(r.id);
-    return arr && arr.length ? Math.min(...arr.map(rank)) : 99;
-  };
-  const repoAt = (r: Repo) => {
-    const arr = byRepo.get(r.id);
-    return arr && arr.length ? Math.max(...arr.map((c) => c.lastActivityAt)) : r.addedAt;
-  };
-  return [...repos]
-    .sort((a, b) => repoRank(a) - repoRank(b) || repoAt(b) - repoAt(a))
-    .map((repo) => ({ repo, conversations: byRepo.get(repo.id) ?? [] }));
+  // Derive each conversation's status rank ONCE. `rank` runs a real status
+  // derivation (not a cheap field read), so calling it inside the O(n log n) sort
+  // comparators below would re-derive the same conversation on every compare —
+  // O(n log n) derivations per recompute, replayed on every streaming delta. Cache
+  // it to one derivation per conversation; the comparators read the cached value.
+  const rankById = new Map<string, number>();
+  for (const c of conversations) rankById.set(c.id, rank(c));
+  const r = (c: Conversation) => rankById.get(c.id) ?? 99;
+  // After the status sort, a group's first conversation holds its lowest (most
+  // urgent) rank; the lane's recency tiebreak is the max activity across it.
+  const repoRank = (g: FleetLane) => (g.conversations.length ? r(g.conversations[0]) : 99);
+  const repoAt = (g: FleetLane) =>
+    g.conversations.length
+      ? Math.max(...g.conversations.map((c) => c.lastActivityAt))
+      : g.repo.addedAt;
+  return groupByRepo(
+    repos,
+    conversations,
+    (a, b) => r(a) - r(b) || b.lastActivityAt - a.lastActivityAt,
+    (a, b) => repoRank(a) - repoRank(b) || repoAt(b) - repoAt(a),
+  );
 }
 
-/** Rebuild the lane objects from a flat, shallow-stable order token list. */
-function rebuildLanes(tokens: string[], repos: Repo[], conversations: Conversation[]): FleetLane[] {
+/** Project lanes to a flat, shallow-stable order-token list, so `useShallow` can
+ *  gate re-renders on order changes alone. Inverse of {@link rebuildLanes}. */
+export function lanesToTokens(lanes: FleetLane[]): string[] {
+  return lanes.flatMap((l) => ["r:" + l.repo.id, ...l.conversations.map((c) => "c:" + c.id)]);
+}
+
+/** Rebuild the lane objects from a flat order-token list (inverse of
+ *  {@link lanesToTokens}). Tokens for a repo/conversation no longer present — a
+ *  stale order list racing a removal — are skipped. */
+export function rebuildLanes(tokens: string[], repos: Repo[], conversations: Conversation[]): FleetLane[] {
   const repoById = new Map(repos.map((r) => [r.id, r] as const));
   const convById = new Map(conversations.map((c) => [c.id, c] as const));
   const lanes: FleetLane[] = [];
@@ -144,10 +156,7 @@ export function useFleetLanes(): FleetLane[] {
   const tokens = useConversationStore(
     useShallow((s) => {
       const rank = (c: Conversation) => statusRank(agentStatusForEntry(c.handle, s.sessions[c.id]));
-      return orderLanes(repos, conversations, rank).flatMap((l) => [
-        "r:" + l.repo.id,
-        ...l.conversations.map((c) => "c:" + c.id),
-      ]);
+      return lanesToTokens(orderLanes(repos, conversations, rank));
     }),
   );
   return useMemo(() => rebuildLanes(tokens, repos, conversations), [tokens, repos, conversations]);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { orderLanes, tallyAttention } from "./fleet";
+import { lanesToTokens, orderLanes, rebuildLanes, tallyAttention } from "./fleet";
 import { statusRank, type AgentStatus } from "./status";
 import type { Conversation, Repo } from "../store/conversationsStore";
 
@@ -76,5 +76,70 @@ describe("orderLanes", () => {
     expect(lanes.map((l) => l.repo.id)).toEqual(["a", "empty"]);
     expect(lanes[0].conversations.map((c) => c.id)).toEqual(["c2", "c1"]);
     expect(lanes.find((l) => l.repo.id === "empty")!.conversations).toEqual([]);
+  });
+
+  it("orders two conversation-less repos by addedAt (most recent first)", () => {
+    // Both repos are empty → equal rank (99); the only signal left is the addedAt
+    // tiebreak. The dedicated case for the otherwise-unexercised `repoAt` branch.
+    const repos = [repo("old", 100), repo("new", 200)];
+
+    const lanes = orderLanes(repos, [], () => 0);
+
+    expect(lanes.map((l) => l.repo.id)).toEqual(["new", "old"]);
+    expect(lanes.every((l) => l.conversations.length === 0)).toBe(true);
+  });
+
+  it("derives each conversation's rank exactly once, regardless of fleet size", () => {
+    // Guards the perf contract: `rank` (a real status derivation) is cached, so the
+    // O(n log n) sort can't re-derive a conversation on every comparison.
+    const repos = [repo("a", 1), repo("b", 2)];
+    const conversations = [
+      conv("a1", "a", 10),
+      conv("a2", "a", 20),
+      conv("a3", "a", 30),
+      conv("b1", "b", 40),
+      conv("b2", "b", 50),
+    ];
+    const seen = new Map<string, number>();
+    const rank = (c: Conversation) => {
+      seen.set(c.id, (seen.get(c.id) ?? 0) + 1);
+      return 3;
+    };
+
+    orderLanes(repos, conversations, rank);
+
+    expect([...seen.values()].every((n) => n === 1)).toBe(true);
+    expect(seen.size).toBe(conversations.length);
+  });
+});
+
+describe("rebuildLanes ↔ lanesToTokens round-trip", () => {
+  it("reconstructs the exact lane structure from its order tokens", () => {
+    const repos = [repo("a", 1), repo("b", 2)];
+    const conversations = [conv("a1", "a", 100), conv("a2", "a", 50), conv("b1", "b", 10)];
+    const lanes = orderLanes(repos, conversations, (c) => (c.id === "a2" ? 0 : 3));
+
+    const rebuilt = rebuildLanes(lanesToTokens(lanes), repos, conversations);
+
+    expect(rebuilt.map((l) => l.repo.id)).toEqual(lanes.map((l) => l.repo.id));
+    expect(rebuilt.map((l) => l.conversations.map((c) => c.id))).toEqual(
+      lanes.map((l) => l.conversations.map((c) => c.id)),
+    );
+  });
+
+  it("skips tokens for repos/conversations no longer present (stale order list)", () => {
+    const repos = [repo("a", 1)];
+    const conversations = [conv("a1", "a", 100)];
+
+    // Order list references a removed repo ("ghost"), a conv under it ("x"), and a
+    // missing conv under a live repo ("missing") — all must be dropped cleanly.
+    const rebuilt = rebuildLanes(
+      ["r:ghost", "c:x", "r:a", "c:a1", "c:missing"],
+      repos,
+      conversations,
+    );
+
+    expect(rebuilt.map((l) => l.repo.id)).toEqual(["a"]);
+    expect(rebuilt[0].conversations.map((c) => c.id)).toEqual(["a1"]);
   });
 });

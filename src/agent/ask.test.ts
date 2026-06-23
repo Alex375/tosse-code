@@ -43,6 +43,17 @@ describe("classifyAsk", () => {
     const a = classifyAsk(req({ tool_name: "WebFetch", input: {} }));
     expect(a.text).toBe("Autoriser WebFetch ?");
   });
+
+  it("ignores an empty description and falls back to the file target", () => {
+    // description "" is falsy, so the `||` chain must drop through to the file path.
+    const a = classifyAsk(req({ tool_name: "Edit", description: "", input: { file_path: "src/y.ts" } }));
+    expect(a.text).toBe("Autoriser la modification de src/y.ts ?");
+  });
+
+  it("falls back to the tool name for an edit with neither description nor file_path", () => {
+    const a = classifyAsk(req({ tool_name: "Edit", input: {} }));
+    expect(a.text).toBe("Autoriser Edit ?");
+  });
 });
 
 describe("field", () => {
