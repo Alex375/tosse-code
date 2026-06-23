@@ -590,6 +590,17 @@ pub async fn read_file(path: String) -> Result<crate::fs::FileContent, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Read an image file for the viewer, base64-encoded (see `fs::read_image`). The
+/// front renders it as a `data:` URL instead of routing the file to Monaco.
+#[tauri::command]
+#[specta::specta]
+pub async fn read_image(path: String) -> Result<crate::fs::ImageContent, String> {
+    tokio::task::spawn_blocking(move || crate::fs::read_image(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 /// Write the editor buffer back to disk (save).
 #[tauri::command]
 #[specta::specta]

@@ -11,6 +11,7 @@ export type {
   FileContent,
   FsChangeEvent,
   FsEntry,
+  ImageContent,
   JsonValue,
   NormalizedBlock,
   PermissionDecision,

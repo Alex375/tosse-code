@@ -17,7 +17,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "../../ipc/client";
 import type { FsEntry } from "../../ipc/client";
-import { baseName, dirName, languageForPath } from "./language";
+import { baseName, dirName, imageMimeForPath, isImagePath, languageForPath } from "./language";
 
 /** Debounce before an edited buffer is autosaved to disk (ms). */
 const AUTOSAVE_MS = 1000;
@@ -38,6 +38,19 @@ export interface FileBuffer {
   error: string | null;
   binary: boolean;
   tooLarge: boolean;
+  /** This path is a known image extension: rendered in the ImageViewer, never
+   *  Monaco. Set from the path up front (before the bytes load). */
+  isImage: boolean;
+  /** A ready-to-use `data:<mime>;base64,…` URL for an image buffer (null until
+   *  loaded, and always null for non-image buffers). */
+  imageDataUrl: string | null;
+  /** Image byte size on disk (for the viewer's info line); null until loaded. */
+  imageSize: number | null;
+  /** Per-tab image view, preserved when switching tabs and back: the zoom
+   *  multiplier over "fit" and the pan offset (px). Undefined = the default fit
+   *  view (zoom 1, centered). */
+  imageZoom?: number;
+  imageOffset?: { x: number; y: number };
   /** An external write arrived while the buffer was dirty (banner shown). */
   diskChanged: boolean;
   /** The pending external content for the "reload" action (null otherwise). */
@@ -120,6 +133,8 @@ interface EditorState {
   setContent: (convId: string, path: string, content: string) => void;
   saveBuffer: (convId: string, path: string) => Promise<void>;
   togglePreview: (convId: string, path: string) => void;
+  /** Persist an image tab's zoom/pan so it survives switching away and back. */
+  setImageView: (convId: string, path: string, zoom: number, offset: { x: number; y: number }) => void;
 
   // ---- Live filesystem changes ----
   onExternalChange: (convId: string, paths: string[]) => Promise<void>;
@@ -258,10 +273,19 @@ function fileBufferFrom(path: string): FileBuffer {
     error: null,
     binary: false,
     tooLarge: false,
+    isImage: isImagePath(path),
+    imageDataUrl: null,
+    imageSize: null,
     diskChanged: false,
     diskContent: null,
     preview: false,
   };
+}
+
+/** Build a `data:` URL the webview can render from base64 image bytes. */
+function imageDataUrlFor(path: string, base64: string): string {
+  const mime = imageMimeForPath(path) ?? "application/octet-stream";
+  return `data:${mime};base64,${base64}`;
 }
 
 export const useEditorStore = create<EditorState>()((set, get) => {
@@ -399,6 +423,26 @@ export const useEditorStore = create<EditorState>()((set, get) => {
         }
         return { ...c, tabs, activeTab: path, buffers, previewTab: preview ? path : c.previewTab };
       });
+      // Images take a separate path: read the raw bytes (base64) and render them
+      // in the ImageViewer, never decoding as text / loading Monaco.
+      if (isImagePath(path)) {
+        const res = await safeCmd(() => commands.readImage(path));
+        patchBuffer(convId, path, (b) => {
+          if (res.status !== "ok") {
+            return { ...b, loading: false, error: res.error };
+          }
+          const img = res.data;
+          return {
+            ...b,
+            loading: false,
+            tooLarge: img.too_large,
+            imageSize: img.size,
+            imageDataUrl: img.too_large ? null : imageDataUrlFor(path, img.data_base64),
+          };
+        });
+        return;
+      }
+
       const res = await safeCmd(() => commands.readFile(path));
       patchBuffer(convId, path, (b) => {
         if (res.status !== "ok") {
@@ -488,6 +532,9 @@ export const useEditorStore = create<EditorState>()((set, get) => {
 
     togglePreview: (convId, path) => patchBuffer(convId, path, (b) => ({ ...b, preview: !b.preview })),
 
+    setImageView: (convId, path, zoom, offset) =>
+      patchBuffer(convId, path, (b) => ({ ...b, imageZoom: zoom, imageOffset: offset })),
+
     onExternalChange: async (convId, paths) => {
       const conv = get().byConv[convId];
       if (!conv) return;
@@ -515,6 +562,24 @@ export const useEditorStore = create<EditorState>()((set, get) => {
       // 2) Reload any OPEN file that changed, applying the conflict policy.
       for (const path of conv.tabs) {
         if (!changed.has(path)) continue;
+        // Images are never editable (no dirty state) → always live-reload the
+        // bytes. A fresh data URL forces the <img> to repaint the new content.
+        if (conv.buffers[path]?.isImage) {
+          const res = await safeCmd(() => commands.readImage(path));
+          if (res.status !== "ok") {
+            patchBuffer(convId, path, (b) => ({ ...b, error: "Image indisponible sur le disque." }));
+            continue;
+          }
+          const img = res.data;
+          patchBuffer(convId, path, (b) => ({
+            ...b,
+            error: null,
+            tooLarge: img.too_large,
+            imageSize: img.size,
+            imageDataUrl: img.too_large ? null : imageDataUrlFor(path, img.data_base64),
+          }));
+          continue;
+        }
         const res = await safeCmd(() => commands.readFile(path));
         if (res.status !== "ok") {
           // The file likely vanished — flag it but keep the tab/content.
