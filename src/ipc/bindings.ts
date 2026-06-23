@@ -650,7 +650,19 @@ session_id: string | null;
  * low/medium/high/xhigh; `ultracode` is the separate xhigh+orchestration tier;
  * `permission_mode` is one of the CLI modes (default/plan/acceptEdits/auto/…).
  */
-model: string | null; effort: string | null; ultracode: boolean; permission_mode: string | null }
+model: string | null; effort: string | null; ultracode: boolean; permission_mode: string | null; 
+/**
+ * An unacknowledged, non-blocking status reminder to re-surface across
+ * restarts: `"review"` (a turn finished and was never seen), `"error"` (the
+ * last turn ended in error), or `"openQuestion"` (the heuristic flagged the
+ * last turn as a question awaiting a reply). `None` once acknowledged ("Vu")
+ * or superseded by the next message. Blocking states (a pending permission or
+ * questionnaire) are deliberately NOT persisted — they only exist while the
+ * process is live and must be answered in the thread. Mirrors the dismissable
+ * part of the derived `AgentStatus` (see the front's `agent/status.ts`), the
+ * single thing that, when off, can't be re-derived from the on-disk transcript.
+ */
+pending_reminder: string | null }
 /**
  * A file's contents plus the guards the editor needs: `too_large` (skipped, over
  * [`MAX_FILE_BYTES`]) and `binary` (a NUL byte was found — not shown as text).

@@ -97,8 +97,8 @@ export interface ComposerHandle {
 
 export const ConductorComposer = forwardRef<
   ComposerHandle,
-  { session: string; wide?: boolean; onSent?: () => void }
->(function ConductorComposer({ session, wide, onSent }, ref) {
+  { session: string; onSent?: () => void }
+>(function ConductorComposer({ session, onSent }, ref) {
   const state = useSessionState(session);
   const send = useSendMessage(session);
   const interrupt = useInterrupt(session);
@@ -339,7 +339,7 @@ export const ConductorComposer = forwardRef<
   };
 
   return (
-    <div className="cv-composer" style={wide ? { maxWidth: 760, margin: "0 auto", width: "100%" } : undefined}>
+    <div className="cv-composer">
       {slashOpen ? (
         <SlashCommandMenu
           items={slashMatches}

@@ -10,10 +10,17 @@ import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore } from "../store/conversationsStore";
 import type { SessionEntry } from "../store/types";
-import { deriveAgentStatus, type AgentSignals, type AgentStatus } from "./status";
+import {
+  deriveAgentStatus,
+  type AgentSignals,
+  type AgentStatus,
+  type ReminderKind,
+} from "./status";
 
-// Everything in AgentSignals except the handle (which lives in the other store).
-type InnerSignals = Omit<AgentSignals, "handle">;
+// The signals carried by the LIVE message-store entry — everything in
+// AgentSignals except the two that live in the conversations (metadata) store:
+// the live `handle` and the `persistedReminder`.
+type InnerSignals = Omit<AgentSignals, "handle" | "persistedReminder">;
 
 const NEUTRAL: InnerSignals = {
   busy: false,
@@ -89,8 +96,9 @@ function gather(entry: SessionEntry | undefined): InnerSignals {
 export function agentStatusForEntry(
   handle: string | null,
   entry: SessionEntry | undefined,
+  persistedReminder: ReminderKind | null = null,
 ): AgentStatus {
-  return deriveAgentStatus({ handle, ...gather(entry) });
+  return deriveAgentStatus({ handle, persistedReminder, ...gather(entry) });
 }
 
 /**
@@ -99,9 +107,18 @@ export function agentStatusForEntry(
  * so the memoized status is referentially stable until a real signal moves.
  */
 export function useAgentStatus(convId: string): AgentStatus {
-  const handle = useConversationsStore(
-    (s) => s.conversations.find((c) => c.id === convId)?.handle ?? null,
+  // Both off-state inputs come from the conversations (metadata) store: the live
+  // `handle` and the `persistedReminder` that re-surfaces a settled state when the
+  // process is off. Read them together with a shallow-stable slice.
+  const { handle, persistedReminder } = useConversationsStore(
+    useShallow((s) => {
+      const conv = s.conversations.find((c) => c.id === convId);
+      return { handle: conv?.handle ?? null, persistedReminder: conv?.pendingReminder ?? null };
+    }),
   );
   const inner = useConversationStore(useShallow((s) => gather(s.sessions[convId])));
-  return useMemo(() => deriveAgentStatus({ handle, ...inner }), [handle, inner]);
+  return useMemo(
+    () => deriveAgentStatus({ handle, persistedReminder, ...inner }),
+    [handle, persistedReminder, inner],
+  );
 }

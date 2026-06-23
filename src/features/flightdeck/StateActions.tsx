@@ -1,12 +1,13 @@
 // Contextual card actions — wired to the SAME command hooks the conversation view
-// uses (useAnswerPermission / markSeen), keyed by stable id. Authorising or
+// uses (useAnswerPermission / acknowledgeConversation), keyed by stable id. Authorising or
 // refusing a permission happens right here; everything else opens the thread. When
 // the status says "blocked" but no request is actually queued yet (the awaiting vs
 // queue race), we fall through to a plain "Ouvrir" rather than render dead buttons.
 import { Ico } from "../../ui/kit";
 import type { AgentStatus } from "../../agent/status";
 import { useAnswerPermission } from "../../ipc/useCommands";
-import { usePendingPermissions, useConversationStore } from "../../store/conversationStore";
+import { usePendingPermissions } from "../../store/conversationStore";
+import { acknowledgeConversation } from "../../store/conversationsStore";
 import { questionCount } from "../conversation/QuestionnaireAsk";
 
 export function StateActions({
@@ -20,7 +21,6 @@ export function StateActions({
 }) {
   const answer = useAnswerPermission(convId);
   const pending = usePendingPermissions(convId);
-  const markSeen = useConversationStore((s) => s.markSeen);
   const open = () => onOpen(convId);
 
   if (status.kind === "needIntervention") {
@@ -63,7 +63,7 @@ export function StateActions({
       // Open question (heuristic) — dismissable, or open the thread to reply.
       return (
         <div className="ag-card-actions">
-          <button className="wf-btn ghost sm" onClick={() => markSeen(convId)}>
+          <button className="wf-btn ghost sm" onClick={() => acknowledgeConversation(convId)}>
             <Ico name="check" className="sm" />
             Vu
           </button>
@@ -77,7 +77,7 @@ export function StateActions({
   } else if (status.kind === "error" || status.kind === "review") {
     return (
       <div className="ag-card-actions">
-        <button className="wf-btn ghost sm" onClick={() => markSeen(convId)}>
+        <button className="wf-btn ghost sm" onClick={() => acknowledgeConversation(convId)}>
           <Ico name="check" className="sm" />
           Vu
         </button>

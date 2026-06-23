@@ -282,12 +282,10 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
 
 export function ConductorThread({
   session,
-  wide,
   scrollRef,
   onRender,
 }: {
   session: string;
-  wide?: boolean;
   // The stick-to-bottom instance is owned by the parent pane so the composer can
   // snap the thread to the bottom on send (see ConductorConversation).
   scrollRef: StickToBottom["scrollRef"];
@@ -303,10 +301,7 @@ export function ConductorThread({
   return (
     <div className="cv-thread" ref={scrollRef}>
       <StreamFollow session={session} onRender={onRender} />
-      <div
-        className="cv-thread-inner"
-        style={wide ? { maxWidth: 720 } : { maxWidth: 760 }}
-      >
+      <div className="cv-thread-inner">
         {empty && !busy ? (
           <div className={styles.empty}>Démarre la conversation en envoyant un message.</div>
         ) : (

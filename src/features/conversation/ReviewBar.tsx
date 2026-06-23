@@ -1,6 +1,6 @@
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { isDismissable, type AgentStatus } from "../../agent/status";
-import { useConversationStore } from "../../store/conversationStore";
+import { acknowledgeConversation } from "../../store/conversationsStore";
 import { Ico } from "../../ui/kit";
 
 /**
@@ -34,7 +34,6 @@ function reviewTone(s: AgentStatus): "review" | "input" | "error" {
 
 export function ReviewBar({ session }: { session: string }) {
   const status = useAgentStatus(session);
-  const markSeen = useConversationStore((s) => s.markSeen);
   if (!isDismissable(status)) return null;
   return (
     <div className="cv-reviewbar" data-tone={reviewTone(status)}>
@@ -43,7 +42,7 @@ export function ReviewBar({ session }: { session: string }) {
       <button
         type="button"
         className="cv-reviewbar-btn"
-        onClick={() => markSeen(session)}
+        onClick={() => acknowledgeConversation(session)}
         title="Repasser la conversation en gris (inactive)"
       >
         <Ico name="check" className="sm" />

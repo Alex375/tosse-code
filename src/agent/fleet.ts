@@ -66,7 +66,9 @@ export function useFleetAttention(): FleetAttention {
     useShallow((s) =>
       convs.length === 0
         ? EMPTY
-        : tallyAttention(convs.map((c) => agentStatusForEntry(c.handle, s.sessions[c.id]))),
+        : tallyAttention(
+            convs.map((c) => agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder)),
+          ),
     ),
   );
 }
@@ -155,7 +157,8 @@ export function useFleetLanes(): FleetLane[] {
   const conversations = useConversations();
   const tokens = useConversationStore(
     useShallow((s) => {
-      const rank = (c: Conversation) => statusRank(agentStatusForEntry(c.handle, s.sessions[c.id]));
+      const rank = (c: Conversation) =>
+        statusRank(agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder));
       return lanesToTokens(orderLanes(repos, conversations, rank));
     }),
   );

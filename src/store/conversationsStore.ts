@@ -21,6 +21,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "../ipc/client";
 import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
+import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { useMemo } from "react";
@@ -85,6 +86,22 @@ export interface Conversation {
   ultracode: boolean;
   /** Permission mode (default/plan/acceptEdits/auto/…); null → product default. */
   permissionMode: string | null;
+  /**
+   * An unacknowledged, non-blocking status reminder that must survive a restart:
+   * `"review"` / `"error"` / `"openQuestion"`, or null when nothing is pending.
+   * Persisted because a settled state is otherwise live-only — when the process is
+   * off (`handle === null`), `deriveAgentStatus` falls back to this to re-display
+   * the reminder. Armed by the event router on a finished turn; cleared by "Vu"
+   * (`acknowledgeConversation`) or the next message. NOT for blocking states
+   * (permission / questionnaire) — those exist only while live.
+   */
+  pendingReminder: ReminderKind | null;
+}
+
+/** Coerce a persisted (untyped) reminder string back to the union, defaulting any
+ *  unrecognised value to null — defensive against a stale/foreign DB row. */
+function asReminderKind(s: string | null): ReminderKind | null {
+  return s === "review" || s === "error" || s === "openQuestion" ? s : null;
 }
 
 /** Display name for a repo path — its basename. */
@@ -127,6 +144,7 @@ const convToRecord = (c: Conversation): ConversationRecord => ({
   effort: c.effort,
   ultracode: c.ultracode,
   permission_mode: c.permissionMode,
+  pending_reminder: c.pendingReminder,
 });
 
 const recordToRepo = (r: RepoRecord): Repo => ({
@@ -149,6 +167,7 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   effort: c.effort,
   ultracode: c.ultracode,
   permissionMode: c.permission_mode,
+  pendingReminder: asReminderKind(c.pending_reminder),
 });
 
 /** Fire a persistence command, logging (never throwing) on failure. Persistence
@@ -210,6 +229,13 @@ interface ConversationsState {
   setConvUltracode: (id: string) => void;
   /** Set the permission mode. */
   setConvPermission: (id: string, mode: PermissionMode) => void;
+  /**
+   * Set (or clear with null) the conversation's persisted status reminder and
+   * mirror it to the core. Idempotent: a no-op when the value is unchanged, so the
+   * event router can call it freely on every settling edge without redundant writes.
+   * Armed from the live status on a finished turn; cleared on "Vu" / next message.
+   */
+  setReminder: (id: string, reminder: ReminderKind | null) => void;
 }
 
 export const useConversationsStore = create<ConversationsState>()((set, get) => ({
@@ -388,6 +414,14 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     if (conv.handle)
       syncToCore("setPermissionMode(live)", () => commands.setPermissionMode(conv.handle!, mode));
   },
+
+  setReminder: (id, reminder) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv || conv.pendingReminder === reminder) return; // idempotent: no churn
+    const updated = { ...conv, pendingReminder: reminder };
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
+    syncToCore("upsertConversation(reminder)", () => commands.upsertConversation(convToRecord(updated)));
+  },
 }));
 
 /**
@@ -417,6 +451,7 @@ export function createConversationInRepo(repoPath: string): string {
     effort: DEFAULT_EFFORT,
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
+    pendingReminder: null,
   });
   return id;
 }
@@ -448,6 +483,7 @@ export function createConversationInWorktree(repoId: string, cwd: string): strin
     effort: DEFAULT_EFFORT,
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
+    pendingReminder: null,
   });
   return id;
 }
@@ -485,6 +521,20 @@ export function liveHandle(convId: string): string | null {
   return (
     useConversationsStore.getState().conversations.find((c) => c.id === convId)?.handle ?? null
   );
+}
+
+/**
+ * Acknowledge ("Vu") a conversation's reminder: mark the last turn seen in the
+ * LIVE message store (so it drops to idle now) AND clear the PERSISTED reminder
+ * (so the acknowledgement survives a restart). This is the single "Vu" entry point
+ * the UI calls — distinct from the raw `markSeen`, which the history loaders use to
+ * silence a replayed PAST completion WITHOUT touching the persisted reminder: an
+ * unopened reminder must survive a restart, so merely OPENING a conversation can't
+ * clear it — only this explicit acknowledgement (or the next message) does.
+ */
+export function acknowledgeConversation(convId: string): void {
+  useConversationStore.getState().markSeen(convId);
+  useConversationsStore.getState().setReminder(convId, null);
 }
 
 // In-flight spawns keyed by conversation id. Spawning is async (a round-trip to
@@ -618,7 +668,14 @@ export async function stopConversationSession(convId: string): Promise<void> {
  */
 export async function startConversationSession(convId: string): Promise<string> {
   await reloadConversationHistory(convId);
-  return ensureConversationSession(convId);
+  const handle = await ensureConversationSession(convId);
+  // `reloadConversationHistory` marked the replayed turn seen, so the conversation is
+  // now live + idle and its reminder bar is hidden. Reconcile the PERSISTED reminder
+  // to match (clear it): otherwise a stale "review"/"error" would resurrect via the
+  // off-branch the moment the stream is later stopped or the app is force-quit —
+  // bringing the stream online IS engaging with it, like sending the next message.
+  useConversationsStore.getState().setReminder(convId, null);
+  return handle;
 }
 
 /**

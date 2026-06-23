@@ -20,10 +20,12 @@ vi.mock("../ipc/client", () => {
 
 import { commands } from "../ipc/client";
 import {
+  acknowledgeConversation,
   ensureConversationSession,
   useConversationsStore,
   type Conversation,
 } from "./conversationsStore";
+import { useConversationStore } from "./conversationStore";
 
 const baseConv = (over: Partial<Conversation> = {}): Conversation => ({
   id: "c1",
@@ -39,6 +41,7 @@ const baseConv = (over: Partial<Conversation> = {}): Conversation => ({
   effort: "xhigh",
   ultracode: false,
   permissionMode: "default",
+  pendingReminder: null,
   ...over,
 });
 
@@ -94,6 +97,34 @@ describe("conversationsStore — per-conversation controls", () => {
     expect(commands.setEffortLevel).toHaveBeenCalledWith("session-7", "high");
     useConversationsStore.getState().setConvPermission("c1", "acceptEdits");
     expect(commands.setPermissionMode).toHaveBeenCalledWith("session-7", "acceptEdits");
+  });
+});
+
+describe("conversationsStore — persisted reminder", () => {
+  it("setReminder stores the kind and persists it", () => {
+    useConversationsStore.getState().setReminder("c1", "review");
+    expect(conv0().pendingReminder).toBe("review");
+    expect(commands.upsertConversation).toHaveBeenCalled();
+  });
+
+  it("setReminder is idempotent — no write when unchanged", () => {
+    useConversationsStore.getState().setReminder("c1", "error");
+    vi.clearAllMocks();
+    useConversationsStore.getState().setReminder("c1", "error");
+    expect(commands.upsertConversation).not.toHaveBeenCalled();
+  });
+
+  it("acknowledgeConversation clears the persisted reminder AND marks the live turn seen", () => {
+    seed(baseConv({ pendingReminder: "review" }));
+    // The helper exists to do BOTH halves; lock in the live one too, so a future
+    // change dropping markSeen (which would leave an open conv stuck on "review")
+    // fails here.
+    const markSeen = vi.spyOn(useConversationStore.getState(), "markSeen");
+    acknowledgeConversation("c1");
+    expect(markSeen).toHaveBeenCalledWith("c1");
+    expect(conv0().pendingReminder).toBeNull();
+    expect(commands.upsertConversation).toHaveBeenCalled();
+    markSeen.mockRestore();
   });
 });
 

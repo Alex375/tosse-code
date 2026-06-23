@@ -5,6 +5,7 @@ import {
   isDismissable,
   looksLikeQuestion,
   rowAttention,
+  statusReminderKind,
   type AgentSignals,
 } from "./status";
 
@@ -21,6 +22,7 @@ function sig(over: Partial<AgentSignals> = {}): AgentSignals {
     lastTurnIsError: false,
     turnSeen: true,
     lastAssistantText: null,
+    persistedReminder: null,
     ...over,
   };
 }
@@ -32,6 +34,38 @@ describe("deriveAgentStatus", () => {
     expect(
       deriveAgentStatus(sig({ handle: null, awaitingPermission: true, busy: true })).kind,
     ).toBe("off");
+  });
+
+  describe("persisted reminder re-surfaces a settled state when off", () => {
+    it("maps each persisted kind back to its status when there is no live handle", () => {
+      expect(deriveAgentStatus(sig({ handle: null, persistedReminder: "review" })).kind).toBe(
+        "review",
+      );
+      expect(deriveAgentStatus(sig({ handle: null, persistedReminder: "error" }))).toEqual({
+        kind: "error",
+        message: expect.any(String),
+      });
+      expect(
+        deriveAgentStatus(sig({ handle: null, persistedReminder: "openQuestion" })),
+      ).toEqual({ kind: "needInput", via: "openQuestion", prompt: null });
+    });
+
+    it("is off when no reminder is persisted", () => {
+      expect(deriveAgentStatus(sig({ handle: null, persistedReminder: null })).kind).toBe("off");
+    });
+
+    it("is IGNORED while the process is live — live signals win", () => {
+      // A live, idle session with a stale persisted reminder reads as idle, not the
+      // reminder: the live derivation is authoritative whenever the handle is set.
+      expect(
+        deriveAgentStatus(sig({ handle: "session-1", turnSeen: true, persistedReminder: "review" }))
+          .kind,
+      ).toBe("idle");
+      expect(
+        deriveAgentStatus(sig({ handle: "session-1", busy: true, persistedReminder: "error" }))
+          .kind,
+      ).toBe("running");
+    });
   });
 
   it("is idle when live, not busy, and the last turn was consumed", () => {
@@ -154,6 +188,24 @@ describe("agentStatusToDot (4-colour grouping)", () => {
     expect(agentStatusToDot({ kind: "needIntervention", tool: "Bash" })).toBe("ask");
     expect(agentStatusToDot({ kind: "review" })).toBe("review");
     expect(agentStatusToDot({ kind: "error", message: "x" })).toBe("err");
+  });
+});
+
+describe("statusReminderKind", () => {
+  it("returns the persistable kind for the three reminders", () => {
+    expect(statusReminderKind({ kind: "review" })).toBe("review");
+    expect(statusReminderKind({ kind: "error", message: "x" })).toBe("error");
+    expect(statusReminderKind({ kind: "needInput", via: "openQuestion", prompt: "Y?" })).toBe(
+      "openQuestion",
+    );
+  });
+
+  it("returns null for blocking / non-reminder states (not persisted)", () => {
+    expect(statusReminderKind({ kind: "needInput", via: "questionnaire", prompt: null })).toBeNull();
+    expect(statusReminderKind({ kind: "needIntervention", tool: "Edit" })).toBeNull();
+    expect(statusReminderKind({ kind: "running", activity: null })).toBeNull();
+    expect(statusReminderKind({ kind: "idle" })).toBeNull();
+    expect(statusReminderKind({ kind: "off" })).toBeNull();
   });
 });
 
