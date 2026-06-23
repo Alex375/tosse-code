@@ -178,6 +178,9 @@ export function ImageViewer({ src, size, initialZoom, initialOffset, onViewChang
   // toggle, window resize) — none of which re-fire onLoad. Re-measure the fit
   // baseline (so the % readout stays truthful) and re-clamp the offset (so a
   // panned, zoomed image can't be left pushed past its edge with a gutter).
+  // `failed` is a dep so this re-attaches to the NEW stage node after a decode
+  // error is cleared by a live-reload (the stage div unmounts while `failed`, then
+  // remounts) — otherwise the observer would stay bound to the detached old node.
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage || typeof ResizeObserver === "undefined") return;
@@ -188,7 +191,7 @@ export function ImageViewer({ src, size, initialZoom, initialOffset, onViewChang
     });
     ro.observe(stage);
     return () => ro.disconnect();
-  }, [applyView, clampOffset]);
+  }, [failed, applyView, clampOffset]);
 
   // Wheel/pinch zoom. Attached natively (not via React's onWheel) so we can
   // preventDefault — the listener must be non-passive, which React doesn't
@@ -207,7 +210,10 @@ export function ImageViewer({ src, size, initialZoom, initialOffset, onViewChang
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+    // `failed` re-runs this so the listener re-binds to the NEW stage node after a
+    // decode error is cleared by a live-reload (the stage unmounts then remounts);
+    // without it, wheel/pinch zoom would be silently dead on the recovered image.
+  }, [failed]);
 
   // --- Drag to pan (pointer events + capture so a drag survives leaving the box).
   // The drag is pinned to one pointer id so a second touch contact can't hijack

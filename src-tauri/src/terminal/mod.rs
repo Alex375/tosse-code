@@ -54,13 +54,43 @@ fn terminate(h: &mut TermHandle) {
     if let Some(pid) = h.pid {
         unsafe { libc::kill(-(pid as i32), libc::SIGHUP) };
     }
-    // ...reap the leader (child.kill = SIGHUP + bounded wait + SIGKILL fallback)...
+    // ...ask the child to die (child.kill = SIGHUP + bounded grace + SIGKILL fallback)...
     let _ = h.child.kill();
     // ...then SIGKILL any group member still alive.
     #[cfg(unix)]
     if let Some(pid) = h.pid {
         unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
     }
+    reap(h);
+}
+
+/// Fast teardown for app quit: SIGKILL the whole group at once and reap the leader,
+/// WITHOUT the polite SIGHUP grace `terminate` gives — a clean hang-up is pointless
+/// when the app is exiting, and the per-shell grace poll (~200ms each) would stack up
+/// serially across N terminals and stall quit. Grandchildren get the group SIGKILL too.
+fn terminate_fast(h: &mut TermHandle) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = h.pid {
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        } else {
+            let _ = h.child.kill();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = h.child.kill();
+    }
+    reap(h);
+}
+
+/// Reap the leader so it can't linger as a zombie. The shell has just been SIGKILL'd
+/// (directly, or via `child.kill`'s fallback) — SIGKILL can't be caught or ignored, so
+/// the child is dead or imminently so and this wait returns promptly. Without it, a
+/// shell that trapped/ignored SIGHUP and outran the grace window would be killed but
+/// never `wait`ed (std/portable-pty don't reap on drop), leaking a zombie until quit.
+fn reap(h: &mut TermHandle) {
+    let _ = h.child.wait();
 }
 
 /// The app's live integrated terminals, keyed by id. Held as Tauri managed state.
@@ -205,15 +235,16 @@ impl Terminals {
 
     /// Kill every live terminal (app teardown — never orphan a shell). Drains the
     /// registry under the lock, then terminates outside it so the per-shell kill
-    /// grace can't hold the lock (nor wedge quit) — paired with the lock-free
-    /// `write`, no stuck terminal can stall shutdown.
+    /// can't hold the lock (nor wedge quit) — paired with the lock-free `write`, no
+    /// stuck terminal can stall shutdown. Uses the fast (SIGKILL-now, no SIGHUP grace)
+    /// path so quit isn't delayed by the serial per-shell grace polls.
     pub fn kill_all(&self) {
         let handles: Vec<TermHandle> = {
             let mut guard = self.inner.lock().unwrap();
             guard.drain().map(|(_, h)| h).collect()
         };
         for mut h in handles {
-            terminate(&mut h);
+            terminate_fast(&mut h);
         }
     }
 }

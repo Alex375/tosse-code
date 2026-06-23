@@ -63,3 +63,26 @@ export const useTodoBarUi = create<TodoBarUiState>((set) => ({
 export function useTodoBarOpen(convId: string): boolean {
   return useTodoBarUi((s) => s.open[convId] ?? true);
 }
+
+/** Forget one conversation's stored open/collapsed state — call when it's deleted so
+ *  neither localStorage nor the in-memory map accumulates orphan entries. No-op if
+ *  nothing was stored for it. Mirrors contextWindowCache.clearCachedWindow. */
+export function clearTodoBarOpen(convId: string): void {
+  const cur = useTodoBarUi.getState().open;
+  if (!(convId in cur)) return;
+  const next: OpenMap = { ...cur };
+  delete next[convId];
+  save(next);
+  useTodoBarUi.setState({ open: next });
+}
+
+/** Drop every stored open/collapsed state — call on a full data wipe ("Tout
+ *  supprimer"). Mirrors contextWindowCache.clearAllCachedWindows. */
+export function clearAllTodoBarOpen(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* disabled storage — best-effort, ignore */
+  }
+  useTodoBarUi.setState({ open: {} });
+}

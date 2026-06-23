@@ -22,14 +22,80 @@ interface TermEntry {
   fit: FitAddon;
   /** A detached div that owns xterm's DOM; reparented in/out of the React tree. */
   host: HTMLDivElement;
-  /** Whether `term.open` (and the WebGL renderer) has run on `host` yet. */
+  /** Whether `term.open` has run on `host` yet. */
   opened: boolean;
   /** The shell has exited (EOF on the PTY) — a re-open restarts it. */
   exited: boolean;
+  /** The live WebGL renderer, or null if this terminal is on the DOM renderer
+   *  (never got a context, lost it, or was evicted to stay under the budget). */
+  webgl: WebglAddon | null;
 }
 
 const entries = new Map<string, TermEntry>();
 let listenersReady = false;
+
+/** Browsers cap the number of simultaneous live WebGL contexts (≈16 in
+ *  Chromium/WebKit); past it the OLDEST is dropped, which would silently degrade a
+ *  random older terminal to the DOM renderer for good. We instead keep an explicit
+ *  LRU budget below that cap and evict deliberately, so a re-shown terminal gets
+ *  WebGL back. 8 leaves headroom for any other GL user in the webview. */
+const MAX_WEBGL = 8;
+/** Ids of terminals with a live WebGL renderer, least-recently-attached first. */
+const webglOrder: string[] = [];
+
+/** Mark `id` as the most-recently-used WebGL terminal. */
+function touchWebgl(id: string): void {
+  const i = webglOrder.indexOf(id);
+  if (i !== -1) webglOrder.splice(i, 1);
+  webglOrder.push(id);
+}
+
+/** Drop a terminal's WebGL renderer (falls back to the DOM renderer) and forget it
+ *  in the LRU. The Terminal and its scrollback stay intact; a later attach re-adds
+ *  WebGL. No-op if it had none. */
+function dropWebgl(entry: TermEntry, id: string): void {
+  const i = webglOrder.indexOf(id);
+  if (i !== -1) webglOrder.splice(i, 1);
+  if (entry.webgl) {
+    try {
+      entry.webgl.dispose();
+    } catch {
+      /* already gone */
+    }
+    entry.webgl = null;
+  }
+}
+
+/** Ensure terminal `id` has a live WebGL renderer (creating one if missing) and keep
+ *  the total number of live contexts within `MAX_WEBGL` by evicting the least-recently
+ *  -used. Must run AFTER `term.open`. Silently leaves the terminal on the DOM renderer
+ *  if the webview can't give a context. */
+function ensureWebgl(id: string, entry: TermEntry): void {
+  if (entry.webgl) {
+    touchWebgl(id);
+    return;
+  }
+  try {
+    const webgl = new WebglAddon();
+    // On context loss the browser reclaimed our GL context: fall back to DOM and
+    // forget it so a future attach can re-create one.
+    webgl.onContextLoss(() => dropWebgl(entry, id));
+    entry.term.loadAddon(webgl);
+    entry.webgl = webgl;
+    touchWebgl(id);
+  } catch {
+    /* no WebGL — xterm keeps its default DOM renderer */
+    return;
+  }
+  // Evict beyond the budget: dispose only the addon of the least-recently-used
+  // terminal (never the one we just attached) → it drops to the DOM renderer.
+  while (webglOrder.length > MAX_WEBGL && webglOrder[0] !== id) {
+    const lruId = webglOrder[0];
+    const lru = entries.get(lruId);
+    if (lru) dropWebgl(lru, lruId);
+    else webglOrder.shift();
+  }
+}
 
 /** Decode a base64 PTY chunk to bytes (atob → Uint8Array). */
 function b64ToBytes(b64: string): Uint8Array {
@@ -113,7 +179,7 @@ export function ensureTerm(id: string, cwd: string): TermEntry {
   host.style.width = "100%";
   host.style.height = "100%";
 
-  const entry: TermEntry = { term, fit, host, opened: false, exited: false };
+  const entry: TermEntry = { term, fit, host, opened: false, exited: false, webgl: null };
   entries.set(id, entry);
 
   // Keystrokes / paste → PTY.
@@ -135,16 +201,12 @@ export function attachTerm(id: string, container: HTMLElement): () => void {
   if (firstOpen) {
     term.open(host);
     entry.opened = true;
-    // WebGL renderer (fast); fall back silently to the DOM renderer if the webview
-    // can't give a context, and drop it cleanly on context loss.
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
-      term.loadAddon(webgl);
-    } catch {
-      /* no WebGL — xterm keeps its default DOM renderer */
-    }
   }
+  // (Re)attach a WebGL renderer within the live-context budget. Done on EVERY attach,
+  // not just the first: a terminal that lost its context — or was evicted when many
+  // terminals were open — gets WebGL back the next time it's shown (and is marked
+  // most-recently-used so it isn't the next one evicted).
+  ensureWebgl(id, entry);
 
   const doFit = () => {
     try {
@@ -178,6 +240,9 @@ export function disposeTerm(id: string): void {
   const entry = entries.get(id);
   if (!entry) return;
   entries.delete(id);
+  // Drop it from the WebGL LRU (term.dispose disposes the addon itself).
+  const oi = webglOrder.indexOf(id);
+  if (oi !== -1) webglOrder.splice(oi, 1);
   void commands.terminalClose(id);
   try {
     entry.term.dispose();

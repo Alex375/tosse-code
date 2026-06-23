@@ -24,6 +24,7 @@ import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/clie
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
+import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useMemo } from "react";
 
@@ -310,7 +311,10 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // Kill the integrated terminal of every conversation under this repo (the rows
     // are about to be cascade-deleted) so no PTY shell is orphaned.
     for (const c of get().conversations) {
-      if (c.repoId === repo.id) disposeTerminal(c.id);
+      if (c.repoId === repo.id) {
+        disposeTerminal(c.id);
+        clearTodoBarOpen(c.id);
+      }
     }
     set((s) => {
       const conversations = s.conversations.filter((c) => c.repoId !== repo.id);
@@ -357,6 +361,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // persisted context-window so the localStorage cache doesn't keep orphans.
     useConversationStore.getState().dropSession(id);
     clearCachedWindow(id);
+    clearTodoBarOpen(id);
     autoTitlePending.delete(id);
     titleContext.delete(id);
     titleGenCount.delete(id);
@@ -913,6 +918,7 @@ export async function wipeAllData(): Promise<void> {
   await commands.wipeAllData();
   historyLoaded.clear();
   clearAllCachedWindows();
+  clearAllTodoBarOpen();
   autoTitlePending.clear();
   titleContext.clear();
   titleGenCount.clear();
