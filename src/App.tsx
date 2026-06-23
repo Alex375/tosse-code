@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ConductorConversation } from "./features/conversation/ConductorConversation";
 import { OpenInTerminalButton } from "./features/conversation/OpenInTerminalButton";
+import { TerminalToggle } from "./features/conversation/TerminalToggle";
 import { StreamControl } from "./features/conversation/StreamControl";
 import { WorktreeIndicator } from "./features/git/WorktreeIndicator";
 import { WorktreeManager } from "./features/git/WorktreeManager";
@@ -95,6 +96,7 @@ export default function App() {
             {active ? <WorktreeIndicator conv={active} repoPath={activeRepo.path} /> : null}
             {active ? <StreamControl key={active.id} conv={active} /> : null}
             {active ? <EditorToggle /> : null}
+            {active ? <TerminalToggle /> : null}
             {active ? <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} /> : null}
             <Tag icon="folder" title={activeRepo.path}>
               {repoName(activeRepo.path)}

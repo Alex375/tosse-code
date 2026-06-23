@@ -53,6 +53,19 @@ pub struct SessionTaskEvent {
     pub task: BackgroundTask,
 }
 
+/// A model-generated conversation title arrived (from a `generate_session_title`
+/// control response). The UI maps `session` (handle) → conversation and applies the
+/// title as the name UNLESS the user set a custom title in the meantime. `seq` is the
+/// monotonic per-conversation tag the UI sent: it applies a title only if `seq` is
+/// newer than the last applied, so an out-of-order (stale) response can't overwrite a
+/// fresher title.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionTitleEvent {
+    pub session: String,
+    pub title: String,
+    pub seq: u32,
+}
+
 /// Coalesced filesystem change notification for the editor panel: the (de-noised,
 /// debounced) set of paths that changed under the watched working directory. The
 /// UI reloads any open file in this set and refreshes any expanded tree dirs it
@@ -60,6 +73,23 @@ pub struct SessionTaskEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 pub struct FsChangeEvent {
     pub paths: Vec<String>,
+}
+
+/// A chunk of output from an integrated terminal's PTY, base64-encoded. Base64
+/// (not a `number[]` or a per-chunk lossy string) keeps the byte stream exact and
+/// compact — xterm's own decoder reassembles UTF-8 sequences split across chunks.
+/// Keyed by the terminal `id` so the front routes it to the right xterm instance.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct TerminalOutputEvent {
+    pub id: String,
+    pub data: String,
+}
+
+/// An integrated terminal's shell exited (EOF on the PTY). One-shot, keyed by id;
+/// the front marks that terminal done and offers to restart it on re-open.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct TerminalExitEvent {
+    pub id: String,
 }
 
 /// Bridges a session's [`SessionEmitter`] sink onto the Tauri event bus: each
@@ -105,6 +135,15 @@ impl SessionEmitter for TauriEmitter {
         let ev = SessionTaskEvent {
             session: session.to_string(),
             task: task.clone(),
+        };
+        let _ = ev.emit(&self.app);
+    }
+
+    fn emit_title(&self, session: &str, title: &str, seq: u32) {
+        let ev = SessionTitleEvent {
+            session: session.to_string(),
+            title: title.to_string(),
+            seq,
         };
         let _ = ev.emit(&self.app);
     }

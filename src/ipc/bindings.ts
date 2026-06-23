@@ -199,6 +199,23 @@ async setUltracode(session: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Ask the binary to generate a short conversation title from `description` (the
+ * user's accumulated messages so far), like the official VS Code extension. `seq` is
+ * a monotonic per-conversation tag echoed back in the `SessionTitleEvent` so the
+ * front can drop an out-of-order (stale) response. Fire-and-forget: the title comes
+ * back asynchronously as a `SessionTitleEvent`, which the front applies as the
+ * conversation name (unless the user set a custom title meanwhile). A generation
+ * failure is swallowed in the core — the front keeps its placeholder / last title.
+ */
+async generateConversationTitle(session: string, description: string, seq: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("generate_conversation_title", { session, description, seq }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Interrupt the current turn (without killing the process).
  */
 async interruptSession(session: string) : Promise<Result<null, string>> {
@@ -331,6 +348,18 @@ async readFile(path: string) : Promise<Result<FileContent, string>> {
 }
 },
 /**
+ * Read an image file for the viewer, base64-encoded (see `fs::read_image`). The
+ * front renders it as a `data:` URL instead of routing the file to Monaco.
+ */
+async readImage(path: string) : Promise<Result<ImageContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_image", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Write the editor buffer back to disk (save).
  */
 async writeFile(path: string, content: string) : Promise<Result<null, string>> {
@@ -359,6 +388,52 @@ async watchDir(path: string) : Promise<Result<null, string>> {
 async unwatchDir() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("unwatch_dir") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Open (or replace) the integrated terminal `id`: spawn the user's login shell
+ * under a PTY rooted at `cwd`, sized `cols`×`rows`. Output streams as
+ * `TerminalOutputEvent`; the shell exiting fires `TerminalExitEvent`.
+ */
+async terminalOpen(id: string, cwd: string, cols: number, rows: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_open", { id, cwd, cols, rows }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Feed keystrokes / pasted text to a terminal's shell.
+ */
+async terminalWrite(id: string, data: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_write", { id, data }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Report a terminal's new grid size (xterm fitted to the panel).
+ */
+async terminalResize(id: string, cols: number, rows: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_resize", { id, cols, rows }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Kill a terminal's shell and forget it.
+ */
+async terminalClose(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_close", { id }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -454,6 +529,9 @@ sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionStateEvent: SessionStateEvent,
 sessionTaskEvent: SessionTaskEvent,
+sessionTitleEvent: SessionTitleEvent,
+terminalExitEvent: TerminalExitEvent,
+terminalOutputEvent: TerminalOutputEvent,
 tickEvent: TickEvent
 }>({
 fsChangeEvent: "fs-change-event",
@@ -462,6 +540,9 @@ sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionStateEvent: "session-state-event",
 sessionTaskEvent: "session-task-event",
+sessionTitleEvent: "session-title-event",
+terminalExitEvent: "terminal-exit-event",
+terminalOutputEvent: "terminal-output-event",
 tickEvent: "tick-event"
 })
 
@@ -698,6 +779,18 @@ export type FsChangeEvent = { paths: string[] }
  * reads exactly one level), so a huge repo never reads more than what is shown.
  */
 export type FsEntry = { name: string; path: string; is_dir: boolean }
+/**
+ * An image file's bytes, base64-encoded for the webview to render as a `data:`
+ * URL. Unlike [`read_file`], the binary content IS the payload here — images are
+ * never decoded as text. `too_large` (over [`MAX_FILE_BYTES`]) leaves
+ * `data_base64` empty; the front shows a guard instead of the image.
+ */
+export type ImageContent = { path: string; 
+/**
+ * Base64 of the raw file bytes, NO `data:` prefix (the front prepends the
+ * `data:<mime>;base64,` header, choosing the MIME from the extension).
+ */
+data_base64: string; too_large: boolean; size: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
 /**
  * One authoritative content block of an assistant message.
@@ -879,6 +972,15 @@ rate_limit: RateLimitSnapshot | null }
  */
 export type SessionTaskEvent = { session: string; task: BackgroundTask }
 /**
+ * A model-generated conversation title arrived (from a `generate_session_title`
+ * control response). The UI maps `session` (handle) → conversation and applies the
+ * title as the name UNLESS the user set a custom title in the meantime. `seq` is the
+ * monotonic per-conversation tag the UI sent: it applies a title only if `seq` is
+ * newer than the last applied, so an out-of-order (stale) response can't overwrite a
+ * fresher title.
+ */
+export type SessionTitleEvent = { session: string; title: string; seq: number }
+/**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code
  * extension consumes to drive its `/` autocomplete menu. `name` carries NO
@@ -894,6 +996,18 @@ description: string;
  * Hint for the command's arguments (e.g. `"<task_id>"`), empty when none.
  */
 argument_hint: string }
+/**
+ * An integrated terminal's shell exited (EOF on the PTY). One-shot, keyed by id;
+ * the front marks that terminal done and offers to restart it on re-open.
+ */
+export type TerminalExitEvent = { id: string }
+/**
+ * A chunk of output from an integrated terminal's PTY, base64-encoded. Base64
+ * (not a `number[]` or a per-chunk lossy string) keeps the byte stream exact and
+ * compact — xterm's own decoder reassembles UTF-8 sequences split across chunks.
+ * Keyed by the terminal `id` so the front routes it to the right xterm instance.
+ */
+export type TerminalOutputEvent = { id: string; data: string }
 /**
  * Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
  */

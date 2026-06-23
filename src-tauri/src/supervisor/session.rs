@@ -38,6 +38,12 @@ pub enum SessionCommand {
     /// Enable "ultracode" (xhigh effort + standing dynamic-workflow orchestration).
     /// Disabling is done by selecting a plain [`SessionCommand::SetEffortLevel`].
     EnableUltracode,
+    /// Ask the binary to generate a short conversation title from `description` (the
+    /// user's accumulated messages so far). `seq` is a monotonic per-conversation tag
+    /// echoed back in [`SessionEvent::Title`] so the UI can drop an out-of-order
+    /// (stale) response. The title comes back asynchronously; a failure is logged but
+    /// never surfaced (the UI keeps its optimistic placeholder / last title).
+    GenerateTitle { description: String, seq: u32 },
     Interrupt,
     Shutdown,
 }
@@ -66,6 +72,11 @@ enum PendingControl {
     SetModel,
     SetEffort,
     SetUltracode,
+    /// A `generate_session_title` request, carrying the monotonic `seq` we were asked
+    /// to title with so the ack's title can be tagged with it (the UI drops stale,
+    /// out-of-order responses). Swallowed on failure — never surfaced, since the UI
+    /// has a placeholder name.
+    GenerateTitle(u32),
     Interrupt,
 }
 
@@ -78,6 +89,7 @@ impl PendingControl {
             PendingControl::SetModel => "modèle",
             PendingControl::SetEffort => "effort",
             PendingControl::SetUltracode => "ultracode",
+            PendingControl::GenerateTitle(_) => "génération du titre",
             PendingControl::Interrupt => "interruption",
         }
     }
@@ -140,6 +152,10 @@ impl SessionHandle {
 
     pub async fn enable_ultracode(&self) -> Result<(), SessionError> {
         self.send(SessionCommand::EnableUltracode).await
+    }
+
+    pub async fn generate_title(&self, description: String, seq: u32) -> Result<(), SessionError> {
+        self.send(SessionCommand::GenerateTitle { description, seq }).await
     }
 
     pub async fn interrupt(&self) -> Result<(), SessionError> {
@@ -313,6 +329,7 @@ impl SessionCore {
             SessionEvent::Permission(p) => self.emitter.emit_permission(&self.id, &p),
             SessionEvent::Commands(c) => self.emitter.emit_commands(&self.id, &c),
             SessionEvent::Task(t) => self.emitter.emit_task(&self.id, &t),
+            SessionEvent::Title { title, seq } => self.emitter.emit_title(&self.id, &title, seq),
         }
     }
 
@@ -386,6 +403,17 @@ impl SessionCore {
             return; // an ack we did not track (or already consumed)
         };
         if !resp.ok {
+            // Title generation is cosmetic and has an optimistic placeholder as its
+            // fallback, so a rejection here is logged but NOT surfaced as a timeline
+            // error (and triggers no settings re-read) — unlike model/effort/mode.
+            if matches!(kind, PendingControl::GenerateTitle(_)) {
+                eprintln!(
+                    "[session {}] generate_session_title rejected: {}",
+                    self.id,
+                    resp.error.as_deref().unwrap_or("(no error)")
+                );
+                return;
+            }
             // A rejection (invalid model, unsupported mode/effort, …) must be
             // visible. Then re-read the truth so the indicator never lies.
             let detail = resp.error.as_deref().unwrap_or("requête de contrôle rejetée");
@@ -419,6 +447,15 @@ impl SessionCore {
                     .unwrap_or_else(|| requested.as_wire().to_string());
                 for ev in self.assembler.confirm_permission_mode(&mode) {
                     self.emit(ev);
+                }
+            }
+            // The generated conversation title, tagged with the `seq` we sent so the UI
+            // can drop a stale, out-of-order response. Emit it for the UI to apply
+            // (unless the user has set a custom title since). A success ack with no
+            // usable title is a no-op — the placeholder / last title stays.
+            PendingControl::GenerateTitle(seq) => {
+                if let Some(title) = control::parse_generate_session_title(&v) {
+                    self.emit(SessionEvent::Title { title, seq });
                 }
             }
             // The bare success of set_model / apply_flag_settings carries no payload;
@@ -559,6 +596,14 @@ impl SessionCore {
                 self.emit(ev);
                 self.refresh_settings();
             }
+            SessionCommand::GenerateTitle { description, seq } => {
+                // Fire-and-correlate: the ack carries the title, emitted as
+                // SessionEvent::Title with this `seq` (see on_control_response). No
+                // optimistic state — the UI already shows a placeholder it will replace.
+                self.send_tracked(PendingControl::GenerateTitle(seq), |rid| {
+                    control::generate_session_title_request(rid, &description)
+                });
+            }
             SessionCommand::Interrupt => {
                 self.send_tracked(PendingControl::Interrupt, control::interrupt_request);
             }
@@ -594,6 +639,9 @@ mod tests {
         }
         fn emit_task(&self, _session: &str, task: &crate::supervisor::model::BackgroundTask) {
             let _ = self.tx.send(SessionEvent::Task(task.clone()));
+        }
+        fn emit_title(&self, _session: &str, title: &str, seq: u32) {
+            let _ = self.tx.send(SessionEvent::Title { title: title.to_string(), seq });
         }
     }
 
@@ -894,6 +942,73 @@ mod tests {
         assert_eq!(lines[0]["message"]["content"][0]["text"], json!("hello"));
     }
 
+    /// ACCEPTANCE (deterministic): a GenerateTitle command sends a
+    /// `generate_session_title` control request carrying the description, and its
+    /// success ack (title at `response.response.title`) surfaces a `Title` event.
+    #[test]
+    fn generate_title_round_trip_emits_title_event() {
+        let (mut core, mut events, mut out) = test_core();
+        core.on_command(SessionCommand::GenerateTitle {
+            description: "Fixer le bug du login".to_string(),
+            seq: 2,
+        });
+
+        let sent = drain(&mut out);
+        let req = find_req(&sent, "generate_session_title").expect("a generate_session_title request");
+        assert_eq!(req["request"]["description"], json!("Fixer le bug du login"));
+        assert_eq!(req["request"]["persist"], json!(false));
+        let rid = req["request_id"].as_str().expect("request_id").to_string();
+
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": rid,
+                    "response": { "title": "Bug de login" }
+                }
+            }))
+            .unwrap(),
+        );
+
+        let title = drain(&mut events)
+            .into_iter()
+            .find_map(|e| match e {
+                // The emitted Title echoes the seq we sent, so the UI can order applies.
+                SessionEvent::Title { title, seq } => Some((title, seq)),
+                _ => None,
+            })
+            .expect("a Title event should be emitted");
+        assert_eq!(title, ("Bug de login".to_string(), 2));
+    }
+
+    /// REGRESSION (no noisy error): a REJECTED generate_session_title must NOT
+    /// surface a `control_error` notice — it's cosmetic, with a placeholder fallback.
+    #[test]
+    fn rejected_title_generation_is_silent() {
+        let (mut core, mut events, mut out) = test_core();
+        core.on_command(SessionCommand::GenerateTitle { description: "peu importe".to_string(), seq: 1 });
+        let rid = drain(&mut out)
+            .into_iter()
+            .find(|l| l["request"]["subtype"] == json!("generate_session_title"))
+            .and_then(|l| l["request_id"].as_str().map(str::to_string))
+            .expect("a generate_session_title request");
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": { "subtype": "error", "request_id": rid, "error": "unsupported" }
+            }))
+            .unwrap(),
+        );
+        assert!(
+            !drain(&mut events).iter().any(|e| matches!(
+                e,
+                SessionEvent::Item(ConversationItem::Notice { subtype, .. }) if subtype == "control_error"
+            )),
+            "a rejected title generation must not surface a control_error notice"
+        );
+    }
+
     /// ACCEPTANCE: the `initialize` control_response (matched by its echoed
     /// request_id) is harvested into a single `Commands` event, with the
     /// camelCase `argumentHint` wire key mapped to `argument_hint`.
@@ -1005,6 +1120,54 @@ mod tests {
 
         assert!(saw_tool_result, "expected a tool_result from the Bash call");
         assert_eq!(turn_ok, Some(true), "expected a successful turn");
+    }
+
+    /// LIVE: the whole feature hinges on the binary supporting the
+    /// `generate_session_title` control request. Spawn a real `claude`, ask it to
+    /// title a description, and assert a non-empty `Title` event comes back. No user
+    /// turn is needed — the binary titles from the `description` string itself
+    /// (exactly how the VS Code extension calls it).
+    ///
+    /// Ignored by default (needs the binary, network, auth, quota). Run with:
+    ///   cargo test -p tosse-code --lib -- --ignored live_generate_session_title --nocapture
+    #[tokio::test]
+    #[ignore = "spawns the real claude binary (network + auth + quota)"]
+    async fn live_generate_session_title_returns_a_title() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<SessionEvent>();
+        let emitter = Arc::new(ChannelEmitter { tx });
+        let cwd = std::env::current_dir().unwrap();
+        let handle = spawn_session(
+            "test-title".to_string(),
+            SpawnConfig::new(cwd),
+            InitialControls::default(),
+            emitter,
+            Box::new(|| {}),
+        )
+        .expect("session should spawn");
+
+        handle
+            .generate_title(
+                "Aide-moi à corriger le bug de connexion sur la page de login".to_string(),
+                1,
+            )
+            .await
+            .expect("generate_title should queue");
+
+        let title = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            while let Some(ev) = rx.recv().await {
+                if let SessionEvent::Title { title, .. } = ev {
+                    return Some(title);
+                }
+            }
+            None
+        })
+        .await
+        .expect("a Title event should arrive within the deadline");
+
+        handle.shutdown().await.ok();
+        let title = title.expect("the stream closed before a Title event arrived");
+        eprintln!("[live] generated title: {title:?}");
+        assert!(!title.trim().is_empty(), "the generated title should be non-empty");
     }
 
     /// LIVE end-to-end for the BACKGROUND-TASK socle: spawn a real `claude`, ask it

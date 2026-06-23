@@ -204,6 +204,60 @@ describe("error surfacing (no silent failures)", () => {
   });
 });
 
+describe("image buffers", () => {
+  it("opens an image via readImage as a data URL (not the text/Monaco path)", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/logo.png");
+    const b = buffer("/repo/logo.png");
+    expect(b.loading).toBe(false);
+    expect(b.isImage).toBe(true);
+    expect(b.imageDataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(b.imageSize).toBeGreaterThan(0);
+    // Never decoded as editable text.
+    expect(b.binary).toBe(false);
+    expect(b.content).toBe("");
+  });
+
+  it("live-reloads an open image on external change", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/logo.png");
+    patch("/repo/logo.png", { imageDataUrl: "data:image/png;base64,STALE" });
+
+    await s.onExternalChange(CONV, ["/repo/logo.png"]);
+
+    const b = buffer("/repo/logo.png");
+    expect(b.imageDataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(b.imageDataUrl).not.toContain("STALE");
+  });
+
+  it("surfaces a failed image read instead of staying stuck loading", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/__fail__.png");
+    const b = buffer("/repo/__fail__.png");
+    expect(b.loading).toBe(false);
+    expect(b.error).toBeTruthy();
+    expect(b.imageDataUrl).toBeNull();
+  });
+
+  it("persists the per-tab zoom/pan view so it survives a tab switch", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/a.png");
+    await s.openFile(CONV, "/repo/b.png");
+
+    // Zoom image A, then "leave" it (the viewer flushes its view on unmount).
+    s.setImageView(CONV, "/repo/a.png", 4, { x: -120, y: 30 });
+
+    // The view is remembered on A's buffer and B is untouched (still default).
+    expect(buffer("/repo/a.png").imageZoom).toBe(4);
+    expect(buffer("/repo/a.png").imageOffset).toEqual({ x: -120, y: 30 });
+    expect(buffer("/repo/b.png").imageZoom).toBeUndefined();
+  });
+});
+
 describe("tabs", () => {
   it("closing the active tab falls back to a neighbour", async () => {
     const s = useEditorStore.getState();

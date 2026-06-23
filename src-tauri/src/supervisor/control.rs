@@ -277,6 +277,41 @@ pub fn get_settings_request(request_id: &str) -> Value {
     control_request(request_id, json!({ "subtype": "get_settings" }))
 }
 
+/// `generate_session_title` — ask the binary to derive a short, human title for the
+/// conversation from `description` (the user's accumulated messages so far — the
+/// caller may regenerate from a growing description as the session evolves). The
+/// title is produced by a model call INSIDE the `claude` binary (so it rides the Max
+/// subscription, no separate API key, no prompt to maintain here). Mirrors the official VS Code
+/// extension's SDK call (`{subtype:"generate_session_title", description, persist}`):
+/// it auto-titles a conversation from what the user is doing. `persist:false` —
+/// Tosse persists the name in its OWN store, so we never ask the binary to write an
+/// `ai-title` entry into its transcript. The title comes back at
+/// `response.response.title` (see [`parse_generate_session_title`]).
+pub fn generate_session_title_request(request_id: &str, description: &str) -> Value {
+    control_request(
+        request_id,
+        json!({
+            "subtype": "generate_session_title",
+            "description": description,
+            "persist": false,
+        }),
+    )
+}
+
+/// Parse the generated title out of a `generate_session_title` control response. The
+/// title lives at `response.response.title` (the same doubly-nested shape as
+/// `get_settings`/`initialize`). Returns `None` when absent or empty — the caller
+/// then keeps the optimistic placeholder rather than blanking the conversation name.
+pub fn parse_generate_session_title(line: &Value) -> Option<String> {
+    let title = line
+        .get("response")?
+        .get("response")?
+        .get("title")?
+        .as_str()?
+        .trim();
+    (!title.is_empty()).then(|| title.to_string())
+}
+
 /// A successful `control_response` carrying a permission ALLOW result (spec §5.2).
 /// Note the doubly-nested `response.response` and the camelCase result fields.
 pub fn permission_allow_response(request_id: &str, tool_use_id: &str, updated_input: Value) -> Value {
@@ -456,6 +491,37 @@ mod tests {
         // A response with no `applied` yields None (so the caller skips it).
         let bare = json!({ "response": { "subtype": "success", "request_id": "x", "response": {} } });
         assert!(parse_get_settings_applied(&bare).is_none());
+    }
+
+    #[test]
+    fn generate_session_title_request_shape() {
+        let r = generate_session_title_request("t-1", "Aide-moi à fixer le bug du login");
+        assert_eq!(r["type"], json!("control_request"));
+        assert_eq!(r["request_id"], json!("t-1"));
+        assert_eq!(r["request"]["subtype"], json!("generate_session_title"));
+        assert_eq!(r["request"]["description"], json!("Aide-moi à fixer le bug du login"));
+        // persist:false — Tosse stores the name itself; the binary must NOT write an
+        // ai-title into its transcript.
+        assert_eq!(r["request"]["persist"], json!(false));
+    }
+
+    #[test]
+    fn parses_generated_title_from_doubly_nested_response() {
+        let line = json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "t-1",
+                "response": { "title": "  Fix du bug de login  " }
+            }
+        });
+        // Trimmed to the inner text.
+        assert_eq!(parse_generate_session_title(&line).as_deref(), Some("Fix du bug de login"));
+        // A blank/missing title yields None (so the caller keeps the placeholder).
+        let blank = json!({ "response": { "response": { "title": "   " } } });
+        assert!(parse_generate_session_title(&blank).is_none());
+        let missing = json!({ "response": { "response": {} } });
+        assert!(parse_generate_session_title(&missing).is_none());
     }
 
     #[test]

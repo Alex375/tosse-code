@@ -24,6 +24,8 @@ import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/clie
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
+import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
+import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useMemo } from "react";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
@@ -121,6 +123,36 @@ function deriveName(text: string): string {
   return t.length > 42 ? t.slice(0, 42) + "…" : t;
 }
 
+/** Clean a model-generated title: trim, collapse whitespace, cap length. */
+function cleanTitle(text: string): string {
+  const t = text.trim().replace(/\s+/g, " ");
+  return t.length > 60 ? t.slice(0, 60) + "…" : t;
+}
+
+// Conversations whose name is an auto placeholder (the truncated first message) still
+// eligible to be REPLACED by the binary's model-generated title — the VS Code
+// extension's behavior. In-memory ONLY (the auto/custom distinction is intentionally
+// NOT persisted, to avoid a schema column): a manual rename removes the conversation
+// from this set so a late-arriving smart title never clobbers a title the user chose
+// (the "onlyIfNoCustomTitle" guard). KNOWN LIMITATION of being in-memory: if the app
+// quits before the async title arrives, the persisted placeholder (the truncated
+// first message) stays as the name and is never re-titled on the next run — the
+// placeholder is the graceful fallback, so this is cosmetic.
+const autoTitlePending = new Set<string>();
+
+// Auto-title REGENERATION (beyond the VS Code one-shot): the title is regenerated on
+// each of the first few user messages, feeding the model the ACCUMULATED user intent
+// — so a session that opens with "/list-tasks" and then "do task X" isn't stuck on
+// "List tasks". `titleContext` holds the user messages so far (the description sent to
+// the binary); `titleGenCount` caps the regenerations (and doubles as the monotonic
+// `seq` we tag each request with); `lastAppliedSeq` lets `applyAutoTitle` drop an
+// out-of-order (stale) response so an older-context title can't overwrite a fresher
+// one. All in-memory, cleared on rename/remove/wipe.
+const MAX_TITLE_REGENS = 3;
+const titleContext = new Map<string, string[]>();
+const titleGenCount = new Map<string, number>();
+const lastAppliedSeq = new Map<string, number>();
+
 // ---- Persistence adapter ----------------------------------------------------
 // The ONE place that knows the SQL-facing DTO shape (snake_case `*Record`).
 // Maps to/from the camelCase domain model and forwards to the core. If the
@@ -196,8 +228,29 @@ interface ConversationsState {
   removeConversation: (id: string) => void;
   /** Rename a conversation to a user-chosen title. Blank or unchanged names are ignored. */
   renameConversation: (id: string, name: string) => void;
-  /** Name an untitled conversation from its first user message (keyed by stable id). */
+  /**
+   * On the first user message of an untitled conversation: set an optimistic
+   * placeholder name (the truncated message) and mark it eligible for the binary's
+   * model-generated title. No-op once the conversation has any non-default name.
+   */
   noteFirstMessage: (id: string, text: string) => void;
+  /**
+   * Accumulate `text` (a user message) and ask the live session to (re)generate a
+   * smart title from the user's intent SO FAR. Called on each send; regenerates up to
+   * a small cap then freezes, so the title tracks the real topic as the conversation
+   * evolves (e.g. "/list-tasks" → "do task X") without churning forever. No-op unless
+   * still auto-title-eligible, under the cap, and live. Title arrives via
+   * `SessionTitleEvent` → [`applyAutoTitle`].
+   */
+  triggerAutoTitle: (id: string, text: string) => void;
+  /**
+   * Apply a model-generated title (from `SessionTitleEvent`) as the conversation
+   * name — but ONLY if it is still auto-title-eligible (the user has not renamed it
+   * since) AND `seq` is newer than the last applied (drops out-of-order/stale
+   * responses). Does NOT consume eligibility: later regenerations replace it until the
+   * title settles. Persisted.
+   */
+  applyAutoTitle: (id: string, title: string, seq: number) => void;
   /** Store Claude's session_id on the conversation for --resume (keyed by stable id). */
   noteSessionId: (id: string, sessionId: string) => void;
   /** Bind a conversation (by stable id) to its live Rust session handle. In-memory only. */
@@ -255,6 +308,14 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
   removeRepo: (path) => {
     const repo = get().repos.find((r) => r.path === path);
     if (!repo) return;
+    // Kill the integrated terminal of every conversation under this repo (the rows
+    // are about to be cascade-deleted) so no PTY shell is orphaned.
+    for (const c of get().conversations) {
+      if (c.repoId === repo.id) {
+        disposeTerminal(c.id);
+        clearTodoBarOpen(c.id);
+      }
+    }
     set((s) => {
       const conversations = s.conversations.filter((c) => c.repoId !== repo.id);
       return {
@@ -300,6 +361,14 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // persisted context-window so the localStorage cache doesn't keep orphans.
     useConversationStore.getState().dropSession(id);
     clearCachedWindow(id);
+    clearTodoBarOpen(id);
+    autoTitlePending.delete(id);
+    titleContext.delete(id);
+    titleGenCount.delete(id);
+    lastAppliedSeq.delete(id);
+    // Kill its integrated terminal (PTY shell + xterm instance) too — same no-orphan
+    // policy as the claude session above. No-op if it never opened a terminal.
+    disposeTerminal(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
@@ -309,6 +378,13 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     const conv = get().conversations.find((c) => c.id === id);
     // Ignore a blank or unchanged title — an empty name would leave an unlabeled row.
     if (!conv || !trimmed || trimmed === conv.name) return;
+    // A manual rename is a custom title: it takes the conversation out of auto-title
+    // eligibility (and stops any further regeneration), so a late-arriving model title
+    // never clobbers the user's choice.
+    autoTitlePending.delete(id);
+    titleContext.delete(id);
+    titleGenCount.delete(id);
+    lastAppliedSeq.delete(id);
     const updated = { ...conv, name: trimmed };
     set((s) => ({
       conversations: s.conversations.map((c) => (c.id === conv.id ? updated : c)),
@@ -320,12 +396,69 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
 
   noteFirstMessage: (id, text) => {
     const conv = get().conversations.find((c) => c.id === id);
+    // Only a still-untitled conversation auto-titles: a custom rename (or a resumed
+    // conversation carrying a prior name) is left untouched.
     if (!conv || conv.name !== DEFAULT_CONV_NAME) return;
+    // Optimistic placeholder (the truncated message), like the VS Code extension —
+    // instant feedback and the fallback if title generation fails. Mark it eligible
+    // for replacement by the model-generated title (see triggerAutoTitle).
+    autoTitlePending.add(id);
     const updated = { ...conv, name: deriveName(text) };
     set((s) => ({
       conversations: s.conversations.map((c) => (c.id === conv.id ? updated : c)),
     }));
     syncToCore("upsertConversation(rename)", () =>
+      commands.upsertConversation(convToRecord(updated)),
+    );
+  },
+
+  triggerAutoTitle: (id, text) => {
+    // Eligible only if still an auto placeholder (not renamed/resumed).
+    if (!autoTitlePending.has(id)) return;
+    const count = titleGenCount.get(id) ?? 0;
+    if (count >= MAX_TITLE_REGENS) return; // title has settled — stop regenerating
+    // Accumulate the user's messages FIRST (before the live-handle gate) so the
+    // intent stays complete even if the session is momentarily down — then regenerate
+    // from the WHOLE intent so far, not just the first message ("/list-tasks" then
+    // "do task X" lands on the task). The binary truncates to its own token budget.
+    const ctx = [...(titleContext.get(id) ?? []), text];
+    titleContext.set(id, ctx);
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv?.handle) return; // no live session to ask (the placeholder stays)
+    const description = ctx.join("\n").trim();
+    if (!description) return;
+    // Tag this request with a monotonic seq so applyAutoTitle can drop a stale,
+    // out-of-order response (older-context title arriving after a fresher one).
+    const seq = count + 1;
+    titleGenCount.set(id, seq);
+    // Fire-and-forget: the title returns via SessionTitleEvent → applyAutoTitle. A
+    // failure is non-fatal (the placeholder/last title stays) — log it, never surface it.
+    void commands
+      .generateConversationTitle(conv.handle, description, seq)
+      .then((res) => {
+        if (res.status === "error")
+          console.error("[autoTitle] generateConversationTitle failed:", res.error);
+      })
+      .catch((e) => console.error("[autoTitle] generateConversationTitle threw:", e));
+  },
+
+  applyAutoTitle: (id, title, seq) => {
+    // Apply only while still eligible (the user hasn't renamed since). NOT consumed:
+    // later regenerations (up to the cap) replace it in turn until the title settles.
+    if (!autoTitlePending.has(id)) return;
+    // Drop a stale, out-of-order response: only ever move the title FORWARD in seq, so
+    // an earlier (poorer-context) generation that resolves late can't clobber a fresher
+    // one. Record the seq even when the name doesn't change, so a later older seq loses.
+    if (seq <= (lastAppliedSeq.get(id) ?? 0)) return;
+    lastAppliedSeq.set(id, seq);
+    const conv = get().conversations.find((c) => c.id === id);
+    const cleaned = cleanTitle(title);
+    if (!conv || !cleaned || cleaned === conv.name) return;
+    const updated = { ...conv, name: cleaned };
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === conv.id ? updated : c)),
+    }));
+    syncToCore("upsertConversation(autoTitle)", () =>
       commands.upsertConversation(convToRecord(updated)),
     );
   },
@@ -780,9 +913,16 @@ export async function wipeAllData(): Promise<void> {
       .filter((c): c is Conversation & { handle: string } => c.handle !== null)
       .map((c) => commands.stopSession(c.handle)),
   );
+  // Kill every integrated terminal (PTY shells + xterm instances) before clearing.
+  disposeAllTerminals();
   await commands.wipeAllData();
   historyLoaded.clear();
   clearAllCachedWindows();
+  clearAllTodoBarOpen();
+  autoTitlePending.clear();
+  titleContext.clear();
+  titleGenCount.clear();
+  lastAppliedSeq.clear();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
 }

@@ -101,11 +101,12 @@ Logiciel **rapide et très optimisé** — exigence cœur, pas un nice-to-have. 
 - **Shell desktop** : Tauri 2 — utilise le webview de l'OS, **pas de Chromium embarqué** (~15 Mo, léger/rapide ; vs Electron ~180 Mo).
 - **Cœur** (le « backend » **local**, pas de serveur cloud) : Rust + tokio. Superviseur de process, client du protocole Claude Code, persistance.
 - **UI** : React + TypeScript + Vite, rendue dans le webview Tauri.
-- **Éditeur** : Monaco (l'éditeur de VS Code, package npm) — diffs inclus.
-- **Terminal** : xterm.js + addon-webgl.
+- **Éditeur** : Monaco (package npm) — **implémenté, lazy-loadé / code-split** (chunk éditeur hors du bundle de démarrage ; workers de langage json/css/html/ts en chunks lazy séparés, chargés seulement à l'ouverture d'un fichier du langage → démarrage non impacté).
+- **Terminal** : `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-webgl` — **implémenté**. PTY natif côté Rust via `portable-pty` 0.8 ; octets PTY encodés en base64 sur le bus d'events Tauri (crate `base64` 0.22). Rendu WebGL côté front.
 - **État UI** : Zustand (flotte d'agents, nourri par les events) + TanStack Query (commandes).
-- **Crates clés** : portable-pty (PTY interactif), notify (watch fichiers), **rusqlite (bundled)** + SQLite (persistance — SQLite C compilé dans le binaire, synchrone, mode WAL, foreign_keys ON ; sqlx écarté : nos écritures sont minuscules/rares/hors chemin chaud, pas besoin d'async + macros), serde_json (parse stream-json), **tauri-specta** (contrat IPC typé Rust→TS auto-généré, jamais de resync manuelle).
-- **Plugins Tauri** : opener, dialog, **updater** + **process** (auto-update signé, cf. « Versioning & releases »).
+- **Crates clés** : `portable-pty` 0.8 (PTY interactif), `base64` 0.22 (cadrage octets PTY sur le bus d'events), notify (watch fichiers), **rusqlite (bundled)** + SQLite (persistance — SQLite C compilé dans le binaire, synchrone, mode WAL, foreign_keys ON ; sqlx écarté : nos écritures sont minuscules/rares/hors chemin chaud, pas besoin d'async + macros), serde_json (parse stream-json), **tauri-specta** (contrat IPC typé Rust→TS auto-généré, jamais de resync manuelle), **reqwest** (features `rustls-no-provider`) + **rustls** (feature `ring`) — ajoutées comme dépendances directes (étaient déjà présentes transitivement via tauri-plugin-updater) ; provider crypto `ring` installé idempotemment au runtime avant le 1er client HTTP.
+- **Plugins Tauri** : opener, dialog, **updater** + **process** (auto-update signé), **notification** (notifs OS agent).
+- **JS plugins** : `@tauri-apps/plugin-notification`. Permission `notification:default` dans `capabilities/default.json`.
 - **git2** : option ouverte pour diff/status in-process côté éditeur Monaco — PAS utilisé pour les worktrees (voir module `git/` ci-dessous).
 
 ## Frontière build vs réutilisation
@@ -118,23 +119,51 @@ Réimplémentation **clean-room en Rust** du client utilisé par l'extension VS 
 - Spawn du binaire `claude` avec `--output-format stream-json --input-format stream-json --verbose`.
 - Mode **bidirectionnel persistant** (un process vit toute la session) — **PAS `claude -p`** (one-shot).
 - Messages JSON-lines reçus : `system`, `assistant`, `user`, `tool_use`, `tool_result`, `result`, `stream_event`.
-- Canal de contrôle : `control_request` / `control_response` (sous-types : `initialize`, `can_use_tool`, `set_permission_mode`, `interrupt`, `mcp_message`). Une demande de permission = un `control_request{can_use_tool}` → on répond `control_response`. Lancé avec `--permission-prompt-tool stdio`.
+- Canal de contrôle : `control_request` / `control_response` (sous-types : `initialize`, `can_use_tool`, `set_permission_mode`, `interrupt`, `mcp_message`, `generate_session_title`). Une demande de permission = un `control_request{can_use_tool}` → on répond `control_response`. Lancé avec `--permission-prompt-tool stdio`.
 - `SessionStatePayload` contient un champ **`cwd`** capté depuis `system/init` (ré-émis à chaque tour) — source de vérité du répertoire de travail COURANT de la session. Le cwd n'est PAS figé : l'agent peut le déplacer (via outils worktree) ; l'UI suit le `cwd` live.
 - « Par terminal, pas l'API HTTP » respecté : on pilote le binaire CLI (abo Max) ; le stream-json n'est qu'un cadrage stdio structuré par-dessus.
 - Référence disséquée localement : extension `anthropic.claude-code` (`extension.js` = host/transport ; `webview/index.js` = UI React).
+- ⚠️ Point ouvert : le wire du `control_request` sous-type `task_stop` (bouton Stop tâche de fond) n'a PAS encore été disséqué dans l'extension VS Code — à ne PAS inventer. À capturer avant d'implémenter le bouton Stop.
 
 ## Tools IDE exposés à l'agent (Phase 2)
 Comme on remplace l'IDE, on implémentera le côté serveur des tools IDE que l'extension expose à l'agent : `openDiff`, `openFile` (à la bonne ligne), `getCurrentSelection`, `getDiagnostics`, `getWorkspaceFolders`, `saveDocument`… → l'agent agit dans NOTRE éditeur.
 
 ## Structure (monorepo pnpm)
-- `src-tauri/` (Rust : `supervisor/`, `git/`, `fs/`, `store/`, `tosse/`, `ipc/`)
-  - `supervisor/` **implémenté** : `protocol.rs` (types serde du fil stream-json), `transport.rs` (spawn + reader/writer/stderr), `control.rs` (canal de contrôle + gestion des permissions), `model.rs` + `assembler.rs` (normalisation des messages pour l'UI), `session.rs` (acteur tokio par session).
+- `src-tauri/` (Rust : `supervisor/`, `git/`, `fs/`, `usage/`, `terminal/`, `store/`, `tosse/`, `ipc/`)
+  - `supervisor/` **implémenté** : `protocol.rs` (types serde du fil stream-json ; les sous-types `system/task_*` — `task_started`, `task_progress`, `task_updated`, `task_notification` — ont des variantes typées, ne tombent plus dans `SystemMsg::Unknown`), `transport.rs` (spawn + reader/writer/stderr), `control.rs` (canal de contrôle + gestion des permissions), `model.rs` (normalisation messages UI + record `BackgroundTask` : kind Agent/Workflow/Bash/Monitor, status, agent_id ; types `WorkflowRun`/`WorkflowPhase` ; variant `SessionEvent::Task`) + `assembler.rs` (normalisation + map `background_tasks` keyée `task_id` ; classification producteur Bash vs Monitor via nom de tool capté dès `content_block_start`), `session.rs` (acteur tokio par session), `subagents.rs` (lecteurs disque des artefacts tâches de fond : transcript sous-agent, manifeste `wf_<id>.json`, `tasks/<id>.output`), `history.rs` factorisé : `parse_transcript_str(skip_sidechain)` (réutilisé par `subagents.rs` et `load_persisted_state`).
   - `store/` **implémenté** : `model.rs` (records de domaine, zéro SQL) + `db.rs` (struct `Store` = le SEUL service qui parle SQL ; mappe lignes ↔ records). DB ouverte dans `lib.rs` setup → `app_data_dir()/tosse.db`, managée en state Tauri. Périmètre : métadonnées only (repos + conversations + sélection active) ; messages NON persistés (restent dans les transcripts Claude). Politique dev : pas de migration data-preserving pour l'instant → wipe-and-recreate (+ bouton « Tout supprimer » dans les Réglages). NB : une vraie migration data-preserving est tracée comme tâche dédiée (l'auto-update rend les changements de schéma visibles côté utilisateur).
   - `git/` **implémenté** : `src-tauri/src/git/mod.rs` est le SEUL service qui parle `git` (même pattern d'encapsulation que `store/db.rs`, swappable). Il enveloppe le **binaire `git` en CLI** (sous-process + parsing `--porcelain`), PAS la crate git2. Raison : sécurité de suppression déléguée à `git worktree remove` (refuse de détruire un worktree sale), parsing porcelain stable, pas de dépendance de build libgit2 pour des ops rares hors hot-path. Aucune crate ajoutée au Cargo.toml.
-  - Surface IPC (tauri-specta) : commandes `spawn_session` / `send_message` / `answer_permission` / `set_permission_mode` / `interrupt_session` / `stop_session` + persistance `load_persisted_state` / `upsert_repo` / `delete_repo` / `upsert_conversation` / `delete_conversation` / `set_active_conversation` / `wipe_all_data` + worktrees `list_worktrees` / `worktree_status` / `create_worktree` / `remove_worktree` (types `WorktreeInfo` / `WorktreeStatus`) + events `session_state` / `session_message` / `session_permission`. Registre `Sessions` en managed state Tauri.
-- `src/` (React : `features/{fleet,conversation,editor,git,explorer,settings}`, `ipc/`, `store`)
+  - `fs/` **implémenté** : `src-tauri/src/fs/mod.rs` = le SEUL service qui parle au filesystem pour l'éditeur (même pattern swappable que `git/mod.rs` et `store/db.rs`). `read_dir` (lazy, un niveau), `read_file` (gardes binaire/trop-gros >2 Mio), `write_file`, et `FsWatcher` (Tauri managed state) = une seule watch récursive via `notify` (crate désormais réellement dépendance), debounce ~150 ms, filtre `.git/node_modules/target/dist/build/…`, émet un `FsChangeEvent` coalescé.
+  - `usage/` **implémenté** : `src-tauri/src/usage/mod.rs` = SEUL service qui touche les credentials OAuth et l'endpoint d'usage (même pattern d'encapsulation que `git/mod.rs`, `fs/mod.rs` et `store/db.rs`, swappable). Réplique `GET https://api.anthropic.com/api/oauth/usage` pour obtenir le % d'usage du forfait (5h/7j) — donnée absente du stream-json. Token lu depuis `~/.claude/.credentials.json` → Keychain macOS (`/usr/bin/security`), **lecture seule** (jamais de refresh ni d'écriture de credentials).
+  - `terminal/` **implémenté** : `src-tauri/src/terminal/mod.rs` = SEUL service qui parle PTY (même pattern d'encapsulation que `git/mod.rs`, `fs/mod.rs`, `usage/mod.rs`, swappable). Spawn d'un shell interactif via `portable-pty` 0.8 ; octets PTY envoyés encodés en base64 via event Tauri `TerminalOutputEvent` ; resize via la commande `terminal_resize`. Commandes IPC : `terminal_open` / `terminal_write` / `terminal_resize` / `terminal_close`. Events : `TerminalOutputEvent` / `TerminalExitEvent`. Le writer PTY est derrière un `Arc<Mutex>` mais les écritures se font **hors du lock global** (anti-hang au quit). Teardown : le shell est lancé avec `setsid` (leader de groupe) → arrêt via `kill(-pid, SIGKILL)` sur tout le groupe, même pattern anti-orphelins que le superviseur pour les process `claude`.
+  - Surface IPC (tauri-specta) : commandes `spawn_session` / `send_message` / `answer_permission` / `set_permission_mode` / `interrupt_session` / `stop_session` + persistance `load_persisted_state` / `upsert_repo` / `delete_repo` / `upsert_conversation` / `delete_conversation` / `set_active_conversation` / `wipe_all_data` + worktrees `list_worktrees` / `worktree_status` / `create_worktree` / `remove_worktree` (types `WorktreeInfo` / `WorktreeStatus`) + filesystem `read_dir` / `read_file` / `write_file` / `watch_dir` / `unwatch_dir` (types `FsEntry` / `FileContent`) + tâches de fond `load_subagent_transcript` / `load_workflow_run` / `read_task_output` + **`request_user_attention(critical: bool)`** (rebond Dock macOS via `window.request_user_attention(Critical|Informational)`) + **`get_plan_usage`** (retourne `Result<PlanUsage, UsageError>` typé) + terminal `terminal_open` / `terminal_write` / `terminal_resize` / `terminal_close` + **`generate_conversation_title`** (déclenche un renommage via `control_request{generate_session_title}`) + events `session_state` / `session_message` / `session_permission` / `FsChangeEvent` / `session_task` (type `SessionTaskEvent` — tâches de fond en cours) / `TerminalOutputEvent` / `TerminalExitEvent` / **`SessionTitleEvent`** (nouveau titre généré par le binaire). Managed state Tauri : `Sessions`, `Store`, `FsWatcher`.
+- `src/` (React : `features/{flightdeck,conversation,editor,terminal,git,explorer,settings}`, `ipc/`, `store`, `agent/`, `notifications/`, `ui/`)
+  - `src/features/flightdeck/` **implémenté** : Vue Gestion d'agents (Flight Deck). Layout en swimlanes par dépôt — scroll vertical entre repos, scroll horizontal dans un repo, bandes bornées à 2 rangées. Composants : FlightDeck, StreamCard, StateBlock, StateActions, ActivityLine, AttentionBar. CSS dédié `src/ui/conductor-flightdeck.css`.
+  - `src/features/editor/` **implémenté** : `editorStore.ts` (Zustand, état par conversation en mémoire ; layout en localStorage `tosse:editor` — inclut `terminalOpen: boolean` et `terminalFraction: number` pour le panneau terminal), `MonacoView.tsx` (wrapper Monaco lazy), `FileTree`, `EditorPane`, `EditorPanel`, `Splitter`, `useFsWatch`, `language.ts`, `EditorToggle`, `editor.module.css`. Layout rooté sur `effectiveCwd` (cwd live de la conversation).
+  - `src/features/terminal/` **implémenté** : terminal PTY intégré dans le panneau latéral de la vue Conversation. Architecture :
+    - `termManager.ts` — gestionnaire d'instances xterm **hors React** : les instances `Terminal` (xterm) sont persistantes par conversation (survivent à la fermeture du panneau et au switch de conversation) et recyclées sans reconstruction. WebGL renderer attaché une fois ; fit addon pour le resize. Clé `conv_<id>`.
+    - `TerminalView.tsx` — composant React lazy (code-split, hors bundle de démarrage) ; monte/démonte le DOM du terminal sans détruire l'instance xterm.
+    - `cleanup.ts` — shim de découplage : câble le nettoyage des instances xterm sur `removeConversation`, `removeRepo` et `wipeAllData` (store Zustand) sans que `termManager` ne dépende de React ni du store → les instances xterm restent hors du bundle eager.
+    - `TerminalToggle.tsx` — bouton d'ouverture/fermeture du panneau terminal dans la toolbar du SidePanel.
+  - `src/features/conversation/SidePanel.tsx` **implémenté** : orchestre le panneau latéral (éditeur + terminal). Gère le splitter vertical éditeur/terminal, la fraction `terminalFraction`, et le toggle `TerminalToggle`. Le terminal est lazy-loadé à la première ouverture.
   - `src/features/git/` **implémenté** : indicateur worktree actif, badge sidebar, gestionnaire modale des worktrees.
-  - `src/features/settings/SettingsPanel.tsx` : page Réglages — section « À propos » (version via `getVersion()`) + section « Mise à jour » (`UpdateSection`). `UpdateBanner` = bannière globale « MAJ dispo ». Store `src/store/updater.ts` + `src/store/settingsUi.ts`.
+  - `src/features/settings/SettingsPanel.tsx` : page Réglages désormais structurée en **rail latéral à onglets** (Général / Notifications / Mises à jour / Données), conçue pour scaler. `src/store/settingsUi.ts` porte la section active + deep-link (la bannière MAJ ouvre l'onglet « updates »). Sections : `UpdateSection`, `NotificationsSection`.
+  - `src/store/updater.ts` : auto-check au lancement + toutes les 2h, check silencieux qui enregistre quand même les échecs dans `lastCheckError`. `UpdateBanner` = bannière globale « MAJ dispo ».
+  - `src/store/notifications.ts` : 3 prefs persistées localStorage (`tosse:notifications`) — `systemNotification` / `sound` / `dockBounce`, toutes ON par défaut.
+  - `src/store/contextData.ts` : `useContextData`/`fmtTokens` (fenêtre de contexte), extrait du composer.
+  - `src/store/activity.ts` : `describeActivity`/`useLiveActivity` — activité live de l'agent (dernier tool_use EN COURS du tour courant seulement, jamais un outil terminé).
+  - `src/store/conversationsStore.ts` : `groupConversationsByRepo`/`useConversationsByRepo` (groupement par repo, partagé sidebar + Flight Deck).
+  - `src/store/planUsage.ts` + hook `usePlanUsage` (TanStack Query, poll 5 min + on-open throttlé + bouton de rafraîchissement manuel) — expose le % d'usage du forfait (5h/7j) via `get_plan_usage`. Intégré dans le popover du cercle de contexte (section « Forfait » avec barres % + erreurs typées actionnables).
+  - `src/agent/` : modules domaine agents partagés entre Vue Conversation et Flight Deck.
+    - `status.ts` : `agentStatusForEntry(handle, entry)` (forme non-hook) + `statusRank` (ordre d'affichage flotte).
+    - `fleet.ts` : `useFleetAttention`/`tallyAttention` (agrégat d'attention), `useFleetLanes`/`orderLanes` (ordonnancement des bandes par état ; re-render gated via `useShallow` sur tokens d'ordre).
+    - `ask.ts` : `classifyAsk` (classification d'une demande de permission), extrait de ConductorThread.
+  - `src/notifications/` (nouveau dossier) :
+    - `notify.ts` — dispatcher des notifs agent : initialise la permission OS, supprime la notif si la conv est déjà au premier plan, supprime le « terminé » post-interruption.
+    - `sound.ts` — carillon synthétisé Web Audio, zéro asset externe.
+    - `transition.ts` — fonction pure `agentEventFor` : décide la notif à émettre à partir des transitions d'état (`awaiting_permission` false→true = attention ; `busy` true→false (vivant) = terminé).
+  - `src/ui/Toggle.tsx` : composant réutilisable interrupteur (`role=switch`).
+  - `src/ui/kit.tsx` : primitives partagées `ContextMeter` (barre de contexte + %) et `TodoPips` (pips d'avancement des todos).
   - `src/ipc/useWorktrees.ts` : hook TanStack Query pour les commandes worktree IPC.
 - `packages/ipc-types/` (types générés Rust→TS)
 
@@ -148,12 +177,24 @@ Comme on remplace l'IDE, on implémentera le côté serveur des tools IDE que l'
 - Acteur mono-tâche par session : pas de mutex partagé entre sessions (isolation tokio).
 - Persistance encapsulée : un seul service (`store::db::Store`) parle SQL ; le reste du cœur et l'IPC ne manipulent que des records de domaine → changer de moteur/schéma = réécrire `db.rs` uniquement.
 - **Git encapsulé** (même pattern) : `git::mod` est le seul point d'entrée pour toutes les ops git → swappable sans toucher à l'IPC ni au front.
+- **Fs encapsulé** (même pattern que git/store) : `fs::mod` est le seul point d'entrée filesystem de l'éditeur → swappable sans toucher IPC ni front.
+- **Usage encapsulé** (même pattern que git/fs/store) : `usage::mod` est le seul point d'entrée pour les credentials OAuth et l'API d'usage → swappable sans toucher à l'IPC ni au front. Lecture seule des credentials, jamais d'écriture.
+- **Terminal encapsulé** (même pattern que git/fs/usage/store) : `terminal::mod` est le seul point d'entrée PTY → swappable sans toucher à l'IPC ni au front. Invariants à ne PAS régresser : (1) writer PTY hors du lock global (anti-hang au quit) ; (2) teardown tue le GROUPE de process (`kill(-pid)`, shell = leader `setsid`) — anti-orphelins, même logique que le superviseur pour `claude` ; (3) instances xterm **persistantes par conversation** (survivent fermeture panneau + switch conv) — gérées par `termManager.ts` hors React ; (4) `TerminalView` et Monaco **lazy-loadés** (hors bundle de démarrage, code-split) ; (5) nettoyage des instances xterm câblé via `cleanup.ts` (shim) sur `removeConversation`/`removeRepo`/`wipeAllData` — maintient xterm hors du bundle eager.
 - Identité de conversation : l'**id stable** (UUID, PK persistée) est distinct du **handle de session live** (`session-N`, en mémoire, non persisté, remappé à chaque resume). Le front est keyé par **id stable** pour toutes les LECTURES (message store, état, timeline, composants) ; le **handle** (`session-N`) n'est résolu qu'au moment d'envoyer une commande au process vivant. Le routeur d'events (`useGlobalSessionEvents`) mappe `handle → id stable` (les events live restent keyés par handle côté cœur Rust). Le handle est libéré sur `state.ended` ; un renvoi re-spawne.
 - Spawn **paresseux** (lazy) : aucun process `claude` n'est lancé au démarrage ni à la sélection d'une conversation. L'historique se lit du transcript on-disk (`loadSessionHistory`, pur I/O). Le process est spawné à la volée au **1er message** (`ensureConversationSession`, avec `--resume` si `sessionId`).
 - Teardown **sans orphelins** : chaque `claude` tourne dans son propre groupe de process (`process_group(0)`, Unix). L'arrêt signale tout le groupe (`kill(-pid, …)`) selon l'échelle EOF → SIGTERM → SIGKILL, avec balayage SIGKILL final sur tous les chemins. Kill-all au quit : on attend que le registre `Sessions` se vide (borné). Dépendance `libc` (cfg unix). `stop_session` tue le process (≠ `interrupt_session`, qui ne stoppe que le tour).
 - **Outils worktree natifs de Claude Code** (`EnterWorktree` / `ExitWorktree`) visibles dans `system/init.tools` — l'app les INTERCEPTE : détection des `tool_use` dans `useGlobalSessionEvents` → rafraîchit la liste des worktrees côté UI. Le `cwd` d'une conversation N'EST PAS figé ; l'UI suit le `cwd` live via `SessionStatePayload.cwd`.
 - **Convention d'emplacement des worktrees** créés par l'app : `.claude/worktrees/<branche>` (dans le worktree principal, aligné sur le comportement de l'outil natif `EnterWorktree`).
 - **Association conversation↔worktree** par le `cwd` : résolution longest-prefix côté front.
+- **Éditeur rooté sur `effectiveCwd`** : arborescence + watch suivent le cwd live (EnterWorktree/ExitWorktree) ; marche aussi avant tout spawn `claude` (lecture disque pure).
+- **Une seule watch fs active** à la fois (cwd de la conversation affichée), debounced + filtrée.
+- **État éditeur par conversation en mémoire** ; seules les prefs de layout persistées en localStorage `tosse:editor` (inclut `terminalOpen` et `terminalFraction`) — PAS en SQLite (évite la migration de schéma, cohérent avec « messages non persistés »).
+- **Politique de conflit fichier ouvert** : buffer propre → reload live ; buffer sale → garde les modifs + bandeau « modifié sur le disque ». Autosave debounced + Cmd+S.
+- **Détection des transitions d'état agent** : point UNIQUE dans `useGlobalSessionEvents.ts` (`onState`) via `agentEventFor` (`transition.ts`, fonction pure). Règles : `awaiting_permission` false→true = attention requise ; `busy` true→false (vivant) = terminé. À factoriser pour la future Vue Gestion d'agents — ne PAS dupliquer cette détection ailleurs.
+- **Raccourcis clavier** : ⌘1 (Conversation) / ⌘2 (Flight Deck) dans `App.tsx`. Utilisent `e.code` (pas `e.key`) pour être robustes sur les claviers AZERTY.
+- **Outil sous-agent `Agent` (alias `Task`)** : l'outil lancé par Claude Code pour les sous-agents est nommé `Agent` côté front ; l'alias `Task` est conservé pour compatibilité. La classification du producteur (Bash vs Monitor vs Agent) est faite côté Rust à partir du nom de tool, capté dès `content_block_start`.
+- **Tâches de fond — séparation socle/UI** : `supervisor/` expose les briques (event `session_task`, commandes de lecture des artefacts disque). La consommation UI (vues Agent/Monitor/Workflow/Bash-bg) est déléguée aux tâches débloquées — ne PAS implémenter de logique de rendu dans `supervisor/`.
+- **Renommage automatique du titre de conversation** : piloté par un `control_request{generate_session_title}` envoyé au binaire `claude` sur les premiers messages (contexte cumulé). Le titre est généré par un appel auxiliaire au petit modèle (Haiku), hors-conversation (ne touche pas au transcript ni au contexte Opus). Protection côté front : `seq` monotone comme garde d'ordre (ignore les réponses hors-ordre) + flag "titre custom" en mémoire (pas de colonne SQL, cohérent avec la politique « pas de migration de schéma »).
 
 ## Commandes dev
 
@@ -164,8 +205,11 @@ Rust (depuis `src-tauri/`, cargo dans `~/.cargo/bin`) :
 Front TypeScript :
 - Typecheck : `node_modules/.bin/tsc --noEmit`
 - Build : `pnpm build`
+- **Tests unitaires front** : `pnpm test` (= `vitest run` ; tests co-localisés `*.test.ts`)
 
 Bindings IPC : regénérés automatiquement au build debug et via le test `export_bindings_regenerates_ts_client` (tauri-specta).
+
+**Infra de test front** : `vitest` + `jsdom` ajoutés en devDeps. La **CI** (`.github/workflows/ci.yml`) exécute une étape « Tests unitaires front (vitest) » (`pnpm test`) en plus du build front et de `cargo test --lib` ; rappel : la CI ne tourne qu'à la PR vers `main`.
 
 ## Builds de test locaux (dev)
 
@@ -175,6 +219,7 @@ Alexandre **dogfoode** : il code ce projet en se servant de l'app **de productio
 
 **Règle pour tout build de test** : lui donner un **nom ET un identifiant DISTINCTS** de la prod — jamais les mêmes. Ex. `productName: "Tosse Code Test"` + `identifier: "com.tosse.desktop.test"` → bundle séparé (`Tosse Code Test.app`) + dossier de données séparé → zéro conflit avec la prod, zéro risque pour les conversations réelles.
 - Mécanisme propre : override **au moment du build** via `tauri build --config` (overlay JSON `productName`/`identifier`), SANS modifier le `tauri.conf.json` committé (qui reste la config prod).
+- Fichier de référence versionné : `src-tauri/dev-build.conf.json` (`productName` "Tosse Code dev build", `identifier` `com.tosse.desktop.dev`).
 - Les artefacts de test restent dans la sortie de build (`src-tauri/target/release/bundle/{dmg,macos}/`) ou un dossier dédié hors du chemin de la prod — mais l'important est le **nom/identifiant distinct**, pas seulement le dossier.
 - Outiller ça proprement (script/skill « test build ») pourra faire l'objet d'une tâche.
 
@@ -208,7 +253,7 @@ Workflow `.github/workflows/release.yml`, **100 % manuel** (`workflow_dispatch`,
 ### Sécurité (« un peu sécurisé »)
 - Déclenchement : `workflow_dispatch` est lançable par tout compte en write, MAIS le job `authorize` fait que **seuls les comptes de `ALLOWED` (aujourd'hui `Alex375`) produisent une release** — tout autre déclencheur échoue AVANT le build. Ajouter Armand à `ALLOWED` au besoin.
 - Garde-fou anti-doublon : refus si la version courante a déjà une release → force à bumper.
-- macOS **non signé Apple** (pas de compte Developer) : 1er lancement = clic droit → Ouvrir (`xattr -cr "/Applications/Tosse Code.app"`). Signature/notarisation Apple = chantier ultérieur.
+- macOS **non signé Apple** (pas de compte Developer) : 1er lancement = clic droit → Ouvrir (`xattr -cr "/Applications/Tosse Code.app"`). Signature/notarisation Apple = chantier ultérieure.
 
 ### Auto-update in-app (implémenté — `tauri-plugin-updater` + `tauri-plugin-process`)
 L'app vérifie/installe les MAJ signées depuis les releases GitHub (repo public → `latest.json` accessible sans token). Côté front : `src/store/updater.ts` (auto-check au lancement + toutes les 2h, check silencieux qui **enregistre** quand même les échecs dans `lastCheckError` → pas d'erreur silencieuse non détectable ; install = download → vérif signature → `relaunch()`), section « Mise à jour » des Réglages + `UpdateBanner`. Clé : publique dans `tauri.conf.json` (`plugins.updater.pubkey`) ; privée en secret repo `TAURI_SIGNING_PRIVATE_KEY` + backup local hors repo `~/.tauri/tosse-code-updater.key` (sans mot de passe → workflow passe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""`). NE PAS perdre la privée (sinon plus aucune MAJ signable). `bundle.createUpdaterArtifacts: true`. NB : la MAJ ne touche QUE le bundle `.app` ; les données (base SQLite + transcripts) sont hors bundle et préservées.
@@ -239,28 +284,19 @@ Deux vues principales :
 
 ---
 
-## MVP (Phase 1)
+## MVP (Phase 1) — état d'avancement
 
-### Stream / Conversation Claude Code
-- **Premier livrable concret.** Stream Claude Code **basique** : pouvoir streamer une conversation Claude Code, envoyer des messages, recevoir des messages.
-- Ça doit être **clean**. **On garde la qualité du rendu du stream de VS Code** (jugé très propre) comme référence d'affichage — refait à notre sauce (Rust + React).
+### [LIVRÉ] Stream / Conversation Claude Code
+Protocole stream-json implémenté en Rust (clean-room). Session bidirectionnelle persistante, canal de contrôle, normalisation des messages, rendu React propre inspiré VS Code.
 
-### Éditeur de texte léger
-- Un panneau qui s'ouvre sur le côté avec l'**arborescence des fichiers du projet** et le **fichier qui s'ouvre**.
-- (Coloration syntaxique et le reste viennent en Phase 2.)
+### [LIVRÉ] Éditeur de texte léger
+Panneau latéral avec arborescence des fichiers + éditeur Monaco, lazy-loadé (code-split). Watch fs live, rooté sur le cwd courant (suit les worktrees).
 
-### Terminal
-- Une petite fenêtre terminal intégrée, qui s'ouvre dans la vue.
+### [LIVRÉ] Terminal
+Terminal PTY intégré dans le panneau latéral via xterm.js + WebGL. Service Rust `terminal/` encapsulé (portable-pty), commandes IPC `terminal_open/write/resize/close`. Instances xterm persistantes par conversation (survivent au switch de panneau). Lazy-loadé (code-split, hors bundle de démarrage).
 
-### Vue Gestion d'agents
-Des petites cases pour chaque agent en cours, avec :
-- **Où il est** : dans quel repo.
-- **Actif ou non**.
-- **Ce qu'il fait en ce moment / où il en est**.
-- **Pouvoir lui répondre** s'il pose une question.
-- **Notification** quand il a besoin d'intervention.
-- **Quoi afficher** quand une intervention est requise (ex. la question / le blocage).
-- Son **état** : en cours de run / idle / ready for review / besoin d'intervention.
+### [LIVRÉ] Vue Gestion d'agents (Flight Deck)
+Swimlanes par dépôt, scroll vertical/horizontal, état live de chaque agent (busy/attention/idle), AttentionBar, notifs OS + son + rebond Dock.
 
 ---
 
@@ -296,7 +332,7 @@ Principe : chaque action significative de l'UI a un équivalent appelable par un
 
 ## Organisation
 - Assigné à Alexandre. Repo créé : `github.com/Alex375/tosse-code`.
-- **Tâches Phase 1 créées** (6 parents + sous-tâches + dépendances de blocage). Chemin critique : Scaffolding → Cœur stream-json → Vue Conversation, puis (éditeur léger, terminal) ; la Vue Gestion d'agents part en parallèle dès que le cœur est prêt. Seule tâche non bloquée (point d'entrée) : **« Scaffolding : projet Tauri 2 + monorepo + IPC typé »**.
+- Phase 1 **complète** — les 4 livrables (Conversation, Éditeur, Terminal, Vue Gestion d'agents) sont implémentés et mergés sur dev.
 
 ---
 **Active Mission: Développement TOSSE** (En cours, assigned to Les deux)

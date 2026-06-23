@@ -319,6 +319,13 @@ pub enum SessionEvent {
     /// transition, keyed by `task_id`, so the UI tracks the live fleet of
     /// sub-agents / workflows / watches / background shells.
     Task(BackgroundTask),
+    /// A model-generated conversation title (from a `generate_session_title` control
+    /// response). The UI triggers it on each of the first few user messages of an
+    /// untitled conversation (regenerated from the accumulated intent until it
+    /// settles), carrying the monotonic `seq` it sent so the UI can drop an
+    /// out-of-order (stale) response. Applied as the name UNLESS the user set a
+    /// custom title in the meantime.
+    Title { title: String, seq: u32 },
 }
 
 /// Sink for a session's events. The IPC layer implements this over a Tauri
@@ -329,4 +336,5 @@ pub trait SessionEmitter: Send + Sync + 'static {
     fn emit_permission(&self, session: &str, request: &PermissionRequestPayload);
     fn emit_commands(&self, session: &str, commands: &[SlashCommand]);
     fn emit_task(&self, session: &str, task: &BackgroundTask);
+    fn emit_title(&self, session: &str, title: &str, seq: u32);
 }
