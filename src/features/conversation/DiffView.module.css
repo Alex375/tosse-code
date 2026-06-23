@@ -36,6 +36,13 @@
   margin: 0;
   max-height: 260px;
   overflow: auto;
+  /* Hard stop at the edges — kill the macOS elastic bounce and prevent
+     scroll-chaining into the conversation thread (VSCode-like fixed scroll). */
+  overscroll-behavior: none;
+  /* Clearance for the overlay horizontal scrollbar so it never paints over the
+     last line (mirrors the .text right-padding that already clears the vertical
+     scrollbar). The new-file <pre> below already has all-round padding. */
+  padding-bottom: var(--space-3);
   font-family: var(--font-mono);
   font-feature-settings: "liga" 0, "calt" 0, "tnum" 1;
   font-size: var(--fs-code);
@@ -89,9 +96,23 @@
   padding: var(--space-3);
   max-height: 260px;
   overflow: auto;
+  /* Same hard stop as .lines — no elastic bounce, no chaining to the thread. */
+  overscroll-behavior: none;
   font-family: var(--font-mono);
   font-size: var(--fs-code);
   line-height: 1.5;
   white-space: pre;
   color: var(--text-primary);
+}
+
+/* Discreet scrollbars: keep the app's dark thumb (global * rule) but make the
+   track transparent. WebKit paints a light/white track by default once
+   ::-webkit-scrollbar is sized and the global rule styles only the thumb — so
+   without this the file blocks show a white track over their dark background.
+   Mirrors the markdown code blocks (.pre) for a consistent, unobtrusive look. */
+.lines::-webkit-scrollbar-track,
+.writePre::-webkit-scrollbar-track,
+.lines::-webkit-scrollbar-corner,
+.writePre::-webkit-scrollbar-corner {
+  background: transparent;
 }
