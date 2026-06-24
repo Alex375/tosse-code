@@ -277,14 +277,28 @@ pub fn get_settings_request(request_id: &str) -> Value {
     control_request(request_id, json!({ "subtype": "get_settings" }))
 }
 
+/// A brevity instruction appended to the description we hand the binary. The
+/// `generate_session_title` control request exposes NO length/format knob — it only
+/// takes `description` + `persist`, and the binary's internal model tends to return
+/// titles a touch too long for our sidebar. Since the binary titles by *summarizing*
+/// `description`, the only lever is the description itself: we append a short
+/// meta-instruction steering it shorter. We pin the language to the user's text so the
+/// English hint can't flip a French conversation's title to English, and ask for the
+/// title only so the hint isn't echoed verbatim. (Validated live against the real
+/// binary — see `live_generate_session_title_returns_a_title`.)
+const TITLE_BREVITY_HINT: &str = "\n\n[Title guidance: write a very short title — at \
+    most 5 words — in the same language as the text above. Output only the title, no \
+    quotes, no trailing punctuation.]";
+
 /// `generate_session_title` — ask the binary to derive a short, human title for the
 /// conversation from `description` (the user's accumulated messages so far — the
 /// caller may regenerate from a growing description as the session evolves). The
 /// title is produced by a model call INSIDE the `claude` binary (so it rides the Max
-/// subscription, no separate API key, no prompt to maintain here). Mirrors the official VS Code
-/// extension's SDK call (`{subtype:"generate_session_title", description, persist}`):
-/// it auto-titles a conversation from what the user is doing. `persist:false` —
-/// Tosse persists the name in its OWN store, so we never ask the binary to write an
+/// subscription, no separate API key). Mirrors the official VS Code extension's SDK
+/// call (`{subtype:"generate_session_title", description, persist}`), with one
+/// addition: we append [`TITLE_BREVITY_HINT`] to the description to nudge the binary
+/// toward shorter titles (it has no native length knob). `persist:false` — Tosse
+/// persists the name in its OWN store, so we never ask the binary to write an
 /// `ai-title` entry into its transcript. The title comes back at
 /// `response.response.title` (see [`parse_generate_session_title`]).
 pub fn generate_session_title_request(request_id: &str, description: &str) -> Value {
@@ -292,7 +306,7 @@ pub fn generate_session_title_request(request_id: &str, description: &str) -> Va
         request_id,
         json!({
             "subtype": "generate_session_title",
-            "description": description,
+            "description": format!("{description}{TITLE_BREVITY_HINT}"),
             "persist": false,
         }),
     )
@@ -499,7 +513,17 @@ mod tests {
         assert_eq!(r["type"], json!("control_request"));
         assert_eq!(r["request_id"], json!("t-1"));
         assert_eq!(r["request"]["subtype"], json!("generate_session_title"));
-        assert_eq!(r["request"]["description"], json!("Aide-moi à fixer le bug du login"));
+        // The user's text is preserved VERBATIM (and first), with the brevity hint
+        // appended after it — the binary summarizes the whole thing into a short title.
+        let desc = r["request"]["description"].as_str().expect("description is a string");
+        assert!(
+            desc.starts_with("Aide-moi à fixer le bug du login"),
+            "user text must lead the description, got: {desc:?}"
+        );
+        assert!(
+            desc.contains("at most 5 words"),
+            "the brevity hint must be appended, got: {desc:?}"
+        );
         // persist:false — Tosse stores the name itself; the binary must NOT write an
         // ai-title into its transcript.
         assert_eq!(r["request"]["persist"], json!(false));
