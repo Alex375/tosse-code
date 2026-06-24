@@ -72,8 +72,10 @@ const stripTrailingSlash = (p: string) => p.replace(/\/+$/, "");
 
 /** Collapse `.`/`..`/empty segments so a file has ONE canonical absolute key
  *  (Monaco models + editor tabs are keyed by the literal path string, so two
- *  spellings of the same file would otherwise open two tabs). */
-function normalizePosix(p: string): string {
+ *  spellings of the same file would otherwise open two tabs). Exported so the
+ *  mention existence cache can canonicalise raw fs-watcher paths to the SAME key
+ *  shape before invalidating (see mentionCache.ts). */
+export function normalizePosix(p: string): string {
   const absolute = p.startsWith("/");
   const out: string[] = [];
   for (const seg of p.split("/")) {

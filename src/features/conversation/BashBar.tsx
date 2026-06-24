@@ -13,20 +13,8 @@ import { useState } from "react";
 import { useBackgroundBashTasks, useSessionTasks } from "../../store/backgroundTasksStore";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { useStopTask } from "../../ipc/useCommands";
-import { Ico } from "../../ui/kit";
+import { Ico, RunDots } from "../../ui/kit";
 import { BashOutputPopover } from "./BashOutputPopover";
-
-/** The three bouncing dots — the same "working" motif as the main thread indicator
- *  and AgentBar, so a running command reads identically across the UI. */
-function RunDots() {
-  return (
-    <span className="cv-bgrun" aria-hidden="true">
-      <i />
-      <i />
-      <i />
-    </span>
-  );
-}
 
 export function BashBar({ session }: { session: string }) {
   // The bar lists only RUNNING commands; a finished one drops out.

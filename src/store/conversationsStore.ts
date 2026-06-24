@@ -29,6 +29,7 @@ import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./con
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
+import { clearMentionCache } from "../features/conversation/mentionCache";
 import { worktreeCwdFromTranscript } from "../features/git/worktree";
 import { useMemo } from "react";
 
@@ -992,6 +993,7 @@ export async function wipeAllData(): Promise<void> {
   titleContext.clear();
   titleGenCount.clear();
   lastAppliedSeq.clear();
+  clearMentionCache();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
   useBackgroundTasksStore.getState().clear();

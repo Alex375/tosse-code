@@ -170,6 +170,19 @@ export function Dot({ s, pulse }: { s: StreamState; pulse?: boolean }) {
   return <span className={"wf-dot " + st + (live ? " pulse" : "")} />;
 }
 
+/** The three bouncing "working" dots — the shared motif used by the main thread
+ *  indicator and the pinned bars (AgentBar / BashBar), so a running agent or
+ *  background command reads identically across the UI. */
+export function RunDots() {
+  return (
+    <span className="cv-bgrun" aria-hidden="true">
+      <i />
+      <i />
+      <i />
+    </span>
+  );
+}
+
 export function Pill({
   s,
   children,

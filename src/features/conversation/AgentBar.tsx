@@ -15,19 +15,8 @@ import { useConversationsStore } from "../../store/conversationsStore";
 import { fmtDuration, resolveAgentId, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
 import type { BackgroundTask } from "../../ipc/client";
-import { Ico } from "../../ui/kit";
+import { Ico, RunDots } from "../../ui/kit";
 import { TranscriptPopover } from "./TranscriptPopover";
-
-/** The three bouncing dots — the same "working" motif as the main thread indicator. */
-function RunDots() {
-  return (
-    <span className="cv-bgrun" aria-hidden="true">
-      <i />
-      <i />
-      <i />
-    </span>
-  );
-}
 
 export function AgentBar({ session }: { session: string }) {
   const bgIds = useBackgroundAgentIds(session);

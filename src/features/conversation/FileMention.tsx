@@ -21,9 +21,9 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { commands } from "../../ipc/client";
 import { useEditorStore } from "../editor/editorStore";
 import { parseFileMention, resolveMentionAbs, SCHEME, type FileMention } from "./fileMentions";
+import { cachedStatus, ensureMentionChecked, subscribeMention } from "./mentionCache";
 
 // ---- Provider: which conversation/cwd a rendered mention belongs to ----------
 
@@ -51,47 +51,6 @@ function useFileMentionCtx(): MentionCtx | null {
   return useContext(Ctx);
 }
 
-// ---- Existence cache (module-level, shared by every mention) -----------------
-// A path is checked at most once (cache + in-flight dedup); subscribers re-render
-// when the answer lands. Keyed by absolute path, so the same file referenced from
-// many messages costs a single `pathExists` syscall.
-
-type Status = "exists" | "missing";
-
-const cache = new Map<string, Status>();
-const inflight = new Set<string>();
-const listeners = new Map<string, Set<() => void>>();
-
-function notify(abs: string): void {
-  listeners.get(abs)?.forEach((l) => l());
-}
-
-function subscribe(abs: string, cb: () => void): () => void {
-  let set = listeners.get(abs);
-  if (!set) {
-    set = new Set();
-    listeners.set(abs, set);
-  }
-  set.add(cb);
-  return () => {
-    set.delete(cb);
-    if (set.size === 0) listeners.delete(abs);
-  };
-}
-
-function ensureChecked(abs: string): void {
-  if (cache.has(abs) || inflight.has(abs)) return;
-  inflight.add(abs);
-  commands
-    .pathExists(abs)
-    .then((ok) => cache.set(abs, ok ? "exists" : "missing"))
-    .catch(() => cache.set(abs, "missing"))
-    .finally(() => {
-      inflight.delete(abs);
-      notify(abs);
-    });
-}
-
 // ---- Hook: a token → a clickable target, or null ----------------------------
 
 interface MentionTarget {
@@ -114,14 +73,16 @@ function useMentionTarget(raw: string): MentionTarget | null {
     [mention, cwd],
   );
   const subscribeAbs = useCallback(
-    (cb: () => void) => (abs ? subscribe(abs, cb) : () => {}),
+    (cb: () => void) => (abs ? subscribeMention(abs, cb) : () => {}),
     [abs],
   );
-  const getStatus = useCallback(() => (abs ? cache.get(abs) : undefined), [abs]);
+  const getStatus = useCallback(() => (abs ? cachedStatus(abs) : undefined), [abs]);
   const status = useSyncExternalStore(subscribeAbs, getStatus);
+  // Re-check when `abs` changes OR when an fs-change invalidation cleared the
+  // cached answer (status → undefined): the path may have just been created.
   useEffect(() => {
-    if (abs) ensureChecked(abs);
-  }, [abs]);
+    if (abs) ensureMentionChecked(abs);
+  }, [abs, status]);
 
   if (!ctx || !mention || !abs || status !== "exists") return null;
   return { ctx, abs, mention };

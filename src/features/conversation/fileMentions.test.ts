@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFileMention, resolveMentionAbs } from "./fileMentions";
+import { normalizePosix, parseFileMention, resolveMentionAbs } from "./fileMentions";
 
 describe("parseFileMention", () => {
   it("detects a relative path with an extension", () => {
@@ -103,5 +103,34 @@ describe("resolveMentionAbs", () => {
     expect(resolveMentionAbs("/repo", "../b/c.ts")).toBe("/b/c.ts");
     expect(resolveMentionAbs("/repo", "a/./b/../c.ts")).toBe("/repo/a/c.ts");
     expect(resolveMentionAbs("/repo", "/abs/../x.ts")).toBe("/x.ts");
+  });
+});
+
+// Exported for the mention existence cache: it canonicalises raw fs-watcher paths to
+// the SAME key shape used for cache lookups, so invalidation matches (see mentionCache).
+describe("normalizePosix", () => {
+  it("drops '.' and empty segments", () => {
+    expect(normalizePosix("/repo/src/./late.ts")).toBe("/repo/src/late.ts");
+    expect(normalizePosix("/a//b")).toBe("/a/b");
+    expect(normalizePosix("/a/b/")).toBe("/a/b");
+  });
+
+  it("collapses '..' against the preceding segment", () => {
+    expect(normalizePosix("/a/b/../c")).toBe("/a/c");
+    expect(normalizePosix("/a/b/c/../../d")).toBe("/a/d");
+  });
+
+  it("leaves leading '..' in a relative path (can't climb above the root)", () => {
+    expect(normalizePosix("../x.ts")).toBe("../x.ts");
+    expect(normalizePosix("a/../../x")).toBe("../x");
+  });
+
+  it("clamps '..' at an absolute root", () => {
+    expect(normalizePosix("/../x")).toBe("/x");
+    expect(normalizePosix("/")).toBe("/");
+  });
+
+  it("is idempotent on an already-canonical path", () => {
+    expect(normalizePosix("/repo/src/late.ts")).toBe("/repo/src/late.ts");
   });
 });
