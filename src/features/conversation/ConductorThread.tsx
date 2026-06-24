@@ -1,5 +1,12 @@
-import { useLayoutEffect, useState } from "react";
-import type { JsonValue, NormalizedBlock, PermissionRequestPayload } from "../../ipc/client";
+import { useCallback, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import type {
+  BackgroundTaskStatus,
+  ConversationItem,
+  JsonValue,
+  NormalizedBlock,
+  PermissionRequestPayload,
+} from "../../ipc/client";
+import { commands } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
 import { classifyAsk, field } from "../../agent/ask";
 import { useLiveActivity } from "../../store/activity";
@@ -9,14 +16,20 @@ import {
   useNotice,
   usePendingPermissions,
   useSessionState,
+  useSubThread,
   useTimeline,
   useToolResult,
   useTurn,
 } from "../../store/conversationStore";
-import { Avatar, ClaudeMark, Ico, UserMark } from "../../ui/kit";
+import { useConversationsStore } from "../../store/conversationsStore";
+import { useTaskByToolUse } from "../../store/backgroundTasksStore";
+import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
+import { fmtTokens } from "../../store/contextData";
+import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
 import { DiffView } from "./DiffView";
 import { QuestionnaireAsk, QuestionnaireSummary, questionCount } from "./QuestionnaireAsk";
 import { StreamMarkdown } from "./StreamMarkdown";
+import { SubAgentTranscript } from "./SubAgentTranscript";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolResultBody } from "./ToolResultBody";
 import { toolMeta } from "./toolMeta";
@@ -231,16 +244,199 @@ function ConductorToolCard({
   );
 }
 
+/** Map a sub-agent's coarse lifecycle onto the design's status-dot colour token. */
+function taskDotState(o: { running: boolean; failed: boolean; stopped: boolean }): StreamState {
+  if (o.failed) return "err";
+  if (o.running) return "work";
+  if (o.stopped) return "off";
+  return "done";
+}
+
+
+/**
+ * A sub-agent launched by the `Agent` tool (ex-`Task`): a collapsible header with
+ * the live lifecycle (label, type, running→done dot, tokens / tool-calls / duration
+ * once finished) and, when expanded, the sub-agent's transcript INLINE. While it
+ * runs we show the live sub-thread (streamed, keyed by this tool_use id); once
+ * finished — or on a resumed conversation where the sub-thread wasn't replayed —
+ * the full transcript is read from disk via `load_subagent_transcript`.
+ *
+ * Drill-down needs the claude session_id (durable) + the sub-agent's agent_id; the
+ * latter is reported only by the LIVE task lifecycle, so a resumed conversation
+ * degrades to the live sub-thread / a clear "unavailable" note instead.
+ *
+ * Renders nothing for a DETACHED sub-agent (`run_in_background`): those are surfaced
+ * in the pinned <AgentBar>, not inline, to keep the thread clean.
+ */
+function SubAgentCard({
+  session,
+  toolUseId,
+  input,
+}: {
+  session: string;
+  toolUseId: string;
+  input: JsonValue;
+}) {
+  const task = useTaskByToolUse(session, toolUseId);
+  const result = useToolResult(session, toolUseId);
+  const state = useSessionState(session);
+  const liveIds = useSubThread(session, toolUseId);
+  const claudeSessionId = useConversationsStore(
+    (s) => s.conversations.find((c) => c.id === session)?.sessionId ?? null,
+  );
+
+  const status: BackgroundTaskStatus | null = task?.status ?? null;
+  const label = field(input, "description") ?? task?.label ?? "Sous-agent";
+  const subagentType = field(input, "subagent_type") ?? task?.subagent_type ?? null;
+  const agentId = task?.agent_id ?? null;
+  const model = task?.model ?? null;
+  // Sub-agents inherit the conversation's reasoning effort (not recorded per sub-agent
+  // anywhere), so the parent's effort is the best available signal.
+  const effort = state?.effort ?? null;
+
+  const running = status === "running" || (status === null && !result && (state?.busy ?? false));
+  const failed = status === "failed" || (status === null && (result?.isError ?? false));
+  const stopped = status === "stopped";
+  const dot = taskDotState({ running, failed, stopped });
+
+  const [open, setOpen] = useState(false);
+  const [disk, setDisk] = useState<ConversationItem[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const fetchTranscript = useCallback(async () => {
+    if (!claudeSessionId || !agentId) return;
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await commands.loadSubagentTranscript(claudeSessionId, agentId);
+      if (res.status === "ok") setDisk(res.data);
+      else setErr(res.error);
+    } catch (e) {
+      // A thrown IPC/transport error must NEVER be swallowed: surface it and clear the
+      // loading state (the `finally` guarantees we don't get stuck "Chargement…").
+      console.error("loadSubagentTranscript threw:", e);
+      setErr(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [claudeSessionId, agentId]);
+
+  // Fetch on open, and again once the task settles (running → terminal) so a
+  // mid-run partial read is replaced by the complete transcript. Both effects depend
+  // on `fetchTranscript` so a change of session/agent id re-binds to a fresh fetch
+  // (no stale closure loading the wrong transcript).
+  useEffect(() => {
+    if (open) void fetchTranscript();
+  }, [open, fetchTranscript]);
+  useEffect(() => {
+    if (open && status && status !== "running") void fetchTranscript();
+  }, [open, status, fetchTranscript]);
+
+  // A detached (run_in_background) sub-agent lives in the pinned AgentBar, not inline —
+  // keep the thread clean. All hooks above have run, so this conditional render is safe.
+  if (isBackgroundAgentInput(input)) return null;
+
+  // Prefer the live sub-thread while running (smooth, no IPC); the disk transcript
+  // is authoritative once finished and the only source on a resumed conversation.
+  const showLive = running && liveIds.length > 0;
+
+  // The prompt sent to the sub-agent (the Agent tool's `prompt` input). The live
+  // sub-thread streams only the sub-agent's REPLIES, so we prepend the prompt as the
+  // opening user turn — otherwise the transcript starts mid-conversation. (The disk
+  // transcript already carries it as its first user_message.)
+  const promptText = field(input, "prompt");
+  const liveBody = (
+    <div className="cv-subtranscript">
+      {promptText ? <MsgUser text={promptText} /> : null}
+      {liveIds.map((id) => (
+        <TurnRow key={id} session={session} turnId={id} />
+      ))}
+    </div>
+  );
+
+  let body: ReactNode = null;
+  if (open) {
+    if (showLive) {
+      body = liveBody;
+    } else if (disk && disk.length > 0) {
+      body = <SubAgentTranscript items={disk} />;
+    } else if (liveIds.length > 0) {
+      body = liveBody;
+    } else if (loading) {
+      body = <div className={styles.subEmpty}>Chargement du transcript…</div>;
+    } else if (err) {
+      body = <div className={styles.subEmpty}>Transcript illisible : {err}</div>;
+    } else if (running) {
+      body = <div className={styles.subEmpty}>Le sous-agent travaille…</div>;
+    } else {
+      body = (
+        <div className={styles.subEmpty}>
+          {claudeSessionId && agentId
+            ? "Aucun transcript pour ce sous-agent."
+            : "Transcript indisponible (conversation rouverte)."}
+        </div>
+      );
+    }
+  }
+
+  return (
+    <div className="cv-tool">
+      <div
+        className="cv-tool-h"
+        onClick={() => setOpen((o) => !o)}
+        role="button"
+        style={{ cursor: "pointer" }}
+      >
+        <Ico name="spark" className="sm" />
+        <span className="cv-tool-t">Sous-agent</span>
+        <span className="cv-tool-m" title={label}>
+          {label}
+        </span>
+        {subagentType ? <span className={styles.subType}>{subagentType}</span> : null}
+        <span className={styles.status}>
+          <Dot s={dot} pulse={running} />
+          <span
+            style={{
+              display: "inline-flex",
+              transform: open ? "rotate(180deg)" : "none",
+              transition: "transform 0.15s ease",
+              marginLeft: 4,
+            }}
+          >
+            <Ico name="chev" className="sm" />
+          </span>
+        </span>
+      </div>
+      {model || effort || (task && (task.tokens != null || task.duration_ms != null || task.tool_uses != null)) ? (
+        <div className={styles.subStats + " wf-mono"}>
+          {model ? <span title={model}>{shortModel(model)}</span> : null}
+          {effort ? <span>effort {effort}</span> : null}
+          {task?.tokens != null ? <span>{fmtTokens(task.tokens)} tk</span> : null}
+          {task?.tool_uses != null ? <span>{task.tool_uses} outils</span> : null}
+          {task?.duration_ms != null ? <span>{fmtDuration(task.duration_ms)}</span> : null}
+        </div>
+      ) : null}
+      {open ? <div className="cv-tool-b">{body}</div> : null}
+    </div>
+  );
+}
+
 function AssistantBlocks({ session, blocks }: { session: string; blocks: NormalizedBlock[] }) {
   return (
     <>
       {blocks.map((b, i) => {
         if (b.type === "text") return <StreamMarkdown key={i} text={b.text} />;
         if (b.type === "thinking") return <ThinkingBlock key={i} text={b.text} finalized />;
-        if (b.type === "tool_use")
+        if (b.type === "tool_use") {
+          // The sub-agent tool (`Agent`, ex-`Task`) gets a richer card: live
+          // lifecycle header + an inline, expandable full transcript.
+          if (b.name === "Agent" || b.name === "Task")
+            return <SubAgentCard key={i} session={session} toolUseId={b.id} input={b.input} />;
           return (
             <ConductorToolCard key={i} session={session} toolUseId={b.id} name={b.name} input={b.input} />
           );
+        }
         return null;
       })}
     </>

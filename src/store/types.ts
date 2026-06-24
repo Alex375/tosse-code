@@ -152,6 +152,13 @@ export interface SessionEntry {
   /** Ordered turn ids per sub-agent (Task) thread, keyed by parent_tool_use_id. */
   subThreads: Record<string, string[]>;
   /**
+   * tool_use ids of the sub-agents (`Agent`/`Task`) launched DETACHED
+   * (`input.run_in_background === true`). Captured once per assistant_message (not
+   * re-scanned per token) so the pinned AgentBar reads them in O(1). Detached
+   * sub-agents are shown in that bar, not inline in the thread.
+   */
+  bgAgentIds: string[];
+  /**
    * The agent's current to-do list (last `TodoWrite` on the MAIN thread wins; a
    * sub-agent keeps its own and does not clobber this). Empty until the agent
    * writes one. Read via `useTodos` / `useTodoSummary`.

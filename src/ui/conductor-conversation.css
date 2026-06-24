@@ -63,6 +63,10 @@
    children (diffs, code blocks) scroll INTERNALLY instead of forcing the whole
    thread wider than its max-width (horizontal overflow / runaway scrollbar). */
 .cv-msg { display:flex; gap:11px; min-width:0; }
+/* Sub-agent transcript (inline expand + popover): the same generous breathing room
+   between messages as the main thread — without it the prompt sits glued to the first
+   reply. Used by <SubAgentTranscript> and the inline live sub-thread. */
+.cv-subtranscript { display:flex; flex-direction:column; gap:18px; }
 /* The user's own messages keep their full-width bubble (as before), but the avatar
    moves to the RIGHT: row-reverse puts the avatar at the far right and the bubble
    (flex:1) fills the rest to its left. */
@@ -279,6 +283,49 @@
 .cv-todobar-chev { flex:0 0 auto; margin-left:auto; transition:transform .18s ease; }
 .cv-todobar-chev.open { transform:rotate(180deg); }
 .cv-todobar-b { max-height:30vh; overflow-y:auto; overscroll-behavior:contain; padding:3px 14px 13px; }
+
+/* Detached sub-agents — discreet single lines pinned above the composer. No card
+   chrome: subtle rows that echo the inline sub-agent look, so several at once stay
+   out of the way. */
+.cv-bgagents {
+  flex:0 0 auto;
+  margin:4px auto 2px;
+  max-width:var(--cv-max,840px);
+  width:calc(100% - 52px);
+  max-height:22vh;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  display:flex;
+  flex-direction:column;
+  gap:1px;
+}
+.cv-bgagent {
+  display:flex; align-items:center; gap:8px; width:100%;
+  padding:5px 8px; border:0; border-radius:7px; background:transparent;
+  color:var(--wf-tx-lo); font:inherit; font-size:12px; text-align:left; cursor:pointer;
+  transition:background .12s ease, color .12s ease;
+}
+.cv-bgagent:hover { background:color-mix(in srgb, var(--wf-panel-3) 50%, transparent); color:var(--wf-tx); }
+.cv-bgagent .wf-dot { flex:0 0 auto; }
+.cv-bgagent-label { flex:0 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cv-bgagent-meta { flex:0 1 auto; min-width:0; font-size:10.5px; color:var(--wf-tx-xlo); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cv-bgagent-stats { flex:0 0 auto; font-size:10.5px; color:var(--wf-tx-xlo); font-variant-numeric:tabular-nums; }
+.cv-bgagent-go { flex:0 0 auto; margin-left:auto; color:var(--wf-tx-xlo); opacity:0; transition:opacity .12s ease; }
+.cv-bgagent:hover .cv-bgagent-go { opacity:1; }
+
+/* The bouncing "thinking" dots for a running detached agent (mirrors the main
+   thread's working indicator, scaled down). */
+.cv-bgrun { display:inline-flex; align-items:center; gap:3px; flex:0 0 auto; width:14px; justify-content:center; }
+.cv-bgrun i { width:4px; height:4px; border-radius:50%; background:var(--wf-accent); display:inline-block; animation:cv-bgrun-wave 1.25s ease-in-out infinite; }
+.cv-bgrun i:nth-child(2) { animation-delay:.16s; }
+.cv-bgrun i:nth-child(3) { animation-delay:.32s; }
+@keyframes cv-bgrun-wave {
+  0%, 65%, 100% { transform:translateY(0); opacity:.45; }
+  32% { transform:translateY(-3px); opacity:1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cv-bgrun i { animation:none !important; opacity:.8; }
+}
 
 .cv-todolist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
 .cv-todo-i { display:flex; align-items:flex-start; gap:9px; font-size:12.5px; line-height:1.45; color:var(--wf-tx); }

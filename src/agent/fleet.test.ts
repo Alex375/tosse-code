@@ -42,8 +42,9 @@ describe("statusRank", () => {
     expect(statusRank({ kind: "error", message: "x" })).toBe(0);
     expect(statusRank({ kind: "review" })).toBe(1);
     expect(statusRank({ kind: "running", activity: null })).toBe(2);
-    expect(statusRank({ kind: "idle" })).toBe(3);
-    expect(statusRank({ kind: "off" })).toBe(4);
+    expect(statusRank({ kind: "backgrounding", count: 1 })).toBe(3);
+    expect(statusRank({ kind: "idle" })).toBe(4);
+    expect(statusRank({ kind: "off" })).toBe(5);
   });
 });
 

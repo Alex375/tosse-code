@@ -27,6 +27,7 @@ import type {
 import type {
   ErrorItem,
   NoticeItem,
+  NormalizedBlock,
   SessionEntry,
   TimelineEntry,
   TodoItem,
@@ -66,6 +67,7 @@ function emptyEntry(session: string): SessionEntry {
     pendingPermissions: [],
     openBubble: {},
     subThreads: {},
+    bgAgentIds: [],
     todos: [],
     // No finished turn yet → nothing to review (an idle, never-run session reads
     // as idle/off, not "ready for review").
@@ -75,6 +77,25 @@ function emptyEntry(session: string): SessionEntry {
 }
 
 const rootKey = (parentToolUseId: string | null) => parentToolUseId ?? "root";
+
+/** tool_use ids of `Agent`/`Task` blocks launched detached (`run_in_background`). */
+function backgroundAgentIdsIn(blocks: NormalizedBlock[]): string[] {
+  const ids: string[] = [];
+  for (const b of blocks) {
+    if (b.type === "tool_use" && (b.name === "Agent" || b.name === "Task")) {
+      const input = b.input;
+      if (
+        input &&
+        typeof input === "object" &&
+        !Array.isArray(input) &&
+        (input as Record<string, unknown>).run_in_background === true
+      ) {
+        ids.push(b.id);
+      }
+    }
+  }
+  return ids;
+}
 
 function hasTimelineId(timeline: TimelineEntry[], id: string): boolean {
   return timeline.some((e) => e.id === id);
@@ -400,7 +421,16 @@ export const useConversationStore = create<ConversationState>((set) => {
               streamingThinking: "",
               hasThinking: blocks.some((b) => b.type === "thinking"),
             };
-            const next = { ...base, turns: { ...base.turns, [item.id]: turn } };
+            let next = { ...base, turns: { ...base.turns, [item.id]: turn } };
+            // Record any detached sub-agent (`Agent` with run_in_background) launched in
+            // this message, so the pinned AgentBar can list it WITHOUT re-scanning every
+            // block on each streamed token. Done once per assistant_message.
+            const newBg = backgroundAgentIdsIn(item.blocks).filter(
+              (id) => !next.bgAgentIds.includes(id),
+            );
+            if (newBg.length > 0) {
+              next = { ...next, bgAgentIds: [...next.bgAgentIds, ...newBg] };
+            }
             // Capture the agent's to-do list from a TodoWrite tool_use (last
             // write wins). Scoped to the MAIN thread: a sub-agent (Task) keeps
             // its own todos and must not overwrite the conversation-level list.
@@ -534,6 +564,17 @@ export const useSubThread = (
 ): string[] =>
   useConversationStore(
     useShallow((s) => s.sessions[session]?.subThreads[parentToolUseId] ?? EMPTY_IDS),
+  );
+
+/**
+ * tool_use ids of the sub-agents (`Agent`/`Task`) this conversation launched DETACHED
+ * (`run_in_background: true`). Captured at write time (see `bgAgentIds` in the
+ * reducer), so this is an O(1) field read — shallow-compared, re-renders only when a
+ * new detached sub-agent appears. Detached sub-agents show in the pinned AgentBar,
+ * not inline; the inline card suppresses itself for them. */
+export const useBackgroundAgentIds = (session: string): string[] =>
+  useConversationStore(
+    useShallow((s) => s.sessions[session]?.bgAgentIds ?? EMPTY_IDS),
   );
 
 /** The conversation's current to-do list (raw items, in agent order). */

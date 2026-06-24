@@ -23,6 +23,7 @@ function sig(over: Partial<AgentSignals> = {}): AgentSignals {
     turnSeen: true,
     lastAssistantText: null,
     persistedReminder: null,
+    runningBackgroundTasks: 0,
     ...over,
   };
 }
@@ -70,6 +71,26 @@ describe("deriveAgentStatus", () => {
 
   it("is idle when live, not busy, and the last turn was consumed", () => {
     expect(deriveAgentStatus(sig()).kind).toBe("idle");
+  });
+
+  it("is 'backgrounding' when idle but background tools are still running", () => {
+    expect(deriveAgentStatus(sig({ runningBackgroundTasks: 2 }))).toEqual({
+      kind: "backgrounding",
+      count: 2,
+    });
+    // It maps to the soft 'bg' dot, and never demands attention.
+    expect(agentStatusToDot({ kind: "backgrounding", count: 2 })).toBe("bg");
+    expect(rowAttention({ kind: "backgrounding", count: 2 })).toBeNull();
+  });
+
+  it("busy still wins over running background tasks (the main loop is active)", () => {
+    expect(deriveAgentStatus(sig({ busy: true, runningBackgroundTasks: 3 })).kind).toBe("running");
+  });
+
+  it("a pending review/question wins over backgrounding (look at it first)", () => {
+    expect(
+      deriveAgentStatus(sig({ turnSeen: false, runningBackgroundTasks: 1 })).kind,
+    ).toBe("review");
   });
 
   it("is running while busy", () => {

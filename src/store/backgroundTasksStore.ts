@@ -1,0 +1,135 @@
+// The background-task registry: the UI-side mirror of the core's per-session
+// `BackgroundTask` map (the socle — see `supervisor::assembler`). The core emits a
+// FULL cumulative snapshot of a task on every `session_task` event, so applying one
+// is a replace-by-`task_id`, never a patch-merge.
+//
+// Keyed by a conversation's STABLE id (the event router maps the live handle →
+// stable id before calling in), exactly like `conversationStore`. This is a dumb
+// data store: the sub-agent / Bash-bg / Monitor / workflow DISPLAY layers read from
+// it; no rendering logic lives here (socle/UI separation).
+
+import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
+import type { BackgroundTask } from "../ipc/client";
+
+/** Field-wise equality (everything but the immutable `task_id`), so a duplicated
+ *  snapshot — Tauri delivery is at-least-once — is a no-op instead of a re-render. */
+function taskEqual(a: BackgroundTask, b: BackgroundTask): boolean {
+  return (
+    a.kind === b.kind &&
+    a.tool_use_id === b.tool_use_id &&
+    a.label === b.label &&
+    a.subagent_type === b.subagent_type &&
+    a.model === b.model &&
+    a.agent_id === b.agent_id &&
+    a.status === b.status &&
+    a.progress === b.progress &&
+    a.tokens === b.tokens &&
+    a.tool_uses === b.tool_uses &&
+    a.duration_ms === b.duration_ms &&
+    a.summary === b.summary &&
+    a.output_file === b.output_file
+  );
+}
+
+interface BackgroundTasksState {
+  /** convId → (task_id → latest cumulative snapshot). */
+  sessions: Record<string, Record<string, BackgroundTask>>;
+  /** Apply a `session_task` snapshot (replace by `task_id`). */
+  applyTask: (session: string, task: BackgroundTask) => void;
+  /**
+   * The session's process ended: reconcile any task still marked `running` to
+   * `stopped`. The terminal `task_*` event can be missed when the whole session
+   * exits (or is stopped), which would otherwise leave a "running" task lingering —
+   * showing as live in the FlightDeck badge / status of a conversation that's off.
+   */
+  endSession: (session: string) => void;
+  /** Forget a conversation's tasks (its conversation was deleted). */
+  dropSession: (session: string) => void;
+  /** Forget everything (wipe-all). */
+  clear: () => void;
+}
+
+export const useBackgroundTasksStore = create<BackgroundTasksState>((set) => ({
+  sessions: {},
+
+  applyTask: (session, task) =>
+    set((s) => {
+      const cur = s.sessions[session] ?? {};
+      const prev = cur[task.task_id];
+      if (prev && taskEqual(prev, task)) return s; // idempotent re-delivery
+      return {
+        sessions: { ...s.sessions, [session]: { ...cur, [task.task_id]: task } },
+      };
+    }),
+
+  endSession: (session) =>
+    set((s) => {
+      const cur = s.sessions[session];
+      if (!cur) return s;
+      let changed = false;
+      const next: Record<string, BackgroundTask> = {};
+      for (const [id, t] of Object.entries(cur)) {
+        if (t.status === "running") {
+          next[id] = { ...t, status: "stopped" };
+          changed = true;
+        } else {
+          next[id] = t;
+        }
+      }
+      if (!changed) return s;
+      return { sessions: { ...s.sessions, [session]: next } };
+    }),
+
+  dropSession: (session) =>
+    set((s) => {
+      if (!s.sessions[session]) return s;
+      const next = { ...s.sessions };
+      delete next[session];
+      return { sessions: next };
+    }),
+
+  clear: () => set({ sessions: {} }),
+}));
+
+// ---- Selector hooks --------------------------------------------------------
+
+const EMPTY_TASKS: Record<string, BackgroundTask> = {};
+
+/** All background tasks of a conversation, keyed by `task_id`. */
+export const useSessionTasks = (
+  session: string,
+): Record<string, BackgroundTask> =>
+  useBackgroundTasksStore(useShallow((s) => s.sessions[session] ?? EMPTY_TASKS));
+
+/** How many background tasks are currently RUNNING for a conversation. Drives the
+ *  "backgrounding" agent status (idle main loop + live background work). A plain
+ *  number → referentially stable, re-renders only when the count changes. */
+export const useRunningTaskCount = (session: string): number =>
+  useBackgroundTasksStore((s) => {
+    const tasks = s.sessions[session];
+    if (!tasks) return 0;
+    let n = 0;
+    for (const t of Object.values(tasks)) if (t.status === "running") n++;
+    return n;
+  });
+
+/**
+ * The background task spawned by a given `tool_use` block (an `Agent` / `Bash` /
+ * `Monitor` / `Workflow` card), matched on `tool_use_id`, or `undefined` if the
+ * core hasn't reported one (e.g. a resumed conversation — task lifecycle is
+ * live-only). The snapshot reference is stable across no-op re-deliveries
+ * (`taskEqual`), so this drives a re-render only on a real change.
+ */
+export const useTaskByToolUse = (
+  session: string,
+  toolUseId: string,
+): BackgroundTask | undefined =>
+  useBackgroundTasksStore((s) => {
+    const tasks = s.sessions[session];
+    if (!tasks) return undefined;
+    for (const t of Object.values(tasks)) {
+      if (t.tool_use_id === toolUseId) return t;
+    }
+    return undefined;
+  });

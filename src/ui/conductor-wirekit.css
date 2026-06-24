@@ -108,6 +108,10 @@
 .wf-dot.arch { background: var(--wf-tx-xlo); }
 .wf-dot.off  { background: transparent; box-shadow: inset 0 0 0 1.5px var(--wf-tx-lo); }
 .wf-dot.err  { background: var(--wf-err);  box-shadow: 0 0 0 3px var(--wf-err-bg); }
+/* "backgrounding" — idle main loop, background tools still running. A soft VIOLET,
+   deliberately distinct from green "running" (and calm: no pulse) so the two are
+   never confused — present, waiting on background work, but not demanding attention. */
+.wf-dot.bg   { background:#a78bfa; box-shadow: 0 0 0 3px #a78bfa2e; }
 
 @keyframes wf-pulse { 0%,100%{ opacity:1 } 50%{ opacity:.35 } }
 .wf-dot.pulse { animation: wf-pulse 1.8s ease-in-out infinite; }
@@ -126,6 +130,7 @@
 .wf-pill.arch { color:#787e8a; background: transparent; border-color:#2c2c34; }
 .wf-pill.off  { color:#787e8a; background: transparent; border-color:#2c2c34; }
 .wf-pill.err  { color:#f0a9af; background: var(--wf-err-bg);  border-color:#5c3036; }
+.wf-pill.bg   { color:#c9b8ff; background:#221a3c; border-color:#3d2f63; }
 
 .wf-badge {
   display: inline-flex; align-items: center; justify-content: center;

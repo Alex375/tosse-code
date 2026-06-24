@@ -578,6 +578,14 @@ label: string | null;
  */
 subagent_type: string | null; 
 /**
+ * Model the sub-agent ran on (`Agent` only), e.g. `"claude-haiku-4-5"`. Captured
+ * from the sub-agent's streamed `assistant` message (`message.model`) — the wire's
+ * ONLY place a sub-agent's model surfaces (it is absent from every `task_*` event
+ * and from the normalized transcript). `None` for non-agent tasks, or until the
+ * sub-agent streams its first assistant message.
+ */
+model: string | null; 
+/**
  * The sub-agent's id (`Agent` only), i.e. the key for [`super::subagents::load_subagent_transcript`].
  * Derived from the `output_file` basename (`subagents/agent-<agentId>.jsonl`), since
  * the wire carries it only inside that path. Lets the UI drill into the transcript

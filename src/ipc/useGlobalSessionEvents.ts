@@ -19,9 +19,11 @@ import type {
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionStateEvent,
+  SessionTaskEvent,
   SessionTitleEvent,
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
+import { useBackgroundTasksStore } from "../store/backgroundTasksStore";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
 import { useCommandsStore } from "../store/commandsStore";
 import { setCachedWindow } from "../store/contextWindowCache";
@@ -279,6 +281,9 @@ export function useGlobalSessionEvents(): void {
         // The process is gone: unbind the live handle so the next send re-spawns
         // lazily instead of routing to a dead session.
         useConversationsStore.getState().setHandle(session, null);
+        // …and reconcile any background task still flagged running: the whole session
+        // exited, so it can't be live anymore (the terminal task event may be missed).
+        useBackgroundTasksStore.getState().endSession(session);
       }
     }
 
@@ -295,6 +300,15 @@ export function useGlobalSessionEvents(): void {
       // Applied only if still auto-title-eligible (not renamed since) and the seq is
       // newer than the last applied (drops out-of-order/stale title responses).
       useConversationsStore.getState().applyAutoTitle(convId, payload.title, payload.seq);
+    }
+
+    function onTask(payload: SessionTaskEvent) {
+      // Background-task lifecycle (sub-agents, Bash-bg, Monitor, workflows). The
+      // core emits a full cumulative snapshot per task; the store replaces by id.
+      // Routed by the stable conversation id like every other session event.
+      const session = convIdForHandle(payload.session);
+      if (!session) return; // unknown / deleted conversation
+      useBackgroundTasksStore.getState().applyTask(session, payload.task);
     }
 
     function onCommands(payload: SessionCommandsEvent) {
@@ -322,6 +336,9 @@ export function useGlobalSessionEvents(): void {
       .then((un) => unlisteners.push(un));
     events.sessionTitleEvent
       .listen((e) => { if (!disposed) onTitle(e.payload); })
+      .then((un) => unlisteners.push(un));
+    events.sessionTaskEvent
+      .listen((e) => { if (!disposed) onTask(e.payload); })
       .then((un) => unlisteners.push(un));
 
     return () => {

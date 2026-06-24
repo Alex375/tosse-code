@@ -8,6 +8,7 @@
 // Token-by-token deltas with small delays so Playwright can capture mid-stream.
 
 import type {
+  BackgroundTask,
   ConversationItem,
   PermissionDecision,
   PermissionRequestPayload,
@@ -18,7 +19,68 @@ export interface ScenarioEmit {
   state: (s: SessionStatePayload) => void;
   item: (i: ConversationItem) => void;
   permission: (p: PermissionRequestPayload) => void;
+  /** Background-task lifecycle snapshot (optional — only the bg demo emits these). */
+  task?: (t: BackgroundTask) => void;
 }
+
+/** Build a full BackgroundTask from a partial (mock convenience). */
+function taskOf(p: Partial<BackgroundTask> & { task_id: string }): BackgroundTask {
+  return {
+    kind: "agent",
+    tool_use_id: null,
+    label: null,
+    subagent_type: null,
+    model: null,
+    agent_id: null,
+    status: "running",
+    progress: null,
+    tokens: null,
+    tool_uses: null,
+    duration_ms: null,
+    summary: null,
+    output_file: null,
+    ...p,
+  };
+}
+
+/** A finished sub-agent transcript — what `load_subagent_transcript` returns. Used by
+ *  the browser mock so the transcript popover renders real-shaped content in dev. */
+export const DEMO_SUBAGENT_TRANSCRIPT: ConversationItem[] = [
+  {
+    kind: "user_message",
+    id: "su1",
+    parent_tool_use_id: null,
+    text: "Explore the supervisor module and map its structure: the protocol types, the assembler, and how background tasks flow through it. Return a concise structured map.",
+  },
+  {
+    kind: "assistant_message",
+    id: "sa1",
+    parent_tool_use_id: null,
+    blocks: [
+      { type: "thinking", text: "Let me list the supervisor directory first, then read the key files to map the data flow." },
+      { type: "text", text: "Je commence par lister le module `supervisor/`, puis je lis les fichiers clés." },
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls -1 src-tauri/src/supervisor", description: "list module" } },
+    ],
+  },
+  {
+    kind: "tool_result",
+    tool_use_id: "t1",
+    is_error: false,
+    parent_tool_use_id: null,
+    content: "assembler.rs\ncontrol.rs\nhistory.rs\nmodel.rs\nprotocol.rs\nsession.rs\nsubagents.rs\ntransport.rs",
+  },
+  {
+    kind: "assistant_message",
+    id: "sa2",
+    parent_tool_use_id: null,
+    blocks: [
+      {
+        type: "text",
+        text: "Voici la carte du module :\n\n- **protocol.rs** — types serde du fil stream-json\n- **assembler.rs** — normalisation + registre des tâches de fond\n- **session.rs** — acteur tokio par session\n- **subagents.rs** — lecteurs disque (transcript sous-agent, manifeste workflow)\n\nFlux des tâches de fond : `task_started → task_progress → task_updated → task_notification`, chaque event ré-émis comme un `BackgroundTask` complet.",
+      },
+    ],
+  },
+];
 
 const MODEL = "claude-opus-4-8[1m]";
 export const MOCK_SESSION_ID = "01HVMOCK-S3SSION-ID";
@@ -257,6 +319,131 @@ export class ScenarioDriver {
       this.emit.permission(QUESTION);
       this.emit.state({ ...baseState, busy: true, activity: null, awaiting_permission: true });
     });
+  }
+
+  /**
+   * Background-tools demo (`?demo=background`): one FOREGROUND sub-agent (streams
+   * inline, finishes) then one BACKGROUND sub-agent that keeps running after the turn
+   * ends — so the inline card, the pinned AgentBar, the "backgrounding" status colour
+   * and (via load_subagent_transcript) the transcript popover all render in dev.
+   */
+  startBackground() {
+    this.reset();
+    this.emit.state({ ...this.busyState });
+
+    // --- foreground sub-agent: streams inline, then completes ---
+    this.step(220, () =>
+      this.emit.item({ kind: "message_started", id: "m1", role: "assistant", parent_tool_use_id: null }),
+    );
+    const t1 = "Je lance un audit de sécurité via un sous-agent.\n\n";
+    this.streamText("m1", t1);
+    this.step(150, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "m1",
+        parent_tool_use_id: null,
+        blocks: [
+          { type: "text", text: t1 },
+          {
+            type: "tool_use",
+            id: "toolu_fg",
+            name: "Agent",
+            input: {
+              description: "Audit sécurité",
+              subagent_type: "security",
+              prompt:
+                "Audite la sécurité du module auth et liste les findings, classés par sévérité (haute / moyenne / basse), avec un correctif proposé pour chacun.",
+            },
+          },
+        ],
+      }),
+    );
+    this.step(60, () =>
+      this.emit.task?.(
+        taskOf({ task_id: "tk_fg", tool_use_id: "toolu_fg", label: "Audit sécurité", subagent_type: "security", model: "claude-haiku-4-5", status: "running" }),
+      ),
+    );
+    // live sub-thread content (scoped under toolu_fg)
+    this.step(240, () =>
+      this.emit.item({ kind: "message_started", id: "sa_fg", role: "assistant", parent_tool_use_id: "toolu_fg" }),
+    );
+    this.step(160, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "sa_fg",
+        parent_tool_use_id: "toolu_fg",
+        blocks: [
+          {
+            type: "text",
+            text: "3 findings : (1) pas de rate-limit sur `/login` [haute], (2) tokens en localStorage [moyenne], (3) pas de rotation des refresh tokens [moyenne].",
+          },
+        ],
+      }),
+    );
+    this.step(200, () =>
+      this.emit.task?.(
+        taskOf({ task_id: "tk_fg", tool_use_id: "toolu_fg", label: "Audit sécurité", subagent_type: "security", model: "claude-haiku-4-5", status: "completed", agent_id: "demoagent_fg", tokens: 18400, tool_uses: 7, duration_ms: 21000 }),
+      ),
+    );
+    this.step(120, () =>
+      this.emit.item({ kind: "tool_result", tool_use_id: "toolu_fg", content: "3 findings rapportés (1 haute, 2 moyennes).", is_error: false, parent_tool_use_id: null }),
+    );
+
+    // --- background sub-agent: launched detached, stays running past the turn ---
+    this.step(280, () =>
+      this.emit.item({ kind: "message_started", id: "m2", role: "assistant", parent_tool_use_id: null }),
+    );
+    const t2 = "Maintenant je lance un explorateur du code en arrière-plan. Je te préviens quand c'est fini — tu peux continuer à me parler entre-temps.";
+    this.streamText("m2", t2, 3, 18);
+    this.step(150, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "m2",
+        parent_tool_use_id: null,
+        blocks: [
+          { type: "text", text: t2 },
+          {
+            type: "tool_use",
+            id: "toolu_bg",
+            name: "Agent",
+            input: {
+              description: "Explorer le code",
+              subagent_type: "Explore",
+              run_in_background: true,
+              prompt: "Explore the supervisor module and map its structure: protocol types, the assembler, and how background tasks flow.",
+            },
+          },
+        ],
+      }),
+    );
+    this.step(120, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_bg",
+        content:
+          "Async agent launched successfully.\nagentId: demoagent_bg\noutput_file: /Users/dev/.claude/projects/x/subagents/agent-demoagent_bg.jsonl",
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+    this.step(60, () =>
+      this.emit.task?.(
+        taskOf({ task_id: "tk_bg", tool_use_id: "toolu_bg", label: "Explorer le code", subagent_type: "Explore", model: "claude-sonnet-4-6", status: "running" }),
+      ),
+    );
+    this.step(220, () =>
+      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, total_cost_usd: 0.021, num_turns: 2, duration_ms: 26000 }),
+    );
+    // Idle main loop, but tk_bg keeps running → conversation goes "backgrounding".
+    this.step(40, () => this.emit.state(idleState()));
+    // …then the background agent finishes a few seconds later: it drops out of the
+    // AgentBar / FlightDeck badge, and the conversation falls back from "backgrounding"
+    // to idle. (Exercises the disappear-on-complete behaviour in dev.)
+    this.step(14000, () =>
+      this.emit.task?.(
+        taskOf({ task_id: "tk_bg", tool_use_id: "toolu_bg", label: "Explorer le code", subagent_type: "Explore", model: "claude-sonnet-4-6", status: "completed", agent_id: "demoagent_bg", tokens: 42000, tool_uses: 15, duration_ms: 38000 }),
+      ),
+    );
   }
 
   /** Resume the turn after the user answers the pending prompt. */

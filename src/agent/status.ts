@@ -22,6 +22,7 @@ export type AgentStatus =
   | { kind: "off" } // no live `claude` process (never started / stopped / exited)
   | { kind: "idle" } // live, nothing pending, last result already consumed
   | { kind: "running"; activity: string | null } // a turn is in flight
+  | { kind: "backgrounding"; count: number } // main loop idle, but N background tools still running
   | { kind: "needInput"; via: "questionnaire" | "openQuestion"; prompt: string | null }
   | { kind: "needIntervention"; tool: string } // a permission prompt is blocking
   | { kind: "error"; message: string } // last finished turn ended in error
@@ -61,6 +62,12 @@ export interface AgentSignals {
   turnSeen: boolean;
   /** Text of the last assistant turn, for the open-question heuristic. */
   lastAssistantText: string | null;
+  /**
+   * Number of background tools (sub-agents, Monitor, Bash-bg, workflows) currently
+   * RUNNING for this conversation. When the main loop is idle but this is > 0 the
+   * conversation is "backgrounding" — calm, still interactive — rather than idle.
+   */
+  runningBackgroundTasks: number;
   /**
    * A reminder persisted from a previous run (or while live), surfaced ONLY when
    * the process is off (`handle === null`): it re-displays a finished-but-unseen
@@ -156,6 +163,12 @@ export function deriveAgentStatus(s: AgentSignals): AgentStatus {
     return { kind: "review" };
   }
 
+  // Settled with nothing to review — but if background tools are still running, the
+  // conversation isn't truly idle: it's quietly waiting on them (and stays
+  // interactive). A calm, distinct state rather than the dormant "idle".
+  if (s.runningBackgroundTasks > 0)
+    return { kind: "backgrounding", count: s.runningBackgroundTasks };
+
   return { kind: "idle" };
 }
 
@@ -172,6 +185,8 @@ export function agentStatusToDot(s: AgentStatus): StreamState {
       return "done"; // grey
     case "running":
       return "work"; // green
+    case "backgrounding":
+      return "bg"; // soft — quietly waiting on background tools
     case "needInput":
     case "needIntervention":
       return "ask"; // orange
@@ -196,7 +211,13 @@ export function rowAttention(s: AgentStatus): "input" | "review" | "error" | nul
       return "review";
     case "error":
       return "error";
-    default:
+    // The calm states get no whole-row emphasis. Listed explicitly (not a `default`)
+    // so adding a future status kind is a compile error here until it's classified —
+    // matching `agentStatusToDot` / `statusRank`. `backgrounding` is calm by design.
+    case "running":
+    case "backgrounding":
+    case "idle":
+    case "off":
       return null;
   }
 }
@@ -217,10 +238,12 @@ export function statusRank(s: AgentStatus): number {
       return 1; // à relire
     case "running":
       return 2; // en cours
+    case "backgrounding":
+      return 3; // tâches de fond en cours (calme)
     case "idle":
-      return 3;
-    case "off":
       return 4;
+    case "off":
+      return 5;
   }
 }
 

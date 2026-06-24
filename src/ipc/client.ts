@@ -6,6 +6,9 @@
 export { commands, events, isTauri } from "./provider";
 
 export type {
+  BackgroundTask,
+  BackgroundTaskKind,
+  BackgroundTaskStatus,
   ConversationItem,
   ConversationRecord,
   FileContent,
@@ -27,6 +30,7 @@ export type {
   SessionPermissionEvent,
   SessionStateEvent,
   SessionStatePayload,
+  SessionTaskEvent,
   SessionTitleEvent,
   SlashCommand,
   TickEvent,

@@ -234,6 +234,12 @@ pub struct BackgroundTask {
     pub label: Option<String>,
     /// Sub-agent type (`Agent` only, e.g. `"Explore"`).
     pub subagent_type: Option<String>,
+    /// Model the sub-agent ran on (`Agent` only), e.g. `"claude-haiku-4-5"`. Captured
+    /// from the sub-agent's streamed `assistant` message (`message.model`) — the wire's
+    /// ONLY place a sub-agent's model surfaces (it is absent from every `task_*` event
+    /// and from the normalized transcript). `None` for non-agent tasks, or until the
+    /// sub-agent streams its first assistant message.
+    pub model: Option<String>,
     /// The sub-agent's id (`Agent` only), i.e. the key for [`super::subagents::load_subagent_transcript`].
     /// Derived from the `output_file` basename (`subagents/agent-<agentId>.jsonl`), since
     /// the wire carries it only inside that path. Lets the UI drill into the transcript

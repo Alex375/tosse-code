@@ -23,6 +23,7 @@ import { commands } from "../ipc/client";
 import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
+import { useBackgroundTasksStore } from "./backgroundTasksStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
@@ -362,6 +363,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // Drop its (now unreachable) message timeline from the message store, and its
     // persisted context-window so the localStorage cache doesn't keep orphans.
     useConversationStore.getState().dropSession(id);
+    useBackgroundTasksStore.getState().dropSession(id);
     clearCachedWindow(id);
     clearTodoBarOpen(id);
     clearComposerDraft(id);
@@ -929,6 +931,7 @@ export async function wipeAllData(): Promise<void> {
   lastAppliedSeq.clear();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
+  useBackgroundTasksStore.getState().clear();
 }
 
 export const useConversations = () =>
