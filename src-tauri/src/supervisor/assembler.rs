@@ -234,8 +234,15 @@ impl Assembler {
             CliMessage::User(u) => self.ingest_user(u, &mut out),
             CliMessage::Result(r) => self.ingest_result(r, &mut out),
             CliMessage::RateLimitEvent(rl) => self.ingest_rate_limit(rl, &mut out),
-            // control_* / keep_alive / transcript_mirror / unknown: nothing for the
-            // UI at this layer.
+            // A top-level `"type"` we do not model — almost always CLI protocol drift
+            // after a binary upgrade. Nothing to render (we don't know its shape), but
+            // log it so the drift is diagnosable instead of vanishing without a trace.
+            CliMessage::Unknown => {
+                eprintln!(
+                    "[assembler] dropping an unmodeled top-level message (CLI protocol drift after an upgrade?)"
+                );
+            }
+            // control_* / keep_alive / transcript_mirror: nothing for the UI at this layer.
             _ => {}
         }
         out
@@ -636,6 +643,9 @@ impl Assembler {
             subtype: r.subtype.clone(),
             is_error: r.is_error,
             result: r.result.clone(),
+            // Present on the wire (often null); surface it only when it's a real string
+            // so an errored turn can show a typed "Erreur d'API : <status>" heading.
+            api_error_status: r.api_error_status.as_str().map(str::to_string),
             total_cost_usd: r.total_cost_usd,
             num_turns: r.num_turns,
             duration_ms: r.duration_ms,

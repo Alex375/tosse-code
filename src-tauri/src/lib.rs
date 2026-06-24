@@ -18,9 +18,9 @@ use ipc::commands::{
     write_file, Sessions,
 };
 use ipc::events::{
-    FsChangeEvent, SessionCommandsEvent, SessionMessageEvent, SessionPermissionEvent,
-    SessionStateEvent, SessionTaskEvent, SessionTitleEvent, TerminalExitEvent, TerminalOutputEvent,
-    TickEvent,
+    FsChangeEvent, FsWatchErrorEvent, SessionCommandsEvent, SessionMessageEvent,
+    SessionPermissionEvent, SessionStateEvent, SessionTaskEvent, SessionTitleEvent,
+    TerminalExitEvent, TerminalOutputEvent, TickEvent,
 };
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
@@ -81,6 +81,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionTaskEvent,
             SessionTitleEvent,
             FsChangeEvent,
+            FsWatchErrorEvent,
             TerminalOutputEvent,
             TerminalExitEvent,
         ])

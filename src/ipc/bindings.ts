@@ -524,6 +524,7 @@ async wipeAllData() : Promise<Result<null, string>> {
 
 export const events = __makeEvents__<{
 fsChangeEvent: FsChangeEvent,
+fsWatchErrorEvent: FsWatchErrorEvent,
 sessionCommandsEvent: SessionCommandsEvent,
 sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
@@ -535,6 +536,7 @@ terminalOutputEvent: TerminalOutputEvent,
 tickEvent: TickEvent
 }>({
 fsChangeEvent: "fs-change-event",
+fsWatchErrorEvent: "fs-watch-error-event",
 sessionCommandsEvent: "session-commands-event",
 sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
@@ -698,10 +700,16 @@ export type ConversationItem =
 /**
  * End of a turn (`result`).
  */
-{ kind: "turn_result"; subtype: string; is_error: boolean; result: JsonValue | null; total_cost_usd: number | null; num_turns: number | null; duration_ms: number | null } | 
+{ kind: "turn_result"; subtype: string; is_error: boolean; result: JsonValue | null; api_error_status: string | null; total_cost_usd: number | null; num_turns: number | null; duration_ms: number | null } | 
 /**
- * A non-conversational system notice (compact boundary, sub-agent task
- * lifecycle, …) surfaced raw for now.
+ * A non-conversational notice surfaced in the timeline. Two families:
+ * - informational: `control_change` (a confirmed model/effort/mode move),
+ * compact boundaries, …
+ * - errors: `control_error`, `process_exited`, `send_failed`, `protocol_error`,
+ * and the generic `error` — each carries `detail.message` (+ optional
+ * `detail.detail`/`stderr`/`exit_code`) and renders as a visible error bubble.
+ * This is the single channel any layer uses to surface an error without new
+ * plumbing (the "zero silent error" contract).
  */
 { kind: "notice"; subtype: string; detail: JsonValue }
 /**
@@ -779,6 +787,12 @@ export type FsChangeEvent = { paths: string[] }
  * reads exactly one level), so a huge repo never reads more than what is shown.
  */
 export type FsEntry = { name: string; path: string; is_dir: boolean }
+/**
+ * The filesystem watcher backend hit an error and live updates may have stopped.
+ * Surfaced so the editor panel can show a discreet "file watching interrupted"
+ * hint instead of silently going stale. Not session-keyed (single active watch).
+ */
+export type FsWatchErrorEvent = { message: string }
 /**
  * An image file's bytes, base64-encoded for the webview to render as a `data:`
  * URL. Unlike [`read_file`], the binary content IS the payload here — images are

@@ -85,6 +85,7 @@ function repoPathForConv(convId: string): string | null {
 
 export function useAnswerPermission(convId: string) {
   const removePermission = useConversationStore((s) => s.removePermission);
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
   return useMutation({
     mutationFn: async (args: { requestId: string; decision: PermissionDecision }) => {
       // Optimistically dismiss the card; the state event confirms awaiting=false.
@@ -94,6 +95,12 @@ export function useAnswerPermission(convId: string) {
       return unwrap(
         commands.answerPermission(handle, args.requestId, args.decision),
       );
+    },
+    // The card was dismissed optimistically: if the reply never reached the session,
+    // the agent stays blocked CLI-side with nothing in the thread — surface it.
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      addErrorTurn(convId, `Réponse à la demande d'autorisation échouée : ${message}`);
     },
   });
 }
@@ -106,6 +113,7 @@ export function useAnswerPermission(convId: string) {
 // source of truth for what the indicator shows.
 
 export function useInterrupt(convId: string) {
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
   return useMutation({
     mutationFn: async () => {
       const handle = liveHandle(convId);
@@ -115,15 +123,26 @@ export function useInterrupt(convId: string) {
       noteInterrupt(convId);
       return unwrap(commands.interruptSession(handle));
     },
+    // A failed interrupt is otherwise invisible (the "done" notif was already
+    // suppressed) — say it didn't take so the user knows the agent is still running.
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      addErrorTurn(convId, `Interruption échouée : ${message}`);
+    },
   });
 }
 
 export function useStop(convId: string) {
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
   return useMutation({
     mutationFn: async () => {
       const handle = liveHandle(convId);
       if (!handle) return; // already off
       return unwrap(commands.stopSession(handle));
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      addErrorTurn(convId, `Arrêt de la session échoué : ${message}`);
     },
   });
 }

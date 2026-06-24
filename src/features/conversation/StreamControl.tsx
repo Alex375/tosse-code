@@ -7,6 +7,7 @@ import {
 } from "../../store/conversationsStore";
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { agentStatusToDot } from "../../agent/status";
+import { useConversationStore } from "../../store/conversationStore";
 import { Dot, Ico, Menu, MenuItem, WF_STATUS } from "../../ui/kit";
 
 /**
@@ -37,7 +38,11 @@ export function StreamControl({ conv }: { conv: Conversation }) {
       .catch((e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[stream] action failed:", e);
+        // Surface in the title-bar pill (transient) AND in the thread (persistent,
+        // detail not hidden behind a hover) so a failed allumer/relancer/éteindre
+        // can't be missed.
         setError(msg);
+        useConversationStore.getState().addErrorTurn(conv.id, `Action du stream échouée : ${msg}`);
       })
       .finally(() => setPending(false));
   };

@@ -145,12 +145,21 @@ pub enum ConversationItem {
         subtype: String,
         is_error: bool,
         result: Option<Value>,
+        /// API-level error status on an errored turn (e.g. `"overloaded"`); `None` on
+        /// success or when the CLI omits it. Drives a typed error heading in the UI.
+        api_error_status: Option<String>,
         total_cost_usd: Option<f64>,
         num_turns: Option<u64>,
         duration_ms: Option<u64>,
     },
-    /// A non-conversational system notice (compact boundary, sub-agent task
-    /// lifecycle, …) surfaced raw for now.
+    /// A non-conversational notice surfaced in the timeline. Two families:
+    ///  - informational: `control_change` (a confirmed model/effort/mode move),
+    ///    compact boundaries, …
+    ///  - errors: `control_error`, `process_exited`, `send_failed`, `protocol_error`,
+    ///    and the generic `error` — each carries `detail.message` (+ optional
+    ///    `detail.detail`/`stderr`/`exit_code`) and renders as a visible error bubble.
+    ///    This is the single channel any layer uses to surface an error without new
+    ///    plumbing (the "zero silent error" contract).
     Notice {
         subtype: String,
         detail: Value,

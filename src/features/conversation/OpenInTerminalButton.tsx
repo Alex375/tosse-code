@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { commands } from "../../ipc/client";
+import { useAppErrors } from "../../store/appErrors";
 import { Ico } from "../../ui/kit";
 
 /**
@@ -25,7 +26,12 @@ export function OpenInTerminalButton({
     const res = await commands.openInTerminal(cwd, sessionId);
     setBusy(false);
     if (res.status === "error") {
+      // The core builds an actionable French message; surface it instead of burying
+      // it in the console where the user never sees why nothing opened.
       console.error("openInTerminal failed:", res.error);
+      useAppErrors
+        .getState()
+        .pushError("Impossible d'ouvrir la conversation dans le terminal du système.", res.error);
     }
   };
 

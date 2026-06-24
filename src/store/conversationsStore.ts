@@ -23,6 +23,7 @@ import { commands } from "../ipc/client";
 import type { ConversationItem, ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
+import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
@@ -204,17 +205,32 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   pendingReminder: asReminderKind(c.pending_reminder),
 });
 
-/** Fire a persistence command, logging (never throwing) on failure. Persistence
- *  is best-effort and off the hot path — a failed write must not break the UI. */
+// The one user-facing message for any persistence failure (deduped in the banner),
+// so a broken DB shows ONE clear warning, not a flood of per-write errors.
+const PERSIST_FAILURE_MSG =
+  "Impossible d'enregistrer les modifications de la conversation — elles risquent de ne pas survivre au redémarrage.";
+
+/** Fire a persistence command, logging AND surfacing (never throwing) on failure.
+ *  Persistence is best-effort and off the hot path — a failed write must not break
+ *  the UI — but it must NOT be silent: a lost rename/model/etc would vanish on the
+ *  next restart with no warning, so it raises an app-level banner (deduped). */
 function syncToCore(
   label: string,
   run: () => Promise<{ status: "ok"; data: unknown } | { status: "error"; error: string }>,
 ): void {
   void run()
     .then((res) => {
-      if (res.status !== "ok") console.error(`[persist] ${label} failed:`, res.error);
+      if (res.status !== "ok") {
+        console.error(`[persist] ${label} failed:`, res.error);
+        useAppErrors.getState().pushError(PERSIST_FAILURE_MSG, `${label}: ${res.error}`);
+      }
     })
-    .catch((e) => console.error(`[persist] ${label} threw:`, e));
+    .catch((e) => {
+      console.error(`[persist] ${label} threw:`, e);
+      useAppErrors
+        .getState()
+        .pushError(PERSIST_FAILURE_MSG, `${label}: ${e instanceof Error ? e.message : String(e)}`);
+    });
 }
 
 interface ConversationsState {
@@ -649,7 +665,16 @@ export async function bootConversations(): Promise<void> {
       activeId: res.data.active_id,
     });
   } else {
+    // A failed hydration leaves the store empty — INDISTINGUISHABLE from a fresh
+    // install, so all the user's conversations would appear silently gone. Surface
+    // it loudly: a corrupt/locked DB is a real problem, not "no conversations yet".
     console.error("loadPersistedState failed:", res.error);
+    useAppErrors
+      .getState()
+      .pushError(
+        "Impossible de charger vos conversations — la base de données est peut-être corrompue ou verrouillée. Vos données ne sont pas perdues ; redémarre l'application.",
+        res.error,
+      );
   }
 }
 
@@ -857,7 +882,17 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv || !conv.sessionId) return;
   const res = await commands.loadSessionHistory(conv.sessionId);
-  if (res.status !== "ok" || res.data.length === 0) return;
+  // Distinguish a real failure from "nothing to show": a command-level error
+  // (rare — the core itself rarely rejects; a corrupt transcript comes back as an
+  // in-band history_error Notice item) is surfaced, an empty history is silent.
+  if (res.status !== "ok") {
+    console.error("loadSessionHistory failed:", res.error);
+    useAppErrors
+      .getState()
+      .pushError("Impossible de charger l'historique d'une conversation.", res.error);
+    return;
+  }
+  if (res.data.length === 0) return;
   const { ensureSession, applyItem, applyContextFill, markSeen } =
     useConversationStore.getState();
   ensureSession(convId);
@@ -899,7 +934,14 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return;
   const res = await commands.loadSessionHistory(conv.sessionId);
-  if (res.status !== "ok" || res.data.length === 0) return; // keep timeline on error/empty
+  if (res.status !== "ok") {
+    console.error("loadSessionHistory (reload) failed:", res.error);
+    useAppErrors
+      .getState()
+      .pushError("Impossible de recharger l'historique d'une conversation.", res.error);
+    return; // keep the current timeline
+  }
+  if (res.data.length === 0) return; // nothing on disk → keep timeline
   const { resetSession, applyItem, applyContextFill, markSeen } =
     useConversationStore.getState();
   resetSession(convId);

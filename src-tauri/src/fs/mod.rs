@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri_specta::Event;
 
-use crate::ipc::events::FsChangeEvent;
+use crate::ipc::events::{FsChangeEvent, FsWatchErrorEvent};
 
 /// Files larger than this are not read into the editor (returned as `too_large`).
 /// The cap is about COST, not binariness: `read_file` loads the whole file into
@@ -219,6 +219,9 @@ impl FsWatcher {
     pub fn watch(&self, app: tauri::AppHandle, root: PathBuf) -> notify::Result<()> {
         self.unwatch(); // at most one active watch
         let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
+        // Clone for the error path so the watcher can tell the UI it went blind
+        // (the original `app` is moved into the debounce thread below).
+        let err_app = app.clone();
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             match res {
                 Ok(event) => {
@@ -230,8 +233,13 @@ impl FsWatcher {
                         }
                     }
                 }
-                // A watcher backend error is rare but must not vanish silently.
-                Err(e) => eprintln!("[fs watcher] event error: {e}"),
+                // A watcher backend error is rare but must not vanish silently: log it
+                // AND tell the editor panel live updates may have stopped, so the tree
+                // doesn't silently go stale.
+                Err(e) => {
+                    eprintln!("[fs watcher] event error: {e}");
+                    let _ = (FsWatchErrorEvent { message: e.to_string() }).emit(&err_app);
+                }
             }
         })?;
         watcher.watch(&root, RecursiveMode::Recursive)?;

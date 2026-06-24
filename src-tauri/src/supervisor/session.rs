@@ -12,9 +12,10 @@
 //! unit-testable with no live `claude` process — see the tests below.
 
 use std::collections::HashMap;
+use std::process::ExitStatus;
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use super::assembler::Assembler;
@@ -202,17 +203,30 @@ async fn run_actor(
     on_exit: Box<dyn FnOnce() + Send + 'static>,
 ) {
     core.initialize();
-    loop {
+    // Why the loop ended: a spontaneous transport close (the process died on its own)
+    // must be EXPLAINED in the conversation, while a requested Shutdown is expected.
+    let process_gone = loop {
         tokio::select! {
             maybe_msg = msg_rx.recv() => match maybe_msg {
                 Some(msg) => core.on_message(msg),
-                None => break, // transport closed: the process exited
+                None => break true, // transport closed: the process exited on its own
             },
             maybe_cmd = cmd_rx.recv() => match maybe_cmd {
-                Some(SessionCommand::Shutdown) | None => break,
+                Some(SessionCommand::Shutdown) | None => break false, // requested stop
                 Some(cmd) => core.on_command(cmd),
             },
         }
+    };
+    // The process vanished without us asking: surface why (exit code + last stderr)
+    // so a crash / OOM / auth failure mid-turn is never a silent stop.
+    if process_gone {
+        let status = transport.wait_status().await;
+        core.emit_process_exit(
+            status,
+            transport.reader_error(),
+            transport.writer_error(),
+            transport.stderr_tail(),
+        );
     }
     // Announce the end so the UI stops showing a live session.
     core.emit_ended();
@@ -284,12 +298,15 @@ impl SessionCore {
         }
     }
 
-    fn send(&self, line: Value) {
+    /// Queue an outbound line. Returns `false` if the writer channel is closed (the
+    /// process is gone but the actor hasn't observed it yet) so user-facing callers
+    /// can surface "not delivered" instead of dropping it silently.
+    fn send(&self, line: Value) -> bool {
         if self.outbound.send(line).is_err() {
-            // The writer channel is closed — the process is gone but the actor
-            // hasn't observed it yet. Log so a dropped line is diagnosable.
             eprintln!("[session {}] outbound channel closed; dropped a line", self.id);
+            return false;
         }
+        true
     }
 
     fn next_request_id(&mut self) -> String {
@@ -320,6 +337,60 @@ impl SessionCore {
             subtype: "control_error".to_string(),
             detail: serde_json::json!({ "control": kind.label(), "message": detail }),
         }));
+    }
+
+    /// Surface ANY error as a visible timeline notice — the single core-side entry
+    /// point for the "zero silent error" contract. `subtype` selects the heading the
+    /// UI renders (`process_exited` / `send_failed` / `protocol_error` / `error`);
+    /// `detail` carries `message` (+ optional `detail`/`stderr`/`exit_code`).
+    fn emit_error_notice(&self, subtype: &str, detail: Value) {
+        self.emit(SessionEvent::Item(ConversationItem::Notice {
+            subtype: subtype.to_string(),
+            detail,
+        }));
+    }
+
+    /// The `claude` process died without us asking. Emit a `process_exited` notice that
+    /// explains it — exit code / signal, the reader/writer failure that preceded it,
+    /// and the tail of stderr — so an unexpected crash (OOM, auth failure, panic) is
+    /// visible in the conversation instead of the agent merely "stopping".
+    fn emit_process_exit(
+        &self,
+        status: Option<ExitStatus>,
+        reader_err: Option<String>,
+        writer_err: Option<String>,
+        stderr_tail: Vec<String>,
+    ) {
+        let message = describe_exit(status);
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(r) = reader_err {
+            parts.push(format!("flux interrompu : {r}"));
+        }
+        if let Some(w) = writer_err {
+            parts.push(format!("écriture interrompue : {w}"));
+        }
+        if let Some(code) = status.and_then(|s| s.code()) {
+            parts.push(format!("exit code: {code}"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(sig) = status.and_then(|s| s.signal()) {
+                parts.push(format!("signal: {sig}"));
+            }
+        }
+        if !stderr_tail.is_empty() {
+            parts.push(format!("stderr:\n{}", stderr_tail.join("\n")));
+        }
+        let detail = if parts.is_empty() {
+            Value::Null
+        } else {
+            Value::String(parts.join("\n\n"))
+        };
+        self.emit_error_notice(
+            "process_exited",
+            json!({ "message": message, "detail": detail }),
+        );
     }
 
     fn emit(&self, ev: SessionEvent) {
@@ -389,6 +460,9 @@ impl SessionCore {
     ///   - anything else → an unmatched ack we ignore.
     fn on_control_response(&mut self, v: Value) {
         let Some(resp) = control::parse_control_response(&v) else {
+            // A control_response with no nested request_id — we can't route it. Rare,
+            // internal; log (not a thread notice) so protocol drift is diagnosable.
+            eprintln!("[session {}] unparseable control_response (no request_id)", self.id);
             return;
         };
         // The initialize handshake completes exactly once.
@@ -400,7 +474,14 @@ impl SessionCore {
             return;
         }
         let Some(kind) = self.pending_control.remove(&resp.request_id) else {
-            return; // an ack we did not track (or already consumed)
+            // An ack we did not track (or already consumed). Benign in the common
+            // case; log it so a control command that silently never completes is
+            // diagnosable instead of vanishing.
+            eprintln!(
+                "[session {}] control_response for an untracked request '{}'",
+                self.id, resp.request_id
+            );
+            return;
         };
         if !resp.ok {
             // Title generation is cosmetic and has an optimistic placeholder as its
@@ -469,7 +550,12 @@ impl SessionCore {
 
     fn on_control_request(&mut self, v: Value) {
         let Some((request_id, parsed)) = control::parse_inbound_control(&v) else {
+            // No usable request_id → we can't even send a correlated error back; the
+            // CLI may hang. Surface it so a stuck turn is at least explained.
             eprintln!("[session {}] control_request without a usable request_id", self.id);
+            self.emit_error_notice("protocol_error", json!({
+                "message": "Une requête de Claude Code était illisible (sans identifiant) et n'a pas pu être traitée.",
+            }));
             return;
         };
         // A known-but-malformed (or otherwise un-typeable) request still gets an
@@ -480,6 +566,12 @@ impl SessionCore {
             Err(e) => {
                 eprintln!("[session {}] malformed control_request: {e}", self.id);
                 self.send(control::control_error_response(&request_id, "malformed control request"));
+                // The most likely malformed request is a `can_use_tool` — i.e. a
+                // permission prompt the user will never see. Make that visible.
+                self.emit_error_notice("protocol_error", json!({
+                    "message": "Une requête de Claude Code n'a pas pu être interprétée (une demande d'autorisation a peut-être été ignorée).",
+                    "detail": e,
+                }));
                 return;
             }
         };
@@ -509,9 +601,12 @@ impl SessionCore {
                 self.emit(SessionEvent::Permission(payload));
                 self.emit(state_ev);
             }
-            // Hooks / MCP / dialogs are not supported yet. Reply with an error so
-            // the CLI does not hang waiting on us (spec §4.1/§4.6).
+            // Hooks / MCP / dialogs are not supported yet. Reply with an error so the
+            // CLI does not hang waiting on us (spec §4.1/§4.6). These are benign and
+            // routine, so they're LOGGED (no longer 100% silent) but not surfaced as a
+            // thread error — that would be noise, not signal.
             InboundControl::Unknown => {
+                eprintln!("[session {}] unsupported inbound control_request (replied with error)", self.id);
                 self.send(control::control_error_response(&request_id, "unsupported control request"));
             }
         }
@@ -520,9 +615,16 @@ impl SessionCore {
     fn on_command(&mut self, cmd: SessionCommand) {
         match cmd {
             SessionCommand::SendUserText(text) => {
-                self.send(transport::user_message(text));
-                let ev = self.assembler.set_busy(true);
-                self.emit(ev);
+                if self.send(transport::user_message(text)) {
+                    let ev = self.assembler.set_busy(true);
+                    self.emit(ev);
+                } else {
+                    // The line never reached the (dead) process: say so, instead of
+                    // flipping to "busy" for a turn that will never start.
+                    self.emit_error_notice("send_failed", json!({
+                        "message": "Votre message n'a pas pu être transmis à Claude Code : la session s'est fermée. Renvoyez-le pour la relancer.",
+                    }));
+                }
             }
             SessionCommand::AnswerPermission { request_id, decision } => {
                 match self.pending.remove(&request_id) {
@@ -537,9 +639,17 @@ impl SessionCore {
                                 control::permission_deny_response(&request_id, &p.tool_use_id, &message)
                             }
                         };
-                        self.send(line);
+                        let delivered = self.send(line);
+                        // Clear the prompt either way (it's no longer answerable); but if
+                        // the response never reached the process, surface it — otherwise
+                        // the agent stays blocked CLI-side with nothing in the thread.
                         let ev = self.assembler.set_awaiting_permission(false);
                         self.emit(ev);
+                        if !delivered {
+                            self.emit_error_notice("send_failed", json!({
+                                "message": "Votre réponse à la demande d'autorisation n'a pas pu être transmise : la session s'est fermée.",
+                            }));
+                        }
                     }
                     None => eprintln!(
                         "[session {}] answer for unknown permission request '{request_id}'",
@@ -610,6 +720,25 @@ impl SessionCore {
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown => {}
         }
+    }
+}
+
+/// Human, French summary of how the `claude` process exited (the `message` of a
+/// `process_exited` notice). The raw exit code / signal go in the detail.
+fn describe_exit(status: Option<ExitStatus>) -> String {
+    let Some(status) = status else {
+        return "Le process Claude Code s'est arrêté de façon inattendue.".to_string();
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return format!("Le process Claude Code a été interrompu par un signal ({sig}).");
+        }
+    }
+    match status.code() {
+        Some(0) | None => "Le process Claude Code s'est arrêté de façon inattendue.".to_string(),
+        Some(code) => format!("Le process Claude Code s'est arrêté (code {code})."),
     }
 }
 
@@ -753,6 +882,48 @@ mod tests {
             decision: PermissionDecision::Deny { message: "x".to_string() },
         });
         assert!(drain(&mut out).is_empty(), "no control_response for an unknown request");
+    }
+
+    /// REGRESSION (silent error): a user message that can't be delivered because the
+    /// session is gone (writer channel closed) must surface a `send_failed` notice —
+    /// not silently flip to "busy" for a turn that will never start.
+    #[test]
+    fn send_user_text_on_a_dead_session_surfaces_a_notice() {
+        let (mut core, mut events, out) = test_core();
+        drop(out); // the process is gone: the outbound channel is closed
+        core.on_command(SessionCommand::SendUserText("hello".to_string()));
+        let notice = drain(&mut events).into_iter().find_map(|e| match e {
+            SessionEvent::Item(ConversationItem::Notice { subtype, .. }) => Some(subtype),
+            _ => None,
+        });
+        assert_eq!(notice.as_deref(), Some("send_failed"));
+    }
+
+    /// REGRESSION (silent error): a malformed `can_use_tool` (missing the required
+    /// `tool_use_id`) must STILL answer the CLI (anti-hang) AND surface a
+    /// `protocol_error` notice — the user otherwise never sees the prompt and gets no
+    /// hint why a tool didn't run.
+    #[test]
+    fn malformed_can_use_tool_answers_cli_and_surfaces_a_notice() {
+        let (mut core, mut events, mut out) = test_core();
+        let msg: CliMessage = serde_json::from_value(json!({
+            "type": "control_request",
+            "request_id": "req-bad",
+            "request": { "subtype": "can_use_tool", "tool_name": "Bash" }
+        }))
+        .unwrap();
+        core.on_message(msg);
+        // Anti-hang: an error control_response still goes out to the CLI.
+        assert!(
+            drain(&mut out).iter().any(|l| l["type"] == json!("control_response")),
+            "a malformed control_request must still be answered"
+        );
+        // And the failure is visible in the thread.
+        let found = drain(&mut events).into_iter().any(|e| matches!(
+            e,
+            SessionEvent::Item(ConversationItem::Notice { subtype, .. }) if subtype == "protocol_error"
+        ));
+        assert!(found, "a malformed can_use_tool must surface a protocol_error notice");
     }
 
     /// REGRESSION (silent error): a `set_permission_mode` ack that succeeds but

@@ -63,6 +63,52 @@
   flex: none;
   margin-top: 1px;
 }
+.errorBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.errorHeading {
+  font-weight: 600;
+}
+.errorText {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* "Détails techniques" disclosure: a muted, borderless toggle that reveals the raw
+   error payload (stderr / exit code / raw line) without polluting the stream. */
+.errorToggle {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--wf-tx-lo);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.errorToggle:hover {
+  color: var(--wf-tx);
+}
+.errorDetail {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wf-err) 8%, var(--wf-bg, transparent));
+  font-family: var(--wf-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--wf-tx);
+}
 
 /* A confirmed control change (model / effort / permission): a subtle, centered
    inline line, à la VS Code extension. Muted, with the from→to values emphasised. */

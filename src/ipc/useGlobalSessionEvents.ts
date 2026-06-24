@@ -19,6 +19,7 @@ import type {
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionStateEvent,
+  SessionTaskEvent,
   SessionTitleEvent,
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
@@ -101,6 +102,9 @@ export function useGlobalSessionEvents(): void {
     const rafIds = new Map<string, number>();
     // Sessions already ensured in the store (avoid redundant state writes).
     const ensured = new Set<string>();
+    // Background-task ids already surfaced as failed (the task event re-fires on
+    // every transition; surface a failure exactly once).
+    const seenFailedTasks = new Set<string>();
     let disposed = false;
     const unlisteners: Array<() => void> = [];
 
@@ -108,6 +112,25 @@ export function useGlobalSessionEvents(): void {
       if (ensured.has(session)) return;
       ensured.add(session);
       useConversationStore.getState().ensureSession(session);
+    }
+
+    /** A `listen()` that rejects means a whole class of live events will never
+     *  arrive — the conversation would go silent. Surface it (don't swallow): log it
+     *  and, if a conversation is open, drop a visible error bubble explaining that
+     *  live updates may be broken. */
+    function onAttachError(name: string, e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`failed to attach ${name} listener:`, e);
+      const activeId = useConversationsStore.getState().activeId;
+      if (activeId) {
+        useConversationStore
+          .getState()
+          .addErrorTurn(
+            activeId,
+            `La connexion au flux d'événements (${name}) a échoué — les mises à jour en direct peuvent ne pas s'afficher. Redémarre l'application.`,
+            message,
+          );
+      }
     }
 
     function flushKey(bufKey: string, session: string, msgId: string) {
@@ -291,21 +314,56 @@ export function useGlobalSessionEvents(): void {
       useCommandsStore.getState().setCommands(conv.cwd, payload.commands);
     }
 
+    // A background task (sub-agent / workflow / background Bash / Monitor) emits a
+    // terminal `failed` status that would otherwise vanish (the rich task views are a
+    // separate effort). Surface the FAILURE in the owning conversation so a sub-agent
+    // that errored out isn't silently lost. `stopped` is usually user/session-driven,
+    // so it's left quiet — only genuine failures alert.
+    function onTask(payload: SessionTaskEvent) {
+      const session = convIdForHandle(payload.session);
+      if (!session) return;
+      const task = payload.task;
+      if (task.status !== "failed") return;
+      if (seenFailedTasks.has(task.task_id)) return; // re-emitted per transition
+      seenFailedTasks.add(task.task_id);
+      ensureOnce(session);
+      const label = task.label ? ` : ${task.label}` : "";
+      const detailParts: string[] = [];
+      if (task.summary) detailParts.push(task.summary);
+      if (task.output_file) detailParts.push(`output: ${task.output_file}`);
+      useConversationStore
+        .getState()
+        .addErrorTurn(
+          session,
+          `Une tâche de fond a échoué${label}.`,
+          detailParts.length ? detailParts.join("\n") : null,
+        );
+    }
+
     events.sessionMessageEvent
       .listen((e) => { if (!disposed) onMessage(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("messages", e));
     events.sessionStateEvent
       .listen((e) => { if (!disposed) onState(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("état", e));
     events.sessionPermissionEvent
       .listen((e) => { if (!disposed) onPermission(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("permissions", e));
     events.sessionCommandsEvent
       .listen((e) => { if (!disposed) onCommands(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("commandes", e));
     events.sessionTitleEvent
       .listen((e) => { if (!disposed) onTitle(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("titres", e));
+    events.sessionTaskEvent
+      .listen((e) => { if (!disposed) onTask(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("tâches", e));
 
     return () => {
       disposed = true;

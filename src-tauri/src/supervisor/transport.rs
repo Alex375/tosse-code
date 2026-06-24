@@ -15,8 +15,10 @@
 //! on the [`CliMessage`] stream this layer produces and the [`Transport::send_line`]
 //! escape hatch it exposes.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -25,6 +27,18 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
 use super::protocol::CliMessage;
+
+/// How many trailing stderr lines from the `claude` process to keep buffered, so an
+/// abnormal exit can surface the tail (auth failure, panic, MCP error) in the UI
+/// without streaming every line into the conversation.
+const STDERR_TAIL_MAX: usize = 80;
+
+/// Shared, bounded ring of the process's most recent stderr lines.
+type StderrTail = Arc<Mutex<VecDeque<String>>>;
+/// Shared slot for a pump task's terminal error (reader IO / writer IO), so the
+/// session actor can explain WHY the process went away instead of treating every
+/// disappearance as a clean exit.
+type ErrSlot = Arc<Mutex<Option<String>>>;
 
 /// How a `claude` process is launched. Build with [`SpawnConfig::new`] and tweak
 /// the optional fields.
@@ -190,6 +204,12 @@ pub struct Transport {
     /// The reader / writer / stderr pump tasks. Aborted on shutdown so none
     /// outlive the process (no dangling tokio task, no pipe left open).
     pumps: Vec<tokio::task::JoinHandle<()>>,
+    /// Last N stderr lines, for surfacing the cause of an abnormal exit.
+    stderr_tail: StderrTail,
+    /// Set if the stdout reader ended on an IO error (vs a clean EOF).
+    reader_err: ErrSlot,
+    /// Set if the stdin writer died on a write/flush/serialize failure.
+    writer_err: ErrSlot,
 }
 
 impl Transport {
@@ -277,10 +297,14 @@ impl Transport {
         let (msg_tx, msg_rx) = mpsc::unbounded_channel::<CliMessage>();
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Value>();
 
+        let stderr_tail: StderrTail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_MAX)));
+        let reader_err: ErrSlot = Arc::new(Mutex::new(None));
+        let writer_err: ErrSlot = Arc::new(Mutex::new(None));
+
         let pumps = vec![
-            tokio::spawn(reader_loop(stdout, msg_tx)),
-            tokio::spawn(writer_loop(stdin, writer_rx)),
-            tokio::spawn(stderr_loop(stderr)),
+            tokio::spawn(reader_loop(stdout, msg_tx, reader_err.clone())),
+            tokio::spawn(writer_loop(stdin, writer_rx, writer_err.clone())),
+            tokio::spawn(stderr_loop(stderr, stderr_tail.clone())),
         ];
 
         Ok((
@@ -289,6 +313,9 @@ impl Transport {
                 writer_tx: Some(writer_tx),
                 child,
                 pumps,
+                stderr_tail,
+                reader_err,
+                writer_err,
             },
             msg_rx,
         ))
@@ -297,6 +324,33 @@ impl Transport {
     /// OS process id, while the child is alive.
     pub fn pid(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// The buffered tail of the process's stderr (oldest → newest), for surfacing the
+    /// cause of an abnormal exit. Empty when the process never wrote to stderr.
+    pub fn stderr_tail(&self) -> Vec<String> {
+        self.stderr_tail
+            .lock()
+            .map(|b| b.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// The stdout reader's terminal IO error, if it ended on one (vs a clean EOF).
+    pub fn reader_error(&self) -> Option<String> {
+        self.reader_err.lock().ok().and_then(|e| e.clone())
+    }
+
+    /// The stdin writer's terminal error, if a write/flush/serialize failure killed it.
+    pub fn writer_error(&self) -> Option<String> {
+        self.writer_err.lock().ok().and_then(|e| e.clone())
+    }
+
+    /// Reap the child and return its exit status. Safe to call before [`shutdown`]
+    /// (tokio's `Child::wait` is idempotent — `shutdown`'s own wait then returns the
+    /// same status). Used by the session actor to report the exit code of a process
+    /// that died on its own.
+    pub async fn wait_status(&mut self) -> Option<ExitStatus> {
+        self.child.wait().await.ok()
     }
 
     /// Queue a user turn as a `user` message in the Anthropic message shape
@@ -400,7 +454,11 @@ impl Transport {
 /// Read stdout as newline-delimited JSON. Each non-empty line is parsed into a
 /// [`CliMessage`]; parse failures are logged and skipped, never fatal (spec
 /// §2.1). Ends when the stream closes or the consumer drops the receiver.
-async fn reader_loop(stdout: ChildStdout, tx: mpsc::UnboundedSender<CliMessage>) {
+async fn reader_loop(
+    stdout: ChildStdout,
+    tx: mpsc::UnboundedSender<CliMessage>,
+    reader_err: ErrSlot,
+) {
     let mut lines = BufReader::new(stdout).lines();
     loop {
         match lines.next_line().await {
@@ -423,9 +481,14 @@ async fn reader_loop(stdout: ChildStdout, tx: mpsc::UnboundedSender<CliMessage>)
                     }
                 }
             }
-            Ok(None) => break,        // EOF: process closed stdout
+            Ok(None) => break, // EOF: process closed stdout (clean — no reader_err)
             Err(e) => {
+                // An IO error (broken pipe, …), NOT a clean EOF: record it so the
+                // session can report a transport failure instead of a silent end.
                 eprintln!("[transport] stdout read error: {e}");
+                if let Ok(mut slot) = reader_err.lock() {
+                    *slot = Some(e.to_string());
+                }
                 break;
             }
         }
@@ -435,34 +498,52 @@ async fn reader_loop(stdout: ChildStdout, tx: mpsc::UnboundedSender<CliMessage>)
 /// Drain the outbound queue onto stdin, one full JSON line at a time, flushing
 /// after each so the CLI sees complete lines. Stdin stays open until the queue
 /// is closed (writer sender dropped), which then signals EOF to the child.
-async fn writer_loop(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Value>) {
+async fn writer_loop(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Value>, writer_err: ErrSlot) {
+    let record = |e: String| {
+        if let Ok(mut slot) = writer_err.lock() {
+            *slot = Some(e);
+        }
+    };
     while let Some(value) = rx.recv().await {
         let mut line = match serde_json::to_string(&value) {
             Ok(s) => s,
             Err(e) => {
+                // A message we couldn't serialize is dropped (the session continues);
+                // record it so a lost outbound line is diagnosable, not silent.
                 eprintln!("[transport] dropping unserializable outbound message: {e}");
+                record(format!("message non sérialisable : {e}"));
                 continue;
             }
         };
         line.push('\n');
         if let Err(e) = stdin.write_all(line.as_bytes()).await {
             eprintln!("[transport] stdin write failed: {e}");
+            record(format!("écriture stdin échouée : {e}"));
             break;
         }
         if let Err(e) = stdin.flush().await {
             eprintln!("[transport] stdin flush failed: {e}");
+            record(format!("flush stdin échoué : {e}"));
             break;
         }
     }
     // Channel closed → drop stdin here → child receives EOF.
 }
 
-/// Forward the child's stderr to our log (debug aid; the protocol never uses it).
-async fn stderr_loop(stderr: ChildStderr) {
+/// Forward the child's stderr to our log AND keep a bounded tail of it, so an
+/// abnormal exit (auth failure, panic, MCP error) can surface its cause in the UI
+/// instead of being lost to a Finder-launched bundle's invisible stderr.
+async fn stderr_loop(stderr: ChildStderr, tail: StderrTail) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         if !line.trim().is_empty() {
             eprintln!("[claude stderr] {line}");
+            if let Ok(mut buf) = tail.lock() {
+                if buf.len() == STDERR_TAIL_MAX {
+                    buf.pop_front();
+                }
+                buf.push_back(line);
+            }
         }
     }
 }

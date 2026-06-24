@@ -75,6 +75,14 @@ pub struct FsChangeEvent {
     pub paths: Vec<String>,
 }
 
+/// The filesystem watcher backend hit an error and live updates may have stopped.
+/// Surfaced so the editor panel can show a discreet "file watching interrupted"
+/// hint instead of silently going stale. Not session-keyed (single active watch).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct FsWatchErrorEvent {
+    pub message: String,
+}
+
 /// A chunk of output from an integrated terminal's PTY, base64-encoded. Base64
 /// (not a `number[]` or a per-chunk lossy string) keeps the byte stream exact and
 /// compact — xterm's own decoder reassembles UTF-8 sequences split across chunks.
@@ -98,53 +106,57 @@ pub struct TauriEmitter {
     pub app: tauri::AppHandle,
 }
 
+/// Emit a tauri-specta event, logging (never swallowing) a failed emit. `emit` only
+/// errors if the event bus / window is gone — but a DROPPED error item (a
+/// `control_error` / `is_error` / `process_exited` notice rides `emit_item`) would
+/// be a silent loss, so it must at least leave a trace.
+fn emit_logged<E: Event + Clone + Serialize>(app: &tauri::AppHandle, name: &str, ev: E) {
+    if let Err(e) = ev.emit(app) {
+        eprintln!("[ipc] failed to emit {name} event: {e}");
+    }
+}
+
 impl SessionEmitter for TauriEmitter {
     fn emit_state(&self, session: &str, state: &SessionStatePayload) {
-        let ev = SessionStateEvent {
+        emit_logged(&self.app, "session_state", SessionStateEvent {
             session: session.to_string(),
             state: state.clone(),
-        };
-        let _ = ev.emit(&self.app);
+        });
     }
 
     fn emit_item(&self, session: &str, item: &ConversationItem) {
-        let ev = SessionMessageEvent {
+        emit_logged(&self.app, "session_message", SessionMessageEvent {
             session: session.to_string(),
             item: item.clone(),
-        };
-        let _ = ev.emit(&self.app);
+        });
     }
 
     fn emit_permission(&self, session: &str, request: &PermissionRequestPayload) {
-        let ev = SessionPermissionEvent {
+        emit_logged(&self.app, "session_permission", SessionPermissionEvent {
             session: session.to_string(),
             request: request.clone(),
-        };
-        let _ = ev.emit(&self.app);
+        });
     }
 
     fn emit_commands(&self, session: &str, commands: &[SlashCommand]) {
-        let ev = SessionCommandsEvent {
+        emit_logged(&self.app, "session_commands", SessionCommandsEvent {
             session: session.to_string(),
             commands: commands.to_vec(),
-        };
-        let _ = ev.emit(&self.app);
+        });
     }
 
     fn emit_task(&self, session: &str, task: &BackgroundTask) {
-        let ev = SessionTaskEvent {
+        emit_logged(&self.app, "session_task", SessionTaskEvent {
             session: session.to_string(),
             task: task.clone(),
-        };
-        let _ = ev.emit(&self.app);
+        });
     }
 
     fn emit_title(&self, session: &str, title: &str, seq: u32) {
-        let ev = SessionTitleEvent {
+        emit_logged(&self.app, "session_title", SessionTitleEvent {
             session: session.to_string(),
             title: title.to_string(),
             seq,
-        };
-        let _ = ev.emit(&self.app);
+        });
     }
 }

@@ -116,8 +116,9 @@ interface ConversationState {
    *  injects it before the loop ends) → drives the "en attente" badge. */
   addUserTurn: (session: string, text: string, queued?: boolean) => void;
   /** Append a visible error bubble to the timeline (e.g. a send that failed to
-   *  spawn the session). Makes an otherwise-silent command failure self-evident. */
-  addErrorTurn: (session: string, message: string) => void;
+   *  spawn the session). Makes an otherwise-silent command failure self-evident.
+   *  `detail` (optional) is the raw technical payload, shown behind a disclosure. */
+  addErrorTurn: (session: string, message: string, detail?: string | null) => void;
   enqueuePermission: (session: string, request: PermissionRequestPayload) => void;
   removePermission: (session: string, requestId: string) => void;
   /** Acknowledge the last finished turn ("Vu" button): mark it seen so the
@@ -273,7 +274,7 @@ export const useConversationStore = create<ConversationState>((set) => {
         };
       }),
 
-    addErrorTurn: (session, message) =>
+    addErrorTurn: (session, message, detail) =>
       withEntry(session, (entry) => {
         const id = `err_${entry.seq}`;
         // An error turn means the send failed (or a respawn fallback): a message
@@ -282,7 +283,7 @@ export const useConversationStore = create<ConversationState>((set) => {
         return clearQueuedBadges({
           ...entry,
           seq: entry.seq + 1,
-          errors: { ...entry.errors, [id]: { id, message } },
+          errors: { ...entry.errors, [id]: { id, message, detail: detail ?? null } },
           timeline: [...entry.timeline, { kind: "error", id }],
         });
       }),
@@ -430,6 +431,7 @@ export const useConversationStore = create<ConversationState>((set) => {
               subtype: item.subtype,
               isError: item.is_error,
               result: item.result,
+              apiErrorStatus: item.api_error_status ?? null,
               totalCostUsd: item.total_cost_usd,
               numTurns: item.num_turns,
               durationMs: item.duration_ms,
@@ -479,6 +481,10 @@ export const useConversationStore = create<ConversationState>((set) => {
           }
 
           default:
+            // A ConversationItem kind we don't handle (a new core/protocol variant
+            // landing before the front catches up). TS has no exhaustiveness guard on
+            // this switch, so it would be dropped without a trace — log it instead.
+            console.warn("[conversationStore] unhandled ConversationItem kind:", (item as { kind?: string }).kind);
             return entry;
         }
       }),
