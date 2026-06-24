@@ -57,6 +57,12 @@ export interface FileBuffer {
   diskContent: string | null;
   /** Markdown only: show the rendered preview instead of the source. */
   preview: boolean;
+  /**
+   * A one-shot "jump to this line" request (from a clicked file mention),
+   * consumed once by MonacoView then cleared. `seq` is a monotonic nonce so a
+   * repeat click on the SAME line still re-fires the reveal.
+   */
+  pendingReveal: { line: number; column: number; seq: number } | null;
 }
 
 interface ConvEditor {
@@ -124,8 +130,26 @@ interface EditorState {
 
   // ---- Tabs / buffers ----
   /** Open a file. `preview` (single-click) uses the reusable temporary tab;
-   *  omitting it / false (double-click) opens a pinned tab. */
-  openFile: (convId: string, path: string, opts?: { preview?: boolean }) => Promise<void>;
+   *  omitting it / false (double-click) opens a pinned tab. `reveal` jumps the
+   *  editor to a line (and forces markdown to source mode so Monaco mounts). */
+  openFile: (
+    convId: string,
+    path: string,
+    opts?: { preview?: boolean; reveal?: { line: number; column?: number } },
+  ) => Promise<void>;
+  /**
+   * Open a file mention: reveal the side editor, collapse the tree (focus on the
+   * file), open the file (preview tab) and optionally jump to a line. The single
+   * entry point used by clickable file mentions in the conversation.
+   */
+  revealInEditor: (
+    convId: string,
+    cwd: string,
+    path: string,
+    opts?: { line?: number; column?: number },
+  ) => void;
+  /** Clear a buffer's consumed one-shot reveal request. */
+  clearReveal: (convId: string, path: string) => void;
   /** Promote a path's tab to pinned (no longer the reusable preview tab). */
   pinTab: (convId: string, path: string) => void;
   closeTab: (convId: string, path: string) => void;
@@ -233,6 +257,9 @@ async function safeCmd<T>(
 
 // ---- Autosave timers (module-level, not store state) ------------------------
 
+// Monotonic nonce for line-reveal requests, so re-clicking the SAME line re-fires.
+let revealSeq = 0;
+
 const autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const timerKey = (convId: string, path: string) => `${convId} ${path}`;
 
@@ -279,6 +306,7 @@ function fileBufferFrom(path: string): FileBuffer {
     diskChanged: false,
     diskContent: null,
     preview: false,
+    pendingReveal: null,
   };
 }
 
@@ -394,10 +422,22 @@ export const useEditorStore = create<EditorState>()((set, get) => {
       const conv = get().byConv[convId];
       if (!conv) return;
       const preview = opts?.preview ?? false;
+      const reveal = opts?.reveal
+        ? { line: opts.reveal.line, column: opts.reveal.column ?? 1, seq: ++revealSeq }
+        : null;
 
-      // Already open: focus it. A pin request (double-click) on the current
+      // Already open: focus it (and re-arm the reveal, since the line target may
+      // differ from last time). A pin request (double-click) on the current
       // preview tab promotes it to a permanent tab.
       if (conv.buffers[path]) {
+        if (reveal) {
+          patchBuffer(convId, path, (b) => ({
+            ...b,
+            pendingReveal: reveal,
+            // A line jump needs Monaco, not the rendered markdown preview.
+            preview: b.language === "markdown" ? false : b.preview,
+          }));
+        }
         if (!preview && conv.previewTab === path) {
           patchConv(convId, (c) => ({ ...c, activeTab: path, previewTab: null }));
         } else {
@@ -412,7 +452,7 @@ export const useEditorStore = create<EditorState>()((set, get) => {
       const replacing = preview && conv.previewTab && conv.buffers[conv.previewTab] ? conv.previewTab : null;
       if (replacing) clearAutosave(convId, replacing);
       patchConv(convId, (c) => {
-        const buffers = { ...c.buffers, [path]: fileBufferFrom(path) };
+        const buffers = { ...c.buffers, [path]: { ...fileBufferFrom(path), pendingReveal: reveal } };
         let tabs: string[];
         if (replacing) {
           delete buffers[replacing];
@@ -458,8 +498,9 @@ export const useEditorStore = create<EditorState>()((set, get) => {
           binary: f.binary,
           tooLarge: f.too_large,
           // Markdown opens in rendered preview by default (read-first); the
-          // toggle flips to source for editing.
-          preview: !f.binary && !f.too_large && b.language === "markdown",
+          // toggle flips to source for editing. A pending line reveal forces
+          // source so Monaco mounts and can jump to the line.
+          preview: !reveal && !f.binary && !f.too_large && b.language === "markdown",
         };
       });
     },
@@ -484,6 +525,21 @@ export const useEditorStore = create<EditorState>()((set, get) => {
     },
 
     selectTab: (convId, path) => patchConv(convId, (c) => ({ ...c, activeTab: path })),
+
+    revealInEditor: (convId, cwd, path, opts) => {
+      // The slice must exist before openFile (it early-returns otherwise); the
+      // editor panel's own mount also calls ensureConv (idempotent at same root).
+      get().ensureConv(convId, cwd);
+      get().setOpen(true);
+      get().setTreeCollapsed(true); // focus on the file: "arbre masqué"
+      void get().openFile(convId, path, {
+        preview: true,
+        reveal: opts?.line != null ? { line: opts.line, column: opts.column } : undefined,
+      });
+    },
+
+    clearReveal: (convId, path) =>
+      patchBuffer(convId, path, (b) => (b.pendingReveal ? { ...b, pendingReveal: null } : b)),
 
     setContent: (convId, path, content) => {
       patchBuffer(convId, path, (b) => {

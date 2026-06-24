@@ -1,6 +1,7 @@
 import { clsx } from "clsx";
 import { useMemo } from "react";
 import { diffCounts, lineDiff } from "./lineDiff";
+import { MentionPathChip } from "./FileMention";
 import { basename } from "./toolMeta";
 import styles from "./DiffView.module.css";
 
@@ -27,7 +28,7 @@ export function DiffView({ path, oldText, newText = "" }: DiffViewProps) {
     <div className={styles.diff}>
       {path && (
         <div className={styles.header}>
-          <span className={styles.path}>{basename(path)}</span>
+          <MentionPathChip path={path} className={styles.path} display={basename(path)} />
           {oldText != null ? (
             <span className={styles.summary}>
               <span className={styles.added}>+{counts.added}</span>{" "}

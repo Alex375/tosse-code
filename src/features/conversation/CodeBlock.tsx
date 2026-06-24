@@ -1,5 +1,5 @@
 import { Check, Copy } from "lucide-react";
-import { memo, useState, type ReactNode } from "react";
+import { memo, useState } from "react";
 import { Expandable } from "../../ui/Expandable";
 import { IconButton } from "../../ui/IconButton";
 import styles from "./Markdown.module.css";
@@ -39,7 +39,3 @@ export const CodeBlock = memo(function CodeBlock({ code }: CodeBlockProps) {
     </div>
   );
 });
-
-export function InlineCode({ children }: { children: ReactNode }) {
-  return <code className={styles.inlineCode}>{children}</code>;
-}

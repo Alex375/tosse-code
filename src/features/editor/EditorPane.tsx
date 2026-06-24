@@ -108,6 +108,7 @@ function ActiveFile({
   const setImageView = useEditorStore((s) => s.setImageView);
   const reloadFromDisk = useEditorStore((s) => s.reloadFromDisk);
   const keepLocal = useEditorStore((s) => s.keepLocal);
+  const clearReveal = useEditorStore((s) => s.clearReveal);
 
   const isMd = isMarkdownPath(buffer.path);
   const editable =
@@ -192,6 +193,8 @@ function ActiveFile({
               openPaths={openPaths}
               onChange={(v) => setContent(convId, buffer.path, v)}
               onSave={() => void saveBuffer(convId, buffer.path)}
+              reveal={buffer.pendingReveal}
+              onRevealConsumed={() => clearReveal(convId, buffer.path)}
             />
           </Suspense>
         </EditorErrorBoundary>

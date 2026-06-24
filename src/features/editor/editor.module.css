@@ -280,6 +280,19 @@
   min-height: 0;
   min-width: 0;
 }
+/* Transient line flash when a clicked file mention jumps the editor to a line.
+   The decoration is cleared after the animation, so it pulses once and fades. */
+@keyframes tosseRevealPulse {
+  from {
+    background: rgba(217, 119, 87, 0.3);
+  }
+  to {
+    background: rgba(217, 119, 87, 0);
+  }
+}
+.revealHighlight {
+  animation: tosseRevealPulse 1.6s ease-out forwards;
+}
 .placeholder {
   flex: 1;
   display: flex;

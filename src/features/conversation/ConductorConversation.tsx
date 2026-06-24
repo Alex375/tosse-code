@@ -17,6 +17,7 @@ import { TodoBar } from "../todos/TodoBar";
 import { ConductorComposer, type ComposerHandle } from "./ConductorComposer";
 import { ConductorSidebar } from "./ConductorSidebar";
 import { ConductorThread } from "./ConductorThread";
+import { FileMentionProvider } from "./FileMention";
 import { ReviewBar } from "./ReviewBar";
 import { AgentBar } from "./AgentBar";
 import { useStickToBottom } from "./useStickToBottom";
@@ -153,6 +154,7 @@ function MainArea({
         <ConversationPane
           key={conv.id}
           session={conv.id}
+          cwd={cwd}
           composerRef={composerRef}
           onBackgroundClick={onBackgroundClick}
         />
@@ -186,17 +188,23 @@ function MainArea({
  */
 function ConversationPane({
   session,
+  cwd,
   composerRef,
   onBackgroundClick,
 }: {
   session: string;
+  cwd: string;
   composerRef: RefObject<ComposerHandle>;
   onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
   const { scrollRef, onRender, scrollToBottom } = useStickToBottom(session);
   return (
     <div className="wf-col cv-pane" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
-      <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
+      {/* Provide the conversation id + live cwd so file mentions in the thread
+          resolve + open in this conversation's editor. */}
+      <FileMentionProvider convId={session} cwd={cwd}>
+        <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
+      </FileMentionProvider>
       <AgentBar session={session} />
       <TodoBar session={session} />
       <ReviewBar session={session} />
