@@ -520,6 +520,7 @@ const EMPTY_TIMELINE: TimelineEntry[] = [];
 const EMPTY_PERMS: PermissionRequestPayload[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_TODOS: TodoItem[] = [];
+const EMPTY_STRINGS: string[] = [];
 
 export const useSessionState = (session: string): SessionStatePayload | undefined =>
   useConversationStore((s) => s.sessions[session]?.state);
@@ -587,4 +588,30 @@ export const useTodos = (session: string): TodoItem[] =>
 export const useTodoSummary = (session: string): TodoSummary =>
   useConversationStore(
     useShallow((s) => todoSummary(s.sessions[session]?.todos ?? EMPTY_TODOS)),
+  );
+
+/**
+ * Chronological (oldest→newest) list of the user's OWN messages in this
+ * conversation — the root-level `role:"user"` turns, in timeline order. Drives the
+ * composer's ↑/↓ shell-style history recall. Blank messages are dropped and
+ * consecutive duplicates collapsed, like a shell history. Sub-agent (Task) user
+ * turns (`parentToolUseId !== null`) are excluded. Shallow-compared so it only
+ * re-renders when the user actually sends a new (distinct) message. */
+export const useUserMessageHistory = (session: string): string[] =>
+  useConversationStore(
+    useShallow((s) => {
+      const entry = s.sessions[session];
+      if (!entry) return EMPTY_STRINGS;
+      const out: string[] = [];
+      for (const t of entry.timeline) {
+        if (t.kind !== "turn") continue;
+        const turn = entry.turns[t.id];
+        if (!turn || turn.role !== "user" || turn.parentToolUseId !== null) continue;
+        const text = turn.streamingText;
+        if (!text.trim()) continue;
+        if (out.length && out[out.length - 1] === text) continue; // collapse consecutive dups
+        out.push(text);
+      }
+      return out.length ? out : EMPTY_STRINGS;
+    }),
   );
