@@ -12,6 +12,7 @@ import type { Conversation } from "../../store/conversationsStore";
 import type { TodoItem } from "../../store/types";
 import { StateBlock } from "./StateBlock";
 import { StateActions } from "./StateActions";
+import { BackgroundTaskBadge } from "./BackgroundTaskBadge";
 
 /** Relative "last activity" stamp — "il y a 14 min" / "il y a 2 h". `now` comes from
  *  the grid's shared ticker so idle/off cards advance without a per-card timer. */
@@ -77,6 +78,7 @@ export function StreamCard({
           // "done/total" ratio still carries the full number.
           <TodoPips segs={todos.slice(0, 20).map(todoSeg)} done={summary.completed} total={summary.total} />
         ) : null}
+        <BackgroundTaskBadge convId={conv.id} />
         <span className="wf-row" style={{ gap: 5, marginLeft: "auto" }} title="Dernière activité">
           <Ico name="clock" className="sm" />
           {fmtAgo(conv.lastActivityAt, now)}

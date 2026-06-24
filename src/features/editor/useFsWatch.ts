@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { commands, events } from "../../ipc/client";
 import { useEditorStore } from "./editorStore";
+import { useAppErrors } from "../../store/appErrors";
 
 /** Run a watch IPC call, logging both an error Result and a thrown rejection.
  *  Watch is best-effort (a failure only means live-refresh won't fire) but must
@@ -46,22 +47,44 @@ export function useFsWatch(convId: string, cwd: string | null, enabled: boolean)
   // listen() registration is logged rather than swallowed.
   useEffect(() => {
     let disposed = false;
-    let un: (() => void) | undefined;
-    events.fsChangeEvent
-      .listen((e) => {
+    const uns: Array<() => void> = [];
+    const track = (p: Promise<() => void>, label: string) =>
+      p
+        .then((fn) => {
+          if (disposed) fn();
+          else uns.push(fn);
+        })
+        .catch((e) => console.error(`[fsWatch] ${label}.listen failed:`, e));
+
+    track(
+      events.fsChangeEvent.listen((e) => {
         if (disposed) return;
         const { convId, cwd } = ctx.current;
         if (!cwd) return;
         void useEditorStore.getState().onExternalChange(convId, e.payload.paths);
-      })
-      .then((fn) => {
-        if (disposed) fn();
-        else un = fn;
-      })
-      .catch((e) => console.error("[fsWatch] fsChangeEvent.listen failed:", e));
+      }),
+      "fsChangeEvent",
+    );
+
+    // The watcher backend died: live refresh has stopped, so the tree/open files can
+    // go stale without any sign. Surface it (deduped) instead of letting it be silent.
+    track(
+      events.fsWatchErrorEvent.listen((e) => {
+        if (disposed) return;
+        console.error("[fsWatch] watcher backend error:", e.payload.message);
+        useAppErrors
+          .getState()
+          .pushError(
+            "Le suivi des fichiers s'est interrompu — l'arborescence et les fichiers ouverts peuvent ne pas se rafraîchir automatiquement.",
+            e.payload.message,
+          );
+      }),
+      "fsWatchErrorEvent",
+    );
+
     return () => {
       disposed = true;
-      un?.();
+      uns.forEach((un) => un());
     };
   }, []);
 }

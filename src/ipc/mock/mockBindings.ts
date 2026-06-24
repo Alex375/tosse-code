@@ -8,6 +8,7 @@ import type {
   ConversationRecord,
   FileContent,
   FsChangeEvent,
+  FsWatchErrorEvent,
   FsEntry,
   ImageContent,
   PermissionDecision,
@@ -22,6 +23,7 @@ import type {
   SessionPermissionEvent,
   SessionStatePayload,
   SessionStateEvent,
+  SessionTaskEvent,
   SessionTitleEvent,
   SlashCommand,
   TerminalExitEvent,
@@ -31,7 +33,7 @@ import type {
   WorktreeInfo,
   WorktreeStatus,
 } from "../bindings";
-import { idleState, ScenarioDriver } from "./scenario";
+import { DEMO_SUBAGENT_TRANSCRIPT, idleState, MOCK_SESSION_ID, ScenarioDriver } from "./scenario";
 
 // A small slash-command catalogue so the browser/Playwright build exercises the
 // `/` autocomplete menu without a real `claude` process.
@@ -83,11 +85,13 @@ const sessionMessageEvent = new MockEmitter<SessionMessageEvent>();
 const sessionPermissionEvent = new MockEmitter<SessionPermissionEvent>();
 const sessionStateEvent = new MockEmitter<SessionStateEvent>();
 const sessionCommandsEvent = new MockEmitter<SessionCommandsEvent>();
+const sessionTaskEvent = new MockEmitter<SessionTaskEvent>();
 const sessionTitleEvent = new MockEmitter<SessionTitleEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
-// No real filesystem in the browser mock — this never fires, but must exist so
+// No real filesystem in the browser mock — these never fire, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
 const fsChangeEvent = new MockEmitter<FsChangeEvent>();
+const fsWatchErrorEvent = new MockEmitter<FsWatchErrorEvent>();
 // No real PTY in the browser mock — these never fire, but must exist so the
 // integrated terminal can subscribe without crashing.
 const terminalOutputEvent = new MockEmitter<TerminalOutputEvent>();
@@ -98,9 +102,11 @@ export const mockEvents = {
   sessionPermissionEvent,
   sessionStateEvent,
   sessionCommandsEvent,
+  sessionTaskEvent,
   sessionTitleEvent,
   tickEvent,
   fsChangeEvent,
+  fsWatchErrorEvent,
   terminalOutputEvent,
   terminalExitEvent,
 };
@@ -125,6 +131,7 @@ function getRecord(session: string): SessionRecord {
       },
       item: (item) => sessionMessageEvent.emit({ session, item }),
       permission: (request) => sessionPermissionEvent.emit({ session, request }),
+      task: (task) => sessionTaskEvent.emit({ session, task }),
     });
     rec = { driver, lastState };
     records.set(session, rec);
@@ -184,6 +191,7 @@ export const mockCommands = {
         : null;
     const driver = getRecord(session).driver;
     if (demo === "question") driver.startQuestion();
+    else if (demo === "background") driver.startBackground();
     else driver.start();
     return ok(null);
   },
@@ -276,6 +284,15 @@ export const mockCommands = {
     return ok([]);
   },
 
+  async loadSubagentTranscript(
+    _sessionId: string,
+    _agentId: string,
+  ): Promise<Result<ConversationItem[], string>> {
+    // No on-disk transcript in the browser mock — return a representative sample so
+    // the transcript popover renders real-shaped content in dev/Playwright.
+    return ok(DEMO_SUBAGENT_TRANSCRIPT);
+  },
+
   async loadSessionContext(_sessionId: string): Promise<Result<ContextFill, string>> {
     // No transcript in the browser mock; the scenario's baseState already carries a
     // context fill, so nothing to seed here.
@@ -301,7 +318,33 @@ export const mockCommands = {
   // ---- Persistence: in-memory only (no real db in the browser). The store
   // boots empty and persists are no-ops, which is the correct dev behaviour.
   async loadPersistedState(): Promise<Result<PersistedState, string>> {
-    return ok({ repos: [], conversations: [], active_id: null });
+    // Adding a repo needs the native folder picker (absent in the browser), so the
+    // mock boots empty by default. With any `?demo` flag, seed one repo + conversation
+    // so the dev/Playwright build has something to drive (e.g. `?demo=background`).
+    const demo =
+      typeof location !== "undefined" && new URLSearchParams(location.search).has("demo");
+    if (!demo) return ok({ repos: [], conversations: [], active_id: null });
+    const now = Date.now();
+    return ok({
+      repos: [{ id: "repo-demo", path: "/Users/dev/demo-repo", added_at: now }],
+      conversations: [
+        {
+          id: "conv-demo",
+          name: "Démo tâches de fond",
+          repo_id: "repo-demo",
+          cwd: "/Users/dev/demo-repo",
+          created_at: now,
+          last_activity_at: now,
+          session_id: MOCK_SESSION_ID,
+          model: "claude-opus-4-8",
+          effort: "xhigh",
+          ultracode: false,
+          permission_mode: "auto",
+          pending_reminder: null,
+        },
+      ],
+      active_id: "conv-demo",
+    });
   },
 
   async upsertRepo(_repo: RepoRecord): Promise<Result<null, string>> {

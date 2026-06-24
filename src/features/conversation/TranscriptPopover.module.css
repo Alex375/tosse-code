@@ -1,0 +1,84 @@
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-scrim);
+  padding: 32px;
+}
+
+.panel {
+  width: 760px;
+  max-width: 92vw;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--wf-panel);
+  border: 1px solid var(--wf-line);
+  border-radius: var(--radius-lg, 14px);
+  box-shadow: var(--shadow-overlay, 0 12px 32px -10px #000);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--wf-line-2, var(--wf-line));
+  flex: 0 0 auto;
+}
+
+.titles {
+  min-width: 0;
+  flex: 1;
+}
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, var(--wf-tx));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subtitle {
+  font-size: 11px;
+  color: var(--wf-tx-lo);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wf-tx-lo);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.close:hover {
+  background: var(--bg-hover, #ffffff10);
+  color: var(--wf-tx);
+}
+
+.body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px;
+}
+
+.note {
+  padding: 16px 4px;
+  font-size: 12.5px;
+  color: var(--wf-tx-lo);
+}

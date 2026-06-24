@@ -245,6 +245,11 @@ pub struct ResultMsg {
     pub is_error: bool,
     /// Final assistant text, or structured output. String in the common case.
     pub result: Option<Value>,
+    /// API-level error status on an errored turn (e.g. `"overloaded"`). Present on the
+    /// wire (often `null`); kept raw so a non-string shape can't fail the whole line,
+    /// and surfaced as a typed error heading by the assembler.
+    #[serde(default)]
+    pub api_error_status: Value,
     pub stop_reason: Option<String>,
     pub session_id: Option<String>,
     pub uuid: Option<String>,

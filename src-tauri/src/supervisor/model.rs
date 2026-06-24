@@ -145,12 +145,21 @@ pub enum ConversationItem {
         subtype: String,
         is_error: bool,
         result: Option<Value>,
+        /// API-level error status on an errored turn (e.g. `"overloaded"`); `None` on
+        /// success or when the CLI omits it. Drives a typed error heading in the UI.
+        api_error_status: Option<String>,
         total_cost_usd: Option<f64>,
         num_turns: Option<u64>,
         duration_ms: Option<u64>,
     },
-    /// A non-conversational system notice (compact boundary, sub-agent task
-    /// lifecycle, …) surfaced raw for now.
+    /// A non-conversational notice surfaced in the timeline. Two families:
+    ///  - informational: `control_change` (a confirmed model/effort/mode move),
+    ///    compact boundaries, …
+    ///  - errors: `control_error`, `process_exited`, `send_failed`, `protocol_error`,
+    ///    and the generic `error` — each carries `detail.message` (+ optional
+    ///    `detail.detail`/`stderr`/`exit_code`) and renders as a visible error bubble.
+    ///    This is the single channel any layer uses to surface an error without new
+    ///    plumbing (the "zero silent error" contract).
     Notice {
         subtype: String,
         detail: Value,
@@ -234,6 +243,12 @@ pub struct BackgroundTask {
     pub label: Option<String>,
     /// Sub-agent type (`Agent` only, e.g. `"Explore"`).
     pub subagent_type: Option<String>,
+    /// Model the sub-agent ran on (`Agent` only), e.g. `"claude-haiku-4-5"`. Captured
+    /// from the sub-agent's streamed `assistant` message (`message.model`) — the wire's
+    /// ONLY place a sub-agent's model surfaces (it is absent from every `task_*` event
+    /// and from the normalized transcript). `None` for non-agent tasks, or until the
+    /// sub-agent streams its first assistant message.
+    pub model: Option<String>,
     /// The sub-agent's id (`Agent` only), i.e. the key for [`super::subagents::load_subagent_transcript`].
     /// Derived from the `output_file` basename (`subagents/agent-<agentId>.jsonl`), since
     /// the wire carries it only inside that path. Lets the UI drill into the transcript

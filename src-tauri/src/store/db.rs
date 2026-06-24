@@ -5,11 +5,12 @@
 //! schema, means rewriting this file and nothing else — callers and the IPC
 //! contract are insulated from it.
 //!
-//! The schema is deliberately allowed to churn during development: there is no
-//! data-preserving migration yet, only create-if-absent plus a [`Store::wipe_all`]
-//! escape hatch (also wired to the Settings "drop all" button). When the model
-//! stabilizes, bump `SCHEMA_VERSION` and add real migrations keyed off the
-//! `meta` table.
+//! Schema changes go through a versioned migration runner ([`Store::migrate`]):
+//! each entry in [`MIGRATIONS`] is applied once, in order, inside a transaction,
+//! and bumps the database's `user_version`. Migrations preserve data — additive
+//! `ALTER TABLE` / backfill, never a `DROP` that loses user rows on a schema
+//! change. [`Store::wipe_all`] stays a MANUAL escape hatch only (the Settings
+//! "drop all" button); it is never triggered by a schema change.
 //!
 //! SQLite itself is compiled into the binary (`rusqlite` `bundled` feature), so
 //! there is nothing to install and no system dependency.
@@ -21,10 +22,35 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::model::{ConversationRecord, PersistedState, RepoRecord};
 
-/// Bump when the schema changes in a way that needs a migration. Today the dev
-/// policy is wipe-and-recreate, so this is informational.
+/// The current schema version. Drives the versioned migration runner: on open, a
+/// database is brought up to this version by applying every migration in
+/// [`MIGRATIONS`] whose target exceeds its stored `user_version`. Always equal to
+/// `MIGRATIONS.len()` (checked at compile time below).
 const SCHEMA_VERSION: i64 = 3;
 const ACTIVE_ID_KEY: &str = "active_id";
+
+/// A single schema migration: a forward, data-preserving step. It receives the
+/// open connection (already inside the runner's per-migration transaction) and
+/// applies its DDL.
+type Migration = fn(&Connection) -> rusqlite::Result<()>;
+
+/// Ordered, APPEND-ONLY list of migrations. Index `i` migrates the schema from
+/// version `i` to version `i + 1`; the runner ([`Store::migrate`]) applies every
+/// migration whose target version exceeds the database's `user_version`, each in
+/// its own transaction. NEVER reorder, delete, or edit a shipped entry — only
+/// append. Editing the past would desync databases already migrated in the field.
+///
+/// Migration bodies must be ADDITIVE and idempotent: `CREATE TABLE IF NOT EXISTS`
+/// and `add_column_if_absent` (guarded `ALTER TABLE ... ADD COLUMN`) / backfill —
+/// never a `DROP` that loses user rows. A non-additive change (rename / retype /
+/// drop) needs SQLite's table-rebuild dance, which requires `PRAGMA foreign_keys`
+/// OFF — and that pragma is a NO-OP inside a transaction. Since the runner wraps
+/// each migration in one, such a migration must toggle foreign-key enforcement
+/// outside it; do not assume you can flip it from inside a `migrate_vN` body.
+const MIGRATIONS: &[Migration] = &[migrate_v1, migrate_v2, migrate_v3];
+
+// SCHEMA_VERSION and the migration list must agree, or version bookkeeping drifts.
+const _: () = assert!(MIGRATIONS.len() == SCHEMA_VERSION as usize);
 
 /// Owns the single SQLite connection. Held behind a `Mutex` because `rusqlite`
 /// is synchronous and writes are tiny and rare (create/rename/delete only), so a
@@ -45,6 +71,133 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Resu
         }
     }
     Ok(false)
+}
+
+/// Run `ddl` (an `ALTER TABLE ... ADD COLUMN`) only when `column` is absent. Keeps
+/// each additive migration idempotent across reopens, and tolerant of the
+/// pre-versioned-runner history where some columns shipped without a version bump
+/// (so a database may already carry a column its recorded version predates).
+fn add_column_if_absent(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    ddl: &str,
+) -> rusqlite::Result<()> {
+    if !column_exists(conn, table, column)? {
+        conn.execute(ddl, [])?;
+    }
+    Ok(())
+}
+
+/// v1 — the initial schema: a key/value `meta` table, `repos`, and the
+/// `conversations` metadata. `IF NOT EXISTS` so it stays safe even if a legacy
+/// database already has these tables but reports `user_version < 1`.
+fn migrate_v1(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meta (
+             key   TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS repos (
+             id       TEXT PRIMARY KEY,
+             path     TEXT NOT NULL,
+             added_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS conversations (
+             id         TEXT PRIMARY KEY,
+             name       TEXT NOT NULL,
+             repo_id    TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+             cwd        TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             session_id TEXT
+         );",
+    )
+}
+
+/// v2 — sidebar recency (`last_activity_at`) plus per-conversation controls
+/// (`model` / `effort` / `ultracode` / `permission_mode`). Every `ADD COLUMN` is
+/// guarded because `last_activity_at` originally shipped under v1 WITHOUT a version
+/// bump, so a database marked v1 may already carry it.
+fn migrate_v2(conn: &Connection) -> rusqlite::Result<()> {
+    add_column_if_absent(
+        conn,
+        "conversations",
+        "last_activity_at",
+        "ALTER TABLE conversations ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_absent(
+        conn,
+        "conversations",
+        "model",
+        "ALTER TABLE conversations ADD COLUMN model TEXT",
+    )?;
+    add_column_if_absent(
+        conn,
+        "conversations",
+        "effort",
+        "ALTER TABLE conversations ADD COLUMN effort TEXT",
+    )?;
+    add_column_if_absent(
+        conn,
+        "conversations",
+        "ultracode",
+        "ALTER TABLE conversations ADD COLUMN ultracode INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_absent(
+        conn,
+        "conversations",
+        "permission_mode",
+        "ALTER TABLE conversations ADD COLUMN permission_mode TEXT",
+    )?;
+    Ok(())
+}
+
+/// v3 — a persisted, acknowledgeable status reminder (review / error /
+/// open-question) so it re-surfaces after a restart even though the live process
+/// is gone. Defaults to NULL (nothing pending).
+fn migrate_v3(conn: &Connection) -> rusqlite::Result<()> {
+    add_column_if_absent(
+        conn,
+        "conversations",
+        "pending_reminder",
+        "ALTER TABLE conversations ADD COLUMN pending_reminder TEXT",
+    )
+}
+
+/// Bridge databases created before the versioned runner. They tracked the schema
+/// in `meta.schema_version` and left `user_version` at 0; seed `user_version` from
+/// that marker ONCE so already-applied migrations are not re-run. A brand-new
+/// database (no `meta` table yet) and a database already on the runner
+/// (`user_version != 0`) are both left untouched. Safe even if the seed is wrong:
+/// every migration body is idempotent.
+fn bridge_legacy_version(conn: &Connection) -> rusqlite::Result<()> {
+    let user_version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if user_version != 0 {
+        return Ok(());
+    }
+    let has_meta = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !has_meta {
+        return Ok(());
+    }
+    let legacy: Option<i64> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|value| value.parse().ok());
+    if let Some(version) = legacy {
+        conn.execute_batch(&format!("PRAGMA user_version = {version};"))?;
+    }
+    Ok(())
 }
 
 impl Store {
@@ -71,78 +224,32 @@ impl Store {
         Ok(store)
     }
 
+    /// Bring the database up to [`SCHEMA_VERSION`] by applying every migration in
+    /// [`MIGRATIONS`] whose target version exceeds the stored `user_version`. Each
+    /// migration runs in its own transaction and bumps `user_version` atomically
+    /// with its DDL, so a crash mid-migration rolls back BOTH (no half-applied
+    /// schema). Re-running on an up-to-date database is a no-op.
     fn migrate(&self) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS meta (
-                 key   TEXT PRIMARY KEY,
-                 value TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS repos (
-                 id       TEXT PRIMARY KEY,
-                 path     TEXT NOT NULL,
-                 added_at INTEGER NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS conversations (
-                 id               TEXT PRIMARY KEY,
-                 name             TEXT NOT NULL,
-                 repo_id          TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-                 cwd              TEXT NOT NULL,
-                 created_at       INTEGER NOT NULL,
-                 last_activity_at INTEGER NOT NULL DEFAULT 0,
-                 session_id       TEXT,
-                 model            TEXT,
-                 effort           TEXT,
-                 ultracode        INTEGER NOT NULL DEFAULT 0,
-                 permission_mode  TEXT,
-                 pending_reminder TEXT
-             );",
-        )?;
-        // Additive migration: a db created before `last_activity_at` keeps its
-        // table untouched by CREATE TABLE IF NOT EXISTS, so add the column in
-        // place. Existing rows get the sentinel 0 and are backfilled at boot once
-        // transcript mtimes can be resolved (see `backfill_last_activity`).
-        if !column_exists(&conn, "conversations", "last_activity_at")? {
-            conn.execute(
-                "ALTER TABLE conversations ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
-        // Additive migration (schema v2): per-conversation controls. A db created
-        // before these columns keeps its rows; new columns default to NULL/0, which
-        // map to the product defaults at spawn (opus / xhigh / default).
-        for (col, ddl) in [
-            ("model", "ALTER TABLE conversations ADD COLUMN model TEXT"),
-            ("effort", "ALTER TABLE conversations ADD COLUMN effort TEXT"),
-            (
-                "ultracode",
-                "ALTER TABLE conversations ADD COLUMN ultracode INTEGER NOT NULL DEFAULT 0",
-            ),
-            (
-                "permission_mode",
-                "ALTER TABLE conversations ADD COLUMN permission_mode TEXT",
-            ),
-            // Schema v3: a persisted, acknowledgeable status reminder (review /
-            // error / open-question) so it re-surfaces after a restart even though
-            // the live process is gone. Defaults to NULL (nothing pending).
-            (
-                "pending_reminder",
-                "ALTER TABLE conversations ADD COLUMN pending_reminder TEXT",
-            ),
-        ] {
-            if !column_exists(&conn, "conversations", col)? {
-                conn.execute(ddl, [])?;
+        let mut conn = self.conn.lock().unwrap();
+
+        // Seed `user_version` from the legacy `meta.schema_version` marker once, so
+        // databases created before the versioned runner skip already-applied steps.
+        bridge_legacy_version(&conn)?;
+
+        let current: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        for (i, migration) in MIGRATIONS.iter().enumerate() {
+            let target = i as i64 + 1;
+            if current >= target {
+                continue;
             }
+            let tx = conn.transaction()?;
+            migration(&tx)?;
+            // `user_version` lives in the db header and commits with the DDL.
+            // `target` is a trusted i64, so the format! interpolation is injection-safe
+            // (pragma values cannot be bound parameters).
+            tx.execute_batch(&format!("PRAGMA user_version = {target};"))?;
+            tx.commit()?;
         }
-        // Upsert (not INSERT OR IGNORE): after the additive migrations above run on an
-        // existing db, the on-disk schema really IS the new version, so `schema_version`
-        // must advance too — otherwise it stays frozen at its first-created value and a
-        // future version-keyed migration would mis-detect the state.
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![SCHEMA_VERSION.to_string()],
-        )?;
         Ok(())
     }
 
@@ -347,6 +454,17 @@ impl Store {
         )?;
         Ok(())
     }
+
+    /// The database's on-disk schema version (`PRAGMA user_version`). The runner
+    /// leaves it equal to [`SCHEMA_VERSION`] after a successful open.
+    #[cfg(test)]
+    fn schema_version(&self) -> i64 {
+        self.conn
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -406,6 +524,13 @@ mod tests {
         }
         fn open(&self) -> Store {
             Store::open(&self.dir.join("tosse.db")).unwrap()
+        }
+        /// Hand-build a legacy on-disk schema on a bare connection (no `Store`, so
+        /// no migration runs and `user_version` stays 0), then close it — exactly
+        /// the state a database left behind by an older app version is in.
+        fn seed_raw(&self, sql: &str) {
+            let conn = rusqlite::Connection::open(self.dir.join("tosse.db")).unwrap();
+            conn.execute_batch(sql).unwrap();
         }
     }
     impl Drop for TempDb {
@@ -772,5 +897,256 @@ mod tests {
         assert!(state.repos.is_empty());
         assert!(state.conversations.is_empty());
         assert_eq!(state.active_id, None);
+    }
+
+    // ---- Versioned migration runner ----------------------------------------
+
+    #[test]
+    fn migration_count_matches_schema_version() {
+        // The compile-time `const _: () = assert!(...)` guards this too; the runtime
+        // mirror makes the invariant visible in the test suite when one is bumped
+        // without the other.
+        assert_eq!(MIGRATIONS.len() as i64, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn fresh_db_ends_at_current_schema_version() {
+        // A brand-new database (no meta table) runs every migration in order and
+        // lands exactly on SCHEMA_VERSION.
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.schema_version(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn reopen_does_not_re_run_or_regress_version() {
+        // Second open over a migrated db: version stays put, data intact, no error.
+        let tmp = TempDb::new("reopen-version");
+        tmp.open().upsert_repo(&repo("r1")).unwrap();
+        let store = tmp.open();
+        assert_eq!(store.schema_version(), SCHEMA_VERSION);
+        assert_eq!(store.load_state().unwrap().repos, vec![repo("r1")]);
+    }
+
+    /// The original v1 schema (commit 9316e0b): base columns only — no
+    /// `last_activity_at`, no controls, no `pending_reminder`. The legacy marker
+    /// lived in `meta.schema_version`, with `user_version` left at 0.
+    const LEGACY_V1_BASE: &str = "
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE repos (id TEXT PRIMARY KEY, path TEXT NOT NULL, added_at INTEGER NOT NULL);
+        CREATE TABLE conversations (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            repo_id    TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+            cwd        TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            session_id TEXT
+        );
+        INSERT INTO meta (key, value) VALUES ('schema_version', '1');
+        INSERT INTO repos (id, path, added_at) VALUES ('r1', '/tmp/r1', 1);
+        INSERT INTO conversations (id, name, repo_id, cwd, created_at, session_id)
+            VALUES ('c1', 'Legacy v1', 'r1', '/tmp/r1', 5, 'sess-1');
+    ";
+
+    #[test]
+    fn legacy_v1_base_db_migrates_preserving_data() {
+        let tmp = TempDb::new("legacy-v1-base");
+        tmp.seed_raw(LEGACY_V1_BASE);
+
+        let store = tmp.open();
+        assert_eq!(store.schema_version(), SCHEMA_VERSION, "bridged then migrated to v3");
+
+        let convs = store.load_state().unwrap().conversations;
+        assert_eq!(convs.len(), 1, "the pre-versioned row must survive");
+        let c = &convs[0];
+        assert_eq!(c.id, "c1");
+        assert_eq!(c.name, "Legacy v1");
+        assert_eq!(c.session_id.as_deref(), Some("sess-1"));
+        // Columns added by the migrations default cleanly on the upgraded row.
+        assert_eq!(c.last_activity_at, 0, "added by v2, backfillable at boot");
+        assert_eq!(c.model, None);
+        assert_eq!(c.effort, None);
+        assert!(!c.ultracode);
+        assert_eq!(c.permission_mode, None);
+        assert_eq!(c.pending_reminder, None);
+
+        // And every new column is fully usable after the in-place upgrade.
+        let mut c = c.clone();
+        c.pending_reminder = Some("error".into());
+        c.model = Some("sonnet".into());
+        store.upsert_conversation(&c).unwrap();
+        let got = store.load_state().unwrap().conversations.remove(0);
+        assert_eq!(got.pending_reminder.as_deref(), Some("error"));
+        assert_eq!(got.model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn legacy_v1_with_last_activity_preserves_its_value() {
+        // Commit 6e388d1 added `last_activity_at` WITHOUT bumping SCHEMA_VERSION, so a
+        // db still marked v1 may already carry it with a real value. The guarded v2
+        // migration must NOT clobber that value back to the default.
+        let tmp = TempDb::new("legacy-v1-activity");
+        tmp.seed_raw(
+            "
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE repos (id TEXT PRIMARY KEY, path TEXT NOT NULL, added_at INTEGER NOT NULL);
+            CREATE TABLE conversations (
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                repo_id          TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                cwd              TEXT NOT NULL,
+                created_at       INTEGER NOT NULL,
+                last_activity_at INTEGER NOT NULL DEFAULT 0,
+                session_id       TEXT
+            );
+            INSERT INTO meta (key, value) VALUES ('schema_version', '1');
+            INSERT INTO repos (id, path, added_at) VALUES ('r1', '/tmp/r1', 1);
+            INSERT INTO conversations (id, name, repo_id, cwd, created_at, last_activity_at, session_id)
+                VALUES ('c1', 'Legacy v1.5', 'r1', '/tmp/r1', 5, 777, 'sess-1');
+            ",
+        );
+
+        let store = tmp.open();
+        assert_eq!(store.schema_version(), SCHEMA_VERSION);
+        let c = store.load_state().unwrap().conversations.remove(0);
+        assert_eq!(c.last_activity_at, 777, "guarded ADD COLUMN must not reset it");
+        assert_eq!(c.model, None, "controls were still added");
+        assert_eq!(c.pending_reminder, None, "pending_reminder was still added");
+    }
+
+    #[test]
+    fn legacy_v2_db_gains_pending_reminder_only() {
+        // Commit d921d8f (v2): controls present, no `pending_reminder`. Only the v3
+        // migration should run; controls and rows must be preserved untouched.
+        let tmp = TempDb::new("legacy-v2");
+        tmp.seed_raw(
+            "
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE repos (id TEXT PRIMARY KEY, path TEXT NOT NULL, added_at INTEGER NOT NULL);
+            CREATE TABLE conversations (
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                repo_id          TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                cwd              TEXT NOT NULL,
+                created_at       INTEGER NOT NULL,
+                last_activity_at INTEGER NOT NULL DEFAULT 0,
+                session_id       TEXT,
+                model            TEXT,
+                effort           TEXT,
+                ultracode        INTEGER NOT NULL DEFAULT 0,
+                permission_mode  TEXT
+            );
+            INSERT INTO meta (key, value) VALUES ('schema_version', '2');
+            INSERT INTO repos (id, path, added_at) VALUES ('r1', '/tmp/r1', 1);
+            INSERT INTO conversations
+                (id, name, repo_id, cwd, created_at, last_activity_at, session_id,
+                 model, effort, ultracode, permission_mode)
+                VALUES ('c1', 'Legacy v2', 'r1', '/tmp/r1', 5, 42, 'sess-1',
+                        'sonnet', 'xhigh', 1, 'plan');
+            ",
+        );
+
+        let store = tmp.open();
+        assert_eq!(store.schema_version(), SCHEMA_VERSION);
+        let c = store.load_state().unwrap().conversations.remove(0);
+        assert_eq!(c.model.as_deref(), Some("sonnet"), "controls preserved");
+        assert_eq!(c.effort.as_deref(), Some("xhigh"));
+        assert!(c.ultracode);
+        assert_eq!(c.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(c.last_activity_at, 42);
+        assert_eq!(c.pending_reminder, None, "the only newly added column");
+    }
+
+    #[test]
+    fn legacy_v3_db_runs_no_migration() {
+        // A db left by the current shipped code (full schema, marker '3', but
+        // user_version still 0): the bridge seeds user_version=3, no migration runs,
+        // and every value — including pending_reminder — survives untouched.
+        let tmp = TempDb::new("legacy-v3");
+        tmp.seed_raw(
+            "
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE repos (id TEXT PRIMARY KEY, path TEXT NOT NULL, added_at INTEGER NOT NULL);
+            CREATE TABLE conversations (
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                repo_id          TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                cwd              TEXT NOT NULL,
+                created_at       INTEGER NOT NULL,
+                last_activity_at INTEGER NOT NULL DEFAULT 0,
+                session_id       TEXT,
+                model            TEXT,
+                effort           TEXT,
+                ultracode        INTEGER NOT NULL DEFAULT 0,
+                permission_mode  TEXT,
+                pending_reminder TEXT
+            );
+            INSERT INTO meta (key, value) VALUES ('schema_version', '3');
+            INSERT INTO repos (id, path, added_at) VALUES ('r1', '/tmp/r1', 1);
+            INSERT INTO conversations
+                (id, name, repo_id, cwd, created_at, last_activity_at, session_id, pending_reminder)
+                VALUES ('c1', 'Legacy v3', 'r1', '/tmp/r1', 5, 9, 'sess-1', 'review');
+            ",
+        );
+
+        let store = tmp.open();
+        assert_eq!(store.schema_version(), SCHEMA_VERSION);
+        let c = store.load_state().unwrap().conversations.remove(0);
+        assert_eq!(c.name, "Legacy v3");
+        assert_eq!(c.pending_reminder.as_deref(), Some("review"), "untouched");
+        assert_eq!(c.last_activity_at, 9);
+    }
+
+    #[test]
+    fn frozen_marker_with_full_schema_preserves_real_values_and_active_id() {
+        // The DOMINANT real-world legacy shape. The pre-runner builds wrote
+        // `meta.schema_version` with INSERT OR IGNORE, so the marker FROZE at the
+        // value first written and never advanced — yet every later app version kept
+        // adding columns to the on-disk schema. So a database can sit at marker '1'
+        // while already carrying the FULL v3 schema WITH real user values. The
+        // bridge seeds user_version=1 and the runner re-runs the guarded v2/v3
+        // migrations — which must be exact no-ops that DO NOT reset those values,
+        // and must not disturb the active selection.
+        let tmp = TempDb::new("frozen-marker-full");
+        tmp.seed_raw(
+            "
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE repos (id TEXT PRIMARY KEY, path TEXT NOT NULL, added_at INTEGER NOT NULL);
+            CREATE TABLE conversations (
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                repo_id          TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                cwd              TEXT NOT NULL,
+                created_at       INTEGER NOT NULL,
+                last_activity_at INTEGER NOT NULL DEFAULT 0,
+                session_id       TEXT,
+                model            TEXT,
+                effort           TEXT,
+                ultracode        INTEGER NOT NULL DEFAULT 0,
+                permission_mode  TEXT,
+                pending_reminder TEXT
+            );
+            INSERT INTO meta (key, value) VALUES ('schema_version', '1');
+            INSERT INTO meta (key, value) VALUES ('active_id', 'c1');
+            INSERT INTO repos (id, path, added_at) VALUES ('r1', '/tmp/r1', 1);
+            INSERT INTO conversations
+                (id, name, repo_id, cwd, created_at, last_activity_at, session_id,
+                 model, effort, ultracode, permission_mode, pending_reminder)
+                VALUES ('c1', 'Frozen', 'r1', '/tmp/r1', 5, 1234, 'sess-1',
+                        'opus', 'xhigh', 1, 'plan', 'review');
+            ",
+        );
+
+        let store = tmp.open();
+        assert_eq!(store.schema_version(), SCHEMA_VERSION, "marker '1' bridged, runner advanced to v3");
+        let state = store.load_state().unwrap();
+        assert_eq!(state.active_id.as_deref(), Some("c1"), "active selection survives migration");
+        let c = &state.conversations[0];
+        // Every real value must survive the re-run of the guarded v2/v3 migrations.
+        assert_eq!(c.last_activity_at, 1234, "guarded ADD must not reset to DEFAULT 0");
+        assert_eq!(c.model.as_deref(), Some("opus"));
+        assert_eq!(c.effort.as_deref(), Some("xhigh"));
+        assert!(c.ultracode);
+        assert_eq!(c.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(c.pending_reminder.as_deref(), Some("review"), "guarded ADD must not reset to NULL");
     }
 }

@@ -95,8 +95,18 @@ fn load_subagent_transcript_in(
         return Vec::new();
     };
     match std::fs::read_to_string(&path) {
-        // A sub-agent's transcript is ENTIRELY sidechain, so keep every line.
-        Ok(content) => parse_transcript_str(&content, false),
+        // A sub-agent's transcript is ENTIRELY sidechain, so keep every line. Any
+        // malformed lines are logged (the drill-down view, when built, can surface them).
+        Ok(content) => {
+            let (items, skipped) = parse_transcript_str(&content, false);
+            if skipped > 0 {
+                eprintln!(
+                    "[subagents] {skipped} unparseable line(s) skipped in {}",
+                    path.display()
+                );
+            }
+            items
+        }
         // `find_file_recursive` already confirmed the file exists, so a read error here
         // is a real failure (permission/IO), not "absent" — log it, never silent.
         Err(e) => {

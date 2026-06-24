@@ -55,3 +55,23 @@
 /* whole-view empty state (no repos / no conversations yet) */
 .ag-empty { margin:auto; text-align:center; color:var(--wf-tx-lo); max-width:440px; padding:40px; line-height:1.7; }
 .ag-empty-title { font-size:15px; color:var(--wf-tx); margin:10px 0 6px; }
+
+/* Background-tasks chip on a card footer ("⚙︎ N" running) + its grouped popover. */
+.ag-bgbadge { display:inline-flex; align-items:center; gap:4px; padding:2px 7px; border:1px solid var(--wf-line); border-radius:999px; background:var(--wf-bg-2); color:var(--wf-tx-lo); font:inherit; font-size:11px; cursor:pointer; transition:background .12s ease, color .12s ease, border-color .12s ease; }
+.ag-bgbadge:hover { color:var(--wf-tx-hi); border-color:var(--wf-line-2,var(--wf-line)); }
+.ag-bgbadge .wf-ico { width:13px; height:13px; }
+
+/* Portal backdrop: catches the click-away without dimming (transparent). */
+.ag-bgpop-backdrop { position:fixed; inset:0; z-index:150; }
+.ag-bgpop { z-index:151; min-width:240px; max-width:340px; max-height:60vh; overflow-y:auto; overscroll-behavior:contain; padding:6px; display:flex; flex-direction:column; gap:8px; background:var(--wf-panel-2); border:1px solid var(--wf-line-2); border-radius:10px; box-shadow:0 14px 36px -12px #000, 0 0 0 1px #0006; }
+.ag-bgpop-grp { display:flex; flex-direction:column; gap:2px; }
+.ag-bgpop-h { display:flex; align-items:center; gap:6px; padding:2px 6px; font-size:10.5px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; color:var(--wf-tx-xlo); }
+.ag-bgpop-h .wf-ico { width:12px; height:12px; }
+.ag-bgpop-n { margin-left:auto; font-variant-numeric:tabular-nums; }
+.ag-bgpop-row { display:flex; align-items:center; gap:8px; width:100%; padding:6px 7px; border:0; border-radius:7px; background:transparent; color:var(--wf-tx); font:inherit; text-align:left; cursor:pointer; transition:background .12s ease; }
+.ag-bgpop-row:hover:not(:disabled) { background:color-mix(in srgb, var(--wf-panel-3,var(--wf-bg-2)) 70%, transparent); }
+.ag-bgpop-row.static { cursor:default; }
+.ag-bgpop-row:disabled { cursor:default; }
+.ag-bgpop-row .wf-dot { flex:0 0 auto; }
+.ag-bgpop-label { flex:1; min-width:0; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ag-bgpop-meta { flex:0 0 auto; font-size:10px; color:var(--wf-tx-lo); }

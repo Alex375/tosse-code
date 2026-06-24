@@ -27,6 +27,7 @@ import type {
 import type {
   ErrorItem,
   NoticeItem,
+  NormalizedBlock,
   SessionEntry,
   TimelineEntry,
   TodoItem,
@@ -35,6 +36,7 @@ import type {
   Turn,
   TurnResultMeta,
 } from "./types";
+import { isBackgroundAgentInput } from "../agent/subagentMeta";
 import { latestTodosInBlocks, todoSummary } from "./todos";
 
 const connectingState: SessionStatePayload = {
@@ -66,6 +68,7 @@ function emptyEntry(session: string): SessionEntry {
     pendingPermissions: [],
     openBubble: {},
     subThreads: {},
+    bgAgentIds: [],
     todos: [],
     // No finished turn yet → nothing to review (an idle, never-run session reads
     // as idle/off, not "ready for review").
@@ -75,6 +78,17 @@ function emptyEntry(session: string): SessionEntry {
 }
 
 const rootKey = (parentToolUseId: string | null) => parentToolUseId ?? "root";
+
+/** tool_use ids of `Agent`/`Task` blocks launched detached (`run_in_background`). */
+function backgroundAgentIdsIn(blocks: NormalizedBlock[]): string[] {
+  const ids: string[] = [];
+  for (const b of blocks) {
+    if (b.type === "tool_use" && (b.name === "Agent" || b.name === "Task") && isBackgroundAgentInput(b.input)) {
+      ids.push(b.id);
+    }
+  }
+  return ids;
+}
 
 function hasTimelineId(timeline: TimelineEntry[], id: string): boolean {
   return timeline.some((e) => e.id === id);
@@ -116,8 +130,9 @@ interface ConversationState {
    *  injects it before the loop ends) → drives the "en attente" badge. */
   addUserTurn: (session: string, text: string, queued?: boolean) => void;
   /** Append a visible error bubble to the timeline (e.g. a send that failed to
-   *  spawn the session). Makes an otherwise-silent command failure self-evident. */
-  addErrorTurn: (session: string, message: string) => void;
+   *  spawn the session). Makes an otherwise-silent command failure self-evident.
+   *  `detail` (optional) is the raw technical payload, shown behind a disclosure. */
+  addErrorTurn: (session: string, message: string, detail?: string | null) => void;
   enqueuePermission: (session: string, request: PermissionRequestPayload) => void;
   removePermission: (session: string, requestId: string) => void;
   /** Acknowledge the last finished turn ("Vu" button): mark it seen so the
@@ -273,7 +288,7 @@ export const useConversationStore = create<ConversationState>((set) => {
         };
       }),
 
-    addErrorTurn: (session, message) =>
+    addErrorTurn: (session, message, detail) =>
       withEntry(session, (entry) => {
         const id = `err_${entry.seq}`;
         // An error turn means the send failed (or a respawn fallback): a message
@@ -282,7 +297,7 @@ export const useConversationStore = create<ConversationState>((set) => {
         return clearQueuedBadges({
           ...entry,
           seq: entry.seq + 1,
-          errors: { ...entry.errors, [id]: { id, message } },
+          errors: { ...entry.errors, [id]: { id, message, detail: detail ?? null } },
           timeline: [...entry.timeline, { kind: "error", id }],
         });
       }),
@@ -400,7 +415,16 @@ export const useConversationStore = create<ConversationState>((set) => {
               streamingThinking: "",
               hasThinking: blocks.some((b) => b.type === "thinking"),
             };
-            const next = { ...base, turns: { ...base.turns, [item.id]: turn } };
+            let next = { ...base, turns: { ...base.turns, [item.id]: turn } };
+            // Record any detached sub-agent (`Agent` with run_in_background) launched in
+            // this message, so the pinned AgentBar can list it WITHOUT re-scanning every
+            // block on each streamed token. Done once per assistant_message.
+            const newBg = backgroundAgentIdsIn(item.blocks).filter(
+              (id) => !next.bgAgentIds.includes(id),
+            );
+            if (newBg.length > 0) {
+              next = { ...next, bgAgentIds: [...next.bgAgentIds, ...newBg] };
+            }
             // Capture the agent's to-do list from a TodoWrite tool_use (last
             // write wins). Scoped to the MAIN thread: a sub-agent (Task) keeps
             // its own todos and must not overwrite the conversation-level list.
@@ -430,6 +454,7 @@ export const useConversationStore = create<ConversationState>((set) => {
               subtype: item.subtype,
               isError: item.is_error,
               result: item.result,
+              apiErrorStatus: item.api_error_status ?? null,
               totalCostUsd: item.total_cost_usd,
               numTurns: item.num_turns,
               durationMs: item.duration_ms,
@@ -479,6 +504,10 @@ export const useConversationStore = create<ConversationState>((set) => {
           }
 
           default:
+            // A ConversationItem kind we don't handle (a new core/protocol variant
+            // landing before the front catches up). TS has no exhaustiveness guard on
+            // this switch, so it would be dropped without a trace — log it instead.
+            console.warn("[conversationStore] unhandled ConversationItem kind:", (item as { kind?: string }).kind);
             return entry;
         }
       }),
@@ -534,6 +563,17 @@ export const useSubThread = (
 ): string[] =>
   useConversationStore(
     useShallow((s) => s.sessions[session]?.subThreads[parentToolUseId] ?? EMPTY_IDS),
+  );
+
+/**
+ * tool_use ids of the sub-agents (`Agent`/`Task`) this conversation launched DETACHED
+ * (`run_in_background: true`). Captured at write time (see `bgAgentIds` in the
+ * reducer), so this is an O(1) field read — shallow-compared, re-renders only when a
+ * new detached sub-agent appears. Detached sub-agents show in the pinned AgentBar,
+ * not inline; the inline card suppresses itself for them. */
+export const useBackgroundAgentIds = (session: string): string[] =>
+  useConversationStore(
+    useShallow((s) => s.sessions[session]?.bgAgentIds ?? EMPTY_IDS),
   );
 
 /** The conversation's current to-do list (raw items, in agent order). */

@@ -98,6 +98,9 @@ export interface TurnResultMeta {
   subtype: string;
   isError: boolean;
   result: JsonValue | null;
+  /** API-level error status carried by an errored `result` (e.g. `"overloaded"`),
+   *  surfaced as a typed heading. `null` on success / when the CLI omits it. */
+  apiErrorStatus: string | null;
   totalCostUsd: number | null;
   numTurns: number | null;
   durationMs: number | null;
@@ -118,6 +121,9 @@ export interface NoticeItem {
 export interface ErrorItem {
   id: string;
   message: string;
+  /** Optional raw technical detail (stderr / stack / raw line), shown behind a
+   *  collapsed "Détails techniques" disclosure. */
+  detail?: string | null;
 }
 
 /**
@@ -151,6 +157,13 @@ export interface SessionEntry {
   openBubble: Record<string, string | undefined>;
   /** Ordered turn ids per sub-agent (Task) thread, keyed by parent_tool_use_id. */
   subThreads: Record<string, string[]>;
+  /**
+   * tool_use ids of the sub-agents (`Agent`/`Task`) launched DETACHED
+   * (`input.run_in_background === true`). Captured once per assistant_message (not
+   * re-scanned per token) so the pinned AgentBar reads them in O(1). Detached
+   * sub-agents are shown in that bar, not inline in the thread.
+   */
+  bgAgentIds: string[];
   /**
    * The agent's current to-do list (last `TodoWrite` on the MAIN thread wins; a
    * sub-agent keeps its own and does not clobber this). Empty until the agent

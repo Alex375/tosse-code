@@ -234,8 +234,15 @@ impl Assembler {
             CliMessage::User(u) => self.ingest_user(u, &mut out),
             CliMessage::Result(r) => self.ingest_result(r, &mut out),
             CliMessage::RateLimitEvent(rl) => self.ingest_rate_limit(rl, &mut out),
-            // control_* / keep_alive / transcript_mirror / unknown: nothing for the
-            // UI at this layer.
+            // A top-level `"type"` we do not model — almost always CLI protocol drift
+            // after a binary upgrade. Nothing to render (we don't know its shape), but
+            // log it so the drift is diagnosable instead of vanishing without a trace.
+            CliMessage::Unknown => {
+                eprintln!(
+                    "[assembler] dropping an unmodeled top-level message (CLI protocol drift after an upgrade?)"
+                );
+            }
+            // control_* / keep_alive / transcript_mirror: nothing for the UI at this layer.
             _ => {}
         }
         out
@@ -317,6 +324,7 @@ impl Assembler {
                 tool_use_id: t.tool_use_id.clone(),
                 label: t.description.clone(),
                 subagent_type: t.subagent_type.clone(),
+                model: None,
                 agent_id: None,
                 status: BackgroundTaskStatus::Running,
                 progress: None,
@@ -434,6 +442,7 @@ impl Assembler {
                 tool_use_id: tool_use_id.map(str::to_string),
                 label: None,
                 subagent_type: None,
+                model: None,
                 agent_id: None,
                 status: BackgroundTaskStatus::Running,
                 progress: None,
@@ -585,6 +594,36 @@ impl Assembler {
             blocks,
             parent_tool_use_id: a.parent_tool_use_id.clone(),
         }));
+        // A sub-agent's assistant message carries the model it ran on — the wire's only
+        // place a sub-agent's model appears (absent from every `task_*` event). Correlate
+        // by `parent_tool_use_id` → the spawning `Agent` tool_use → its BackgroundTask,
+        // stash the model, and re-emit the task on first capture / change so the UI can
+        // show it on the sub-agent card. Cheap: only sub-agent messages (parent set) hit
+        // this, and only a real change re-emits.
+        if let Some(parent) = a.parent_tool_use_id.as_deref() {
+            if let Some(model) = a.message.get("model").and_then(Value::as_str) {
+                match self
+                    .background_tasks
+                    .values_mut()
+                    .find(|t| t.tool_use_id.as_deref() == Some(parent))
+                {
+                    Some(task) => {
+                        if task.model.as_deref() != Some(model) {
+                            task.model = Some(model.to_string());
+                            out.push(SessionEvent::Task(task.clone()));
+                        }
+                    }
+                    // The sub-agent's model is data that exists ONLY here on the wire, so a
+                    // failed correlation (e.g. its `assistant` arrived before `task_started`
+                    // seeded the task) silently loses it. That must never be silent — log it
+                    // (same policy as the rest of this module). Rare: `task_started` normally
+                    // precedes any sub-agent output.
+                    None => eprintln!(
+                        "[assembler] sub-agent model {model:?} not correlated: no background task with tool_use_id {parent:?}"
+                    ),
+                }
+            }
+        }
     }
 
     fn ingest_user(&mut self, u: &UserMsg, out: &mut Vec<SessionEvent>) {
@@ -636,6 +675,9 @@ impl Assembler {
             subtype: r.subtype.clone(),
             is_error: r.is_error,
             result: r.result.clone(),
+            // Present on the wire (often null); surface it only when it's a real string
+            // so an errored turn can show a typed "Erreur d'API : <status>" heading.
+            api_error_status: r.api_error_status.as_str().map(str::to_string),
             total_cost_usd: r.total_cost_usd,
             num_turns: r.num_turns,
             duration_ms: r.duration_ms,
@@ -935,6 +977,51 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert!(matches!(&blocks[0], NormalizedBlock::Text { text } if text == "let me check"));
         assert!(matches!(&blocks[1], NormalizedBlock::ToolUse { name, .. } if name == "Bash"));
+    }
+
+    /// A sub-agent's model surfaces ONLY inside its own streamed `assistant` message
+    /// (`message.model`); the assembler must correlate it (via `parent_tool_use_id` →
+    /// the spawning Agent tool_use → its task) and stash it on the BackgroundTask.
+    #[test]
+    fn captures_subagent_model_from_its_assistant_message() {
+        let mut asm = Assembler::new();
+        // The spawning `Agent` tool_use — records the tool name for task classification.
+        let parent: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "assistant",
+            "message": {"id": "msg_p", "role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_agent", "name": "Agent",
+                 "input": {"description": "Explore", "subagent_type": "Explore"}}
+            ]},
+            "session_id": "s", "uuid": "u_p"
+        }))
+        .unwrap();
+        asm.ingest(&parent);
+        // `task_started` for that Agent tool_use → seeds the BackgroundTask.
+        let started: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "task_started", "task_id": "task_1",
+            "tool_use_id": "toolu_agent", "description": "Explore",
+            "subagent_type": "Explore", "task_type": "local_agent"
+        }))
+        .unwrap();
+        asm.ingest(&started);
+        // The sub-agent's OWN assistant message: parent_tool_use_id set + model present.
+        let sub: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "assistant",
+            "message": {"id": "msg_s", "role": "assistant", "model": "claude-haiku-4-5",
+                        "content": [{"type": "text", "text": "hi"}]},
+            "parent_tool_use_id": "toolu_agent", "session_id": "s", "uuid": "u_s"
+        }))
+        .unwrap();
+        let events = asm.ingest(&sub);
+        let task = events
+            .into_iter()
+            .find_map(|e| match e {
+                SessionEvent::Task(t) => Some(t),
+                _ => None,
+            })
+            .expect("the sub-agent's assistant message should re-emit its task with the model");
+        assert_eq!(task.model.as_deref(), Some("claude-haiku-4-5"));
+        assert_eq!(task.tool_use_id.as_deref(), Some("toolu_agent"));
     }
 
     #[test]

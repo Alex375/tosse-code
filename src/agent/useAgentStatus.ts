@@ -9,6 +9,7 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore } from "../store/conversationsStore";
+import { useRunningTaskCount } from "../store/backgroundTasksStore";
 import type { SessionEntry } from "../store/types";
 import {
   deriveAgentStatus,
@@ -17,10 +18,14 @@ import {
   type ReminderKind,
 } from "./status";
 
-// The signals carried by the LIVE message-store entry — everything in
-// AgentSignals except the two that live in the conversations (metadata) store:
-// the live `handle` and the `persistedReminder`.
-type InnerSignals = Omit<AgentSignals, "handle" | "persistedReminder">;
+// The signals carried by the LIVE message-store entry — everything in AgentSignals
+// except the ones sourced elsewhere: the live `handle` and `persistedReminder` (the
+// conversations/metadata store) and `runningBackgroundTasks` (the background-task
+// registry).
+type InnerSignals = Omit<
+  AgentSignals,
+  "handle" | "persistedReminder" | "runningBackgroundTasks"
+>;
 
 const NEUTRAL: InnerSignals = {
   busy: false,
@@ -97,8 +102,9 @@ export function agentStatusForEntry(
   handle: string | null,
   entry: SessionEntry | undefined,
   persistedReminder: ReminderKind | null = null,
+  runningBackgroundTasks = 0,
 ): AgentStatus {
-  return deriveAgentStatus({ handle, persistedReminder, ...gather(entry) });
+  return deriveAgentStatus({ handle, persistedReminder, runningBackgroundTasks, ...gather(entry) });
 }
 
 /**
@@ -117,8 +123,9 @@ export function useAgentStatus(convId: string): AgentStatus {
     }),
   );
   const inner = useConversationStore(useShallow((s) => gather(s.sessions[convId])));
+  const runningBackgroundTasks = useRunningTaskCount(convId);
   return useMemo(
-    () => deriveAgentStatus({ handle, persistedReminder, ...inner }),
-    [handle, persistedReminder, inner],
+    () => deriveAgentStatus({ handle, persistedReminder, runningBackgroundTasks, ...inner }),
+    [handle, persistedReminder, runningBackgroundTasks, inner],
   );
 }

@@ -20,13 +20,16 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "../ipc/client";
-import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
+import type { ConversationItem, ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
+import { useBackgroundTasksStore } from "./backgroundTasksStore";
+import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
+import { worktreeCwdFromTranscript } from "../features/git/worktree";
 import { useMemo } from "react";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
@@ -203,17 +206,32 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   pendingReminder: asReminderKind(c.pending_reminder),
 });
 
-/** Fire a persistence command, logging (never throwing) on failure. Persistence
- *  is best-effort and off the hot path — a failed write must not break the UI. */
+// The one user-facing message for any persistence failure (deduped in the banner),
+// so a broken DB shows ONE clear warning, not a flood of per-write errors.
+const PERSIST_FAILURE_MSG =
+  "Impossible d'enregistrer les modifications de la conversation — elles risquent de ne pas survivre au redémarrage.";
+
+/** Fire a persistence command, logging AND surfacing (never throwing) on failure.
+ *  Persistence is best-effort and off the hot path — a failed write must not break
+ *  the UI — but it must NOT be silent: a lost rename/model/etc would vanish on the
+ *  next restart with no warning, so it raises an app-level banner (deduped). */
 function syncToCore(
   label: string,
   run: () => Promise<{ status: "ok"; data: unknown } | { status: "error"; error: string }>,
 ): void {
   void run()
     .then((res) => {
-      if (res.status !== "ok") console.error(`[persist] ${label} failed:`, res.error);
+      if (res.status !== "ok") {
+        console.error(`[persist] ${label} failed:`, res.error);
+        useAppErrors.getState().pushError(PERSIST_FAILURE_MSG, `${label}: ${res.error}`);
+      }
     })
-    .catch((e) => console.error(`[persist] ${label} threw:`, e));
+    .catch((e) => {
+      console.error(`[persist] ${label} threw:`, e);
+      useAppErrors
+        .getState()
+        .pushError(PERSIST_FAILURE_MSG, `${label}: ${e instanceof Error ? e.message : String(e)}`);
+    });
 }
 
 interface ConversationsState {
@@ -362,6 +380,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // Drop its (now unreachable) message timeline from the message store, and its
     // persisted context-window so the localStorage cache doesn't keep orphans.
     useConversationStore.getState().dropSession(id);
+    useBackgroundTasksStore.getState().dropSession(id);
     clearCachedWindow(id);
     clearTodoBarOpen(id);
     clearComposerDraft(id);
@@ -648,7 +667,16 @@ export async function bootConversations(): Promise<void> {
       activeId: res.data.active_id,
     });
   } else {
+    // A failed hydration leaves the store empty — INDISTINGUISHABLE from a fresh
+    // install, so all the user's conversations would appear silently gone. Surface
+    // it loudly: a corrupt/locked DB is a real problem, not "no conversations yet".
     console.error("loadPersistedState failed:", res.error);
+    useAppErrors
+      .getState()
+      .pushError(
+        "Impossible de charger vos conversations — la base de données est peut-être corrompue ou verrouillée. Vos données ne sont pas perdues ; redémarre l'application.",
+        res.error,
+      );
   }
 }
 
@@ -830,6 +858,20 @@ export async function restartConversationSession(convId: string): Promise<string
 const historyLoaded = new Set<string>();
 
 /**
+ * Re-derive a conversation's active worktree from its transcript and restore it as
+ * `liveCwd`, so the editor (and the worktree indicator/badge, which share
+ * `effectiveCwd`) root on the RIGHT worktree even out of a live session and after
+ * a restart — not the main checkout. `liveCwd` is in-memory only (no SQLite
+ * column, no migration); the on-disk transcript is its durable source of truth.
+ * Mirrors the live EnterWorktree/ExitWorktree interception in
+ * `useGlobalSessionEvents`. A conversation that never touched a worktree (or last
+ * did ExitWorktree) yields null → `effectiveCwd` falls back to `conv.cwd`.
+ */
+function rehydrateWorktreeCwd(convId: string, items: ConversationItem[]): void {
+  useConversationsStore.getState().setLiveCwd(convId, worktreeCwdFromTranscript(items));
+}
+
+/**
  * Load a conversation's history from Claude's on-disk transcript into the message
  * store, keyed by its STABLE id — no process spawned (pure file IO). Idempotent
  * and run at most once per conversation per app run; `applyItem` also dedupes by
@@ -842,11 +884,24 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv || !conv.sessionId) return;
   const res = await commands.loadSessionHistory(conv.sessionId);
-  if (res.status !== "ok" || res.data.length === 0) return;
+  // Distinguish a real failure from "nothing to show": a command-level error
+  // (rare — the core itself rarely rejects; a corrupt transcript comes back as an
+  // in-band history_error Notice item) is surfaced, an empty history is silent.
+  if (res.status !== "ok") {
+    console.error("loadSessionHistory failed:", res.error);
+    useAppErrors
+      .getState()
+      .pushError("Impossible de charger l'historique d'une conversation.", res.error);
+    return;
+  }
+  if (res.data.length === 0) return;
   const { ensureSession, applyItem, applyContextFill, markSeen } =
     useConversationStore.getState();
   ensureSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // Root the editor on the worktree this conversation actually lives in, read back
+  // from the transcript (its live cwd is in-memory only and lost on restart).
+  rehydrateWorktreeCwd(convId, res.data);
   // The replayed transcript ends on a past turn_result, which arms "review". But a
   // historical completion is not a fresh "Claude just finished, go look" — mark it
   // seen so only genuine LIVE completions surface as review.
@@ -881,11 +936,21 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return;
   const res = await commands.loadSessionHistory(conv.sessionId);
-  if (res.status !== "ok" || res.data.length === 0) return; // keep timeline on error/empty
+  if (res.status !== "ok") {
+    console.error("loadSessionHistory (reload) failed:", res.error);
+    useAppErrors
+      .getState()
+      .pushError("Impossible de recharger l'historique d'une conversation.", res.error);
+    return; // keep the current timeline
+  }
+  if (res.data.length === 0) return; // nothing on disk → keep timeline
   const { resetSession, applyItem, applyContextFill, markSeen } =
     useConversationStore.getState();
   resetSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // Re-root the editor on the conversation's actual worktree, re-derived from the
+  // freshly re-read transcript (live cwd is in-memory only).
+  rehydrateWorktreeCwd(convId, res.data);
   // Replayed history ends on a past turn_result; mark it seen so turning the
   // stream on doesn't flash an old conversation as "review" (only fresh LIVE
   // completions should).
@@ -929,6 +994,7 @@ export async function wipeAllData(): Promise<void> {
   lastAppliedSeq.clear();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
+  useBackgroundTasksStore.getState().clear();
 }
 
 export const useConversations = () =>

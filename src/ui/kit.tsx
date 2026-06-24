@@ -150,7 +150,7 @@ export function NavBtn({
   );
 }
 
-export type StreamState = "work" | "ask" | "err" | "review" | "done" | "arch" | "off";
+export type StreamState = "work" | "ask" | "err" | "review" | "done" | "arch" | "off" | "bg";
 
 export const WF_STATUS: Record<StreamState, { label: string; pill: string; dot: string }> = {
   work: { label: "En cours", pill: "run", dot: "run" },
@@ -160,6 +160,7 @@ export const WF_STATUS: Record<StreamState, { label: string; pill: string; dot: 
   done: { label: "Actif", pill: "done", dot: "done" },
   arch: { label: "Archivé", pill: "arch", dot: "arch" },
   off: { label: "Éteint", pill: "off", dot: "off" },
+  bg: { label: "Tâches en fond", pill: "bg", dot: "bg" },
 };
 export const WF_ATTENTION: StreamState[] = ["ask", "err", "review"];
 
