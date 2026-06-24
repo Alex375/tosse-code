@@ -195,6 +195,11 @@
 .wf-ico { width: 15px; height: 15px; display: inline-block; flex: 0 0 auto; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .wf-ico.sm { width: 13px; height: 13px; }
 
+/* Brand marks (filled, currentColor) — Claude sunburst + user silhouette. */
+.wf-claude, .wf-user-mark { width: 15px; height: 15px; display: inline-block; flex: 0 0 auto; }
+/* The model picker chip wears the Claude logo, tinted with the brand coral. */
+.wf-chip .wf-claude { width: 14px; height: 14px; color: var(--wf-accent); }
+
 .wf-avatar {
   width: 22px; height: 22px; border-radius: 6px; flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
@@ -202,6 +207,13 @@
   background: var(--wf-panel-3); color: var(--wf-tx);
 }
 .wf-avatar.ai { background: var(--wf-accent-dim); color: var(--wf-accent); }
+/* The user's own messages: a filled silhouette knocked out of a coral brand tile
+   (counterpart to the AI avatar's Claude mark). */
+.wf-avatar.user {
+  background: linear-gradient(150deg, #e8895f, #c8603f); color: #1a0f0a;
+  box-shadow: 0 2px 8px -3px rgba(217,119,87,.4), inset 0 1px 0 rgba(255,255,255,.21);
+}
+.wf-avatar .wf-claude, .wf-avatar .wf-user-mark { width: 14px; height: 14px; }
 
 .wf-mono { font-family: var(--wf-mono); }
 .wf-muted { color: var(--wf-tx-lo); }
@@ -229,6 +241,7 @@
 .wf-act.wait { color:#b4caf2; }
 .wf-act.arch { color:var(--wf-tx-xlo); }
 .wf-act.done { color:var(--wf-tx-lo); }
+.wf-act .wf-claude { width:13px; height:13px; color:var(--wf-accent); }
 .wf-act-t { color:var(--wf-tx-hi); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; animation: wf-act-in .32s ease both; }
 .wf-act.att .wf-act-t, .wf-act.err .wf-act-t { color:inherit; }
 

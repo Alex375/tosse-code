@@ -19,7 +19,7 @@ import {
 } from "../../store/conversationsStore";
 import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
 import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts";
-import { ChipBtn, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
+import { ChipBtn, ClaudeMark, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { useContextData } from "../../store/contextData";
 import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
@@ -423,7 +423,7 @@ export const ConductorComposer = forwardRef<
       <div className="cv-comp-foot">
         {/* Model picker — reads the LIVE model (resolved id mapped to its alias),
             falls back to the persisted/default; wired to set_model + persistence. */}
-        <Menu up trigger={<ChipBtn icon="diamond">{modelLabel(modelId)}</ChipBtn>}>
+        <Menu up trigger={<ChipBtn iconNode={<ClaudeMark />}>{modelLabel(modelId)}</ChipBtn>}>
           <MenuLabel>Modèle</MenuLabel>
           {MODEL_OPTS.map(([label, value, hint]) => (
             <MenuItem

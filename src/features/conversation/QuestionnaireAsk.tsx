@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { JsonValue, PermissionRequestPayload } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
-import { Avatar, Ico } from "../../ui/kit";
+import { Avatar, ClaudeMark, Ico } from "../../ui/kit";
 import { ToolResultBody } from "./ToolResultBody";
 
 // AskUserQuestion questionnaire — reproduces the Claude Code terminal UX:
@@ -296,7 +296,7 @@ export function QuestionnaireAsk({
 function AskShell({ children }: { children: ReactNode }) {
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai>✦</Avatar>
+      <Avatar ai><ClaudeMark /></Avatar>
       <div className="cv-aibody">{children}</div>
     </div>
   );
