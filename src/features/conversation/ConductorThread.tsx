@@ -9,7 +9,7 @@ import type {
 import { commands } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
 import { classifyAsk, field } from "../../agent/ask";
-import { useLiveActivity } from "../../store/activity";
+import { useLiveActivity, useLiveBashCommand } from "../../store/activity";
 import {
   useConversationStore,
   useError,
@@ -24,10 +24,11 @@ import {
 } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { useTaskByToolUse } from "../../store/backgroundTasksStore";
-import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
+import { fmtDuration, isBackgroundAgentInput, isRunInBackground, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
 import { DiffView } from "./DiffView";
+import { MentionPathChip } from "./FileMention";
 import { QuestionnaireAsk, QuestionnaireSummary, questionCount } from "./QuestionnaireAsk";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { SubAgentTranscript } from "./SubAgentTranscript";
@@ -282,6 +283,9 @@ function ConductorToolCard({
   const primaryArg = isQuestionnaire
     ? `${questionCount(input)} question${questionCount(input) > 1 ? "s" : ""}`
     : meta.primaryArg;
+  // When the header arg IS a file path (Read/Edit/Write/MultiEdit…), make the
+  // chip a clickable mention — opens the file in the side editor.
+  const filePath = field(input, "file_path");
   const tone = isEdit || isWrite ? "diff" : meta.kind === "bash" ? "term" : "";
 
   return (
@@ -295,9 +299,13 @@ function ConductorToolCard({
         <Ico name={icon} className="sm" />
         <span className="cv-tool-t">{label}</span>
         {primaryArg ? (
-          <span className="cv-tool-m wf-mono" title={primaryArg}>
-            {primaryArg}
-          </span>
+          filePath ? (
+            <MentionPathChip path={filePath} className="cv-tool-m wf-mono" display={primaryArg} />
+          ) : (
+            <span className="cv-tool-m wf-mono" title={primaryArg}>
+              {primaryArg}
+            </span>
+          )
         ) : null}
         <span className={styles.status}>
           {running ? (
@@ -529,6 +537,27 @@ function SubAgentCard({
   );
 }
 
+/**
+ * A `Bash` tool block. A DETACHED background command (`run_in_background`) is surfaced
+ * in the pinned <BashBar>, not inline — suppressed deterministically on the INPUT alone,
+ * exactly like a detached sub-agent (see SubAgentCard's `isBackgroundAgentInput` guard).
+ * Gating on the input (not the live task) means there's no inline flash before the task
+ * arrives, and on a resumed conversation it stays absent until the core re-emits — the
+ * same live-only behaviour as detached sub-agents, so the two bars stay symmetric.
+ */
+function BashBlock({
+  session,
+  toolUseId,
+  input,
+}: {
+  session: string;
+  toolUseId: string;
+  input: JsonValue;
+}) {
+  if (isRunInBackground(input)) return null;
+  return <ConductorToolCard session={session} toolUseId={toolUseId} name="Bash" input={input} />;
+}
+
 function AssistantBlocks({ session, blocks }: { session: string; blocks: NormalizedBlock[] }) {
   return (
     <>
@@ -540,6 +569,9 @@ function AssistantBlocks({ session, blocks }: { session: string; blocks: Normali
           // lifecycle header + an inline, expandable full transcript.
           if (b.name === "Agent" || b.name === "Task")
             return <SubAgentCard key={i} session={session} toolUseId={b.id} input={b.input} />;
+          // A detached background Bash moves to the pinned BashBar (see BashBlock).
+          if (b.name === "Bash")
+            return <BashBlock key={i} session={session} toolUseId={b.id} input={b.input} />;
           return (
             <ConductorToolCard key={i} session={session} toolUseId={b.id} name={b.name} input={b.input} />
           );
@@ -672,6 +704,10 @@ export function ConductorThread({
  */
 function WorkingIndicator({ session }: { session: string }) {
   const activity = useLiveActivity(session);
+  // Registre (1): when the live tool is a FOREGROUND shell command, show it
+  // terminal-style ("$ command…") rather than the generic "Exécute …" phrase — the
+  // bottom-of-terminal feel of the CLI. Any other activity keeps the plain line.
+  const bash = useLiveBashCommand(session);
   return (
     <div className={styles.activity}>
       <span className={styles.typing} aria-hidden="true">
@@ -679,7 +715,14 @@ function WorkingIndicator({ session }: { session: string }) {
         <i />
         <i />
       </span>
-      <span>{activity}</span>
+      {bash ? (
+        <code className={"cv-shellrun wf-mono"} title={bash}>
+          <span className="cv-shellrun-p" aria-hidden="true">$</span>
+          {bash}
+        </code>
+      ) : (
+        <span>{activity}</span>
+      )}
     </div>
   );
 }

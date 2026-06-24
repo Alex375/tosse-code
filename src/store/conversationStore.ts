@@ -520,6 +520,7 @@ const EMPTY_TIMELINE: TimelineEntry[] = [];
 const EMPTY_PERMS: PermissionRequestPayload[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_TODOS: TodoItem[] = [];
+const EMPTY_STRINGS: string[] = [];
 
 export const useSessionState = (session: string): SessionStatePayload | undefined =>
   useConversationStore((s) => s.sessions[session]?.state);
@@ -587,4 +588,58 @@ export const useTodos = (session: string): TodoItem[] =>
 export const useTodoSummary = (session: string): TodoSummary =>
   useConversationStore(
     useShallow((s) => todoSummary(s.sessions[session]?.todos ?? EMPTY_TODOS)),
+  );
+
+/**
+ * Chronological (oldest→newest) list of the user's OWN messages in this
+ * conversation — the root-level `role:"user"` turns, in timeline order. Drives the
+ * composer's ↑/↓ shell-style history recall. Blank messages are dropped and
+ * consecutive duplicates collapsed, like a shell history. Sub-agent (Task) user
+ * turns (`parentToolUseId !== null`) are excluded. Shallow-compared so it only
+ * re-renders when the user actually sends a new (distinct) message. */
+/**
+ * The user's OWN messages in a session, chronological — the root-level `role:"user"`
+ * turns in timeline order. Blank messages are dropped and consecutive duplicates
+ * collapsed (like a shell history); sub-agent (Task) user turns
+ * (`parentToolUseId !== null`) are excluded. Pure (no hook, no memo) so it is
+ * unit-testable; the hook below memoises it. */
+export function selectUserMessageHistory(entry: SessionEntry | undefined): string[] {
+  if (!entry) return EMPTY_STRINGS;
+  const out: string[] = [];
+  for (const t of entry.timeline) {
+    if (t.kind !== "turn") continue;
+    const turn = entry.turns[t.id];
+    if (!turn || turn.role !== "user" || turn.parentToolUseId !== null) continue;
+    const text = turn.streamingText;
+    if (!text.trim()) continue;
+    if (out.length && out[out.length - 1] === text) continue; // collapse consecutive dups
+    out.push(text);
+  }
+  return out.length ? out : EMPTY_STRINGS;
+}
+
+// Memoised by `timeline` identity: the set of user root-turns (and their text, set
+// once at creation, never streamed into) changes ONLY when a new timeline entry is
+// pushed — the per-token streaming path replaces `turns` but keeps the same
+// `timeline` reference. So while the agent streams a reply, this returns the cached
+// array (same reference) instead of re-walking the whole history on every token.
+const userHistoryCache = new Map<string, { timeline: TimelineEntry[]; result: string[] }>();
+
+/** `selectUserMessageHistory` cached per session on the `timeline` reference. Pure
+ *  (the cache is an arg-free module singleton) so the memo invariant is testable. */
+export function memoizedUserMessageHistory(
+  session: string,
+  entry: SessionEntry | undefined,
+): string[] {
+  if (!entry) return EMPTY_STRINGS;
+  const cached = userHistoryCache.get(session);
+  if (cached && cached.timeline === entry.timeline) return cached.result;
+  const result = selectUserMessageHistory(entry);
+  userHistoryCache.set(session, { timeline: entry.timeline, result });
+  return result;
+}
+
+export const useUserMessageHistory = (session: string): string[] =>
+  useConversationStore(
+    useShallow((s) => memoizedUserMessageHistory(session, s.sessions[session])),
   );

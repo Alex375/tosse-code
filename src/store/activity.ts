@@ -140,3 +140,23 @@ export function describeActivity(entry: SessionEntry | undefined): string {
 export function useLiveActivity(convId: string): string {
   return useConversationStore((s) => describeActivity(s.sessions[convId]));
 }
+
+/**
+ * The FOREGROUND shell command running RIGHT NOW (the in-flight main-thread Bash) —
+ * the live "$ command…" terminal indicator. `null` when the live tool isn't a Bash.
+ * A `run_in_background: true` Bash gets its tool_result immediately, so it is never
+ * "in flight" here — those are surfaced in the pinned <BashBar> instead. Returns the
+ * full command (the indicator truncates for display). Pure for testing.
+ */
+export function liveBashCommand(entry: SessionEntry | undefined): string | null {
+  if (!entry) return null;
+  const tool = lastInFlightMainToolUse(entry);
+  if (!tool || tool.name !== "Bash") return null;
+  const c = field(tool.input, "command");
+  return c && c.trim() ? c.trim() : null;
+}
+
+/** Reactive live foreground shell command for a conversation (by stable id). */
+export function useLiveBashCommand(convId: string): string | null {
+  return useConversationStore((s) => liveBashCommand(s.sessions[convId]));
+}

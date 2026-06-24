@@ -272,3 +272,90 @@ describe("tabs", () => {
     expect(c.activeTab).toBe("/repo/a.txt");
   });
 });
+
+// The "jump to a line" plumbing behind clickable file mentions: openFile's `reveal`
+// option, the markdown→source forcing, the seq nonce (so a re-click replays), and the
+// revealInEditor orchestration (open panel + collapse tree + arm the reveal).
+describe("reveal (clickable file mentions)", () => {
+  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it("stamps a pendingReveal with line + column and a fresh seq", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, FILE, { reveal: { line: 42, column: 7 } });
+    const r = buffer().pendingReveal;
+    expect(r).toMatchObject({ line: 42, column: 7 });
+    expect(typeof r!.seq).toBe("number");
+  });
+
+  it("defaults the reveal column to 1", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, FILE, { reveal: { line: 5 } });
+    expect(buffer().pendingReveal).toMatchObject({ line: 5, column: 1 });
+  });
+
+  it("re-arms a NEW seq when revealing the SAME line of an already-open file", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, FILE, { reveal: { line: 10 } });
+    const seq1 = buffer().pendingReveal!.seq;
+    // A re-click on the same line must produce a higher seq so MonacoView replays
+    // the jump+pulse (an identical reveal would otherwise be a no-op).
+    await s.openFile(CONV, FILE, { reveal: { line: 10 } });
+    expect(buffer().pendingReveal!.seq).toBeGreaterThan(seq1);
+  });
+
+  it("forces a markdown file to source when a line reveal is pending", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/doc.md", { reveal: { line: 3 } });
+    const b = buffer("/repo/doc.md");
+    expect(b.language).toBe("markdown");
+    expect(b.preview).toBe(false); // source, so Monaco mounts and can jump
+  });
+
+  it("opens markdown in rendered preview when there is NO reveal", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/doc.md");
+    expect(buffer("/repo/doc.md").preview).toBe(true);
+  });
+
+  it("flips an already-open markdown preview to source on a later reveal", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/doc.md");
+    expect(buffer("/repo/doc.md").preview).toBe(true);
+    await s.openFile(CONV, "/repo/doc.md", { reveal: { line: 2 } });
+    expect(buffer("/repo/doc.md").preview).toBe(false);
+  });
+
+  it("clearReveal drops the consumed pendingReveal", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, FILE, { reveal: { line: 9 } });
+    expect(buffer().pendingReveal).not.toBeNull();
+    s.clearReveal(CONV, FILE);
+    expect(buffer().pendingReveal).toBeNull();
+  });
+
+  it("revealInEditor opens the panel, collapses the tree, and arms the reveal", async () => {
+    const s = useEditorStore.getState();
+    s.setOpen(false);
+    s.setTreeCollapsed(false);
+    s.revealInEditor(CONV, ROOT, FILE, { line: 12 });
+    // Panel + tree are synchronous orchestration.
+    expect(useEditorStore.getState().open).toBe(true);
+    expect(useEditorStore.getState().treeCollapsed).toBe(true);
+    await tick(); // openFile is fired (void) — let the buffer settle
+    expect(buffer().pendingReveal).toMatchObject({ line: 12, column: 1 });
+  });
+
+  it("revealInEditor without a line opens the file but arms no reveal", async () => {
+    const s = useEditorStore.getState();
+    s.revealInEditor(CONV, ROOT, FILE);
+    await tick();
+    expect(buffer().pendingReveal).toBeNull();
+  });
+});

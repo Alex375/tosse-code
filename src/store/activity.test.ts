@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeActivity, toolActivityLabel } from "./activity";
+import { describeActivity, liveBashCommand, toolActivityLabel } from "./activity";
 import type { SessionEntry, Turn, TimelineEntry, TodoItem, NormalizedBlock } from "./types";
 
 function toolUse(id: string, name: string, input: unknown): NormalizedBlock {
@@ -202,5 +202,46 @@ describe("describeActivity", () => {
   it("falls back to thinking on an empty turn, and a neutral line with no entry", () => {
     expect(describeActivity(entry({}))).toBe("Réfléchit…");
     expect(describeActivity(undefined)).toBe("Travaille…");
+  });
+});
+
+describe("liveBashCommand", () => {
+  it("returns the command of a foreground Bash in flight (no result yet)", () => {
+    const e = entry({
+      timeline: [{ kind: "turn", id: "t1" }],
+      turns: { t1: assistantTurn("t1", [toolUse("tu1", "Bash", { command: "pnpm test" })]) },
+      toolResults: {},
+    });
+    expect(liveBashCommand(e)).toBe("pnpm test");
+  });
+
+  it("is null when the in-flight tool is not a Bash", () => {
+    const e = entry({
+      timeline: [{ kind: "turn", id: "t1" }],
+      turns: { t1: assistantTurn("t1", [toolUse("tu1", "Read", { file_path: "a.ts" })]) },
+      toolResults: {},
+    });
+    expect(liveBashCommand(e)).toBeNull();
+  });
+
+  it("is null for a backgrounded Bash — its result lands immediately, so never in flight", () => {
+    // A run_in_background Bash gets the "running in background" ack right away, so its
+    // tool_result exists → not in flight here (it belongs in the BashBar instead).
+    const e = entry({
+      timeline: [{ kind: "turn", id: "t1" }],
+      turns: { t1: assistantTurn("t1", [toolUse("tu1", "Bash", { command: "pnpm dev" })]) },
+      toolResults: { tu1: { toolUseId: "tu1", content: "running in background", isError: false, parentToolUseId: null } },
+    });
+    expect(liveBashCommand(e)).toBeNull();
+  });
+
+  it("is null with no entry / an empty command", () => {
+    expect(liveBashCommand(undefined)).toBeNull();
+    const e = entry({
+      timeline: [{ kind: "turn", id: "t1" }],
+      turns: { t1: assistantTurn("t1", [toolUse("tu1", "Bash", { command: "   " })]) },
+      toolResults: {},
+    });
+    expect(liveBashCommand(e)).toBeNull();
   });
 });

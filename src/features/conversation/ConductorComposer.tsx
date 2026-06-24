@@ -10,7 +10,7 @@ import {
 import type { PermissionMode, SlashCommand } from "../../ipc/client";
 import { useShallow } from "zustand/react/shallow";
 import { useInterrupt, useSendMessage } from "../../ipc/useCommands";
-import { useSessionState } from "../../store/conversationStore";
+import { useSessionState, useUserMessageHistory } from "../../store/conversationStore";
 import {
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
@@ -29,6 +29,15 @@ import {
   slashTokenAt,
   type SlashToken,
 } from "./SlashCommandMenu";
+import {
+  IDLE_NAV,
+  caretOnFirstLine,
+  caretOnLastLine,
+  recallNext,
+  recallPrev,
+  type HistoryNav,
+  type RecallResult,
+} from "./messageHistory";
 import styles from "./ConductorComposer.module.css";
 
 // The real Claude models. Wire value = CLI alias (sent verbatim to set_model and
@@ -138,6 +147,13 @@ export const ConductorComposer = forwardRef<
     return !!c && !c.sessionId && !c.handle;
   });
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // ---- Shell-style ↑/↓ history recall -------------------------------------
+  // The user's own previously-sent messages, oldest→newest (see selector). The
+  // navigation cursor is a ref (no re-render needed) and resets on remount — the
+  // pane is keyed by conv.id, so switching conversations starts fresh.
+  const history = useUserMessageHistory(session);
+  const histNav = useRef<HistoryNav>(IDLE_NAV);
 
   // Let the conversation view focus the input on a background click (see
   // ConductorConversation). Skips a disabled textarea so a read-only session
@@ -289,6 +305,7 @@ export const ConductorComposer = forwardRef<
     // bubble shows an "en attente" badge until the turn ends.
     send.mutate({ text: t, worktree: useWorktree && isFresh, queued: busy });
     setText("");
+    histNav.current = IDLE_NAV;
     setSlashToken(null);
     requestAnimationFrame(autoGrow);
     // Sending always snaps the thread to the bottom, even if the user had scrolled
@@ -332,6 +349,21 @@ export const ConductorComposer = forwardRef<
     });
   };
 
+  /** Fill the composer with a recalled message and park the caret at its end. */
+  const applyRecall = (res: RecallResult) => {
+    histNav.current = res.nav;
+    setText(res.text);
+    setSlashToken(null);
+    setSlashDismissed(false);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+      autoGrow();
+    });
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // While the `/` menu is open it owns the navigation/commit keys.
     if (slashOpen) {
@@ -360,6 +392,35 @@ export const ConductorComposer = forwardRef<
       e.preventDefault();
       cyclePermMode();
       return;
+    }
+    // ↑/↓ recall previously-sent messages, shell-style — but only at the field's
+    // edge (caret on the first line for ↑, last line for ↓) so multi-line editing
+    // and the modifier combos (⌥/⌘/⇧ + arrow = caret/selection) keep working.
+    const bareArrow = !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey;
+    if (e.key === "ArrowUp" && bareArrow) {
+      const ta = e.currentTarget;
+      if (caretOnFirstLine(ta.value, ta.selectionStart ?? 0)) {
+        const res = recallPrev(history, histNav.current, text);
+        if (res) {
+          e.preventDefault();
+          applyRecall(res);
+          return;
+        }
+      }
+    }
+    if (e.key === "ArrowDown" && bareArrow) {
+      const ta = e.currentTarget;
+      if (
+        histNav.current.index !== null &&
+        caretOnLastLine(ta.value, ta.selectionEnd ?? ta.value.length)
+      ) {
+        const res = recallNext(history, histNav.current);
+        if (res) {
+          e.preventDefault();
+          applyRecall(res);
+          return;
+        }
+      }
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -392,6 +453,9 @@ export const ConductorComposer = forwardRef<
               : "Demande à l'agent, @ pour un fichier, / pour une commande…"
           }
           onChange={(e) => {
+            // Genuine typing exits history navigation: the edited text becomes the
+            // new live draft (a later ↑ re-stashes it and starts from the newest).
+            histNav.current = IDLE_NAV;
             setText(e.target.value);
             setSlashDismissed(false);
             syncSlashToken(e.currentTarget);

@@ -87,6 +87,13 @@
 /* The command/path preview takes the free space and ellipsises — a clean
    one-line header; the full value is revealed by expanding the card. */
 .cv-tool-m { font-size:11px; color:var(--wf-tx-lo); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Clickable file mention: an inline-code path in prose, a tool-card file chip,
+   or a diff header path that resolves to a real file. Discreet affordance —
+   brighten + underline on hover/focus; the element keeps its host styling. */
+[data-filelink] { cursor: pointer; }
+[data-filelink]:hover,
+[data-filelink]:focus-visible { color: var(--wf-tx-hi); text-decoration: underline; }
+[data-filelink]:focus-visible { outline: none; }
 .cv-tool-b { border-top:1px solid var(--wf-line); padding:10px 12px; background:var(--wf-bg-2); }
 /* Full command shown in the body of an expanded Bash card (wraps, fully readable). */
 .cv-tool-cmd { margin:0 0 10px; padding:8px 10px; background:#0e0e11; border:1px solid var(--wf-line); border-radius:6px; font-size:11.5px; line-height:1.5; color:#f0cd97; white-space:pre-wrap; word-break:break-word; }
@@ -325,6 +332,45 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .cv-bgrun i { animation:none !important; opacity:.8; }
+}
+
+/* Background shell commands (Bash run_in_background) — pinned rows in the same
+   container (.cv-bgagents) as the detached sub-agents, so the two bars match. Each row
+   pairs a clickable command area with a Stop button (running only). */
+.cv-bashrow { display:flex; align-items:center; gap:4px; width:100%; }
+.cv-bashrow-main {
+  flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:8px;
+  padding:5px 8px; border:0; border-radius:7px; background:transparent;
+  color:var(--wf-tx-lo); font:inherit; font-size:12px; text-align:left; cursor:pointer;
+  transition:background .12s ease, color .12s ease;
+}
+.cv-bashrow-main:hover { background:color-mix(in srgb, var(--wf-panel-3) 50%, transparent); color:var(--wf-tx); }
+.cv-bashrow-dot { flex:0 0 auto; display:inline-flex; width:14px; justify-content:center; }
+.cv-bashrow-dot .wf-dot { flex:0 0 auto; }
+.cv-bashrow-cmd { flex:0 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--wf-tx); }
+.cv-bashrow-p { color:var(--wf-tx-xlo); margin-right:6px; user-select:none; }
+.cv-bashrow .cv-bgagent-stats { margin-left:auto; padding-left:8px; }
+.cv-bgstop {
+  flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
+  width:24px; height:24px; padding:0; border:0; border-radius:6px; background:transparent;
+  color:var(--wf-tx-xlo); cursor:pointer; transition:background .12s ease, color .12s ease;
+}
+.cv-bgstop:hover { background:color-mix(in srgb, var(--wf-err) 16%, transparent); color:var(--wf-err); }
+
+/* The live foreground shell command in the working indicator (registre 1): a terminal
+   "$ command…" line, ellipsised to one row. */
+.cv-shellrun {
+  min-width:0; max-width:100%; display:inline-flex; align-items:baseline;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  font-size:12px; color:var(--wf-tx);
+}
+.cv-shellrun-p { color:var(--wf-tx-xlo); margin-right:6px; flex:0 0 auto; }
+
+/* The captured output of a background command, in its popover — terminal-flavoured. */
+.cv-bashout {
+  margin:0; padding:10px 12px; background:#0e0e11; border:1px solid var(--wf-line);
+  border-radius:6px; font-size:11.5px; line-height:1.55; color:#d7d7df;
+  white-space:pre-wrap; word-break:break-word;
 }
 
 .cv-todolist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }

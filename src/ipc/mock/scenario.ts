@@ -82,6 +82,20 @@ export const DEMO_SUBAGENT_TRANSCRIPT: ConversationItem[] = [
   },
 ];
 
+/** Canned output for the background-shell demo, returned by the mock's
+ *  `read_task_output` so the <BashOutputPopover> renders real-shaped logs in dev. */
+const BASH_OUTPUTS: Record<string, string> = {
+  tk_dev:
+    "VITE v5.4.2  ready in 412 ms\n\n  ➜  Local:   http://localhost:1420/\n  ➜  Network: use --host to expose\n  ➜  press h + enter to show help\n\n[12:04:18] hmr update /src/App.tsx\n[12:04:31] hmr update /src/ui/conductor-conversation.css\n",
+  tk_build:
+    "vite v5.4.2 building for production...\n✓ 1240 modules transformed.\ndist/index.html                   0.46 kB │ gzip:  0.30 kB\ndist/assets/index-a1b2c3.css     38.91 kB │ gzip:  7.12 kB\ndist/assets/index-d4e5f6.js     284.10 kB │ gzip: 92.34 kB\n✓ built in 9.40s\n",
+};
+
+/** The mock side of `read_task_output` — canned logs keyed by the demo task ids. */
+export function mockTaskOutput(taskId: string): string | null {
+  return BASH_OUTPUTS[taskId] ?? null;
+}
+
 const MODEL = "claude-opus-4-8[1m]";
 export const MOCK_SESSION_ID = "01HVMOCK-S3SSION-ID";
 
@@ -217,6 +231,9 @@ export class ScenarioDriver {
   private awaiting = false;
   private mode: "edit" | "question" = "edit";
   private pendingId: string | null = null;
+  /** Background Bash tasks emitted by the shell demo, so `stopBash` can re-emit a
+   *  known one as stopped (mirroring the core's `stop_task` → `task_*` flow). */
+  private bashTasks = new Map<string, BackgroundTask>();
 
   constructor(
     private emit: ScenarioEmit,
@@ -444,6 +461,144 @@ export class ScenarioDriver {
         taskOf({ task_id: "tk_bg", tool_use_id: "toolu_bg", label: "Explorer le code", subagent_type: "Explore", model: "claude-sonnet-4-6", status: "completed", agent_id: "demoagent_bg", tokens: 42000, tool_uses: 15, duration_ms: 38000 }),
       ),
     );
+  }
+
+  /** Record + emit a background Bash task snapshot (so `stopBash` can find it later). */
+  private emitBash(t: BackgroundTask) {
+    this.bashTasks.set(t.task_id, t);
+    this.emit.task?.(t);
+  }
+
+  /**
+   * Background-shell demo (`?demo=shell`): a FOREGROUND command (in flight while busy →
+   * the bottom "$ command…" indicator, registre 1), then TWO `run_in_background`
+   * commands — a dev server that keeps running (Stop button + live output tail) and a
+   * build that completes a few seconds later (finished row with duration + exit code).
+   * Exercises the pinned <BashBar>, the <BashOutputPopover> and stop_task end to end.
+   */
+  startShell() {
+    this.reset();
+    this.bashTasks.clear();
+    this.emit.state({ ...this.busyState });
+
+    // --- foreground command: stays in flight a moment → "$ pnpm test…" at the bottom ---
+    this.step(220, () =>
+      this.emit.item({ kind: "message_started", id: "m1", role: "assistant", parent_tool_use_id: null }),
+    );
+    const t1 = "Je lance la suite de tests, puis quelques commandes en arrière-plan.\n\n";
+    this.streamText("m1", t1);
+    this.step(150, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "m1",
+        parent_tool_use_id: null,
+        blocks: [
+          { type: "text", text: t1 },
+          { type: "tool_use", id: "toolu_fg", name: "Bash", input: { command: "pnpm test -- --run", description: "run the test suite" } },
+        ],
+      }),
+    );
+    // Held in flight (no result) so the working indicator shows the live command.
+    this.step(2200, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_fg",
+        content: "Test Files  12 passed (12)\nTests  148 passed (148)\nDuration  3.41s",
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+
+    // --- background #1: a dev server that KEEPS running (Stop button + live tail) ---
+    this.step(260, () =>
+      this.emit.item({ kind: "message_started", id: "m2", role: "assistant", parent_tool_use_id: null }),
+    );
+    const t2 = "Je démarre le serveur de dev en arrière-plan — tu peux continuer à me parler pendant ce temps.";
+    this.streamText("m2", t2, 3, 18);
+    this.step(150, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "m2",
+        parent_tool_use_id: null,
+        blocks: [
+          { type: "text", text: t2 },
+          { type: "tool_use", id: "toolu_dev", name: "Bash", input: { command: "pnpm dev", description: "start dev server", run_in_background: true } },
+        ],
+      }),
+    );
+    this.step(120, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_dev",
+        content:
+          "Command running in background with ID: tk_dev. Output is being written to: /Users/dev/.claude/projects/x/tasks/tk_dev.output. You will be notified when it completes.",
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+    this.step(60, () =>
+      this.emitBash(taskOf({ task_id: "tk_dev", kind: "bash", tool_use_id: "toolu_dev", label: "pnpm dev", status: "running" })),
+    );
+
+    // --- background #2: a build that COMPLETES a few seconds later ---
+    this.step(220, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "m2b",
+        parent_tool_use_id: null,
+        blocks: [
+          { type: "tool_use", id: "toolu_build", name: "Bash", input: { command: "pnpm build", description: "production build", run_in_background: true } },
+        ],
+      }),
+    );
+    this.step(60, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_build",
+        content:
+          "Command running in background with ID: tk_build. Output is being written to: /Users/dev/.claude/projects/x/tasks/tk_build.output.",
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+    this.step(60, () =>
+      this.emitBash(taskOf({ task_id: "tk_build", kind: "bash", tool_use_id: "toolu_build", label: "pnpm build", status: "running" })),
+    );
+
+    this.step(220, () =>
+      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.014, num_turns: 2, duration_ms: 8200 }),
+    );
+    // Idle main loop, but the two bg commands keep running → conversation "backgrounding".
+    this.step(40, () => this.emit.state(idleState()));
+    // …the build finishes a few seconds later: its row flips to completed (duration + exit).
+    this.step(6000, () =>
+      this.emitBash(
+        taskOf({
+          task_id: "tk_build",
+          kind: "bash",
+          tool_use_id: "toolu_build",
+          label: "pnpm build",
+          status: "completed",
+          duration_ms: 9400,
+          summary: 'Background command "pnpm build" completed (exit code 0)',
+          output_file: "tasks/tk_build.output",
+        }),
+      ),
+    );
+  }
+
+  /** Mock the `stop_task` command: re-emit a known background Bash task as stopped,
+   *  exactly as the core would after the CLI kills it (the bar reflects it). */
+  stopBash(taskId: string) {
+    const t = this.bashTasks.get(taskId);
+    if (!t) return;
+    const stopped: BackgroundTask = {
+      ...t,
+      status: "stopped",
+      summary: t.summary ?? `Background command "${t.label}" stopped`,
+      duration_ms: t.duration_ms ?? 4200,
+    };
+    this.emitBash(stopped);
   }
 
   /** Resume the turn after the user answers the pending prompt. */
