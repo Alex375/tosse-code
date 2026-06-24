@@ -88,6 +88,30 @@ describe("worktreeCwdFromTranscript", () => {
     expect(worktreeCwdFromTranscript(items)).toBeNull();
   });
 
+  it("stays in the worktree when an ExitWorktree is REFUSED (is_error)", () => {
+    // A refused exit ("Worktree has N commits — confirm with the user") did not
+    // leave the worktree: the session is still in it, so cwd must stay put.
+    const items = [
+      enter("t1"),
+      result("t1", `Created worktree at ${WT} on branch foo`),
+      exit("t2"),
+      result("t2", "Worktree has 1 commit — confirm with the user, then re-invoke", true),
+    ];
+    expect(worktreeCwdFromTranscript(items)).toBe(WT);
+  });
+
+  it("exits only on a SUCCESSFUL exit after a refused one (refused → confirmed)", () => {
+    const items = [
+      enter("t1"),
+      result("t1", `Created worktree at ${WT} on branch foo`),
+      exit("t2"),
+      result("t2", "Worktree has 1 commit — confirm with the user", true),
+      exit("t3"),
+      result("t3", "Returned to the main worktree"),
+    ];
+    expect(worktreeCwdFromTranscript(items)).toBeNull();
+  });
+
   it("ignores an EnterWorktree whose result carries no parseable path", () => {
     const items = [enter("t1"), result("t1", "done, no path here")];
     expect(worktreeCwdFromTranscript(items)).toBeNull();

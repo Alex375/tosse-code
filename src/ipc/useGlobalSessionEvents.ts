@@ -187,7 +187,13 @@ export function useGlobalSessionEvents(): void {
         const tool = worktreeToolIds.get(item.tool_use_id)!;
         worktreeToolIds.delete(item.tool_use_id);
         const convs = useConversationsStore.getState();
-        if (tool === "EnterWorktree" && !item.is_error) {
+        // Gate BOTH on success: a refused ExitWorktree (e.g. "Worktree has N
+        // commits — confirm with the user") did NOT leave the worktree, so the
+        // session is still in it and liveCwd must stay put — same as a failed
+        // EnterWorktree. (Mirrors `worktreeCwdFromTranscript`.)
+        if (item.is_error) {
+          // no-op: the worktree op was refused/failed, cwd unchanged
+        } else if (tool === "EnterWorktree") {
           const path = parseEnterWorktreePath(item.content);
           if (path) convs.setLiveCwd(session, path);
         } else if (tool === "ExitWorktree") {

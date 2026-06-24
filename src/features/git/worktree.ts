@@ -39,8 +39,13 @@ export function parseEnterWorktreePath(content: unknown): string | null {
  * transcript so the worktree survives a restart (live cwd is in-memory only).
  *
  * Returns the active worktree path, or null if the transcript shows none (never
- * entered, or the last worktree action was an ExitWorktree). This null is the
- * "back to the spawn cwd" signal — callers fall through to `conv.cwd`.
+ * entered, or the last worktree action was a SUCCESSFUL ExitWorktree). This null
+ * is the "back to the spawn cwd" signal — callers fall through to `conv.cwd`.
+ *
+ * Both branches are gated on success (`!is_error`): a REFUSED ExitWorktree (e.g.
+ * "Worktree has N commits — confirm with the user") did NOT leave the worktree,
+ * so the session is still in it and `cwd` must stay put — same as for a failed
+ * EnterWorktree.
  */
 export function worktreeCwdFromTranscript(items: ConversationItem[]): string | null {
   const toolIds = new Map<string, "EnterWorktree" | "ExitWorktree">();
@@ -55,7 +60,8 @@ export function worktreeCwdFromTranscript(items: ConversationItem[]): string | n
     } else if (item.kind === "tool_result" && toolIds.has(item.tool_use_id)) {
       const tool = toolIds.get(item.tool_use_id)!;
       toolIds.delete(item.tool_use_id);
-      if (tool === "EnterWorktree" && !item.is_error) {
+      if (item.is_error) continue; // a refused/failed worktree op did not move the cwd
+      if (tool === "EnterWorktree") {
         const path = parseEnterWorktreePath(item.content);
         if (path) cwd = path;
       } else if (tool === "ExitWorktree") {
