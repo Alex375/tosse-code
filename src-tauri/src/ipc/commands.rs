@@ -388,6 +388,21 @@ pub async fn interrupt_session(
     handle.interrupt().await.map_err(|e| e.to_string())
 }
 
+/// Stop ONE background task (a `run_in_background` Bash / Monitor / sub-agent) by its
+/// `task_id`, without ending the turn or the session. Sends a `stop_task` control
+/// request; the task then settles to `stopped` via its normal `task_*` lifecycle
+/// (surfaced to the UI through `session_task`). No-op if the session is no longer live.
+#[tauri::command]
+#[specta::specta]
+pub async fn stop_task(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    task_id: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.stop_task(task_id).await.map_err(|e| e.to_string())
+}
+
 /// Tear a session down and remove it from the registry.
 #[tauri::command]
 #[specta::specta]

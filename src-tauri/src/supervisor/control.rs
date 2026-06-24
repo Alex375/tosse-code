@@ -211,6 +211,17 @@ pub fn interrupt_request(request_id: &str) -> Value {
     control_request(request_id, json!({ "subtype": "interrupt" }))
 }
 
+/// `stop_task` — stop ONE background task (a `run_in_background` Bash / Monitor /
+/// sub-agent) by its `task_id`, without touching the rest of the session. The task
+/// then transitions to `stopped` via the normal `task_*` lifecycle (a
+/// `task_updated`/`task_notification` we ingest as usual). Cross-checked against the
+/// official VS Code extension SDK transport (`stopTask(id) → request({subtype:
+/// "stop_task", task_id})`) — the wire subtype is `stop_task` (NOT `task_stop`),
+/// verified verbatim in `extension.js` of the installed extension (2.1.179 & 2.1.181).
+pub fn stop_task_request(request_id: &str, task_id: &str) -> Value {
+    control_request(request_id, json!({ "subtype": "stop_task", "task_id": task_id }))
+}
+
 /// `set_permission_mode` — switch the permission mode mid-session (spec §4.5).
 pub fn set_permission_mode_request(request_id: &str, mode: PermissionMode) -> Value {
     control_request(
@@ -568,5 +579,17 @@ mod tests {
             "response": { "subtype": "success", "request_id": "p-1", "response": { "mode": "plan" } }
         });
         assert_eq!(parse_set_permission_mode_ack(&line).as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn stop_task_request_shape() {
+        // The exact wire the official extension sends: subtype `stop_task` (NOT
+        // `task_stop`) with the `task_id` inside the `request` envelope. Verified
+        // verbatim against extension.js — must not drift.
+        let r = stop_task_request("s-1", "tk_abc");
+        assert_eq!(r["type"], json!("control_request"));
+        assert_eq!(r["request_id"], json!("s-1"));
+        assert_eq!(r["request"]["subtype"], json!("stop_task"));
+        assert_eq!(r["request"]["task_id"], json!("tk_abc"));
     }
 }

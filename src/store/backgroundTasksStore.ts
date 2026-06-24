@@ -102,6 +102,31 @@ export const useSessionTasks = (
 ): Record<string, BackgroundTask> =>
   useBackgroundTasksStore(useShallow((s) => s.sessions[session] ?? EMPTY_TASKS));
 
+/**
+ * A conversation's RUNNING background shell commands (`kind: "bash"`, status
+ * `running`), ordered by `task_id` (stable). The pinned <BashBar> lists exactly these
+ * — a finished command drops out of the bar (mirrors AgentBar, which drops a finished
+ * agent). The store still keeps the finished snapshot, so an output popover opened
+ * mid-run survives the command finishing (it reads the full task map, not this list).
+ * Pure (no hook) so it is unit-testable; the hook below wraps it. Monitor (also
+ * `local_bash`) is intentionally excluded — it has its own display task.
+ */
+export function orderBashTasks(
+  tasks: Record<string, BackgroundTask>,
+): BackgroundTask[] {
+  return Object.values(tasks)
+    .filter((t) => t.kind === "bash" && t.status === "running")
+    .sort((a, b) => a.task_id.localeCompare(b.task_id));
+}
+
+/** A conversation's background Bash tasks, ordered for the pinned BashBar. The array
+ *  elements are referentially stable across no-op re-deliveries (`taskEqual`), so
+ *  `useShallow` re-renders only when a task actually changes or the set changes. */
+export const useBackgroundBashTasks = (session: string): BackgroundTask[] =>
+  useBackgroundTasksStore(
+    useShallow((s) => orderBashTasks(s.sessions[session] ?? EMPTY_TASKS)),
+  );
+
 /** How many background tasks are currently RUNNING for a conversation. Drives the
  *  "backgrounding" agent status (idle main loop + live background work). A plain
  *  number → referentially stable, re-renders only when the count changes. */

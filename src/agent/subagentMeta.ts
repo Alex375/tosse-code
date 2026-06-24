@@ -24,14 +24,21 @@ export function fmtDuration(ms: number): string {
   return `${m}m ${rem.toString().padStart(2, "0")}s`;
 }
 
-/** True when an `Agent` tool_use was launched detached (`run_in_background: true`). */
-export function isBackgroundAgentInput(input: JsonValue): boolean {
+/** True when a tool_use was launched detached (`run_in_background: true`) — generic
+ *  over the producer (Bash / Agent / …). The shared primitive behind the per-tool
+ *  helpers below. */
+export function isRunInBackground(input: JsonValue): boolean {
   return (
     !!input &&
     typeof input === "object" &&
     !Array.isArray(input) &&
     (input as Record<string, unknown>).run_in_background === true
   );
+}
+
+/** True when an `Agent` tool_use was launched detached (`run_in_background: true`). */
+export function isBackgroundAgentInput(input: JsonValue): boolean {
+  return isRunInBackground(input);
 }
 
 /** A background task's coarse lifecycle → the design's status-dot colour token. */

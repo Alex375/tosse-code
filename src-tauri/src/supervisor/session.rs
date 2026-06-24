@@ -46,6 +46,9 @@ pub enum SessionCommand {
     /// never surfaced (the UI keeps its optimistic placeholder / last title).
     GenerateTitle { description: String, seq: u32 },
     Interrupt,
+    /// Stop a single background task (a `run_in_background` Bash / Monitor /
+    /// sub-agent) by its `task_id`, without ending the turn or the session.
+    StopTask(String),
     Shutdown,
 }
 
@@ -79,6 +82,9 @@ enum PendingControl {
     /// has a placeholder name.
     GenerateTitle(u32),
     Interrupt,
+    /// A `stop_task` request — its failure surfaces as a control error so the user
+    /// knows the background task is still running.
+    StopTask,
 }
 
 impl PendingControl {
@@ -92,6 +98,7 @@ impl PendingControl {
             PendingControl::SetUltracode => "ultracode",
             PendingControl::GenerateTitle(_) => "génération du titre",
             PendingControl::Interrupt => "interruption",
+            PendingControl::StopTask => "arrêt d'une tâche de fond",
         }
     }
 }
@@ -161,6 +168,10 @@ impl SessionHandle {
 
     pub async fn interrupt(&self) -> Result<(), SessionError> {
         self.send(SessionCommand::Interrupt).await
+    }
+
+    pub async fn stop_task(&self, task_id: String) -> Result<(), SessionError> {
+        self.send(SessionCommand::StopTask(task_id)).await
     }
 
     pub async fn shutdown(&self) -> Result<(), SessionError> {
@@ -541,10 +552,13 @@ impl SessionCore {
             }
             // The bare success of set_model / apply_flag_settings carries no payload;
             // the follow-up get_settings (queued right after) reports the truth.
+            // `Interrupt`/`StopTask` acks are bare too — the visible effect arrives via
+            // the stream (turn ends / the task's `task_*` lifecycle flips to stopped).
             PendingControl::SetModel
             | PendingControl::SetEffort
             | PendingControl::SetUltracode
-            | PendingControl::Interrupt => {}
+            | PendingControl::Interrupt
+            | PendingControl::StopTask => {}
         }
     }
 
@@ -716,6 +730,15 @@ impl SessionCore {
             }
             SessionCommand::Interrupt => {
                 self.send_tracked(PendingControl::Interrupt, control::interrupt_request);
+            }
+            SessionCommand::StopTask(task_id) => {
+                // Fire-and-correlate: the CLI kills the background task and replies with
+                // a bare success; the task then settles to `stopped` via its normal
+                // `task_*` lifecycle (no optimistic state here). A rejection surfaces as
+                // a control error (the user must know the task is still alive).
+                self.send_tracked(PendingControl::StopTask, |rid| {
+                    control::stop_task_request(rid, &task_id)
+                });
             }
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown => {}

@@ -20,6 +20,7 @@ import { ConductorThread } from "./ConductorThread";
 import { FileMentionProvider } from "./FileMention";
 import { ReviewBar } from "./ReviewBar";
 import { AgentBar } from "./AgentBar";
+import { BashBar } from "./BashBar";
 import { useStickToBottom } from "./useStickToBottom";
 
 // Interactive elements whose clicks must NOT be hijacked to focus the composer
@@ -206,6 +207,7 @@ function ConversationPane({
         <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
       </FileMentionProvider>
       <AgentBar session={session} />
+      <BashBar session={session} />
       <TodoBar session={session} />
       <ReviewBar session={session} />
       <ConductorComposer ref={composerRef} session={session} onSent={scrollToBottom} />

@@ -33,7 +33,7 @@ import type {
   WorktreeInfo,
   WorktreeStatus,
 } from "../bindings";
-import { DEMO_SUBAGENT_TRANSCRIPT, idleState, MOCK_SESSION_ID, ScenarioDriver } from "./scenario";
+import { DEMO_SUBAGENT_TRANSCRIPT, idleState, mockTaskOutput, MOCK_SESSION_ID, ScenarioDriver } from "./scenario";
 
 // A small slash-command catalogue so the browser/Playwright build exercises the
 // `/` autocomplete menu without a real `claude` process.
@@ -192,6 +192,7 @@ export const mockCommands = {
     const driver = getRecord(session).driver;
     if (demo === "question") driver.startQuestion();
     else if (demo === "background") driver.startBackground();
+    else if (demo === "shell") driver.startShell();
     else driver.start();
     return ok(null);
   },
@@ -269,6 +270,22 @@ export const mockCommands = {
     rec.lastState = { ...rec.lastState, busy: false, ended: true };
     sessionStateEvent.emit({ session, state: rec.lastState });
     return ok(null);
+  },
+
+  async stopTask(session: string, taskId: string): Promise<Result<null, string>> {
+    // Mirror the core: the CLI kills the task, which settles to `stopped` via its
+    // `task_*` lifecycle. The driver re-emits the known bg-Bash snapshot as stopped.
+    getRecord(session).driver.stopBash(taskId);
+    return ok(null);
+  },
+
+  async readTaskOutput(
+    _sessionId: string,
+    taskId: string,
+  ): Promise<Result<string | null, string>> {
+    // No on-disk output file in the browser mock — canned logs per demo task id so the
+    // BashOutputPopover renders real-shaped content (and tails) in dev/Playwright.
+    return ok(mockTaskOutput(taskId));
   },
 
   async openInTerminal(cwd: string, sessionId: string): Promise<Result<null, string>> {
