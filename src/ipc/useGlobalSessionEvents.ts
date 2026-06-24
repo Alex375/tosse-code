@@ -30,36 +30,13 @@ import { agentEventFor } from "../notifications/transition";
 import { syncReminderFromLive } from "../agent/reminderSync";
 import type { SessionStatePayload } from "./client";
 import { worktreesKey } from "./useWorktrees";
+import { parseEnterWorktreePath } from "../features/git/worktree";
 
 /** Repo path of a conversation (for invalidating its cached worktree list). */
 function repoPathForConv(convId: string): string | null {
   const s = useConversationsStore.getState();
   const conv = s.conversations.find((c) => c.id === convId);
   return conv ? (s.repos.find((r) => r.id === conv.repoId)?.path ?? null) : null;
-}
-
-/** Flatten a tool_result's content (string, or array of {text}) to plain text. */
-function resultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : ""))
-      .join(" ");
-  }
-  return "";
-}
-
-/**
- * Pull the worktree path out of an `EnterWorktree` tool result, e.g.
- * "Created worktree at /…/.claude/worktrees/foo on branch …" or a "Switched to
- * worktree at /…" message. Returns null if no path is found.
- */
-function parseEnterWorktreePath(content: unknown): string | null {
-  const s = resultText(content);
-  const at = s.match(/worktree at (\/[^\n]+?)(?: on branch | on commit |[\n"']|$)/);
-  if (at) return at[1].trim();
-  const wt = s.match(/(\/\S*\/\.claude\/worktrees\/[^\s"']+)/);
-  return wt ? wt[1] : null;
 }
 
 interface DeltaBuf {

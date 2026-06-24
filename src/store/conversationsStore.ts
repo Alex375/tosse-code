@@ -20,13 +20,14 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "../ipc/client";
-import type { ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
+import type { ConversationItem, ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
+import { worktreeCwdFromTranscript } from "../features/git/worktree";
 import { useMemo } from "react";
 
 export const DEFAULT_CONV_NAME = "Nouvelle conversation";
@@ -830,6 +831,20 @@ export async function restartConversationSession(convId: string): Promise<string
 const historyLoaded = new Set<string>();
 
 /**
+ * Re-derive a conversation's active worktree from its transcript and restore it as
+ * `liveCwd`, so the editor (and the worktree indicator/badge, which share
+ * `effectiveCwd`) root on the RIGHT worktree even out of a live session and after
+ * a restart — not the main checkout. `liveCwd` is in-memory only (no SQLite
+ * column, no migration); the on-disk transcript is its durable source of truth.
+ * Mirrors the live EnterWorktree/ExitWorktree interception in
+ * `useGlobalSessionEvents`. A conversation that never touched a worktree (or last
+ * did ExitWorktree) yields null → `effectiveCwd` falls back to `conv.cwd`.
+ */
+function rehydrateWorktreeCwd(convId: string, items: ConversationItem[]): void {
+  useConversationsStore.getState().setLiveCwd(convId, worktreeCwdFromTranscript(items));
+}
+
+/**
  * Load a conversation's history from Claude's on-disk transcript into the message
  * store, keyed by its STABLE id — no process spawned (pure file IO). Idempotent
  * and run at most once per conversation per app run; `applyItem` also dedupes by
@@ -847,6 +862,9 @@ export async function loadConversationHistory(convId: string): Promise<void> {
     useConversationStore.getState();
   ensureSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // Root the editor on the worktree this conversation actually lives in, read back
+  // from the transcript (its live cwd is in-memory only and lost on restart).
+  rehydrateWorktreeCwd(convId, res.data);
   // The replayed transcript ends on a past turn_result, which arms "review". But a
   // historical completion is not a fresh "Claude just finished, go look" — mark it
   // seen so only genuine LIVE completions surface as review.
@@ -886,6 +904,9 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
     useConversationStore.getState();
   resetSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // Re-root the editor on the conversation's actual worktree, re-derived from the
+  // freshly re-read transcript (live cwd is in-memory only).
+  rehydrateWorktreeCwd(convId, res.data);
   // Replayed history ends on a past turn_result; mark it seen so turning the
   // stream on doesn't flash an old conversation as "review" (only fresh LIVE
   // completions should).
