@@ -37,11 +37,11 @@ export function ReviewBar({ session }: { session: string }) {
   const status = useAgentStatus(session);
   const send = useSendMessage(session);
   if (!isDismissable(status)) return null;
-  // "Continue" makes sense when Claude STOPPED (an execution error, or a finished
-  // turn) — send a "continue" message so it resumes. NOT on `needInput`, which needs
-  // a real answer, not a blind resume. Sending clears the reminder (addUserTurn), so
-  // the bar closes on its own.
-  const canContinue = status.kind === "error" || status.kind === "review";
+  // "Continue" only makes sense after an ERROR — send a "continue" message so Claude
+  // retries from where it broke. NOT on `review` (a turn that finished cleanly has
+  // nothing to resume), nor on `needInput` (needs a real answer, not a blind resume).
+  // Sending clears the reminder (addUserTurn), so the bar closes on its own.
+  const canContinue = status.kind === "error";
   return (
     <div className="cv-reviewbar" data-tone={reviewTone(status)}>
       <span className="cv-reviewbar-dot" />
