@@ -15,7 +15,7 @@ const LABELS: Record<EffortLevel, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",
-  xhigh: "Extra high",
+  xhigh: "Extra",
   ultracode: "Ultra code",
 };
 const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "ultracode"];

@@ -13,7 +13,7 @@ import {
   useToolResult,
   useTurn,
 } from "../../store/conversationStore";
-import { Avatar, Ico } from "../../ui/kit";
+import { Avatar, ClaudeMark, Ico, UserMark } from "../../ui/kit";
 import { DiffView } from "./DiffView";
 import { QuestionnaireAsk, QuestionnaireSummary, questionCount } from "./QuestionnaireAsk";
 import { StreamMarkdown } from "./StreamMarkdown";
@@ -42,7 +42,7 @@ const TOOL_ICON: Record<string, string> = {
 function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
   return (
     <div className={"cv-msg cv-user" + (queued ? " is-queued" : "")}>
-      <Avatar>VS</Avatar>
+      <Avatar user><UserMark /></Avatar>
       <div className="cv-bubble">
         {queued ? (
           <span className="cv-queued-tag" title="Envoyé pendant que l'agent travaille — sera traité en cours de route">
@@ -252,7 +252,7 @@ function MsgAI({ session, turnId }: { session: string; turnId: string }) {
   if (!turn) return null;
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai>✦</Avatar>
+      <Avatar ai><ClaudeMark /></Avatar>
       <div className="cv-aibody">
         {/* Finalized blocks accumulated so far, then the block currently being
             typed as a live tail. Both render together so an already-shown block is
@@ -281,7 +281,7 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
 
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai>✦</Avatar>
+      <Avatar ai><ClaudeMark /></Avatar>
       <div className="cv-aibody">
         <div className="cv-ask-turn">
           <div className="wf-ask">
@@ -369,7 +369,11 @@ function WorkingIndicator({ session }: { session: string }) {
   const activity = useLiveActivity(session);
   return (
     <div className={styles.activity}>
-      <Ico name="spark" className="sm wf-spin" />
+      <span className={styles.typing} aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
       <span>{activity}</span>
     </div>
   );

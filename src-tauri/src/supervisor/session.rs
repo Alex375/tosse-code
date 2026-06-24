@@ -955,7 +955,11 @@ mod tests {
 
         let sent = drain(&mut out);
         let req = find_req(&sent, "generate_session_title").expect("a generate_session_title request");
-        assert_eq!(req["request"]["description"], json!("Fixer le bug du login"));
+        // The description carries the user's text (verbatim, leading) plus the appended
+        // brevity hint (control.rs::TITLE_BREVITY_HINT) — see `generate_session_title_request`.
+        let desc = req["request"]["description"].as_str().expect("description is a string");
+        assert!(desc.starts_with("Fixer le bug du login"), "user text leads, got: {desc:?}");
+        assert!(desc.contains("at most 5 words"), "brevity hint appended, got: {desc:?}");
         assert_eq!(req["request"]["persist"], json!(false));
         let rid = req["request_id"].as_str().expect("request_id").to_string();
 
@@ -1166,8 +1170,19 @@ mod tests {
 
         handle.shutdown().await.ok();
         let title = title.expect("the stream closed before a Title event arrived");
-        eprintln!("[live] generated title: {title:?}");
+        let words = title.split_whitespace().count();
+        eprintln!("[live] generated title: {title:?} ({words} words, {} chars)", title.chars().count());
         assert!(!title.trim().is_empty(), "the generated title should be non-empty");
+        // The brevity hint (control.rs::TITLE_BREVITY_HINT) asks for ≤5 words; allow a
+        // little slack but flag a hint that's being ignored or echoed back as prose.
+        assert!(
+            words <= 8,
+            "the brevity hint should keep the title short, got {words} words: {title:?}"
+        );
+        assert!(
+            !title.to_lowercase().contains("title"),
+            "the title must not echo the brevity instruction, got: {title:?}"
+        );
     }
 
     /// LIVE end-to-end for the BACKGROUND-TASK socle: spawn a real `claude`, ask it
