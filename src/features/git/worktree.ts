@@ -2,9 +2,75 @@
 // No React, no IPC — just logic over a WorktreeInfo[] and a cwd, so it is easy
 // to reason about and reuse (indicator, sidebar badge, manager all share it).
 
-import type { SessionStatePayload, WorktreeInfo } from "../../ipc/client";
+import type { ConversationItem, SessionStatePayload, WorktreeInfo } from "../../ipc/client";
 
 const stripSlash = (p: string) => p.replace(/\/+$/, "");
+
+/** Flatten a tool_result's content (string, or array of {text}) to plain text. */
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) =>
+        b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : "",
+      )
+      .join(" ");
+  }
+  return "";
+}
+
+/**
+ * Pull the worktree path out of an `EnterWorktree` tool result, e.g.
+ * "Created worktree at /…/.claude/worktrees/foo on branch …" or a "Switched to
+ * worktree at /…" message. Returns null if no path is found.
+ */
+export function parseEnterWorktreePath(content: unknown): string | null {
+  const s = resultText(content);
+  const at = s.match(/worktree at (\/[^\n]+?)(?: on branch | on commit |[\n"']|$)/);
+  if (at) return at[1].trim();
+  const wt = s.match(/(\/\S*\/\.claude\/worktrees\/[^\s"']+)/);
+  return wt ? wt[1] : null;
+}
+
+/**
+ * Reconstruct the worktree a conversation is in from its transcript, by replaying
+ * its EnterWorktree/ExitWorktree tool results IN ORDER — the same signal the live
+ * stream uses (see `useGlobalSessionEvents`), but read back from the on-disk
+ * transcript so the worktree survives a restart (live cwd is in-memory only).
+ *
+ * Returns the active worktree path, or null if the transcript shows none (never
+ * entered, or the last worktree action was a SUCCESSFUL ExitWorktree). This null
+ * is the "back to the spawn cwd" signal — callers fall through to `conv.cwd`.
+ *
+ * Both branches are gated on success (`!is_error`): a REFUSED ExitWorktree (e.g.
+ * "Worktree has N commits — confirm with the user") did NOT leave the worktree,
+ * so the session is still in it and `cwd` must stay put — same as for a failed
+ * EnterWorktree.
+ */
+export function worktreeCwdFromTranscript(items: ConversationItem[]): string | null {
+  const toolIds = new Map<string, "EnterWorktree" | "ExitWorktree">();
+  let cwd: string | null = null;
+  for (const item of items) {
+    if (item.kind === "assistant_message") {
+      for (const b of item.blocks) {
+        if (b.type === "tool_use" && (b.name === "EnterWorktree" || b.name === "ExitWorktree")) {
+          toolIds.set(b.id, b.name);
+        }
+      }
+    } else if (item.kind === "tool_result" && toolIds.has(item.tool_use_id)) {
+      const tool = toolIds.get(item.tool_use_id)!;
+      toolIds.delete(item.tool_use_id);
+      if (item.is_error) continue; // a refused/failed worktree op did not move the cwd
+      if (tool === "EnterWorktree") {
+        const path = parseEnterWorktreePath(item.content);
+        if (path) cwd = path;
+      } else if (tool === "ExitWorktree") {
+        cwd = null;
+      }
+    }
+  }
+  return cwd;
+}
 
 /**
  * The directory a conversation is in RIGHT NOW, most specific first:

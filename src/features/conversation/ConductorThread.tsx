@@ -20,6 +20,7 @@ import {
   useTimeline,
   useToolResult,
   useTurn,
+  useTurnResult,
 } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { useTaskByToolUse } from "../../store/backgroundTasksStore";
@@ -69,41 +70,104 @@ function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
   );
 }
 
-function MsgError({ session, errorId }: { session: string; errorId: string }) {
-  const err = useError(session, errorId);
-  if (!err) return null;
+/** The single, consistent way an error shows in the thread: a red `role=alert`
+ *  bubble with an optional bold heading, a main message, and a collapsed
+ *  "Détails techniques" disclosure for the raw payload (stderr / exit code / raw
+ *  line) so the detail is one click away without polluting the stream. Used by
+ *  client errors (MsgError), core error notices (NoticeRow) and failed turns
+ *  (TurnResultRow) so they never diverge. */
+function ErrorBlock({
+  heading,
+  children,
+  detail,
+}: {
+  heading?: ReactNode;
+  children?: ReactNode;
+  /** Raw technical detail, hidden behind a disclosure (collapsed by default). */
+  detail?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
   return (
     <div className={styles.errorBubble} role="alert">
       <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
-      <span>{err.message}</span>
+      <div className={styles.errorBody}>
+        {heading ? <div className={styles.errorHeading}>{heading}</div> : null}
+        {children ? <div className={styles.errorText}>{children}</div> : null}
+        {detail ? (
+          <>
+            <button
+              type="button"
+              className={styles.errorToggle}
+              onClick={() => setOpen((o) => !o)}
+            >
+              {open ? "Masquer le détail" : "Détails techniques"}
+            </button>
+            {open ? <pre className={styles.errorDetail}>{detail}</pre> : null}
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }
 
-/** Control-channel notices surfaced from the core:
+function MsgError({ session, errorId }: { session: string; errorId: string }) {
+  const err = useError(session, errorId);
+  if (!err) return null;
+  return <ErrorBlock detail={err.detail}>{err.message}</ErrorBlock>;
+}
+
+/** French heading for each error-bearing notice subtype the core can emit. Any
+ *  subtype listed here (plus the generic `error`) renders as a visible error
+ *  bubble; subtypes absent from this map stay quiet (e.g. `control_change`). This
+ *  is the front half of the "zero silent error" contract: a layer surfaces an
+ *  error by emitting `Notice{subtype, detail:{message, detail?}}` and it shows up
+ *  here with no extra plumbing. */
+const NOTICE_ERROR_HEADINGS: Record<string, string> = {
+  process_exited: "La session Claude Code s'est arrêtée de façon inattendue",
+  session_crashed: "La session Claude Code a planté",
+  send_failed: "Message non transmis à Claude Code",
+  protocol_error: "Erreur de protocole",
+  permission_error: "Demande d'autorisation illisible",
+  task_failed: "Une tâche de fond a échoué",
+};
+
+/** Pull a human-readable detail string out of a notice's raw `detail` payload, for
+ *  the collapsed "Détails techniques" disclosure. Prefers explicit `detail`, then
+ *  any technical fields (stderr / exit code), else the whole payload as JSON. */
+function noticeDetailText(d: Record<string, JsonValue> | null): string | null {
+  if (!d) return null;
+  if (typeof d.detail === "string" && d.detail.trim()) return d.detail;
+  const lines: string[] = [];
+  if (typeof d.stderr === "string" && d.stderr.trim()) lines.push(d.stderr.trimEnd());
+  if (d.exit_code != null) lines.push(`exit code: ${String(d.exit_code)}`);
+  if (typeof d.signal === "string" && d.signal) lines.push(`signal: ${d.signal}`);
+  if (lines.length) return lines.join("\n");
+  return null;
+}
+
+/** Control-channel + error notices surfaced from the core:
  *  - `control_change`: a model/effort/permission change CONFIRMED by the CLI — a
  *    subtle inline line (like the VS Code extension). Emitted only on the model-felt
  *    transition (get_settings read-back / set_permission_mode ack / system/init),
  *    never on the optimistic click, so it is reliable.
- *  - `control_error`: a change the CLI refused — visible, never silent.
+ *  - `control_error` + every subtype in NOTICE_ERROR_HEADINGS (and the generic
+ *    `error`): a real error — a visible red bubble, never silent.
  *  Other notice subtypes stay quiet. */
 function NoticeRow({ session, noticeId }: { session: string; noticeId: string }) {
   const notice = useNotice(session, noticeId);
   if (!notice) return null;
-  const d = (notice.detail ?? null) as unknown as {
-    control?: string;
-    icon?: string;
-    from?: string;
-    to?: string;
-    message?: string;
-  } | null;
+  const d = (notice.detail ?? null) as Record<string, JsonValue> | null;
+  const get = (k: string): string | undefined => {
+    const v = d?.[k];
+    return typeof v === "string" ? v : undefined;
+  };
 
   if (notice.subtype === "control_change") {
     return (
       <div className={styles.controlChange}>
-        <Ico name={d?.icon ?? "spark"} className="sm" />
+        <Ico name={get("icon") ?? "spark"} className="sm" />
         <span>
-          {d?.control} : <b>{d?.from}</b> → <b>{d?.to}</b>
+          {get("control")} : <b>{get("from")}</b> → <b>{get("to")}</b>
         </span>
       </div>
     );
@@ -111,16 +175,53 @@ function NoticeRow({ session, noticeId }: { session: string; noticeId: string })
 
   if (notice.subtype === "control_error") {
     return (
-      <div className={styles.errorBubble} role="alert">
-        <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
-        <span>
-          Réglage « {d?.control ?? "contrôle"} » refusé par Claude Code
-          {d?.message ? ` : ${d.message}` : ""}.
-        </span>
-      </div>
+      <ErrorBlock detail={noticeDetailText(d)}>
+        Réglage « {get("control") ?? "contrôle"} » refusé par Claude Code
+        {get("message") ? ` : ${get("message")}` : ""}.
+      </ErrorBlock>
+    );
+  }
+
+  const heading = NOTICE_ERROR_HEADINGS[notice.subtype] ?? (notice.subtype === "error" ? "Erreur" : null);
+  if (heading) {
+    return (
+      <ErrorBlock heading={heading} detail={noticeDetailText(d)}>
+        {get("message") ?? null}
+      </ErrorBlock>
     );
   }
   return null;
+}
+
+/** A turn that ended in error: the CLI sends a `result` with `is_error` (or an
+ *  `error_*` subtype) carrying the human error text — previously stored but never
+ *  rendered (it fell through the timeline switch). Now a persistent error bubble
+ *  with a typed heading. Successful / interrupted turns render nothing here. */
+function turnErrorHeading(meta: { subtype: string; apiErrorStatus?: string | null }): string {
+  if (meta.apiErrorStatus) return `Erreur d'API : ${meta.apiErrorStatus}`;
+  switch (meta.subtype) {
+    case "error_max_turns":
+      return "Nombre maximum de tours atteint";
+    case "error_during_execution":
+      return "Erreur pendant l'exécution";
+    default:
+      return "La tâche s'est terminée en erreur";
+  }
+}
+
+function resultToText(result: JsonValue | null): string | null {
+  if (result == null) return null;
+  if (typeof result === "string") return result.trim() || null;
+  return JSON.stringify(result, null, 2);
+}
+
+function TurnResultRow({ session, resultId }: { session: string; resultId: string }) {
+  const meta = useTurnResult(session, resultId);
+  if (!meta) return null;
+  const isError = meta.isError || meta.subtype.startsWith("error");
+  if (!isError) return null; // success / interrupted: nothing to surface here
+  const text = resultToText(meta.result);
+  return <ErrorBlock heading={turnErrorHeading(meta)}>{text}</ErrorBlock>;
 }
 
 /** MultiEdit carries an `edits: [{old_string, new_string}, …]` array instead of the
@@ -164,6 +265,11 @@ function ConductorToolCard({
 
   // Edit/Write show their diff immediately; all other results are collapsed by default.
   const [open, setOpen] = useState(isEdit || isWrite);
+  // A failed tool must not hide its error behind a collapsed card: auto-expand once
+  // an error result lands (it arrives after mount, so an effect, not initial state).
+  useEffect(() => {
+    if (result?.isError) setOpen(true);
+  }, [result?.isError]);
 
   // Bash cards are expandable even before a result: the header command is
   // ellipsised, so expanding is how the user reads the full command.
@@ -541,6 +647,8 @@ export function ConductorThread({
                 return <MsgError key={entry.id} session={session} errorId={entry.id} />;
               if (entry.kind === "notice")
                 return <NoticeRow key={entry.id} session={session} noticeId={entry.id} />;
+              if (entry.kind === "turn_result")
+                return <TurnResultRow key={entry.id} session={session} resultId={entry.id} />;
               return null;
             })}
             {pending.map((req) => (

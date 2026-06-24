@@ -32,36 +32,13 @@ import { agentEventFor } from "../notifications/transition";
 import { syncReminderFromLive } from "../agent/reminderSync";
 import type { SessionStatePayload } from "./client";
 import { worktreesKey } from "./useWorktrees";
+import { parseEnterWorktreePath } from "../features/git/worktree";
 
 /** Repo path of a conversation (for invalidating its cached worktree list). */
 function repoPathForConv(convId: string): string | null {
   const s = useConversationsStore.getState();
   const conv = s.conversations.find((c) => c.id === convId);
   return conv ? (s.repos.find((r) => r.id === conv.repoId)?.path ?? null) : null;
-}
-
-/** Flatten a tool_result's content (string, or array of {text}) to plain text. */
-function resultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : ""))
-      .join(" ");
-  }
-  return "";
-}
-
-/**
- * Pull the worktree path out of an `EnterWorktree` tool result, e.g.
- * "Created worktree at /…/.claude/worktrees/foo on branch …" or a "Switched to
- * worktree at /…" message. Returns null if no path is found.
- */
-function parseEnterWorktreePath(content: unknown): string | null {
-  const s = resultText(content);
-  const at = s.match(/worktree at (\/[^\n]+?)(?: on branch | on commit |[\n"']|$)/);
-  if (at) return at[1].trim();
-  const wt = s.match(/(\/\S*\/\.claude\/worktrees\/[^\s"']+)/);
-  return wt ? wt[1] : null;
 }
 
 interface DeltaBuf {
@@ -126,6 +103,9 @@ export function useGlobalSessionEvents(): void {
     const rafIds = new Map<string, number>();
     // Sessions already ensured in the store (avoid redundant state writes).
     const ensured = new Set<string>();
+    // Background-task ids already surfaced as failed (the task event re-fires on
+    // every transition; surface a failure exactly once).
+    const seenFailedTasks = new Set<string>();
     let disposed = false;
     const unlisteners: Array<() => void> = [];
 
@@ -133,6 +113,25 @@ export function useGlobalSessionEvents(): void {
       if (ensured.has(session)) return;
       ensured.add(session);
       useConversationStore.getState().ensureSession(session);
+    }
+
+    /** A `listen()` that rejects means a whole class of live events will never
+     *  arrive — the conversation would go silent. Surface it (don't swallow): log it
+     *  and, if a conversation is open, drop a visible error bubble explaining that
+     *  live updates may be broken. */
+    function onAttachError(name: string, e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`failed to attach ${name} listener:`, e);
+      const activeId = useConversationsStore.getState().activeId;
+      if (activeId) {
+        useConversationStore
+          .getState()
+          .addErrorTurn(
+            activeId,
+            `La connexion au flux d'événements (${name}) a échoué — les mises à jour en direct peuvent ne pas s'afficher. Redémarre l'application.`,
+            message,
+          );
+      }
     }
 
     function flushKey(bufKey: string, session: string, msgId: string) {
@@ -212,7 +211,13 @@ export function useGlobalSessionEvents(): void {
         const tool = worktreeToolIds.get(item.tool_use_id)!;
         worktreeToolIds.delete(item.tool_use_id);
         const convs = useConversationsStore.getState();
-        if (tool === "EnterWorktree" && !item.is_error) {
+        // Gate BOTH on success: a refused ExitWorktree (e.g. "Worktree has N
+        // commits — confirm with the user") did NOT leave the worktree, so the
+        // session is still in it and liveCwd must stay put — same as a failed
+        // EnterWorktree. (Mirrors `worktreeCwdFromTranscript`.)
+        if (item.is_error) {
+          // no-op: the worktree op was refused/failed, cwd unchanged
+        } else if (tool === "EnterWorktree") {
           const path = parseEnterWorktreePath(item.content);
           if (path) convs.setLiveCwd(session, path);
         } else if (tool === "ExitWorktree") {
@@ -302,15 +307,6 @@ export function useGlobalSessionEvents(): void {
       useConversationsStore.getState().applyAutoTitle(convId, payload.title, payload.seq);
     }
 
-    function onTask(payload: SessionTaskEvent) {
-      // Background-task lifecycle (sub-agents, Bash-bg, Monitor, workflows). The
-      // core emits a full cumulative snapshot per task; the store replaces by id.
-      // Routed by the stable conversation id like every other session event.
-      const session = convIdForHandle(payload.session);
-      if (!session) return; // unknown / deleted conversation
-      useBackgroundTasksStore.getState().applyTask(session, payload.task);
-    }
-
     function onCommands(payload: SessionCommandsEvent) {
       // Cache the catalogue by cwd (not by session): commands depend on the
       // working folder, and a fresh conversation in the same repo reuses them
@@ -322,24 +318,60 @@ export function useGlobalSessionEvents(): void {
       useCommandsStore.getState().setCommands(conv.cwd, payload.commands);
     }
 
+    // A background task (sub-agent / workflow / background Bash / Monitor) snapshot.
+    // Two roles: (1) feed the background-task REGISTRY that drives the sub-agent cards,
+    // the pinned AgentBar and the Flight Deck badge; (2) surface a terminal `failed`
+    // status in the owning conversation so a sub-agent that errored out isn't silently
+    // lost. `stopped` is usually user/session-driven, so it's left quiet — only genuine
+    // failures alert. Routed by stable conversation id like every other session event.
+    function onTask(payload: SessionTaskEvent) {
+      const session = convIdForHandle(payload.session);
+      if (!session) return;
+      const task = payload.task;
+      // (1) registry: the core emits a full cumulative snapshot per task (replace by id).
+      useBackgroundTasksStore.getState().applyTask(session, task);
+      // (2) failure surfacing (de-duped per task — re-emitted on each transition).
+      if (task.status !== "failed") return;
+      if (seenFailedTasks.has(task.task_id)) return; // re-emitted per transition
+      seenFailedTasks.add(task.task_id);
+      ensureOnce(session);
+      const label = task.label ? ` : ${task.label}` : "";
+      const detailParts: string[] = [];
+      if (task.summary) detailParts.push(task.summary);
+      if (task.output_file) detailParts.push(`output: ${task.output_file}`);
+      useConversationStore
+        .getState()
+        .addErrorTurn(
+          session,
+          `Une tâche de fond a échoué${label}.`,
+          detailParts.length ? detailParts.join("\n") : null,
+        );
+    }
+
     events.sessionMessageEvent
       .listen((e) => { if (!disposed) onMessage(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("messages", e));
     events.sessionStateEvent
       .listen((e) => { if (!disposed) onState(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("état", e));
     events.sessionPermissionEvent
       .listen((e) => { if (!disposed) onPermission(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("permissions", e));
     events.sessionCommandsEvent
       .listen((e) => { if (!disposed) onCommands(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("commandes", e));
     events.sessionTitleEvent
       .listen((e) => { if (!disposed) onTitle(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("titres", e));
     events.sessionTaskEvent
       .listen((e) => { if (!disposed) onTask(e.payload); })
-      .then((un) => unlisteners.push(un));
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("tâches", e));
 
     return () => {
       disposed = true;

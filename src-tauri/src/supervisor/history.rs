@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::assembler::{context_used_from_usage, normalize_blocks};
 use super::model::{ContextFill, ConversationItem};
@@ -114,8 +114,17 @@ fn load_context_fill_in(config_dir: &Path, session_id: &str) -> ContextFill {
     let Some(path) = find_transcript(config_dir, session_id) else {
         return ContextFill::default();
     };
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return ContextFill::default();
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        // The ring is a soft indicator (the next live turn corrects it), so a read
+        // failure stays non-fatal — but log a REAL IO error (vs a benign vanished
+        // file) instead of silently defaulting, matching the module's policy.
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[history] cannot read transcript for context fill {}: {e}", path.display());
+            }
+            return ContextFill::default();
+        }
     };
     let mut fill = ContextFill::default();
     for line in content.lines() {
@@ -154,25 +163,62 @@ fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
         // The main conversation transcript: skip sidechain (sub-agent) turns — the
         // root Task/Agent tool_use + its result still show, and the sub-agent's own
         // transcript is read separately (see [`super::subagents`]).
-        Ok(content) => parse_transcript_str(&content, true),
-        Err(_) => Vec::new(),
+        Ok(content) => {
+            let (mut items, skipped) = parse_transcript_str(&content, true);
+            // Malformed lines were silently dropped before — restoring fewer turns than
+            // the transcript holds, with no hint. Surface it as a timeline notice so a
+            // partially-restored conversation is never silently incomplete.
+            if skipped > 0 {
+                items.push(history_notice(format!(
+                    "{skipped} ligne(s) de l'historique étaient illisibles — des messages peuvent manquer."
+                )));
+            }
+            items
+        }
+        // `find_transcript` already proved the file exists, so NotFound is a rare race
+        // (deleted underfoot) — still "nothing to show", not an error.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        // A REAL read error (permissions / IO) on a file we know exists: don't
+        // collapse it to an empty conversation — say the history couldn't be read.
+        Err(e) => {
+            eprintln!("[history] cannot read transcript {}: {e}", path.display());
+            vec![history_notice(format!(
+                "Impossible de lire l'historique de cette conversation : {e}"
+            ))]
+        }
     }
 }
 
-/// Normalize a JSON-lines transcript into [`ConversationItem`]s. When
-/// `skip_sidechain` is true, sub-agent (`isSidechain:true`) turns are dropped — the
-/// behavior the main conversation restore wants. A SUB-AGENT's own transcript is
-/// itself entirely sidechain, so [`super::subagents`] calls this with
+/// A timeline notice carrying a history-restore problem (unreadable / partially
+/// corrupt transcript). Rendered as a visible error bubble by the UI — restoring a
+/// conversation must never drop messages silently.
+fn history_notice(message: String) -> ConversationItem {
+    ConversationItem::Notice {
+        subtype: "history_error".to_string(),
+        detail: json!({ "message": message }),
+    }
+}
+
+/// Normalize a JSON-lines transcript into [`ConversationItem`]s plus the COUNT of
+/// malformed lines that had to be skipped (so the caller can surface a "history may be
+/// incomplete" notice). When `skip_sidechain` is true, sub-agent (`isSidechain:true`)
+/// turns are dropped — the behavior the main conversation restore wants. A SUB-AGENT's
+/// own transcript is itself entirely sidechain, so [`super::subagents`] calls this with
 /// `skip_sidechain = false` to keep every line.
-pub(crate) fn parse_transcript_str(content: &str, skip_sidechain: bool) -> Vec<ConversationItem> {
+pub(crate) fn parse_transcript_str(
+    content: &str,
+    skip_sidechain: bool,
+) -> (Vec<ConversationItem>, usize) {
     let mut items = Vec::new();
+    let mut skipped = 0usize;
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
-            continue; // tolerate a malformed line, never abort the restore
+            skipped += 1; // tolerate a malformed line, never abort the restore — but count it
+            continue;
         };
         if skip_sidechain && entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             continue;
@@ -185,7 +231,7 @@ pub(crate) fn parse_transcript_str(content: &str, skip_sidechain: bool) -> Vec<C
             _ => {}
         }
     }
-    items
+    (items, skipped)
 }
 
 /// A `user` transcript line is either a real prompt (string or text blocks) or
@@ -359,6 +405,43 @@ mod tests {
         assert!(load_history_in(&base, "does-not-exist").is_empty());
         // Same for the context fill: no transcript → nothing seeded, not an error.
         assert_eq!(load_context_fill_in(&base, "does-not-exist"), ContextFill::default());
+    }
+
+    /// REGRESSION (silent error): a malformed transcript line is tolerated (the good
+    /// turns still restore) BUT no longer vanishes silently — a `history_error` notice
+    /// is appended so the user knows the restored conversation may be incomplete.
+    #[test]
+    fn malformed_transcript_line_surfaces_a_history_error_notice() {
+        let base = std::env::temp_dir().join(format!("tosse-hist-bad-{}", std::process::id()));
+        let proj = base.join("projects").join("-some-cwd");
+        std::fs::create_dir_all(&proj).unwrap();
+        let session_id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+        let mut f = std::fs::File::create(proj.join(format!("{session_id}.jsonl"))).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"user","uuid":"u1","message":{{"role":"user","content":"hi"}}}}"#
+        )
+        .unwrap();
+        writeln!(f, "{{ this is not valid json").unwrap();
+        drop(f);
+
+        let items = load_history_in(&base, session_id);
+        std::fs::remove_dir_all(&base).ok();
+
+        // The good line still restores…
+        assert!(
+            items
+                .iter()
+                .any(|i| matches!(i, ConversationItem::UserMessage { text, .. } if text == "hi")),
+            "the well-formed turn must still be restored"
+        );
+        // …and the skipped malformed line surfaces a visible notice.
+        assert!(
+            items
+                .iter()
+                .any(|i| matches!(i, ConversationItem::Notice { subtype, .. } if subtype == "history_error")),
+            "a skipped malformed line must surface a history_error notice"
+        );
     }
 
     #[test]

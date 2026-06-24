@@ -13,6 +13,7 @@ export type {
   ConversationRecord,
   FileContent,
   FsChangeEvent,
+  FsWatchErrorEvent,
   FsEntry,
   ImageContent,
   JsonValue,

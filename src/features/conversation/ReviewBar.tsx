@@ -1,6 +1,7 @@
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { isDismissable, type AgentStatus } from "../../agent/status";
 import { acknowledgeConversation } from "../../store/conversationsStore";
+import { useSendMessage } from "../../ipc/useCommands";
 import { Ico } from "../../ui/kit";
 
 /**
@@ -34,11 +35,28 @@ function reviewTone(s: AgentStatus): "review" | "input" | "error" {
 
 export function ReviewBar({ session }: { session: string }) {
   const status = useAgentStatus(session);
+  const send = useSendMessage(session);
   if (!isDismissable(status)) return null;
+  // "Continue" makes sense when Claude STOPPED (an execution error, or a finished
+  // turn) — send a "continue" message so it resumes. NOT on `needInput`, which needs
+  // a real answer, not a blind resume. Sending clears the reminder (addUserTurn), so
+  // the bar closes on its own.
+  const canContinue = status.kind === "error" || status.kind === "review";
   return (
     <div className="cv-reviewbar" data-tone={reviewTone(status)}>
       <span className="cv-reviewbar-dot" />
       <span className="cv-reviewbar-label">{reviewLabel(status)}</span>
+      {canContinue ? (
+        <button
+          type="button"
+          className="cv-reviewbar-btn"
+          onClick={() => send.mutate({ text: "continue" })}
+          title="Renvoyer « continue » pour que Claude reprenne le travail"
+        >
+          <Ico name="play" className="sm" />
+          Continue
+        </button>
+      ) : null}
       <button
         type="button"
         className="cv-reviewbar-btn"

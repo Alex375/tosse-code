@@ -98,6 +98,9 @@ export interface TurnResultMeta {
   subtype: string;
   isError: boolean;
   result: JsonValue | null;
+  /** API-level error status carried by an errored `result` (e.g. `"overloaded"`),
+   *  surfaced as a typed heading. `null` on success / when the CLI omits it. */
+  apiErrorStatus: string | null;
   totalCostUsd: number | null;
   numTurns: number | null;
   durationMs: number | null;
@@ -118,6 +121,9 @@ export interface NoticeItem {
 export interface ErrorItem {
   id: string;
   message: string;
+  /** Optional raw technical detail (stderr / stack / raw line), shown behind a
+   *  collapsed "Détails techniques" disclosure. */
+  detail?: string | null;
 }
 
 /**

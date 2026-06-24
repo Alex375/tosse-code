@@ -8,6 +8,7 @@ import { WorktreeManager } from "./features/git/WorktreeManager";
 import { EditorToggle } from "./features/editor/EditorToggle";
 import { FlightDeck } from "./features/flightdeck/FlightDeck";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
+import { AppErrorBanner } from "./ui/AppErrorBanner";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
 import { startUpdaterAutoCheck } from "./store/updater";
 import { initNotifications } from "./notifications/notify";
@@ -71,7 +72,7 @@ export default function App() {
   return (
     <Win
       title={view === "flightdeck" ? "Flight Deck" : active?.name ?? "Conductor"}
-      banner={<UpdateBanner />}
+      banner={<><UpdateBanner /><AppErrorBanner /></>}
       nav={
         <>
           <NavBtn

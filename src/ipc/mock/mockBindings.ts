@@ -8,6 +8,7 @@ import type {
   ConversationRecord,
   FileContent,
   FsChangeEvent,
+  FsWatchErrorEvent,
   FsEntry,
   ImageContent,
   PermissionDecision,
@@ -84,12 +85,13 @@ const sessionMessageEvent = new MockEmitter<SessionMessageEvent>();
 const sessionPermissionEvent = new MockEmitter<SessionPermissionEvent>();
 const sessionStateEvent = new MockEmitter<SessionStateEvent>();
 const sessionCommandsEvent = new MockEmitter<SessionCommandsEvent>();
-const sessionTitleEvent = new MockEmitter<SessionTitleEvent>();
 const sessionTaskEvent = new MockEmitter<SessionTaskEvent>();
+const sessionTitleEvent = new MockEmitter<SessionTitleEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
-// No real filesystem in the browser mock — this never fires, but must exist so
+// No real filesystem in the browser mock — these never fire, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
 const fsChangeEvent = new MockEmitter<FsChangeEvent>();
+const fsWatchErrorEvent = new MockEmitter<FsWatchErrorEvent>();
 // No real PTY in the browser mock — these never fire, but must exist so the
 // integrated terminal can subscribe without crashing.
 const terminalOutputEvent = new MockEmitter<TerminalOutputEvent>();
@@ -100,10 +102,11 @@ export const mockEvents = {
   sessionPermissionEvent,
   sessionStateEvent,
   sessionCommandsEvent,
-  sessionTitleEvent,
   sessionTaskEvent,
+  sessionTitleEvent,
   tickEvent,
   fsChangeEvent,
+  fsWatchErrorEvent,
   terminalOutputEvent,
   terminalExitEvent,
 };
