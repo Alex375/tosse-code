@@ -28,6 +28,7 @@ import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/sub
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
 import { DiffView } from "./DiffView";
+import { MentionPathChip } from "./FileMention";
 import { QuestionnaireAsk, QuestionnaireSummary, questionCount } from "./QuestionnaireAsk";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { SubAgentTranscript } from "./SubAgentTranscript";
@@ -282,6 +283,9 @@ function ConductorToolCard({
   const primaryArg = isQuestionnaire
     ? `${questionCount(input)} question${questionCount(input) > 1 ? "s" : ""}`
     : meta.primaryArg;
+  // When the header arg IS a file path (Read/Edit/Write/MultiEdit…), make the
+  // chip a clickable mention — opens the file in the side editor.
+  const filePath = field(input, "file_path");
   const tone = isEdit || isWrite ? "diff" : meta.kind === "bash" ? "term" : "";
 
   return (
@@ -295,9 +299,13 @@ function ConductorToolCard({
         <Ico name={icon} className="sm" />
         <span className="cv-tool-t">{label}</span>
         {primaryArg ? (
-          <span className="cv-tool-m wf-mono" title={primaryArg}>
-            {primaryArg}
-          </span>
+          filePath ? (
+            <MentionPathChip path={filePath} className="cv-tool-m wf-mono" display={primaryArg} />
+          ) : (
+            <span className="cv-tool-m wf-mono" title={primaryArg}>
+              {primaryArg}
+            </span>
+          )
         ) : null}
         <span className={styles.status}>
           {running ? (

@@ -79,19 +79,39 @@ interface Props {
   openPaths: string[];
   onChange: (value: string) => void;
   onSave: () => void;
+  /** A one-shot request to jump to a line (from a clicked file mention). The
+   *  `seq` nonce lets a repeat click on the same line re-fire. */
+  reveal?: { line: number; column: number; seq: number } | null;
+  /** Called once the `reveal` has been applied, so the store can clear it. */
+  onRevealConsumed?: () => void;
 }
 
-export default function MonacoView({ path, value, language, openPaths, onChange, onSave }: Props) {
+export default function MonacoView({
+  path,
+  value,
+  language,
+  openPaths,
+  onChange,
+  onSave,
+  reveal,
+  onRevealConsumed,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const models = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
   // Guards the change listener while we apply an EXTERNAL value (live reload), so
   // pushing disk content into the model doesn't echo back as a user edit.
   const applyingExternal = useRef(false);
+  // The last reveal seq we acted on — so a value change (an edit) never re-jumps
+  // the cursor, but a fresh click (new seq) always does.
+  const lastRevealSeq = useRef<number | null>(null);
+  const revealDeco = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
+  const onRevealConsumedRef = useRef(onRevealConsumed);
   onChangeRef.current = onChange;
   onSaveRef.current = onSave;
+  onRevealConsumedRef.current = onRevealConsumed;
 
   // Create the editor exactly once.
   useEffect(() => {
@@ -167,6 +187,37 @@ export default function MonacoView({ path, value, language, openPaths, onChange,
       }
     }
   }, [openPaths]);
+
+  // Jump to (and pulse-highlight) a line when a file mention is clicked. Acts
+  // once per reveal nonce, so an edit (value change) never re-jumps the cursor
+  // while a fresh click (new seq) always does. MonacoView only mounts after the
+  // buffer has loaded (EditorPane's loading guard), so the model has its lines.
+  // The highlight fades itself out (CSS animation `forwards`); the next reveal's
+  // `.set()` replaces it — so no timer (which a consume-triggered re-render would
+  // race) is needed.
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed || !reveal || lastRevealSeq.current === reveal.seq) return;
+    const model = models.current.get(path) ?? ed.getModel();
+    if (!model) return;
+    lastRevealSeq.current = reveal.seq;
+    const line = Math.min(Math.max(reveal.line, 1), model.getLineCount());
+    ed.revealLineInCenter(line);
+    ed.setPosition({ lineNumber: line, column: Math.max(reveal.column, 1) });
+    ed.focus();
+    if (!revealDeco.current) revealDeco.current = ed.createDecorationsCollection();
+    // Clear before setting so the line's decoration DOM node is recreated — a
+    // re-click on the SAME line (identical decoration) would otherwise be a no-op
+    // for Monaco's overlay and the pulse animation wouldn't replay.
+    revealDeco.current.clear();
+    revealDeco.current.set([
+      {
+        range: new monaco.Range(line, 1, line, 1),
+        options: { isWholeLine: true, className: styles.revealHighlight },
+      },
+    ]);
+    onRevealConsumedRef.current?.();
+  }, [reveal, path]);
 
   return <div ref={hostRef} className={styles.monacoHost} />;
 }

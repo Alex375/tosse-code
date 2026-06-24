@@ -1,7 +1,8 @@
 import { memo, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { CodeBlock, InlineCode } from "./CodeBlock";
+import { CodeBlock } from "./CodeBlock";
+import { MentionInlineCode } from "./FileMention";
 import styles from "./Markdown.module.css";
 
 /**
@@ -25,7 +26,9 @@ const components: Components = {
       const lang = /language-(\w+)/.exec(className ?? "")?.[1];
       return <CodeBlock code={text.replace(/\n$/, "")} lang={lang} />;
     }
-    return <InlineCode>{children}</InlineCode>;
+    // Inline code that resolves to a real file becomes a clickable mention
+    // (opens it in the side editor); otherwise it stays plain inline code.
+    return <MentionInlineCode className={styles.inlineCode}>{children}</MentionInlineCode>;
   },
   a: ({ href, children }) => (
     <a href={href} target="_blank" rel="noopener noreferrer">

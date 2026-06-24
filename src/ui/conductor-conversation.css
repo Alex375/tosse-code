@@ -87,6 +87,13 @@
 /* The command/path preview takes the free space and ellipsises — a clean
    one-line header; the full value is revealed by expanding the card. */
 .cv-tool-m { font-size:11px; color:var(--wf-tx-lo); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Clickable file mention: an inline-code path in prose, a tool-card file chip,
+   or a diff header path that resolves to a real file. Discreet affordance —
+   brighten + underline on hover/focus; the element keeps its host styling. */
+[data-filelink] { cursor: pointer; }
+[data-filelink]:hover,
+[data-filelink]:focus-visible { color: var(--wf-tx-hi); text-decoration: underline; }
+[data-filelink]:focus-visible { outline: none; }
 .cv-tool-b { border-top:1px solid var(--wf-line); padding:10px 12px; background:var(--wf-bg-2); }
 /* Full command shown in the body of an expanded Bash card (wraps, fully readable). */
 .cv-tool-cmd { margin:0 0 10px; padding:8px 10px; background:#0e0e11; border:1px solid var(--wf-line); border-radius:6px; font-size:11.5px; line-height:1.5; color:#f0cd97; white-space:pre-wrap; word-break:break-word; }
