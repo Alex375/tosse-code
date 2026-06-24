@@ -19,6 +19,7 @@ import { ConductorSidebar } from "./ConductorSidebar";
 import { ConductorThread } from "./ConductorThread";
 import { ReviewBar } from "./ReviewBar";
 import { AgentBar } from "./AgentBar";
+import { BashBar } from "./BashBar";
 import { useStickToBottom } from "./useStickToBottom";
 
 // Interactive elements whose clicks must NOT be hijacked to focus the composer
@@ -198,6 +199,7 @@ function ConversationPane({
     <div className="wf-col cv-pane" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
       <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
       <AgentBar session={session} />
+      <BashBar session={session} />
       <TodoBar session={session} />
       <ReviewBar session={session} />
       <ConductorComposer ref={composerRef} session={session} onSent={scrollToBottom} />

@@ -238,6 +238,20 @@ async stopSession(session: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Stop ONE background task (a `run_in_background` Bash / Monitor / sub-agent) by its
+ * `task_id`, without ending the turn or the session. Sends a `stop_task` control
+ * request; the task then settles to `stopped` via its normal `task_*` lifecycle
+ * (surfaced to the UI through `session_task`). No-op if the session is no longer live.
+ */
+async stopTask(session: string, taskId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("stop_task", { session, taskId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Open the OS terminal on this conversation: resume it as an interactive
  * `claude` session (`claude --resume <session_id>`) in its working directory.
  * 

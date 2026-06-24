@@ -146,3 +146,23 @@ export function useStop(convId: string) {
     },
   });
 }
+
+/** Stop ONE background task (a `run_in_background` Bash) by its `task_id`, without
+ *  ending the turn or the session. The task settles to `stopped` via its `task_*`
+ *  lifecycle (the bar reflects it). No-op if nothing is live. */
+export function useStopTask(convId: string) {
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
+  return useMutation({
+    mutationFn: async (taskId: string) => {
+      const handle = liveHandle(convId);
+      if (!handle) return; // nothing live to stop
+      return unwrap(commands.stopTask(handle, taskId));
+    },
+    // A failed stop is otherwise invisible — say it didn't take so the user knows the
+    // background command is still running.
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      addErrorTurn(convId, `Arrêt de la tâche de fond échoué : ${message}`);
+    },
+  });
+}

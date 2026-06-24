@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { BackgroundTask } from "../ipc/client";
-import { useBackgroundTasksStore } from "./backgroundTasksStore";
+import { orderBashTasks, useBackgroundTasksStore } from "./backgroundTasksStore";
 
 function task(over: Partial<BackgroundTask> = {}): BackgroundTask {
   return {
@@ -90,5 +90,48 @@ describe("backgroundTasksStore", () => {
     useBackgroundTasksStore.getState().applyTask("conv-a", task());
     useBackgroundTasksStore.getState().clear();
     expect(useBackgroundTasksStore.getState().sessions).toEqual({});
+  });
+});
+
+describe("orderBashTasks", () => {
+  const map = (...ts: BackgroundTask[]): Record<string, BackgroundTask> =>
+    Object.fromEntries(ts.map((t) => [t.task_id, t]));
+
+  it("keeps only RUNNING bash (drops agent/monitor/workflow AND finished bash)", () => {
+    const got = orderBashTasks(
+      map(
+        task({ task_id: "a", kind: "agent", status: "running" }),
+        task({ task_id: "b", kind: "bash", status: "running" }),
+        task({ task_id: "m", kind: "monitor", status: "running" }),
+        task({ task_id: "w", kind: "workflow", status: "running" }),
+        task({ task_id: "done", kind: "bash", status: "completed" }),
+        task({ task_id: "stopped", kind: "bash", status: "stopped" }),
+        task({ task_id: "failed", kind: "bash", status: "failed" }),
+      ),
+    );
+    expect(got.map((t) => t.task_id)).toEqual(["b"]);
+  });
+
+  it("orders running bash by task_id", () => {
+    const got = orderBashTasks(
+      map(
+        task({ task_id: "tk_3", kind: "bash", status: "running" }),
+        task({ task_id: "tk_1", kind: "bash", status: "running" }),
+        task({ task_id: "tk_2", kind: "bash", status: "running" }),
+      ),
+    );
+    expect(got.map((t) => t.task_id)).toEqual(["tk_1", "tk_2", "tk_3"]);
+  });
+
+  it("is empty when there is no RUNNING bash (none, or only finished)", () => {
+    expect(orderBashTasks({})).toEqual([]);
+    expect(
+      orderBashTasks(
+        map(
+          task({ task_id: "a", kind: "agent", status: "running" }),
+          task({ task_id: "d", kind: "bash", status: "completed" }),
+        ),
+      ),
+    ).toEqual([]);
   });
 });
