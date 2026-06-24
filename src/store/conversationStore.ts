@@ -36,6 +36,7 @@ import type {
   Turn,
   TurnResultMeta,
 } from "./types";
+import { isBackgroundAgentInput } from "../agent/subagentMeta";
 import { latestTodosInBlocks, todoSummary } from "./todos";
 
 const connectingState: SessionStatePayload = {
@@ -82,16 +83,8 @@ const rootKey = (parentToolUseId: string | null) => parentToolUseId ?? "root";
 function backgroundAgentIdsIn(blocks: NormalizedBlock[]): string[] {
   const ids: string[] = [];
   for (const b of blocks) {
-    if (b.type === "tool_use" && (b.name === "Agent" || b.name === "Task")) {
-      const input = b.input;
-      if (
-        input &&
-        typeof input === "object" &&
-        !Array.isArray(input) &&
-        (input as Record<string, unknown>).run_in_background === true
-      ) {
-        ids.push(b.id);
-      }
+    if (b.type === "tool_use" && (b.name === "Agent" || b.name === "Task") && isBackgroundAgentInput(b.input)) {
+      ids.push(b.id);
     }
   }
   return ids;

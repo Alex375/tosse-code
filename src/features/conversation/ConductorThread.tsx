@@ -129,6 +129,7 @@ const NOTICE_ERROR_HEADINGS: Record<string, string> = {
   protocol_error: "Erreur de protocole",
   permission_error: "Demande d'autorisation illisible",
   task_failed: "Une tâche de fond a échoué",
+  history_error: "Problème de restauration de l'historique",
 };
 
 /** Pull a human-readable detail string out of a notice's raw `detail` payload, for

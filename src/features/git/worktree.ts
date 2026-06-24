@@ -2,22 +2,10 @@
 // No React, no IPC — just logic over a WorktreeInfo[] and a cwd, so it is easy
 // to reason about and reuse (indicator, sidebar badge, manager all share it).
 
+import { resultText } from "../../agent/subagentMeta";
 import type { ConversationItem, SessionStatePayload, WorktreeInfo } from "../../ipc/client";
 
 const stripSlash = (p: string) => p.replace(/\/+$/, "");
-
-/** Flatten a tool_result's content (string, or array of {text}) to plain text. */
-function resultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((b) =>
-        b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : "",
-      )
-      .join(" ");
-  }
-  return "";
-}
 
 /**
  * Pull the worktree path out of an `EnterWorktree` tool result, e.g.

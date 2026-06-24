@@ -48,8 +48,9 @@ export function taskStatusDot(s: BackgroundTaskStatus): StreamState {
   }
 }
 
-/** Flatten a tool_result's content (string | array of {text} | …) to plain text. */
-function resultText(content: JsonValue | undefined): string {
+/** Flatten a tool_result's content (string | array of {text} | …) to plain text.
+ *  Shared with the worktree-path parser so both stay in sync on content shapes. */
+export function resultText(content: unknown): string {
   if (content == null) return "";
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
