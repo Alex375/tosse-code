@@ -2,8 +2,11 @@
 //
 // It replays a realistic Claude Code turn over the same event shapes the Rust core
 // emits, so the conversation UI can be developed and screenshotted with zero backend:
-//   send → busy → stream text → tool_use(Read) → tool_result → stream text + code
-//        → tool_use(Edit) → PERMISSION (pause) → [answer] → tool_result → final → turn_result → idle
+//   send → busy → stream text → tool_use(Read, Grep, Glob) → tool_results → stream
+//        text + code → tool_use(Edit) → PERMISSION (pause) → [answer] → tool_result
+//        → final → turn_result → idle
+// The first message runs three consecutive tools so the grouped "Exécuté N étapes"
+// section (ToolSection) is exercised by the mock, not just a single-step run.
 //
 // Token-by-token deltas with small delays so Playwright can capture mid-stream.
 
@@ -285,6 +288,8 @@ export class ScenarioDriver {
         blocks: [
           { type: "text", text: M1_TEXT },
           { type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "src/App.tsx" } },
+          { type: "tool_use", id: "toolu_grep", name: "Grep", input: { pattern: "useState", path: "src" } },
+          { type: "tool_use", id: "toolu_glob", name: "Glob", input: { pattern: "**/*.tsx" } },
         ],
       }),
     );
@@ -293,6 +298,24 @@ export class ScenarioDriver {
         kind: "tool_result",
         tool_use_id: "toolu_read",
         content: READ_RESULT,
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+    this.step(140, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_grep",
+        content: "src/App.tsx:12: const [count, setCount] = useState(0)\nsrc/Counter.tsx:4: const [n] = useState(0)",
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+    this.step(140, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_glob",
+        content: "src/App.tsx\nsrc/Counter.tsx\nsrc/main.tsx",
         is_error: false,
         parent_tool_use_id: null,
       }),

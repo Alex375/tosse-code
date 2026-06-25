@@ -1,121 +1,30 @@
-// Read-only renderer for a `ConversationItem[]` transcript — the reusable brick
-// for showing a sub-agent's full conversation (read from disk via
+// Read-only renderer for a `ConversationItem[]` transcript — the reusable brick for
+// showing a sub-agent's full conversation (read from disk via
 // `load_subagent_transcript`), and the same renderer the future Workflow view and
-// Fleet drill-down will reuse. Unlike the live thread it does NOT read the store:
-// it is a pure function of the items handed in, so it can render an off-thread
-// transcript (a finished sub-agent, a past run) with zero session state.
+// Fleet drill-down will reuse. Unlike the live thread it does NOT read the store: it
+// is a pure function of the items handed in.
 //
 // Tool results arrive as their OWN `tool_result` items; we join them to their
-// `tool_use` block by id locally (the live path does this in the store).
+// `tool_use` block by id locally. Rendering — the grouped "Exécuté N étapes"
+// sections — is shared VERBATIM with the live thread via <ToolSection> /
+// <StaticToolStep>, so the off-thread transcript and the live conversation never
+// diverge.
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { ConversationItem, JsonValue, NormalizedBlock } from "../../ipc/client";
-import { field } from "../../agent/ask";
-import { Avatar, ClaudeMark, Ico, UserMark } from "../../ui/kit";
-import { DiffView } from "./DiffView";
+import { Avatar, ClaudeMark, UserMark } from "../../ui/kit";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { ThinkingBlock } from "./ThinkingBlock";
-import { ToolResultBody } from "./ToolResultBody";
-import { toolMeta } from "./toolMeta";
+import { groupBlocks, runHeader } from "./toolGroup";
+import { StaticToolStep, ToolSection } from "./ToolSection";
 
 interface JoinedResult {
   content: JsonValue;
   isError: boolean;
 }
 
-/** Pull the `edits[]` hunks out of a MultiEdit input (mirrors ConductorThread). */
-function multiEdits(input: JsonValue): { old: string; next: string }[] {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
-  const edits = (input as Record<string, JsonValue>).edits;
-  if (!Array.isArray(edits)) return [];
-  return edits.map((e) => ({
-    old: field(e, "old_string") ?? "",
-    next: field(e, "new_string") ?? "",
-  }));
-}
-
-/** A static tool card: same visual language as the live `ConductorToolCard`, but
- *  fed an already-resolved result (the transcript is finished — no running state). */
-function StaticToolCard({
-  name,
-  input,
-  result,
-}: {
-  name: string;
-  input: JsonValue;
-  result: JoinedResult | undefined;
-}) {
-  const meta = toolMeta(name, input);
-  // ALL tool cards start COLLAPSED in a transcript view (unlike the live thread which
-  // opens edits/writes): a finished transcript is for reading, not editing, so default
-  // to a quiet list of headers the reader can expand on demand.
-  const [open, setOpen] = useState(false);
-  if (meta.suppressed) return null;
-
-  const isEdit = meta.kind === "edit";
-  const isMultiEdit = name === "MultiEdit";
-  const isWrite = meta.kind === "write";
-  const isBash = meta.kind === "bash";
-
-  const hasBody = isEdit || isWrite || isBash || !!result;
-  const tone = isEdit || isWrite ? "diff" : isBash ? "term" : "";
-
-  return (
-    <div className={"cv-tool " + tone}>
-      <div
-        className="cv-tool-h"
-        onClick={hasBody ? () => setOpen((o) => !o) : undefined}
-        role={hasBody ? "button" : undefined}
-        style={hasBody ? { cursor: "pointer" } : undefined}
-      >
-        <Ico name="cog" className="sm" />
-        <span className="cv-tool-t">{name}</span>
-        {meta.primaryArg ? (
-          <span className="cv-tool-m wf-mono" title={meta.primaryArg}>
-            {meta.primaryArg}
-          </span>
-        ) : null}
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 2 }}>
-          {result?.isError ? (
-            <Ico name="alert" className="sm" />
-          ) : (
-            <Ico name="check" className="sm" />
-          )}
-          {hasBody ? (
-            <span style={{ display: "inline-flex", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s ease" }}>
-              <Ico name="chev" className="sm" />
-            </span>
-          ) : null}
-        </span>
-      </div>
-      {hasBody && open ? (
-        <div className="cv-tool-b">
-          {isBash && meta.primaryArg ? (
-            <pre className="cv-tool-cmd wf-mono">{meta.primaryArg}</pre>
-          ) : null}
-          {isEdit ? (
-            isMultiEdit ? (
-              multiEdits(input).map((e, k) => (
-                <DiffView key={k} path={field(input, "file_path")} oldText={e.old} newText={e.next} />
-              ))
-            ) : (
-              <DiffView
-                path={field(input, "file_path")}
-                oldText={field(input, "old_string") ?? ""}
-                newText={field(input, "new_string") ?? ""}
-              />
-            )
-          ) : isWrite ? (
-            <DiffView path={field(input, "file_path")} newText={field(input, "content") ?? ""} />
-          ) : result ? (
-            <ToolResultBody content={result.content} isError={result.isError} />
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
+/** An assistant turn's blocks, grouped exactly like the live thread: prose / thinking
+ *  inline, runs of consecutive tool calls coalesced into one collapsed section. */
 function TranscriptBlocks({
   blocks,
   results,
@@ -123,14 +32,25 @@ function TranscriptBlocks({
   blocks: NormalizedBlock[];
   results: Map<string, JoinedResult>;
 }) {
+  const segments = groupBlocks(blocks);
   return (
     <>
-      {blocks.map((b, i) => {
-        if (b.type === "text") return <StreamMarkdown key={i} text={b.text} />;
-        if (b.type === "thinking") return <ThinkingBlock key={i} text={b.text} finalized />;
-        if (b.type === "tool_use")
-          return <StaticToolCard key={i} name={b.name} input={b.input} result={results.get(b.id)} />;
-        return null;
+      {segments.map((seg) => {
+        if (seg.kind === "text") return <StreamMarkdown key={seg.key} text={seg.text} />;
+        if (seg.kind === "thinking")
+          return <ThinkingBlock key={seg.key} text={seg.text} finalized />;
+        // A nested sub-agent in a settled transcript: render it as a single step row
+        // (the disk view has no live <SubAgentCard> / sub-thread to drill into).
+        if (seg.kind === "agent")
+          return <StaticToolStep key={seg.key} step={seg.step} result={results.get(seg.step.id)} />;
+        const errored = seg.steps.some((s) => results.get(s.id)?.isError ?? false);
+        return (
+          <ToolSection key={seg.key} title={runHeader(seg.steps)} errored={errored}>
+            {seg.steps.map((step) => (
+              <StaticToolStep key={step.id} step={step} result={results.get(step.id)} />
+            ))}
+          </ToolSection>
+        );
       })}
     </>
   );
@@ -138,9 +58,9 @@ function TranscriptBlocks({
 
 /**
  * Render a finished transcript (e.g. a sub-agent's). Pure: depends only on `items`.
- * Renders user turns and assistant turns (text / thinking / tool_use with its
- * joined result). The streaming-only kinds (`message_started`, `*_delta`) and
- * `turn_result` / `notice` are not part of a settled transcript view.
+ * Renders user turns and assistant turns (text / thinking / grouped tool sections).
+ * The streaming-only kinds (`message_started`, `*_delta`) and `turn_result` /
+ * `notice` are not part of a settled transcript view.
  */
 export function SubAgentTranscript({ items }: { items: ConversationItem[] }) {
   const results = useMemo(() => {

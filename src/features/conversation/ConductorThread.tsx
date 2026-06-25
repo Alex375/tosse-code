@@ -17,6 +17,7 @@ import {
   usePendingPermissions,
   useSessionState,
   useSubThread,
+  useRunErrored,
   useTimeline,
   useToolResult,
   useTurn,
@@ -24,35 +25,18 @@ import {
 } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { useTaskByToolUse } from "../../store/backgroundTasksStore";
-import { fmtDuration, isBackgroundAgentInput, isRunInBackground, shortModel } from "../../agent/subagentMeta";
+import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
-import { DiffView } from "./DiffView";
-import { MentionPathChip } from "./FileMention";
-import { QuestionnaireAsk, QuestionnaireSummary, questionCount } from "./QuestionnaireAsk";
+import { QuestionnaireAsk } from "./QuestionnaireAsk";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { SubAgentTranscript } from "./SubAgentTranscript";
 import { ThinkingBlock } from "./ThinkingBlock";
-import { ToolResultBody } from "./ToolResultBody";
-import { toolMeta } from "./toolMeta";
+import { groupBlocks, runHeader, type ToolStep } from "./toolGroup";
+import { LiveToolStep, ToolSection } from "./ToolSection";
 import type { StickToBottom } from "./useStickToBottom";
 import styles from "./ConductorThread.module.css";
 
-const TOOL_ICON: Record<string, string> = {
-  Read: "file",
-  Edit: "diff",
-  MultiEdit: "diff",
-  Write: "file",
-  Bash: "term",
-  Grep: "search",
-  Glob: "search",
-  WebFetch: "layers",
-  // The sub-agent tool is `Agent` on the wire (was `Task`); keep `Task` as an alias
-  // so old transcripts still render the right icon.
-  Agent: "spark",
-  Task: "spark",
-  TodoWrite: "list",
-};
 
 function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
   return (
@@ -226,138 +210,6 @@ function TurnResultRow({ session, resultId }: { session: string; resultId: strin
   return <ErrorBlock heading={turnErrorHeading(meta)}>{text}</ErrorBlock>;
 }
 
-/** MultiEdit carries an `edits: [{old_string, new_string}, …]` array instead of the
- *  top-level old/new pair an Edit has. Pull each hunk out so every one renders a diff
- *  (reading the top-level fields would yield an empty `+0/−0` diff). */
-function multiEdits(input: JsonValue): { old: string; next: string }[] {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
-  const edits = (input as Record<string, JsonValue>).edits;
-  if (!Array.isArray(edits)) return [];
-  return edits.map((e) => ({
-    old: field(e, "old_string") ?? "",
-    next: field(e, "new_string") ?? "",
-  }));
-}
-
-function ConductorToolCard({
-  session,
-  toolUseId,
-  name,
-  input,
-}: {
-  session: string;
-  toolUseId: string;
-  name: string;
-  input: JsonValue;
-}) {
-  const meta = toolMeta(name, input);
-  const result = useToolResult(session, toolUseId);
-  const state = useSessionState(session);
-  if (meta.suppressed) return null;
-
-  const isEdit = meta.kind === "edit";
-  // MultiEdit shares the "edit" kind but carries an `edits[]` array instead of a
-  // top-level old/new pair — render one diff per hunk (see `multiEdits`).
-  const isMultiEdit = name === "MultiEdit";
-  const isWrite = meta.kind === "write";
-  const isBash = meta.kind === "bash";
-  // AskUserQuestion renders a clean Q→A recap instead of raw result text.
-  const isQuestionnaire = name === "AskUserQuestion";
-  const running = !result && (state?.busy ?? false);
-
-  // Edit/Write show their diff immediately; all other results are collapsed by default.
-  const [open, setOpen] = useState(isEdit || isWrite);
-  // A failed tool must not hide its error behind a collapsed card: auto-expand once
-  // an error result lands (it arrives after mount, so an effect, not initial state).
-  useEffect(() => {
-    if (result?.isError) setOpen(true);
-  }, [result?.isError]);
-
-  // Bash cards are expandable even before a result: the header command is
-  // ellipsised, so expanding is how the user reads the full command.
-  const hasBody = isEdit || isWrite || isQuestionnaire || !!result || (isBash && !!meta.primaryArg);
-  const canToggle = hasBody && !isEdit && !isWrite;
-
-  const icon = isQuestionnaire ? "form" : TOOL_ICON[name] || "cog";
-  const label = isQuestionnaire ? "Questionnaire" : name;
-  const primaryArg = isQuestionnaire
-    ? `${questionCount(input)} question${questionCount(input) > 1 ? "s" : ""}`
-    : meta.primaryArg;
-  // When the header arg IS a file path (Read/Edit/Write/MultiEdit…), make the
-  // chip a clickable mention — opens the file in the side editor.
-  const filePath = field(input, "file_path");
-  const tone = isEdit || isWrite ? "diff" : meta.kind === "bash" ? "term" : "";
-
-  return (
-    <div className={"cv-tool " + tone}>
-      <div
-        className="cv-tool-h"
-        onClick={canToggle ? () => setOpen((o) => !o) : undefined}
-        role={canToggle ? "button" : undefined}
-        style={canToggle ? { cursor: "pointer" } : undefined}
-      >
-        <Ico name={icon} className="sm" />
-        <span className="cv-tool-t">{label}</span>
-        {primaryArg ? (
-          filePath ? (
-            <MentionPathChip path={filePath} className="cv-tool-m wf-mono" display={primaryArg} />
-          ) : (
-            <span className="cv-tool-m wf-mono" title={primaryArg}>
-              {primaryArg}
-            </span>
-          )
-        ) : null}
-        <span className={styles.status}>
-          {running ? (
-            <span className={styles.runDot} />
-          ) : result?.isError ? (
-            <Ico name="alert" className={"sm " + styles.errIco} />
-          ) : (
-            <Ico name="check" className={"sm " + styles.okIco} />
-          )}
-          {canToggle && (
-            <span style={{ display: "inline-flex", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s ease", marginLeft: 2 }}>
-              <Ico name="chev" className="sm" />
-            </span>
-          )}
-        </span>
-      </div>
-
-      {open && hasBody && (
-        <div className="cv-tool-b">
-          {/* Bash: the full command (wraps, fully readable) above its output. */}
-          {isBash && meta.primaryArg ? (
-            <pre className="cv-tool-cmd wf-mono">{meta.primaryArg}</pre>
-          ) : null}
-          {isEdit ? (
-            isMultiEdit ? (
-              multiEdits(input).map((e, k) => (
-                <DiffView
-                  key={k}
-                  path={field(input, "file_path")}
-                  oldText={e.old}
-                  newText={e.next}
-                />
-              ))
-            ) : (
-              <DiffView
-                path={field(input, "file_path")}
-                oldText={field(input, "old_string") ?? ""}
-                newText={field(input, "new_string") ?? ""}
-              />
-            )
-          ) : isWrite ? (
-            <DiffView path={field(input, "file_path")} newText={field(input, "content") ?? ""} />
-          ) : isQuestionnaire ? (
-            <QuestionnaireSummary input={input} result={result?.content} />
-          ) : result ? (
-            <ToolResultBody content={result.content} isError={result.isError} />
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /** Map a sub-agent's coarse lifecycle onto the design's status-dot colour token. */
 function taskDotState(o: { running: boolean; failed: boolean; stopped: boolean }): StreamState {
@@ -537,57 +389,90 @@ function SubAgentCard({
   );
 }
 
+
 /**
- * A `Bash` tool block. A DETACHED background command (`run_in_background`) is surfaced
- * in the pinned <BashBar>, not inline — suppressed deterministically on the INPUT alone,
- * exactly like a detached sub-agent (see SubAgentCard's `isBackgroundAgentInput` guard).
- * Gating on the input (not the live task) means there's no inline flash before the task
- * arrives, and on a resumed conversation it stays absent until the core re-emits — the
- * same live-only behaviour as detached sub-agents, so the two bars stay symmetric.
+ * One collapsed section for a run of consecutive (non-sub-agent) tool steps. Its own
+ * component so it can subscribe to the run's aggregate error state and auto-expand on
+ * failure. Sub-agents are NOT here — they render inline via <SubAgentCard> (see
+ * AssistantBlocks), keeping their live lifecycle and drill-in transcript.
  */
-function BashBlock({
-  session,
-  toolUseId,
-  input,
-}: {
-  session: string;
-  toolUseId: string;
-  input: JsonValue;
-}) {
-  if (isRunInBackground(input)) return null;
-  return <ConductorToolCard session={session} toolUseId={toolUseId} name="Bash" input={input} />;
+function LiveRunSection({ session, steps }: { session: string; steps: ToolStep[] }) {
+  const errored = useRunErrored(
+    session,
+    steps.map((s) => s.id),
+  );
+  return (
+    <ToolSection title={runHeader(steps)} errored={errored}>
+      {steps.map((step) => (
+        <LiveToolStep key={step.id} session={session} step={step} />
+      ))}
+    </ToolSection>
+  );
 }
 
-function AssistantBlocks({ session, blocks }: { session: string; blocks: NormalizedBlock[] }) {
+/**
+ * An assistant turn's blocks as the grouped transcript: prose / thinking inline, and
+ * every run of consecutive tool calls coalesced into one collapsed section (see
+ * `groupBlocks`). While the turn is the live one (`live`), its TRAILING run is
+ * suppressed — the step in progress is shown by the bottom <WorkingIndicator>, and
+ * the run materialises as a section once it settles (the claude.ai/code behaviour).
+ */
+function AssistantBlocks({
+  session,
+  blocks,
+  live,
+}: {
+  session: string;
+  blocks: NormalizedBlock[];
+  live: boolean;
+}) {
+  const segments = groupBlocks(blocks);
+  const lastIdx = segments.length - 1;
   return (
     <>
-      {blocks.map((b, i) => {
-        if (b.type === "text") return <StreamMarkdown key={i} text={b.text} />;
-        if (b.type === "thinking") return <ThinkingBlock key={i} text={b.text} finalized />;
-        if (b.type === "tool_use") {
-          // The sub-agent tool (`Agent`, ex-`Task`) gets a richer card: live
-          // lifecycle header + an inline, expandable full transcript.
-          if (b.name === "Agent" || b.name === "Task")
-            return <SubAgentCard key={i} session={session} toolUseId={b.id} input={b.input} />;
-          // A detached background Bash moves to the pinned BashBar (see BashBlock).
-          if (b.name === "Bash")
-            return <BashBlock key={i} session={session} toolUseId={b.id} input={b.input} />;
-          // A Monitor is ALWAYS a background watch (never inline) — surfaced in the
-          // pinned MonitorBar, like a detached Bash. Suppress its inline card.
-          if (b.name === "Monitor") return null;
+      {segments.map((seg, i) => {
+        if (seg.kind === "text") return <StreamMarkdown key={seg.key} text={seg.text} />;
+        if (seg.kind === "thinking")
+          return <ThinkingBlock key={seg.key} text={seg.text} finalized />;
+        if (seg.kind === "agent")
+          // A sub-agent always renders inline (live lifecycle + drill-in transcript),
+          // never grouped nor hidden by the live-trailing suppression.
           return (
-            <ConductorToolCard key={i} session={session} toolUseId={b.id} name={b.name} input={b.input} />
+            <SubAgentCard
+              key={seg.key}
+              session={session}
+              toolUseId={seg.step.id}
+              input={seg.step.input}
+            />
           );
-        }
-        return null;
+        // A `run` of regular tools. While the active turn streams, its TRAILING run is
+        // shown live by the bottom <WorkingIndicator>; it materialises as a section
+        // once the turn settles.
+        if (live && i === lastIdx) return null;
+        return <LiveRunSection key={seg.key} session={session} steps={seg.steps} />;
       })}
     </>
   );
 }
 
-function MsgAI({ session, turnId }: { session: string; turnId: string }) {
+function MsgAI({
+  session,
+  turnId,
+  busy,
+  awaiting,
+}: {
+  session: string;
+  turnId: string;
+  busy: boolean;
+  awaiting: boolean;
+}) {
   const turn = useTurn(session, turnId);
   if (!turn) return null;
+  // The trailing run is shown live (bottom indicator) only for the turn that is ACTIVELY
+  // streaming — keyed on the turn's own status, not the last timeline entry, so a queued
+  // user message landing after it doesn't un-suppress this run; and not while paused on a
+  // permission prompt (`awaiting`), so the pending tool still shows as a section.
+  const live = busy && !awaiting && turn.status === "streaming";
   return (
     <div className="cv-msg cv-ai">
       <Avatar ai><ClaudeMark /></Avatar>
@@ -595,7 +480,9 @@ function MsgAI({ session, turnId }: { session: string; turnId: string }) {
         {/* Finalized blocks accumulated so far, then the block currently being
             typed as a live tail. Both render together so an already-shown block is
             never swapped out — the text between two tools stays put. */}
-        {turn.blocks.length > 0 && <AssistantBlocks session={session} blocks={turn.blocks} />}
+        {turn.blocks.length > 0 && (
+          <AssistantBlocks session={session} blocks={turn.blocks} live={live} />
+        )}
         {turn.streamingThinking && <ThinkingBlock text={turn.streamingThinking} finalized={false} />}
         {turn.streamingText && <StreamMarkdown text={turn.streamingText} streaming />}
       </div>
@@ -678,7 +565,15 @@ export function ConductorThread({
             </div>
             {timeline.map((entry) => {
               if (entry.kind === "turn")
-                return <TurnRow key={entry.id} session={session} turnId={entry.id} />;
+                return (
+                  <TurnRow
+                    key={entry.id}
+                    session={session}
+                    turnId={entry.id}
+                    busy={busy}
+                    awaiting={awaiting}
+                  />
+                );
               if (entry.kind === "error")
                 return <MsgError key={entry.id} session={session} errorId={entry.id} />;
               if (entry.kind === "notice")
@@ -746,9 +641,20 @@ function StreamFollow({ session, onRender }: { session: string; onRender: () => 
   return null;
 }
 
-function TurnRow({ session, turnId }: { session: string; turnId: string }) {
+function TurnRow({
+  session,
+  turnId,
+  busy = false,
+  awaiting = false,
+}: {
+  session: string;
+  turnId: string;
+  /** Session-level flags; MsgAI derives `live` from them + the turn's own status. */
+  busy?: boolean;
+  awaiting?: boolean;
+}) {
   const turn = useTurn(session, turnId);
   if (!turn) return null;
   if (turn.role === "user") return <MsgUser text={turn.streamingText} queued={turn.queued} />;
-  return <MsgAI session={session} turnId={turnId} />;
+  return <MsgAI session={session} turnId={turnId} busy={busy} awaiting={awaiting} />;
 }
