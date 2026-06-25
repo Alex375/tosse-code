@@ -242,6 +242,56 @@ async mcpStatus(session: string) : Promise<Result<McpServerLive[], string>> {
 }
 },
 /**
+ * Enable/disable a live MCP server in a running session (`mcp_toggle`). Optimistic
+ * — returns once sent; the UI re-polls `mcp_status` to reflect the new state, and a
+ * CLI rejection surfaces as a timeline control error.
+ */
+async mcpToggle(session: string, serverName: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_toggle", { session, serverName, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Reconnect a live MCP server (`mcp_reconnect`) — after a failure or once auth is
+ * granted. Optimistic; the UI re-polls `mcp_status`.
+ */
+async mcpReconnect(session: string, serverName: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_reconnect", { session, serverName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Forget a live MCP server's stored OAuth credentials (`mcp_clear_auth`).
+ */
+async mcpClearAuth(session: string, serverName: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_clear_auth", { session, serverName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start the OAuth flow for a live MCP server (`mcp_authenticate`). Returns the
+ * `authUrl` to open in the browser (the front opens it) and whether the user must
+ * finish a manual callback. Errors with "unknown session" when there's no live
+ * process.
+ */
+async mcpAuthenticate(session: string, serverName: string) : Promise<Result<McpAuthResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_authenticate", { session, serverName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tear a session down and remove it from the registry.
  */
 async stopSession(session: string) : Promise<Result<null, string>> {
@@ -369,6 +419,20 @@ async listExtensions(repoPath: string) : Promise<Result<ExtensionsSnapshot, stri
 async setPluginEnabled(pluginId: string, enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_plugin_enabled", { pluginId, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Everything a single plugin provides (skills / sub-agents / MCP servers) for the
+ * per-plugin explorer — scanned regardless of the plugin's enabled state so a
+ * disabled plugin stays browsable. `repo_path` selects the install relevant to the
+ * repo. Best-effort; the blocking file IO runs off the async runtime.
+ */
+async listPluginContents(repoPath: string, pluginId: string) : Promise<Result<PluginContents, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_plugin_contents", { repoPath, pluginId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -614,7 +678,12 @@ tickEvent: "tick-event"
 /**
  * One sub-agent available to a repository (file-based or plugin-provided).
  */
-export type AgentInfo = { name: string; description: string | null; model: string | null; scope: ExtScope; source: string | null }
+export type AgentInfo = { name: string; description: string | null; model: string | null; scope: ExtScope; source: string | null; 
+/**
+ * Absolute path to the agent's `.md` definition — the UI reads it to render a
+ * clean markdown view of the sub-agent.
+ */
+path: string }
 /**
  * A normalized background task, keyed by `task_id` and updated in place as its
  * `task_*` lifecycle events arrive. The single model behind the (future) sub-agent /
@@ -864,7 +933,15 @@ export type ExtScope =
 /**
  * The full configured picture for one repository, across all scopes.
  */
-export type ExtensionsSnapshot = { mcp_servers: McpServerInfo[]; plugins: PluginInfo[]; skills: SkillInfo[]; agents: AgentInfo[] }
+export type ExtensionsSnapshot = { mcp_servers: McpServerInfo[]; plugins: PluginInfo[]; skills: SkillInfo[]; agents: AgentInfo[]; 
+/**
+ * Config files that exist but could NOT be read/parsed (corrupt JSON, IO error).
+ * The scan still degrades to a usable snapshot, but these are surfaced so a
+ * broken config is never indiscernible from "nothing configured" — without them
+ * a corrupt `~/.claude.json` reads as an empty inventory, and a corrupt
+ * `settings.json` would (wrongly) show every plugin as enabled. Empty = clean.
+ */
+warnings: string[] }
 /**
  * A file's contents plus the guards the editor needs: `too_large` (skipped, over
  * [`MAX_FILE_BYTES`]) and `binary` (a NUL byte was found — not shown as text).
@@ -902,6 +979,15 @@ export type ImageContent = { path: string;
  */
 data_base64: string; too_large: boolean; size: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
+/**
+ * Result of an `mcp_authenticate` control request (OAuth start for an http/sse
+ * server). The binary returns an `authUrl` to open in the browser; the loopback
+ * redirect is handled by the CLI itself in the common case. `requires_user_action`
+ * is true when the flow needs the user to paste back a callback URL (the rarer
+ * non-loopback path — surfaced to the UI). `error` carries a rejection message
+ * (auth not supported, server unknown, …) without it being a fatal session error.
+ */
+export type McpAuthResult = { auth_url: string | null; requires_user_action: boolean; error: string | null }
 /**
  * One MCP server visible to a repository, with its resolved enabled state. The
  * live connection status (connected / needs-auth / …) is NOT here — it comes
@@ -968,7 +1054,12 @@ url: string | null;
 /**
  * Number of tools the server currently exposes (0 unless connected).
  */
-tool_count: number }
+tool_count: number; 
+/**
+ * Names of the tools the server exposes (empty unless connected) — shown when
+ * the user expands a server row.
+ */
+tools: string[] }
 /**
  * One authoritative content block of an assistant message.
  */
@@ -1018,6 +1109,16 @@ active_id: string | null }
  * A window is `None` when the endpoint did not report it.
  */
 export type PlanUsage = { five_hour: UsageWindow | null; seven_day: UsageWindow | null }
+/**
+ * Everything ONE plugin provides — for the per-plugin explorer (click a plugin →
+ * browse its skills / sub-agents / MCP servers, like Claude.ai's Customize panel).
+ * 
+ * Scanned straight from the plugin's install dir REGARDLESS of its enabled state:
+ * a disabled plugin must still be browsable. This is why it is a separate read
+ * from [`list_extensions`], which only folds an *enabled* plugin's contributions
+ * into the active snapshot.
+ */
+export type PluginContents = { skills: SkillInfo[]; agents: AgentInfo[]; mcp_servers: McpServerInfo[] }
 /**
  * One installed plugin relevant to a repository (user-global, or project/local
  * scoped to this repo).
@@ -1178,7 +1279,12 @@ export type SkillInfo = { name: string; description: string | null; scope: ExtSc
 /**
  * Plugin id when plugin-provided; `None` for a user/project file skill.
  */
-source: string | null }
+source: string | null; 
+/**
+ * Absolute path to the skill's `SKILL.md` — the UI reads it to render a clean
+ * markdown view of the skill.
+ */
+path: string }
 /**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code

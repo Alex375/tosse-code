@@ -84,6 +84,22 @@ pub struct McpServerLive {
     pub url: Option<String>,
     /// Number of tools the server currently exposes (0 unless connected).
     pub tool_count: u32,
+    /// Names of the tools the server exposes (empty unless connected) — shown when
+    /// the user expands a server row.
+    pub tools: Vec<String>,
+}
+
+/// Result of an `mcp_authenticate` control request (OAuth start for an http/sse
+/// server). The binary returns an `authUrl` to open in the browser; the loopback
+/// redirect is handled by the CLI itself in the common case. `requires_user_action`
+/// is true when the flow needs the user to paste back a callback URL (the rarer
+/// non-loopback path — surfaced to the UI). `error` carries a rejection message
+/// (auth not supported, server unknown, …) without it being a fatal session error.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct McpAuthResult {
+    pub auth_url: Option<String>,
+    pub requires_user_action: bool,
+    pub error: Option<String>,
 }
 
 /// Context-meter seed for a conversation, read from its on-disk transcript so the

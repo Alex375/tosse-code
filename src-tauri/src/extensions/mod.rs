@@ -98,6 +98,9 @@ pub struct SkillInfo {
     pub scope: ExtScope,
     /// Plugin id when plugin-provided; `None` for a user/project file skill.
     pub source: Option<String>,
+    /// Absolute path to the skill's `SKILL.md` — the UI reads it to render a clean
+    /// markdown view of the skill.
+    pub path: String,
 }
 
 /// One sub-agent available to a repository (file-based or plugin-provided).
@@ -108,6 +111,9 @@ pub struct AgentInfo {
     pub model: Option<String>,
     pub scope: ExtScope,
     pub source: Option<String>,
+    /// Absolute path to the agent's `.md` definition — the UI reads it to render a
+    /// clean markdown view of the sub-agent.
+    pub path: String,
 }
 
 /// The full configured picture for one repository, across all scopes.
@@ -117,6 +123,26 @@ pub struct ExtensionsSnapshot {
     pub plugins: Vec<PluginInfo>,
     pub skills: Vec<SkillInfo>,
     pub agents: Vec<AgentInfo>,
+    /// Config files that exist but could NOT be read/parsed (corrupt JSON, IO error).
+    /// The scan still degrades to a usable snapshot, but these are surfaced so a
+    /// broken config is never indiscernible from "nothing configured" — without them
+    /// a corrupt `~/.claude.json` reads as an empty inventory, and a corrupt
+    /// `settings.json` would (wrongly) show every plugin as enabled. Empty = clean.
+    pub warnings: Vec<String>,
+}
+
+/// Everything ONE plugin provides — for the per-plugin explorer (click a plugin →
+/// browse its skills / sub-agents / MCP servers, like Claude.ai's Customize panel).
+///
+/// Scanned straight from the plugin's install dir REGARDLESS of its enabled state:
+/// a disabled plugin must still be browsable. This is why it is a separate read
+/// from [`list_extensions`], which only folds an *enabled* plugin's contributions
+/// into the active snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct PluginContents {
+    pub skills: Vec<SkillInfo>,
+    pub agents: Vec<AgentInfo>,
+    pub mcp_servers: Vec<McpServerInfo>,
 }
 
 // ---- on-disk wire shapes (private; only what we read) ---------------------
@@ -166,11 +192,16 @@ struct McpJsonFile {
     mcp_servers: BTreeMap<String, McpRaw>,
 }
 
-/// `~/.claude/settings.json` — only the plugin enable map.
+/// A `settings.json` (user `~/.claude/settings.json`, project `.claude/settings.json`,
+/// or local `.claude/settings.local.json`): the plugin enable map AND `mcpServers`
+/// — the schema allows declaring MCP servers directly in settings, a file-based
+/// location distinct from `~/.claude.json` / `.mcp.json` that must be scanned too.
 #[derive(Debug, Default, Deserialize)]
 struct SettingsJson {
     #[serde(default, rename = "enabledPlugins")]
     enabled_plugins: BTreeMap<String, bool>,
+    #[serde(default, rename = "mcpServers")]
+    mcp_servers: BTreeMap<String, McpRaw>,
 }
 
 /// `~/.claude/plugins/installed_plugins.json` (version 2).
@@ -220,12 +251,16 @@ pub fn list_extensions(repo_path: &str) -> ExtensionsSnapshot {
     };
     let repo = Path::new(repo_path);
 
-    let claude_json: ClaudeJson = read_json(&home.join(".claude.json")).unwrap_or_default();
-    let settings: SettingsJson =
-        read_json(&home.join(".claude/settings.json")).unwrap_or_default();
-    let project = claude_json.projects.get(repo_path);
-
     let mut snap = ExtensionsSnapshot::default();
+
+    // Main config files go through read_or_warn: a present-but-corrupt one records a
+    // warning (surfaced in the UI) instead of silently reading as "empty" — a corrupt
+    // ~/.claude.json must not look like "no MCP", and a corrupt settings.json must not
+    // make every plugin look enabled (the `.unwrap_or(true)` below).
+    let claude_json: ClaudeJson = read_or_warn(&home.join(".claude.json"), &mut snap.warnings);
+    let settings: SettingsJson =
+        read_or_warn(&home.join(".claude/settings.json"), &mut snap.warnings);
+    let project = claude_json.projects.get(repo_path);
 
     // --- MCP: user scope (named servers; disabled per-project via disabledMcpServers)
     for (name, raw) in &claude_json.mcp_servers {
@@ -233,20 +268,32 @@ pub fn list_extensions(repo_path: &str) -> ExtensionsSnapshot {
         snap.mcp_servers
             .push(mcp_info(name, raw, ExtScope::User, None, !disabled));
     }
+    // --- MCP declared in settings.json files (schema-allowed, file-based). User-global
+    // from ~/.claude/settings.json; project (committed) + local from the repo. Same
+    // per-project disable rule for the user ones as the ~/.claude.json named servers.
+    for (name, raw) in &settings.mcp_servers {
+        let disabled = project.is_some_and(|p| p.disabled_mcp.iter().any(|n| n == name));
+        snap.mcp_servers
+            .push(mcp_info(name, raw, ExtScope::User, None, !disabled));
+    }
+    let project_settings: SettingsJson =
+        read_or_warn(&repo.join(".claude/settings.json"), &mut snap.warnings);
+    for (name, raw) in &project_settings.mcp_servers {
+        snap.mcp_servers
+            .push(mcp_info(name, raw, ExtScope::Project, None, true));
+    }
+    let local_settings: SettingsJson =
+        read_or_warn(&repo.join(".claude/settings.local.json"), &mut snap.warnings);
+    for (name, raw) in &local_settings.mcp_servers {
+        snap.mcp_servers
+            .push(mcp_info(name, raw, ExtScope::Local, None, true));
+    }
 
-    // --- MCP: project scope. Prefer a committed <repo>/.mcp.json; fall back to
-    // the project section of ~/.claude.json. Enabled unless explicitly rejected.
-    let project_mcp: McpJsonFile = read_json(&repo.join(".mcp.json")).unwrap_or_default();
-    let project_mcp_servers: Vec<(&String, &McpRaw)> = if !project_mcp.mcp_servers.is_empty() {
-        project_mcp.mcp_servers.iter().collect()
-    } else {
-        project
-            .map(|p| p.mcp_servers.iter().collect())
-            .unwrap_or_default()
-    };
-    for (name, raw) in project_mcp_servers {
-        // A `.mcp.json` server is active when explicitly approved
-        // (`enabledMcpjsonServers`) or simply not rejected (`disabledMcpjsonServers`).
+    // --- MCP: PROJECT scope = the COMMITTED <repo>/.mcp.json (shared with the team).
+    // A `.mcp.json` server is active when explicitly approved (`enabledMcpjsonServers`)
+    // or simply not rejected (`disabledMcpjsonServers`).
+    let project_mcp: McpJsonFile = read_or_warn(&repo.join(".mcp.json"), &mut snap.warnings);
+    for (name, raw) in &project_mcp.mcp_servers {
         let enabled = project.map_or(true, |p| {
             p.enabled_mcpjson.iter().any(|n| n == name)
                 || !p.disabled_mcpjson.iter().any(|n| n == name)
@@ -255,9 +302,19 @@ pub fn list_extensions(repo_path: &str) -> ExtensionsSnapshot {
             .push(mcp_info(name, raw, ExtScope::Project, None, enabled));
     }
 
+    // --- MCP: LOCAL scope = ~/.claude.json `projects[<repo>].mcpServers` — PRIVATE to
+    // you for THIS repo (the `claude mcp add` default scope). Distinct from project
+    // (committed/shared) and coexists with a `.mcp.json` — it is NOT a fallback.
+    if let Some(p) = project {
+        for (name, raw) in &p.mcp_servers {
+            snap.mcp_servers
+                .push(mcp_info(name, raw, ExtScope::Local, None, true));
+        }
+    }
+
     // --- Plugins (+ their skills/agents/mcp). Only installs relevant to this repo.
     let installed: InstalledPlugins =
-        read_json(&home.join(".claude/plugins/installed_plugins.json")).unwrap_or_default();
+        read_or_warn(&home.join(".claude/plugins/installed_plugins.json"), &mut snap.warnings);
     for (id, installs) in &installed.plugins {
         let Some(install) = relevant_install(installs, repo_path) else {
             continue;
@@ -330,6 +387,40 @@ pub fn list_extensions(repo_path: &str) -> ExtensionsSnapshot {
     snap
 }
 
+/// Scan everything a single installed plugin provides (skills / sub-agents / MCP),
+/// independent of whether the plugin is enabled. `repo_path` selects the install
+/// record relevant to the repo (a plugin can be installed at user/project/local
+/// scopes). Best-effort and infallible — an unknown plugin or missing dir yields
+/// empties so the explorer always opens.
+pub fn list_plugin_contents(repo_path: &str, plugin_id: &str) -> PluginContents {
+    let Some(home) = home_dir() else {
+        return PluginContents::default();
+    };
+    let installed: InstalledPlugins =
+        read_json(&home.join(".claude/plugins/installed_plugins.json")).unwrap_or_default();
+    let Some(install) = installed
+        .plugins
+        .get(plugin_id)
+        .and_then(|installs| relevant_install(installs, repo_path))
+    else {
+        return PluginContents::default();
+    };
+    let Some(dir) = install.install_path.as_deref().map(PathBuf::from) else {
+        return PluginContents::default();
+    };
+
+    let plugin_mcp: McpJsonFile = read_json(&dir.join(".mcp.json")).unwrap_or_default();
+    PluginContents {
+        skills: scan_skills(&dir.join("skills"), ExtScope::Plugin, Some(plugin_id)),
+        agents: scan_agents(&dir.join("agents"), ExtScope::Plugin, Some(plugin_id)),
+        mcp_servers: plugin_mcp
+            .mcp_servers
+            .iter()
+            .map(|(name, raw)| mcp_info(name, raw, ExtScope::Plugin, Some(plugin_id), true))
+            .collect(),
+    }
+}
+
 // ---- actions ---------------------------------------------------------------
 
 /// Enable or disable a plugin (by id `<plugin>@<marketplace>`) in the user's
@@ -350,9 +441,21 @@ pub fn list_extensions(repo_path: &str) -> ExtensionsSnapshot {
 pub fn set_plugin_enabled(plugin_id: &str, enabled: bool) -> Result<(), String> {
     let home = home_dir().ok_or("répertoire personnel ($HOME) introuvable")?;
     let path = home.join(".claude/settings.json");
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("lecture de settings.json impossible : {e}"))?;
+    // A fresh install has no settings.json yet (the CLI writes it only on first
+    // setting change) — treat absent as an empty object so the very first plugin
+    // toggle CREATES the file instead of erroring. A present-but-unreadable file is
+    // still a real error.
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".to_string(),
+        Err(e) => return Err(format!("lecture de settings.json impossible : {e}")),
+    };
     let updated = apply_plugin_enabled(&text, plugin_id, enabled)?;
+    // Ensure ~/.claude exists before the atomic rename (it may not on a fresh install).
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("création du dossier de config impossible : {e}"))?;
+    }
     write_atomic(&path, updated.as_bytes())
 }
 
@@ -394,10 +497,42 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// Read and deserialize a JSON file; `None` on any failure (absent, unreadable,
-/// malformed) so callers can `.unwrap_or_default()`.
+/// malformed) so callers can `.unwrap_or_default()`. Use this only where corruption
+/// is acceptable to swallow (per-plugin manifests); the MAIN config files go through
+/// [`read_or_warn`] so a broken one is surfaced, not silently treated as empty.
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// Read+parse a JSON config file, distinguishing **absent** (`Ok(None)` — a normal
+/// degradation) from **present-but-broken** (`Err` with a human message). This is
+/// what lets the scan surface a corrupt config instead of mistaking it for "nothing
+/// configured" (the silent-error trap).
+fn read_json_checked<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{} illisible : {e}", path.display())),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("{} corrompu : {e}", path.display()))
+}
+
+/// Read a main config file, degrading to `T::default()` but recording a warning when
+/// it exists yet can't be read/parsed (so the failure is never silent).
+fn read_or_warn<T: Default + serde::de::DeserializeOwned>(
+    path: &Path,
+    warnings: &mut Vec<String>,
+) -> T {
+    match read_json_checked(path) {
+        Ok(opt) => opt.unwrap_or_default(),
+        Err(msg) => {
+            warnings.push(msg);
+            T::default()
+        }
+    }
 }
 
 /// Build an [`McpServerInfo`] from a raw server, stripping any URL query string.
@@ -456,7 +591,8 @@ fn scan_skills(dir: &Path, scope: ExtScope, source: Option<&str>) -> Vec<SkillIn
         if !path.is_dir() {
             continue;
         }
-        let front = std::fs::read_to_string(path.join("SKILL.md"))
+        let skill_md = path.join("SKILL.md");
+        let front = std::fs::read_to_string(&skill_md)
             .ok()
             .map(|c| parse_frontmatter(&c))
             .unwrap_or_default();
@@ -466,6 +602,7 @@ fn scan_skills(dir: &Path, scope: ExtScope, source: Option<&str>) -> Vec<SkillIn
             description: front.description,
             scope,
             source: source.map(str::to_string),
+            path: skill_md.to_string_lossy().into_owned(),
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -497,6 +634,7 @@ fn scan_agents(dir: &Path, scope: ExtScope, source: Option<&str>) -> Vec<AgentIn
             model: front.model,
             scope,
             source: source.map(str::to_string),
+            path: path.to_string_lossy().into_owned(),
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -534,6 +672,10 @@ struct FrontMatter {
 /// `---`…`---` block; ignores everything else. Pure, so it is unit-tested.
 fn parse_frontmatter(content: &str) -> FrontMatter {
     let mut fm = FrontMatter::default();
+    // Strip a leading UTF-8 BOM first: `str::trim` does NOT remove U+FEFF (it isn't
+    // Rust whitespace), so a BOM-prefixed SKILL.md/agent .md (Windows editors) would
+    // otherwise have its whole frontmatter ignored (name/description/model lost).
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let mut lines = content.lines();
     // Frontmatter must be the very first thing (allowing a leading BOM/blank).
     if lines.next().map(str::trim) != Some("---") {
@@ -647,6 +789,32 @@ mod tests {
     fn frontmatter_absent_yields_empty() {
         assert_eq!(parse_frontmatter("# just markdown\nname: x"), FrontMatter::default());
         assert_eq!(parse_frontmatter(""), FrontMatter::default());
+    }
+
+    #[test]
+    fn read_json_checked_distinguishes_absent_from_corrupt() {
+        use std::io::Write;
+        // Absent → Ok(None) (a normal degradation, no warning).
+        let missing = std::env::temp_dir().join("tosse-read-json-absent-xyz.json");
+        let _ = std::fs::remove_file(&missing);
+        let r: Result<Option<serde_json::Value>, String> = read_json_checked(&missing);
+        assert!(matches!(r, Ok(None)), "absent must be Ok(None)");
+        // Present but corrupt → Err (a surfaced failure, NOT silently None).
+        let bad = std::env::temp_dir().join("tosse-read-json-corrupt-xyz.json");
+        std::fs::File::create(&bad).unwrap().write_all(b"{ not json ]").unwrap();
+        let r: Result<Option<serde_json::Value>, String> = read_json_checked(&bad);
+        assert!(r.is_err(), "corrupt JSON must be Err, not None");
+        let _ = std::fs::remove_file(&bad);
+    }
+
+    #[test]
+    fn frontmatter_tolerates_utf8_bom() {
+        // A SKILL.md saved with a leading UTF-8 BOM (Windows editors) must still
+        // have its frontmatter read — `str::trim` does NOT strip U+FEFF.
+        let md = "\u{feff}---\nname: pickup\ndescription: do it\n---\n# body";
+        let fm = parse_frontmatter(md);
+        assert_eq!(fm.name.as_deref(), Some("pickup"));
+        assert_eq!(fm.description.as_deref(), Some("do it"));
     }
 
     #[test]

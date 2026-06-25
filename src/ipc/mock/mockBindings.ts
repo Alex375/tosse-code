@@ -6,11 +6,15 @@ import type {
   ContextFill,
   ConversationItem,
   ConversationRecord,
+  ExtensionsSnapshot,
   FileContent,
   FsChangeEvent,
   FsWatchErrorEvent,
   FsEntry,
   ImageContent,
+  McpAuthResult,
+  McpServerLive,
+  PluginContents,
   PermissionDecision,
   PermissionMode,
   PersistedState,
@@ -497,6 +501,33 @@ export const mockCommands = {
 
   async terminalClose(_id: string): Promise<Result<null, string>> {
     return ok(null);
+  },
+
+  // ---- Extensions (MCP / plugins / skills / agents) — demo fixtures --------
+  // Without these, the extensions manager calls `undefined(...)` in `?demo=` mode.
+  async listExtensions(_repoPath: string): Promise<Result<ExtensionsSnapshot, string>> {
+    return ok({ mcp_servers: [], plugins: [], skills: [], agents: [], warnings: [] });
+  },
+  async listPluginContents(_repoPath: string, _pluginId: string): Promise<Result<PluginContents, string>> {
+    return ok({ skills: [], agents: [], mcp_servers: [] });
+  },
+  async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async mcpStatus(_session: string): Promise<Result<McpServerLive[], string>> {
+    return ok([]);
+  },
+  async mcpToggle(_session: string, _serverName: string, _enabled: boolean): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async mcpReconnect(_session: string, _serverName: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async mcpClearAuth(_session: string, _serverName: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async mcpAuthenticate(_session: string, _serverName: string): Promise<Result<McpAuthResult, string>> {
+    return ok({ auth_url: null, requires_user_action: false, error: null });
   },
 };
 

@@ -21,7 +21,8 @@ use tokio::sync::{mpsc, oneshot};
 use super::assembler::Assembler;
 use super::control::{self, InboundControl, PermissionDecision, PermissionMode};
 use super::model::{
-    ConversationItem, McpServerLive, PermissionRequestPayload, SessionEmitter, SessionEvent,
+    ConversationItem, McpAuthResult, McpServerLive, PermissionRequestPayload, SessionEmitter,
+    SessionEvent,
 };
 use super::protocol::CliMessage;
 use super::transport::{self, SpawnConfig, Transport, TransportError};
@@ -51,9 +52,23 @@ pub enum SessionCommand {
     /// Stop a single background task (a `run_in_background` Bash / Monitor /
     /// sub-agent) by its `task_id`, without ending the turn or the session.
     StopTask(String),
-    /// Query the session's live MCP server status; the reply (the parsed server
-    /// list) is delivered back over the oneshot once the CLI answers.
-    McpStatus(oneshot::Sender<Vec<McpServerLive>>),
+    /// Query the session's live MCP server status; the reply is delivered back over
+    /// the oneshot once the CLI answers. `Err` carries the binary's rejection message
+    /// (an error control_response) so a rejected query is NOT mistaken for an empty
+    /// success — distinct from a genuinely empty server list (`Ok(vec![])`).
+    McpStatus(oneshot::Sender<Result<Vec<McpServerLive>, String>>),
+    /// Enable/disable ONE MCP server live (fire-and-correlate; the change shows on
+    /// the next `mcp_status` poll, a rejection surfaces as a control error).
+    McpToggle { server_name: String, enabled: bool },
+    /// Reconnect ONE MCP server (after a failure or once auth is granted).
+    McpReconnect { server_name: String },
+    /// Forget stored OAuth credentials for ONE server.
+    McpClearAuth { server_name: String },
+    /// Start the OAuth flow for ONE server; the reply carries the `authUrl` to open.
+    McpAuthenticate {
+        server_name: String,
+        reply: oneshot::Sender<McpAuthResult>,
+    },
     Shutdown,
 }
 
@@ -90,6 +105,11 @@ enum PendingControl {
     /// A `stop_task` request — its failure surfaces as a control error so the user
     /// knows the background task is still running.
     StopTask,
+    /// A live MCP action (`mcp_toggle` / `mcp_reconnect` / `mcp_clear_auth`) — its
+    /// failure surfaces as a control error so the user knows the action didn't land.
+    McpToggle,
+    McpReconnect,
+    McpClearAuth,
 }
 
 impl PendingControl {
@@ -104,6 +124,9 @@ impl PendingControl {
             PendingControl::GenerateTitle(_) => "génération du titre",
             PendingControl::Interrupt => "interruption",
             PendingControl::StopTask => "arrêt d'une tâche de fond",
+            PendingControl::McpToggle => "activation d'un serveur MCP",
+            PendingControl::McpReconnect => "reconnexion d'un serveur MCP",
+            PendingControl::McpClearAuth => "réinitialisation de l'authentification MCP",
         }
     }
 }
@@ -114,6 +137,10 @@ pub enum SessionError {
     Spawn(TransportError),
     /// The session task is gone (process exited or shut down).
     Closed,
+    /// The binary answered a control request with an explicit error (e.g. an
+    /// unsupported / rejected query). Carries the binary's message so the caller
+    /// surfaces it instead of mistaking the rejection for an empty success.
+    Rejected(String),
 }
 
 impl std::fmt::Display for SessionError {
@@ -123,6 +150,7 @@ impl std::fmt::Display for SessionError {
             // human-readable, actionable message surfaced in the UI.
             SessionError::Spawn(e) => write!(f, "{e}"),
             SessionError::Closed => write!(f, "session is closed"),
+            SessionError::Rejected(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -187,7 +215,36 @@ impl SessionHandle {
         let (tx, rx) = oneshot::channel();
         self.send(SessionCommand::McpStatus(tx)).await?;
         match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
-            Ok(Ok(servers)) => Ok(servers),
+            Ok(Ok(Ok(servers))) => Ok(servers),
+            // The binary rejected the query — surface its message (never a fake empty).
+            Ok(Ok(Err(msg))) => Err(SessionError::Rejected(msg)),
+            _ => Err(SessionError::Closed),
+        }
+    }
+
+    /// Enable/disable a live MCP server (fire-and-correlate; the UI re-polls
+    /// `mcp_status` to reflect the change, a rejection surfaces as a control error).
+    pub async fn mcp_toggle(&self, server_name: String, enabled: bool) -> Result<(), SessionError> {
+        self.send(SessionCommand::McpToggle { server_name, enabled }).await
+    }
+
+    /// Reconnect a live MCP server.
+    pub async fn mcp_reconnect(&self, server_name: String) -> Result<(), SessionError> {
+        self.send(SessionCommand::McpReconnect { server_name }).await
+    }
+
+    /// Forget a live MCP server's stored OAuth credentials.
+    pub async fn mcp_clear_auth(&self, server_name: String) -> Result<(), SessionError> {
+        self.send(SessionCommand::McpClearAuth { server_name }).await
+    }
+
+    /// Start the OAuth flow for a live MCP server; returns the `authUrl` to open
+    /// (and whether the user must finish a callback). Bounded wait, like `mcp_status`.
+    pub async fn mcp_authenticate(&self, server_name: String) -> Result<McpAuthResult, SessionError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(SessionCommand::McpAuthenticate { server_name, reply: tx }).await?;
+        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(result)) => Ok(result),
             _ => Err(SessionError::Closed),
         }
     }
@@ -293,7 +350,10 @@ struct SessionCore {
     restore_ultracode: bool,
     /// In-flight `mcp_status` queries, keyed by their outbound `request_id`. The
     /// matching `control_response` fulfills (and removes) the reply channel.
-    pending_mcp: HashMap<String, oneshot::Sender<Vec<McpServerLive>>>,
+    pending_mcp: HashMap<String, oneshot::Sender<Result<Vec<McpServerLive>, String>>>,
+    /// In-flight `mcp_authenticate` requests, keyed by `request_id` — the reply
+    /// (authUrl / requiresUserAction) is delivered back over the oneshot.
+    pending_mcp_auth: HashMap<String, oneshot::Sender<McpAuthResult>>,
     next_req: u64,
     /// Outbound JSON lines (→ the process stdin in production, → a test channel
     /// in unit tests).
@@ -326,6 +386,7 @@ impl SessionCore {
             init_request_id: None,
             restore_ultracode: initial.ultracode,
             pending_mcp: HashMap::new(),
+            pending_mcp_auth: HashMap::new(),
             next_req: 0,
             outbound,
         }
@@ -353,8 +414,15 @@ impl SessionCore {
     fn send_tracked(&mut self, kind: PendingControl, make: impl FnOnce(&str) -> Value) {
         let rid = self.next_request_id();
         let line = make(&rid);
-        self.pending_control.insert(rid, kind);
-        self.send(line);
+        // Only track the ack if the line actually went out. If the outbound channel
+        // is closed (process gone, not yet observed), surface it as a control error
+        // instead of silently dropping the request and leaking a pending entry that
+        // will never be acked — same "no silent failure" guard as SendUserText.
+        if self.send(line) {
+            self.pending_control.insert(rid, kind);
+        } else {
+            self.emit_control_error(kind, "session fermée : la requête n'a pas pu être envoyée");
+        }
     }
 
     /// Query the session's live applied settings (model/effort/ultracode). The ack
@@ -498,10 +566,27 @@ impl SessionCore {
             eprintln!("[session {}] unparseable control_response (no request_id)", self.id);
             return;
         };
-        // An `mcp_status` reply we are awaiting: fulfill its channel and stop.
+        // An `mcp_status` reply we are awaiting: fulfill its channel and stop. A
+        // rejection (resp.ok == false) is surfaced as Err — NOT swallowed into an
+        // empty "success" list (which would be indiscernible from a real no-MCP
+        // session). Ignore a closed receiver (caller gave up / timed out).
         if let Some(reply) = self.pending_mcp.remove(&resp.request_id) {
-            // Ignore a closed receiver (caller gave up / timed out).
-            let _ = reply.send(control::parse_mcp_status(&v));
+            let result = if resp.ok {
+                Ok(control::parse_mcp_status(&v))
+            } else {
+                Err(resp
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "requête mcp_status rejetée".to_string()))
+            };
+            let _ = reply.send(result);
+            return;
+        }
+        // An `mcp_authenticate` reply: fulfill with the parsed authUrl. A rejection
+        // (resp.error) is carried INSIDE the result (surfaced in the UI), not as a
+        // timeline control error — auth failures are expected and actionable there.
+        if let Some(reply) = self.pending_mcp_auth.remove(&resp.request_id) {
+            let _ = reply.send(control::parse_mcp_authenticate(&v, resp.error.as_deref()));
             return;
         }
         // The initialize handshake completes exactly once.
@@ -586,7 +671,10 @@ impl SessionCore {
             | PendingControl::SetEffort
             | PendingControl::SetUltracode
             | PendingControl::Interrupt
-            | PendingControl::StopTask => {}
+            | PendingControl::StopTask
+            | PendingControl::McpToggle
+            | PendingControl::McpReconnect
+            | PendingControl::McpClearAuth => {}
         }
     }
 
@@ -772,6 +860,28 @@ impl SessionCore {
                 let rid = self.next_request_id();
                 self.pending_mcp.insert(rid.clone(), reply);
                 self.send(control::mcp_status_request(&rid));
+            }
+            // Live MCP actions — fire-and-correlate: the bare-success ack is a no-op
+            // (the UI re-polls `mcp_status`), a rejection surfaces as a control error.
+            SessionCommand::McpToggle { server_name, enabled } => {
+                self.send_tracked(PendingControl::McpToggle, |rid| {
+                    control::mcp_toggle_request(rid, &server_name, enabled)
+                });
+            }
+            SessionCommand::McpReconnect { server_name } => {
+                self.send_tracked(PendingControl::McpReconnect, |rid| {
+                    control::mcp_reconnect_request(rid, &server_name)
+                });
+            }
+            SessionCommand::McpClearAuth { server_name } => {
+                self.send_tracked(PendingControl::McpClearAuth, |rid| {
+                    control::mcp_clear_auth_request(rid, &server_name)
+                });
+            }
+            SessionCommand::McpAuthenticate { server_name, reply } => {
+                let rid = self.next_request_id();
+                self.pending_mcp_auth.insert(rid.clone(), reply);
+                self.send(control::mcp_authenticate_request(&rid, &server_name));
             }
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown => {}
@@ -1322,11 +1432,90 @@ mod tests {
             .unwrap(),
         );
 
-        let servers = rx.try_recv().expect("the reply should be delivered");
+        let servers = rx
+            .try_recv()
+            .expect("the reply should be delivered")
+            .expect("a success reply yields Ok");
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].name, "playwright");
         assert_eq!(servers[0].status, "connected");
         assert_eq!(servers[0].tool_count, 1);
+    }
+
+    /// ACCEPTANCE: a REJECTED mcp_status (control_response with ok=false) is delivered
+    /// as Err carrying the binary's message — never swallowed into an empty Ok list.
+    #[test]
+    fn mcp_status_rejection_surfaces_as_error_not_empty() {
+        let (mut core, _events, mut out) = test_core();
+        let (tx, mut rx) = oneshot::channel();
+        core.on_command(SessionCommand::McpStatus(tx));
+        let rid = drain(&mut out)
+            .into_iter()
+            .find(|l| l["request"]["subtype"] == json!("mcp_status"))
+            .and_then(|l| l["request_id"].as_str().map(str::to_string))
+            .expect("an mcp_status request_id");
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": { "subtype": "error", "request_id": rid, "error": "mcp_status not supported" }
+            }))
+            .unwrap(),
+        );
+        let reply = rx.try_recv().expect("the reply should be delivered");
+        assert_eq!(reply, Err("mcp_status not supported".to_string()));
+    }
+
+    /// ACCEPTANCE: an `McpToggle` command writes an `mcp_toggle` control_request with
+    /// the exact wire shape (`serverName` + `enabled`) the binary expects.
+    #[test]
+    fn mcp_toggle_writes_expected_wire() {
+        let (mut core, _events, mut out) = test_core();
+        core.on_command(SessionCommand::McpToggle {
+            server_name: "qonto".to_string(),
+            enabled: false,
+        });
+        let req = drain(&mut out)
+            .into_iter()
+            .find(|l| l["request"]["subtype"] == json!("mcp_toggle"))
+            .expect("an mcp_toggle control_request should be written");
+        assert_eq!(req["request"]["serverName"], json!("qonto"));
+        assert_eq!(req["request"]["enabled"], json!(false));
+    }
+
+    /// ACCEPTANCE: an `McpAuthenticate` command round-trips — the request carries
+    /// `serverName`, and the response's `authUrl` / `requiresUserAction` are parsed
+    /// back over the reply channel.
+    #[test]
+    fn mcp_authenticate_round_trips_auth_url() {
+        let (mut core, _events, mut out) = test_core();
+        let (tx, mut rx) = oneshot::channel();
+        core.on_command(SessionCommand::McpAuthenticate {
+            server_name: "linear".to_string(),
+            reply: tx,
+        });
+        let req = drain(&mut out)
+            .into_iter()
+            .find(|l| l["request"]["subtype"] == json!("mcp_authenticate"))
+            .expect("an mcp_authenticate control_request should be written");
+        assert_eq!(req["request"]["serverName"], json!("linear"));
+        let rid = req["request_id"].as_str().unwrap().to_string();
+
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": rid,
+                    "response": { "authUrl": "https://auth.example/x", "requiresUserAction": true }
+                }
+            }))
+            .unwrap(),
+        );
+
+        let res = rx.try_recv().expect("the auth reply should be delivered");
+        assert_eq!(res.auth_url.as_deref(), Some("https://auth.example/x"));
+        assert!(res.requires_user_action);
+        assert_eq!(res.error, None);
     }
 
     /// LIVE end-to-end: spawn a real `claude`, run a tool to completion. In this

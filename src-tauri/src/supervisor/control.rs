@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
 
-use super::model::{McpServerLive, SlashCommand};
+use super::model::{McpAuthResult, McpServerLive, SlashCommand};
 
 /// Permission mode, switched at runtime via `set_permission_mode` (spec §4.5).
 /// The wire tokens are exactly these camelCase strings.
@@ -347,6 +347,13 @@ pub fn mcp_status_request(request_id: &str) -> Value {
     control_request(request_id, json!({ "subtype": "mcp_status" }))
 }
 
+/// Drop a URL's query string and fragment — they can carry an auth token. Mirrors
+/// the on-disk scanner's redaction (`extensions::strip_url_query`); duplicated here
+/// (2 lines) to keep `supervisor` independent of `extensions`.
+fn strip_url_query(url: &str) -> String {
+    url.split(['?', '#']).next().unwrap_or(url).to_string()
+}
+
 /// Parse an `mcp_status` control response into the live server list. The array
 /// lives at `response.response.mcpServers` (doubly nested, like initialize's
 /// commands — verified live against the binary). Each entry carries `name`,
@@ -377,18 +384,94 @@ pub fn parse_mcp_status(line: &Value) -> Vec<McpServerLive> {
                     .and_then(Value::as_str)
                     .map(str::to_string)
             };
-            let tool_count = s.get("tools").and_then(Value::as_array).map_or(0, Vec::len) as u32;
+            let tools: Vec<String> = s
+                .get("tools")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|t| t.get("name").and_then(Value::as_str).map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
             Some(McpServerLive {
                 name,
                 status,
                 scope,
                 transport: field("type"),
                 command: field("command"),
-                url: field("url"),
-                tool_count,
+                // Strip the query/fragment — it can carry an auth token. Upholds the
+                // same "no secret crosses the IPC boundary" invariant the on-disk
+                // scanner enforces (extensions::mcp_info), on the LIVE path too.
+                url: field("url").as_deref().map(strip_url_query),
+                tool_count: tools.len() as u32,
+                tools,
             })
         })
         .collect()
+}
+
+/// `mcp_toggle` — enable/disable ONE MCP server live in the session (the binary
+/// connects/disconnects it). Cross-checked against the official extension SDK
+/// transport (`toggleMcpServer(name,enabled) → {subtype:"mcp_toggle",serverName,
+/// enabled}`). The visible effect arrives via the next `mcp_status` poll.
+pub fn mcp_toggle_request(request_id: &str, server_name: &str, enabled: bool) -> Value {
+    control_request(
+        request_id,
+        json!({ "subtype": "mcp_toggle", "serverName": server_name, "enabled": enabled }),
+    )
+}
+
+/// `mcp_reconnect` — ask the session to reconnect ONE MCP server (after a failure,
+/// or once auth has been granted). Extension SDK: `reconnectMcpServer(name) →
+/// {subtype:"mcp_reconnect",serverName}`.
+pub fn mcp_reconnect_request(request_id: &str, server_name: &str) -> Value {
+    control_request(
+        request_id,
+        json!({ "subtype": "mcp_reconnect", "serverName": server_name }),
+    )
+}
+
+/// `mcp_authenticate` — start the OAuth flow for an http/sse server. We omit
+/// `redirectUri` (the extension's UI path calls it with the server name only), so
+/// the CLI uses its own loopback redirect and completes the callback itself in the
+/// common case. The reply carries `authUrl` (open it in the browser) and
+/// `requiresUserAction`. Extension SDK: `{subtype:"mcp_authenticate",serverName,
+/// redirectUri?}` → `.response`.
+pub fn mcp_authenticate_request(request_id: &str, server_name: &str) -> Value {
+    control_request(
+        request_id,
+        json!({ "subtype": "mcp_authenticate", "serverName": server_name }),
+    )
+}
+
+/// `mcp_clear_auth` — forget the stored OAuth credentials for ONE server (so the
+/// next connect re-authenticates). Extension SDK: `mcpClearAuth(name) →
+/// {subtype:"mcp_clear_auth",serverName}`.
+pub fn mcp_clear_auth_request(request_id: &str, server_name: &str) -> Value {
+    control_request(
+        request_id,
+        json!({ "subtype": "mcp_clear_auth", "serverName": server_name }),
+    )
+}
+
+/// Parse an `mcp_authenticate` control response into [`McpAuthResult`]. The payload
+/// is doubly nested (`response.response`, like `mcp_status`); the binary returns
+/// `{authUrl?, requiresUserAction?}`. `err` is the routed control-response error (a
+/// rejection — auth unsupported / unknown server) surfaced to the UI, not as a
+/// fatal session error.
+pub fn parse_mcp_authenticate(line: &Value, err: Option<&str>) -> McpAuthResult {
+    let payload = line.get("response").and_then(|r| r.get("response"));
+    McpAuthResult {
+        auth_url: payload
+            .and_then(|p| p.get("authUrl"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        requires_user_action: payload
+            .and_then(|p| p.get("requiresUserAction"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        error: err.map(str::to_string),
+    }
 }
 
 /// A successful `control_response` carrying a permission ALLOW result (spec §5.2).
@@ -682,6 +765,7 @@ mod tests {
         assert_eq!(servers[0].transport.as_deref(), Some("stdio"));
         assert_eq!(servers[0].command.as_deref(), Some("npx"));
         assert_eq!(servers[0].tool_count, 2);
+        assert_eq!(servers[0].tools, vec!["browser_close", "browser_click"]);
         assert_eq!(servers[1].name, "claude.ai Google Drive");
         assert_eq!(servers[1].status, "needs-auth");
         assert_eq!(servers[1].scope.as_deref(), Some("claudeai"));
@@ -693,6 +777,21 @@ mod tests {
         // An unrelated control_response (e.g. an initialize ack) yields no servers.
         let line = json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "x", "response": { "commands": [] } } });
         assert!(parse_mcp_status(&line).is_empty());
+    }
+
+    #[test]
+    fn parse_mcp_status_strips_url_query_token() {
+        // A live http server whose config URL carries a token must NOT cross the IPC
+        // boundary with the query intact (same invariant as the on-disk scanner).
+        let line = json!({
+            "type": "control_response",
+            "response": { "subtype": "success", "request_id": "x", "response": { "mcpServers": [
+                { "name": "remote", "status": "connected", "scope": "user",
+                  "config": { "type": "http", "url": "https://h/mcp?token=secret#frag" } }
+            ] } }
+        });
+        let servers = parse_mcp_status(&line);
+        assert_eq!(servers[0].url.as_deref(), Some("https://h/mcp"), "query + fragment stripped");
     }
 
     /// Live probe: confirm the `mcp_status` control request is answered by the real

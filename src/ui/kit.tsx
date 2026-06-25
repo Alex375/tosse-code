@@ -54,6 +54,7 @@ const WF_PATHS: Record<string, string> = {
   splith: "M4 5h14v12H4zM11 5v12",
   splitv: "M4 5h14v12H4zM4 11h14",
   sidebar: "M4 5h14v12H4zM9 5v12",
+  globe: "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM3 11h16M11 3c2.4 2.2 2.4 13.8 0 16M11 3c-2.4 2.2-2.4 13.8 0 16",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {
