@@ -446,7 +446,10 @@ function ConversationBody({
   const agents = (ext.data?.agents ?? []).filter((a) => a.source == null);
   const orderedServers = useStableOrder(
     live.data ?? [],
-    (s) => s.name,
+    // Two servers can share a name across scopes (e.g. a `local` and a `project`
+    // `playwright`, both folded into the "repo" bucket) — key by scope+name so they
+    // don't collide in the freeze order nor as React keys below.
+    (s) => `${s.scope ?? ""}:${s.name}`,
     (s) => liveRank(s.status),
     resetToken,
   );
@@ -503,7 +506,7 @@ function ConversationBody({
               </div>
               <div className={styles.list}>
                 {g.items.map((m) => (
-                  <McpLiveRow key={m.name} mcp={m} actions={actions} />
+                  <McpLiveRow key={`${m.scope ?? ""}:${m.name}`} mcp={m} actions={actions} />
                 ))}
               </div>
             </div>
@@ -1070,20 +1073,23 @@ function ItemDetail({ item, sectionKey, pluginName }: { item: ExplorerItem; sect
   );
 }
 
+/** The shared load → error → binary/too-large → markdown ladder for a doc file.
+ *  Reused by the detail pane (DocBody) and the standalone viewer (DocViewer) so the
+ *  four-way state handling and frontmatter strip live in one place. */
+function DocMarkdown({ path }: { path: string }) {
+  const { data, isLoading, isError, error } = useExtensionDoc(path);
+  if (isLoading) return <div className={styles.empty}>Chargement…</div>;
+  if (isError) return <div className={styles.error}>{(error as Error).message}</div>;
+  if (data?.binary || data?.too_large)
+    return <div className={styles.empty}>Fichier non affichable.</div>;
+  return <StreamMarkdown text={stripFrontmatter(data?.content ?? "")} />;
+}
+
 /** Read + render a SKILL.md / agent .md inside a detail pane (frontmatter stripped). */
 function DocBody({ path }: { path: string }) {
-  const { data, isLoading, isError, error } = useExtensionDoc(path);
   return (
     <div className={styles.detailBody}>
-      {isLoading ? (
-        <div className={styles.empty}>Chargement…</div>
-      ) : isError ? (
-        <div className={styles.error}>{(error as Error).message}</div>
-      ) : data?.binary || data?.too_large ? (
-        <div className={styles.empty}>Fichier non affichable.</div>
-      ) : (
-        <StreamMarkdown text={stripFrontmatter(data?.content ?? "")} />
-      )}
+      <DocMarkdown path={path} />
       <div className={styles.docPathFoot}>{path}</div>
     </div>
   );
@@ -1115,7 +1121,6 @@ function McpDetailCard({ mcp }: { mcp: McpServerInfo }) {
 // ---- Standalone markdown viewer (file-based skill / sub-agent) -----------------
 
 function DocViewer({ doc, onClose }: { doc: OpenDoc; onClose: () => void }) {
-  const { data, isLoading, isError, error } = useExtensionDoc(doc.path);
   return (
     <div className={styles.docScrim} onClick={onClose}>
       <div className={styles.docPanel} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal>
@@ -1131,15 +1136,7 @@ function DocViewer({ doc, onClose }: { doc: OpenDoc; onClose: () => void }) {
         </div>
         <div className={styles.docBody}>
           {doc.description ? <p className={styles.detailDesc}>{doc.description}</p> : null}
-          {isLoading ? (
-            <div className={styles.empty}>Chargement…</div>
-          ) : isError ? (
-            <div className={styles.error}>{(error as Error).message}</div>
-          ) : data?.binary || data?.too_large ? (
-            <div className={styles.empty}>Fichier non affichable.</div>
-          ) : (
-            <StreamMarkdown text={stripFrontmatter(data?.content ?? "")} />
-          )}
+          <DocMarkdown path={doc.path} />
         </div>
         <div className={styles.docFoot}>{doc.path}</div>
       </div>

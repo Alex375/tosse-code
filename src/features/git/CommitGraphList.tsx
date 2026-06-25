@@ -9,18 +9,11 @@ import type { CommitInfo } from "../../ipc/useGit";
 import { useConvGitView, useGitViewStore } from "./gitViewStore";
 import { computeGraph } from "./graph";
 import { GitGraph, GRAPH_COL, GRAPH_ROW_H } from "./GitGraph";
+import { fmtDate } from "./fileMeta";
 import styles from "./git.module.css";
 
 // How many ref badges to show before collapsing the rest into a "+N" chip.
 const MAX_REFS = 2;
-
-function fmtDate(tsSeconds: number): string {
-  return new Date(tsSeconds * 1000).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
 
 function RefBadge({ name }: { name: string }) {
   if (name.startsWith("tag: ")) {

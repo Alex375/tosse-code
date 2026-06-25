@@ -5,16 +5,8 @@
 
 import { useCommitFiles, useGitLog } from "../../ipc/useGit";
 import { useConvGitView, useGitViewStore } from "./gitViewStore";
-import { badgeClass, splitPath } from "./fileMeta";
+import { badgeClass, fmtDate, splitPath } from "./fileMeta";
 import styles from "./git.module.css";
-
-function fmtDate(tsSeconds: number): string {
-  return new Date(tsSeconds * 1000).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
 
 export function CommitFileList({ cwd, convId }: { cwd: string; convId: string }) {
   const { selectedOid, selectedHistoryFile } = useConvGitView(convId);

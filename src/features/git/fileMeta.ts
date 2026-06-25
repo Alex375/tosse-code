@@ -32,3 +32,12 @@ export function statusLetter(f: GitFileEntry): string {
   if (f.untracked) return "U";
   return f.index_status !== "." ? f.index_status : f.worktree_status;
 }
+
+/** Format a git author/commit unix timestamp (seconds) for the commit lists. */
+export function fmtDate(tsSeconds: number): string {
+  return new Date(tsSeconds * 1000).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}

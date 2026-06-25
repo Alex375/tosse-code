@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{build_diff, run_git, run_git_bytes, GitDiff, GitError};
+use super::{build_diff, run_git, GitDiff, GitError};
 
 // Field/record separators chosen to never occur in commit text: ASCII US (0x1f)
 // between fields, RS (0x1e) between commits.
@@ -99,8 +99,11 @@ pub fn commit_file_diff(
     // For a rename/copy the "before" side lives at the parent under the ORIGINAL
     // path; using the new path there fails (empty) and renders as fully added.
     let old_path = orig_path.unwrap_or(path);
-    let new = run_git_bytes(cwd, &["show", &format!("{oid}:{path}")]).unwrap_or_default();
-    let old = run_git_bytes(cwd, &["show", &format!("{oid}^:{old_path}")]).unwrap_or_default();
+    // Either side is legitimately empty when the file was added (no parent blob) or
+    // deleted (no blob at `oid`) in this commit; any OTHER git failure propagates
+    // instead of silently rendering as a fully-added/removed file.
+    let new = super::show_blob_or_empty(cwd, &format!("{oid}:{path}"))?;
+    let old = super::show_blob_or_empty(cwd, &format!("{oid}^:{old_path}"))?;
     let short = &oid[..oid.len().min(7)];
     Ok(build_diff(path, &old, &new, &format!("{short}^"), short))
 }
