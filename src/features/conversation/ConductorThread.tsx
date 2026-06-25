@@ -13,12 +13,13 @@ import { useLiveActivity, useLiveBashCommand } from "../../store/activity";
 import {
   useConversationStore,
   useError,
+  useGroupBlocks,
   useNotice,
   usePendingPermissions,
   useSessionState,
   useSubThread,
   useRunErrored,
-  useTimeline,
+  useTimelineRender,
   useToolResult,
   useTurn,
   useTurnResult,
@@ -396,15 +397,26 @@ function SubAgentCard({
  * failure. Sub-agents are NOT here — they render inline via <SubAgentCard> (see
  * AssistantBlocks), keeping their live lifecycle and drill-in transcript.
  */
-function LiveRunSection({ session, steps }: { session: string; steps: ToolStep[] }) {
+function LiveRunSection({
+  session,
+  steps,
+  active,
+  live,
+}: {
+  session: string;
+  steps: ToolStep[];
+  active: boolean;
+  /** True while this run is the live trailing run → section stays expanded, collapses on settle. */
+  live: boolean;
+}) {
   const errored = useRunErrored(
     session,
     steps.map((s) => s.id),
   );
   return (
-    <ToolSection title={runHeader(steps)} errored={errored}>
+    <ToolSection title={runHeader(steps)} errored={errored} live={live}>
       {steps.map((step) => (
-        <LiveToolStep key={step.id} session={session} step={step} />
+        <LiveToolStep key={step.id} session={session} step={step} active={active} />
       ))}
     </ToolSection>
   );
@@ -412,10 +424,10 @@ function LiveRunSection({ session, steps }: { session: string; steps: ToolStep[]
 
 /**
  * An assistant turn's blocks as the grouped transcript: prose / thinking inline, and
- * every run of consecutive tool calls coalesced into one collapsed section (see
- * `groupBlocks`). While the turn is the live one (`live`), its TRAILING run is
- * suppressed — the step in progress is shown by the bottom <WorkingIndicator>, and
- * the run materialises as a section once it settles (the claude.ai/code behaviour).
+ * every run of consecutive tool calls coalesced into one section (see `groupBlocks`).
+ * While the turn is the live one (`live`), its TRAILING run renders EXPANDED so each
+ * step appears live (spinner while running → result/output on completion); it collapses
+ * to the section header once the turn settles. Past / non-trailing runs are collapsed.
  */
 function AssistantBlocks({
   session,
@@ -445,11 +457,21 @@ function AssistantBlocks({
               input={seg.step.input}
             />
           );
-        // A `run` of regular tools. While the active turn streams, its TRAILING run is
-        // shown live by the bottom <WorkingIndicator>; it materialises as a section
-        // once the turn settles.
-        if (live && i === lastIdx) return null;
-        return <LiveRunSection key={seg.key} session={session} steps={seg.steps} />;
+        // A `run` of regular tools. The actively-running trailing run of the live turn
+        // renders EXPANDED so its steps appear live (spinner → result, output on
+        // completion), then collapses to the section header once the turn settles. Past
+        // / non-trailing runs render collapsed. `active={live}` gates the spinner so a
+        // resultless step in a PAST turn never spins when the session is busy later.
+        const liveRun = live && i === lastIdx;
+        return (
+          <LiveRunSection
+            key={seg.key}
+            session={session}
+            steps={seg.steps}
+            active={live}
+            live={liveRun}
+          />
+        );
       })}
     </>
   );
@@ -485,6 +507,45 @@ function MsgAI({
         )}
         {turn.streamingThinking && <ThinkingBlock text={turn.streamingThinking} finalized={false} />}
         {turn.streamingText && <StreamMarkdown text={turn.streamingText} streaming />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * An ASSISTANT response = one OR MORE consecutive assistant turns (messages) rendered as
+ * ONE flow under a single avatar. Their blocks are concatenated, so a run of tool calls
+ * spread across several messages — the agent's loop emits one tool per message — groups
+ * into ONE section; only a real text message breaks the run. The LAST turn carries the
+ * live streaming tail and drives `live`.
+ */
+function MsgAIGroup({
+  session,
+  turnIds,
+  busy,
+  awaiting,
+}: {
+  session: string;
+  turnIds: string[];
+  busy: boolean;
+  awaiting: boolean;
+}) {
+  const blocks = useGroupBlocks(session, turnIds);
+  const lastTurn = useTurn(session, turnIds[turnIds.length - 1]);
+  // Turns stay "streaming" until turn_result, so the group is live while its last turn
+  // streams → the combined trailing run shows live and collapses once the turn settles.
+  const live = busy && !awaiting && lastTurn?.status === "streaming";
+  return (
+    <div className="cv-msg cv-ai">
+      <Avatar ai>
+        <ClaudeMark />
+      </Avatar>
+      <div className="cv-aibody">
+        {blocks.length > 0 && <AssistantBlocks session={session} blocks={blocks} live={live} />}
+        {lastTurn?.streamingThinking && (
+          <ThinkingBlock text={lastTurn.streamingThinking} finalized={false} />
+        )}
+        {lastTurn?.streamingText && <StreamMarkdown text={lastTurn.streamingText} streaming />}
       </div>
     </div>
   );
@@ -543,12 +604,12 @@ export function ConductorThread({
   scrollRef: StickToBottom["scrollRef"];
   onRender: StickToBottom["onRender"];
 }) {
-  const timeline = useTimeline(session);
+  const plan = useTimelineRender(session);
   const pending = usePendingPermissions(session);
   const state = useSessionState(session);
   const busy = state?.busy ?? false;
   const awaiting = state?.awaiting_permission ?? false;
-  const empty = timeline.length === 0 && pending.length === 0;
+  const empty = plan.length === 0 && pending.length === 0;
 
   return (
     <div className="cv-thread" ref={scrollRef}>
@@ -563,23 +624,25 @@ export function ConductorThread({
               aujourd'hui
               <span className="wf-line" />
             </div>
-            {timeline.map((entry) => {
-              if (entry.kind === "turn")
+            {plan.map((item) => {
+              if (item.kind === "ai")
                 return (
-                  <TurnRow
-                    key={entry.id}
+                  <MsgAIGroup
+                    key={item.ids[0]}
                     session={session}
-                    turnId={entry.id}
+                    turnIds={item.ids}
                     busy={busy}
                     awaiting={awaiting}
                   />
                 );
-              if (entry.kind === "error")
-                return <MsgError key={entry.id} session={session} errorId={entry.id} />;
-              if (entry.kind === "notice")
-                return <NoticeRow key={entry.id} session={session} noticeId={entry.id} />;
-              if (entry.kind === "turn_result")
-                return <TurnResultRow key={entry.id} session={session} resultId={entry.id} />;
+              if (item.kind === "user")
+                return <TurnRow key={item.id} session={session} turnId={item.id} />;
+              if (item.kind === "error")
+                return <MsgError key={item.id} session={session} errorId={item.id} />;
+              if (item.kind === "notice")
+                return <NoticeRow key={item.id} session={session} noticeId={item.id} />;
+              if (item.kind === "turn_result")
+                return <TurnResultRow key={item.id} session={session} resultId={item.id} />;
               return null;
             })}
             {pending.map((req) => (

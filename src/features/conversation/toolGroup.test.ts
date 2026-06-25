@@ -82,6 +82,22 @@ describe("groupBlocks", () => {
     const segs = groupBlocks([tool("m", "Monitor"), tool("t", "TodoWrite")]);
     expect(segs).toEqual([]);
   });
+
+  it("includeBackground keeps Monitor / detached Bash as steps but still drops suppressed tools", () => {
+    const segs = groupBlocks(
+      [
+        tool("a", "Read"),
+        tool("m", "Monitor"),
+        tool("bg", "Bash", { run_in_background: true }),
+        tool("todo", "TodoWrite"), // suppressed → hidden even on the disk view
+        tool("b", "Edit"),
+      ],
+      true,
+    );
+    expect(segs).toHaveLength(1);
+    if (segs[0].kind === "run")
+      expect(segs[0].steps.map((s) => s.id)).toEqual(["a", "m", "bg", "b"]);
+  });
 });
 
 describe("isHiddenInline", () => {

@@ -68,14 +68,31 @@ export function isHiddenInline(name: string, input: JsonValue): boolean {
  * `run` segments. Text / thinking flush the current run and render as separators;
  * hidden tools are skipped without breaking the surrounding run. Empty text/thinking
  * blocks are dropped (a streamed turn can hold empty placeholders).
+ *
+ * `includeBackground` keeps the normally-hidden background tools (Monitor, detached
+ * `run_in_background` Bash) as inline steps. The LIVE main thread leaves it false —
+ * those tools live in pinned bars (MonitorBar / BashBar). The off-thread disk
+ * transcript (SubAgentTranscript) sets it true: it has NO live bar to compensate, so
+ * hiding them there would silently drop the only record of those calls.
  */
-export function groupBlocks(blocks: NormalizedBlock[]): Segment[] {
+export function groupBlocks(
+  blocks: NormalizedBlock[],
+  includeBackground = false,
+): Segment[] {
   const out: Segment[] = [];
   let run: ToolStep[] | null = null;
 
   blocks.forEach((b, i) => {
     if (b.type === "tool_use") {
-      if (isHiddenInline(b.name, b.input)) return; // invisible: no step, no break
+      // Live thread: hide everything `isHiddenInline` covers (a pinned bar shows the
+      // background ones). Disk transcript (includeBackground): keep background tools as
+      // steps — no bar compensates there — but `toolMeta`-suppressed tools (TodoWrite,
+      // ide_ RPC) are noise everywhere and stay hidden.
+      if (includeBackground) {
+        if (toolMeta(b.name, b.input).suppressed) return;
+      } else if (isHiddenInline(b.name, b.input)) {
+        return; // invisible: no step, no break
+      }
       // A sub-agent is its own inline card, not a grouped step — it breaks the run.
       if (b.name === "Agent" || b.name === "Task") {
         run = null;

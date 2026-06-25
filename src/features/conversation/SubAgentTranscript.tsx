@@ -32,7 +32,9 @@ function TranscriptBlocks({
   blocks: NormalizedBlock[];
   results: Map<string, JoinedResult>;
 }) {
-  const segments = groupBlocks(blocks);
+  // Disk view: keep background tools (Monitor / detached Bash) as steps — there is no
+  // live bar here to show them, so hiding them would silently drop the only record.
+  const segments = groupBlocks(blocks, true);
   return (
     <>
       {segments.map((seg) => {
