@@ -3,6 +3,9 @@
 // Selected at runtime by provider.ts when window.__TAURI_INTERNALS__ is absent.
 
 import type {
+  BranchInfo,
+  CommitFile,
+  CommitInfo,
   ContextFill,
   ConversationItem,
   ConversationRecord,
@@ -10,6 +13,9 @@ import type {
   FsChangeEvent,
   FsWatchErrorEvent,
   FsEntry,
+  GitDiff,
+  GitFileEntry,
+  GitStatus,
   ImageContent,
   PermissionDecision,
   PermissionMode,
@@ -437,6 +443,66 @@ export const mockCommands = {
     return true;
   },
 
+  // ---- Git history / source control: synthetic data so the Git panel renders in
+  // dev/Playwright (no real `git` in the browser). A small DAG with a merge lets
+  // the graph layout be eyeballed; writes are accepted as no-ops.
+  async gitStatus(_cwd: string): Promise<Result<GitStatus, string>> {
+    return ok(MOCK_GIT_STATUS);
+  },
+  async gitDiff(_cwd: string, path: string): Promise<Result<GitDiff, string>> {
+    return ok({
+      path,
+      old_text: "export function greet(name) {\n  return `Hi ${name}`;\n}\n",
+      new_text: "export function greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n",
+      is_binary: false,
+      old_label: "HEAD",
+      new_label: "Working tree",
+    });
+  },
+  async gitLog(_cwd: string, limit: number, skip: number): Promise<Result<CommitInfo[], string>> {
+    return ok(skip >= MOCK_GIT_LOG.length ? [] : MOCK_GIT_LOG.slice(skip, skip + limit));
+  },
+  async gitBranches(_cwd: string): Promise<Result<BranchInfo[], string>> {
+    return ok(MOCK_GIT_BRANCHES);
+  },
+  async gitCommitFiles(_cwd: string, _oid: string): Promise<Result<CommitFile[], string>> {
+    return ok([
+      { path: "src/app.ts", orig_path: null, status: "M" },
+      { path: "src/new.ts", orig_path: null, status: "A" },
+    ]);
+  },
+  async gitCommitFileDiff(
+    _cwd: string,
+    oid: string,
+    path: string,
+  ): Promise<Result<GitDiff, string>> {
+    const short = oid.slice(0, 7);
+    // A hunk with internal modify + delete — the case the single-trapezoid ribbon
+    // used to skew; lets the per-charChange sub-ribbons be eyeballed in dev.
+    return ok({
+      path,
+      old_text:
+        'import { foo } from "./foo";\n\nfunction greet(name) {\n  const msg = "hi " + name;\n  log(msg);\n  return msg;\n}\n',
+      new_text:
+        'import { foo } from "./foo";\n\nfunction greet(name: string): string {\n  const greeting = `Hi ${name}`;\n  return greeting;\n}\n',
+      is_binary: false,
+      old_label: `${short}^`,
+      new_label: short,
+    });
+  },
+  async gitCommit(_cwd: string, _message: string): Promise<Result<string, string>> {
+    return ok("deadbee");
+  },
+  async gitPush(_cwd: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async gitPull(_cwd: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async gitFetch(_cwd: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
   // ---- Editor filesystem: a tiny synthetic tree so the editor panel renders in
   // the browser/dev build (the real fs is only reachable in the Tauri app).
   // Sentinels `__fail__` (error Result) and `__throw__` (thrown rejection, like a
@@ -527,6 +593,104 @@ function mockFile(path: string): FileContent {
   }
   return { path, content, too_large: false, binary: false, size: content.length };
 }
+
+// Synthetic git state for dev/Playwright. A small DAG with one merge so the
+// graph layout (rails diverging/merging) is visible without a real repo.
+const MOCK_GIT_FILES: GitFileEntry[] = [
+  {
+    path: "src/app.ts",
+    orig_path: null,
+    index_status: "M",
+    worktree_status: ".",
+    staged: true,
+    unstaged: false,
+    untracked: false,
+  },
+  {
+    path: "src/util.ts",
+    orig_path: null,
+    index_status: ".",
+    worktree_status: "M",
+    staged: false,
+    unstaged: true,
+    untracked: false,
+  },
+  {
+    path: "notes.txt",
+    orig_path: null,
+    index_status: ".",
+    worktree_status: "?",
+    staged: false,
+    unstaged: true,
+    untracked: true,
+  },
+];
+const MOCK_GIT_STATUS: GitStatus = {
+  branch: "main",
+  head: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  upstream: "origin/main",
+  ahead: 2,
+  behind: 1,
+  unborn: false,
+  files: MOCK_GIT_FILES,
+};
+function mockCommit(
+  oid: string,
+  parents: string[],
+  subject: string,
+  ts: number,
+  refs: string[] = [],
+): CommitInfo {
+  return {
+    oid: oid.padEnd(40, oid[0] ?? "0"),
+    short_oid: oid.slice(0, 7),
+    parents: parents.map((p) => p.padEnd(40, p[0] ?? "0")),
+    author_name: "Alexandre",
+    author_email: "a@tosse.dev",
+    timestamp: ts,
+    subject,
+    refs,
+  };
+}
+const MOCK_GIT_LOG: CommitInfo[] = [
+  mockCommit("merge00", ["main001", "feat001"], "Merge feat into main", 1_710_000_600, [
+    "HEAD",
+    "main",
+  ]),
+  mockCommit("feat001", ["base001"], "Add the feature", 1_710_000_500, ["feature"]),
+  mockCommit("main001", ["base001"], "Tweak the docs", 1_710_000_400, ["origin/main"]),
+  mockCommit("base001", ["root001"], "Wire it up", 1_710_000_300, []),
+  mockCommit("root001", [], "Initial commit", 1_710_000_200, ["tag: v0.1.0"]),
+];
+const MOCK_GIT_BRANCHES: BranchInfo[] = [
+  {
+    name: "main",
+    oid: "merge00".padEnd(40, "m"),
+    is_head: true,
+    is_remote: false,
+    upstream: "origin/main",
+    ahead: 2,
+    behind: 1,
+  },
+  {
+    name: "feature",
+    oid: "feat001".padEnd(40, "f"),
+    is_head: false,
+    is_remote: false,
+    upstream: null,
+    ahead: null,
+    behind: null,
+  },
+  {
+    name: "origin/main",
+    oid: "main001".padEnd(40, "o"),
+    is_head: false,
+    is_remote: true,
+    upstream: null,
+    ahead: null,
+    behind: null,
+  },
+];
 
 // Per-repo worktree set, seeded lazily with just the main worktree (== repoPath).
 const mockWorktrees = new Map<string, WorktreeInfo[]>();

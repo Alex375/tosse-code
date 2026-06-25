@@ -5,6 +5,7 @@ import { TerminalToggle } from "./features/conversation/TerminalToggle";
 import { StreamControl } from "./features/conversation/StreamControl";
 import { WorktreeIndicator } from "./features/git/WorktreeIndicator";
 import { WorktreeManager } from "./features/git/WorktreeManager";
+import { GitToggle } from "./features/git/GitToggle";
 import { EditorToggle } from "./features/editor/EditorToggle";
 import { FlightDeck } from "./features/flightdeck/FlightDeck";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
@@ -98,6 +99,7 @@ export default function App() {
             {active ? <StreamControl key={active.id} conv={active} /> : null}
             {active ? <EditorToggle /> : null}
             {active ? <TerminalToggle /> : null}
+            {active ? <GitToggle /> : null}
             {active ? <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} /> : null}
             <Tag icon="folder" title={activeRepo.path}>
               {repoName(activeRepo.path)}

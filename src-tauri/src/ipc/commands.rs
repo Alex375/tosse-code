@@ -599,6 +599,134 @@ pub fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+// ---- Git history / source control -----------------------------------------
+//
+// The front's single boundary to the repository's history and working-tree
+// state. Like the worktree commands they forward to [`crate::git`] (the only
+// service that speaks `git`) and run the blocking subprocess off the async
+// runtime via `spawn_blocking`. `cwd` is the conversation's LIVE working
+// directory (it follows EnterWorktree/ExitWorktree), so every op is scoped to
+// the worktree the user is actually looking at.
+
+/// Working-tree status: current branch, ahead/behind, and changed files.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_status(cwd: String) -> Result<crate::git::GitStatus, String> {
+    tokio::task::spawn_blocking(move || crate::git::status(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Diff of one working-tree file against HEAD (old = HEAD, new = on-disk),
+/// for the source-control view's diff editor.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_diff(
+    cwd: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<crate::git::GitDiff, String> {
+    tokio::task::spawn_blocking(move || crate::git::diff_worktree(&cwd, &path, orig_path.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// A page of commit history across all refs (for the graph / git tree).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_log(
+    cwd: String,
+    limit: u32,
+    skip: u32,
+) -> Result<Vec<crate::git::CommitInfo>, String> {
+    tokio::task::spawn_blocking(move || crate::git::log(&cwd, limit, skip))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Local + remote-tracking branches with their upstream tracking counts.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_branches(cwd: String) -> Result<Vec<crate::git::BranchInfo>, String> {
+    tokio::task::spawn_blocking(move || crate::git::branches(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Files changed by a single commit (name-status vs its first parent).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_commit_files(
+    cwd: String,
+    oid: String,
+) -> Result<Vec<crate::git::CommitFile>, String> {
+    tokio::task::spawn_blocking(move || crate::git::commit_files(&cwd, &oid))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Diff of one file introduced by a commit (old = parent, new = commit).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_commit_file_diff(
+    cwd: String,
+    oid: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<crate::git::GitDiff, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::git::commit_file_diff(&cwd, &oid, &path, orig_path.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Stage all changes and commit them with `message`. Returns the new short oid.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_commit(cwd: String, message: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || crate::git::commit(&cwd, &message))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Push the current branch to its upstream.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_push(cwd: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::git::push(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Pull the current branch (`--ff-only`).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_pull(cwd: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::git::pull(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Fetch all remotes (with prune).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_fetch(cwd: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::git::fetch(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 // ---- Editor filesystem ----------------------------------------------------
 //
 // The front's single boundary to the editor's filesystem service. They forward

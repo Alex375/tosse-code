@@ -29,6 +29,7 @@ import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./con
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
+import { useGitViewStore } from "../features/git/gitViewStore";
 import { clearMentionCache } from "../features/conversation/mentionCache";
 import { worktreeCwdFromTranscript } from "../features/git/worktree";
 import { useMemo } from "react";
@@ -335,6 +336,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
         disposeTerminal(c.id);
         clearTodoBarOpen(c.id);
         clearComposerDraft(c.id);
+        useGitViewStore.getState().clear(c.id);
       }
     }
     set((s) => {
@@ -392,6 +394,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // Kill its integrated terminal (PTY shell + xterm instance) too — same no-orphan
     // policy as the claude session above. No-op if it never opened a terminal.
     disposeTerminal(id);
+    useGitViewStore.getState().clear(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
@@ -997,6 +1000,7 @@ export async function wipeAllData(): Promise<void> {
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
   useBackgroundTasksStore.getState().clear();
+  useGitViewStore.getState().clearAll();
 }
 
 export const useConversations = () =>

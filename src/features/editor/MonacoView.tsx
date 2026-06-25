@@ -3,73 +3,14 @@
 // its own chunk and never weighs on app startup, keeping the "fast/light" core
 // principle intact.
 //
-// Workers: Vite bundles each as its own lazily-fetched chunk, so they cost
-// nothing at startup (the whole editor is already a lazy import) and only load
-// when a file of that language is opened. We wire the standard set so opening a
-// .ts/.json/.css/.html file doesn't hand the language service the wrong worker
-// (which would error); everything else falls back to the base editor worker.
-// Syntax highlighting itself runs on the main thread (Monarch), needing no worker.
+// The web-worker environment + the `tosse-dark` theme are set up by the shared
+// `monacoEnv` module (also used by the Git diff editor), so whichever mounts
+// first configures Monaco correctly.
 
 import { useEffect, useRef } from "react";
 import * as monaco from "monaco-editor";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
-import CssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
-import HtmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
-import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import { setupMonaco } from "./monacoEnv";
 import styles from "./editor.module.css";
-
-type MonacoSelf = typeof globalThis & { MonacoEnvironment?: monaco.Environment };
-const globalSelf = globalThis as MonacoSelf;
-if (!globalSelf.MonacoEnvironment) {
-  globalSelf.MonacoEnvironment = {
-    getWorker(_moduleId, label) {
-      switch (label) {
-        case "json":
-          return new JsonWorker();
-        case "css":
-        case "scss":
-        case "less":
-          return new CssWorker();
-        case "html":
-        case "handlebars":
-        case "razor":
-          return new HtmlWorker();
-        case "typescript":
-        case "javascript":
-          return new TsWorker();
-        default:
-          return new EditorWorker();
-      }
-    },
-  };
-}
-
-let themeDefined = false;
-function ensureTheme() {
-  if (themeDefined) return;
-  themeDefined = true;
-  // Mirror the app's dark palette (--wf-* tokens) so the editor blends in.
-  monaco.editor.defineTheme("tosse-dark", {
-    base: "vs-dark",
-    inherit: true,
-    rules: [],
-    colors: {
-      "editor.background": "#0c0c0f",
-      "editor.foreground": "#e7e7ec",
-      "editorLineNumber.foreground": "#4a4a55",
-      "editorLineNumber.activeForeground": "#a6a6b0",
-      "editor.selectionBackground": "#2a3350",
-      "editor.lineHighlightBackground": "#15151b",
-      "editorCursor.foreground": "#d97757",
-      "editorIndentGuide.background1": "#20202a",
-      "editorWidget.background": "#15151b",
-      "editorWidget.border": "#26262f",
-      "editorGutter.background": "#0c0c0f",
-      "scrollbarSlider.background": "#26262f88",
-    },
-  });
-}
 
 interface Props {
   path: string;
@@ -115,7 +56,7 @@ export default function MonacoView({
 
   // Create the editor exactly once.
   useEffect(() => {
-    ensureTheme();
+    setupMonaco();
     const ed = monaco.editor.create(hostRef.current!, {
       theme: "tosse-dark",
       automaticLayout: true, // tracks our resizable panel via a ResizeObserver

@@ -98,11 +98,25 @@ interface EditorState {
   // when both are open.
   open: boolean;
   terminalOpen: boolean;
+  /** Git panel shown — a 3rd region mode that takes over the side region while on. */
+  gitOpen: boolean;
   orientation: SplitOrientation;
+  /** Orientation of the Git workspace, independent of the editor/terminal one:
+   *  `column` = horizontal divider (conv+diff on top, history/files strip below);
+   *  `row` = vertical divider (conv left, the git region on the right). */
+  gitOrientation: SplitOrientation;
   /** Fraction of the main area given to the side region (0..1). */
   editorFraction: number;
   /** Fraction of the side region given to the terminal when both panes are open (0..1). */
   terminalFraction: number;
+  /** Git workspace 2x2 fractions (persisted). Height of the bottom history/files
+   *  strip, width of the minimized conversation column, and width of the history
+   *  pane within the strip — each 0..1. */
+  gitStripFraction: number;
+  gitConvFraction: number;
+  gitStripLeftFraction: number;
+  /** Width fraction of the git-history column in the 3-column (row) layout. */
+  gitHistFraction: number;
   /** File-tree column width, px. */
   treeWidth: number;
   /** The file tree is hidden (focus-on-files mode); the editor still shows. */
@@ -116,9 +130,16 @@ interface EditorState {
   setOpen: (open: boolean) => void;
   toggleTerminal: () => void;
   setTerminalOpen: (open: boolean) => void;
+  toggleGit: () => void;
+  setGitOpen: (open: boolean) => void;
   setOrientation: (o: SplitOrientation) => void;
+  setGitOrientation: (o: SplitOrientation) => void;
   setEditorFraction: (f: number) => void;
   setTerminalFraction: (f: number) => void;
+  setGitStripFraction: (f: number) => void;
+  setGitConvFraction: (f: number) => void;
+  setGitStripLeftFraction: (f: number) => void;
+  setGitHistFraction: (f: number) => void;
   setTreeWidth: (w: number) => void;
   setTreeCollapsed: (collapsed: boolean) => void;
   toggleTree: () => void;
@@ -175,9 +196,15 @@ const LS_KEY = "tosse:editor";
 interface LayoutPrefs {
   open: boolean;
   terminalOpen: boolean;
+  gitOpen: boolean;
   orientation: SplitOrientation;
+  gitOrientation: SplitOrientation;
   editorFraction: number;
   terminalFraction: number;
+  gitStripFraction: number;
+  gitConvFraction: number;
+  gitStripLeftFraction: number;
+  gitHistFraction: number;
   treeWidth: number;
   /** The file tree is collapsed (focus-on-files mode) — the editor still shows. */
   treeCollapsed: boolean;
@@ -186,9 +213,15 @@ interface LayoutPrefs {
 const DEFAULT_LAYOUT: LayoutPrefs = {
   open: false,
   terminalOpen: false,
+  gitOpen: false,
   orientation: "row",
+  gitOrientation: "row",
   editorFraction: 0.42,
   terminalFraction: 0.4,
+  gitStripFraction: 0.25,
+  gitConvFraction: 0.4,
+  gitStripLeftFraction: 0.5,
+  gitHistFraction: 0.3,
   treeWidth: 220,
   treeCollapsed: false,
 };
@@ -202,11 +235,23 @@ function loadLayout(): LayoutPrefs {
     return {
       open: typeof p.open === "boolean" ? p.open : DEFAULT_LAYOUT.open,
       terminalOpen: typeof p.terminalOpen === "boolean" ? p.terminalOpen : DEFAULT_LAYOUT.terminalOpen,
+      gitOpen: typeof p.gitOpen === "boolean" ? p.gitOpen : DEFAULT_LAYOUT.gitOpen,
       orientation: p.orientation === "column" ? "column" : "row",
+      gitOrientation: p.gitOrientation === "column" ? "column" : "row",
       editorFraction:
         typeof p.editorFraction === "number" ? clamp(p.editorFraction, 0.15, 0.85) : DEFAULT_LAYOUT.editorFraction,
       terminalFraction:
         typeof p.terminalFraction === "number" ? clamp(p.terminalFraction, 0.15, 0.85) : DEFAULT_LAYOUT.terminalFraction,
+      // Clamp bounds MUST match the setters below (the gatekeeper for what gets
+      // persisted), else a saved split jumps on reload.
+      gitStripFraction:
+        typeof p.gitStripFraction === "number" ? clamp(p.gitStripFraction, 0.12, 0.6) : DEFAULT_LAYOUT.gitStripFraction,
+      gitConvFraction:
+        typeof p.gitConvFraction === "number" ? clamp(p.gitConvFraction, 0.15, 0.6) : DEFAULT_LAYOUT.gitConvFraction,
+      gitStripLeftFraction:
+        typeof p.gitStripLeftFraction === "number" ? clamp(p.gitStripLeftFraction, 0.2, 0.8) : DEFAULT_LAYOUT.gitStripLeftFraction,
+      gitHistFraction:
+        typeof p.gitHistFraction === "number" ? clamp(p.gitHistFraction, 0.18, 0.5) : DEFAULT_LAYOUT.gitHistFraction,
       treeWidth: typeof p.treeWidth === "number" ? clamp(p.treeWidth, 120, 600) : DEFAULT_LAYOUT.treeWidth,
       treeCollapsed: typeof p.treeCollapsed === "boolean" ? p.treeCollapsed : DEFAULT_LAYOUT.treeCollapsed,
     };
@@ -220,9 +265,15 @@ function saveLayout(s: EditorState): void {
   const prefs: LayoutPrefs = {
     open: s.open,
     terminalOpen: s.terminalOpen,
+    gitOpen: s.gitOpen,
     orientation: s.orientation,
+    gitOrientation: s.gitOrientation,
     editorFraction: s.editorFraction,
     terminalFraction: s.terminalFraction,
+    gitStripFraction: s.gitStripFraction,
+    gitConvFraction: s.gitConvFraction,
+    gitStripLeftFraction: s.gitStripLeftFraction,
+    gitHistFraction: s.gitHistFraction,
     treeWidth: s.treeWidth,
     treeCollapsed: s.treeCollapsed,
   };
@@ -347,13 +398,34 @@ export const useEditorStore = create<EditorState>()((set, get) => {
     ...layout,
     byConv: {},
 
-    toggleOpen: () => withLayout({ open: !get().open }),
-    setOpen: (open) => withLayout({ open }),
-    toggleTerminal: () => withLayout({ terminalOpen: !get().terminalOpen }),
-    setTerminalOpen: (terminalOpen) => withLayout({ terminalOpen }),
+    // Git is a mutually-exclusive mode: opening it hides the editor/terminal
+    // region, and opening the editor or terminal closes Git — so a lit toggle
+    // never contradicts what's actually shown. Editor + terminal still coexist.
+    toggleOpen: () => {
+      const open = !get().open;
+      withLayout(open ? { open: true, gitOpen: false } : { open: false });
+    },
+    setOpen: (open) => withLayout(open ? { open: true, gitOpen: false } : { open: false }),
+    toggleTerminal: () => {
+      const terminalOpen = !get().terminalOpen;
+      withLayout(terminalOpen ? { terminalOpen: true, gitOpen: false } : { terminalOpen: false });
+    },
+    setTerminalOpen: (terminalOpen) =>
+      withLayout(terminalOpen ? { terminalOpen: true, gitOpen: false } : { terminalOpen: false }),
+    toggleGit: () => {
+      const gitOpen = !get().gitOpen;
+      withLayout(gitOpen ? { gitOpen: true, open: false, terminalOpen: false } : { gitOpen: false });
+    },
+    setGitOpen: (gitOpen) =>
+      withLayout(gitOpen ? { gitOpen: true, open: false, terminalOpen: false } : { gitOpen: false }),
     setOrientation: (orientation) => withLayout({ orientation }),
+    setGitOrientation: (gitOrientation) => withLayout({ gitOrientation }),
     setEditorFraction: (f) => withLayout({ editorFraction: clamp(f, 0.15, 0.85) }),
     setTerminalFraction: (f) => withLayout({ terminalFraction: clamp(f, 0.15, 0.85) }),
+    setGitStripFraction: (f) => withLayout({ gitStripFraction: clamp(f, 0.12, 0.6) }),
+    setGitConvFraction: (f) => withLayout({ gitConvFraction: clamp(f, 0.15, 0.6) }),
+    setGitStripLeftFraction: (f) => withLayout({ gitStripLeftFraction: clamp(f, 0.2, 0.8) }),
+    setGitHistFraction: (f) => withLayout({ gitHistFraction: clamp(f, 0.18, 0.5) }),
     setTreeWidth: (w) => withLayout({ treeWidth: clamp(w, 120, 600) }),
     setTreeCollapsed: (treeCollapsed) => withLayout({ treeCollapsed }),
     toggleTree: () => withLayout({ treeCollapsed: !get().treeCollapsed }),
@@ -679,9 +751,15 @@ export const useEditorLayout = () =>
     useShallow((s) => ({
       open: s.open,
       terminalOpen: s.terminalOpen,
+      gitOpen: s.gitOpen,
       orientation: s.orientation,
+      gitOrientation: s.gitOrientation,
       editorFraction: s.editorFraction,
       terminalFraction: s.terminalFraction,
+      gitStripFraction: s.gitStripFraction,
+      gitConvFraction: s.gitConvFraction,
+      gitStripLeftFraction: s.gitStripLeftFraction,
+      gitHistFraction: s.gitHistFraction,
       treeWidth: s.treeWidth,
     })),
   );
