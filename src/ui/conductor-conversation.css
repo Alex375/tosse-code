@@ -15,6 +15,9 @@
 .cv-repo-add { width:18px; height:18px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease; }
 .cv-repo:hover .cv-repo-add { opacity:1; }
 .cv-repo-add:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+.cv-repo-ext { width:18px; height:18px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease; }
+.cv-repo:hover .cv-repo-ext { opacity:1; }
+.cv-repo-ext:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
 .cv-repo-c { font-family:var(--wf-mono); font-size:10px; letter-spacing:0; color:var(--wf-tx-lo); background:var(--wf-panel-3); border-radius:5px; padding:1px 6px; }
 .cv-repo-empty { font-size:11px; color:var(--wf-tx-xlo); padding:2px 9px 5px 25px; font-style:italic; }
 .cv-sess-list { display:flex; flex-direction:column; gap:1px; padding:2px 6px; }

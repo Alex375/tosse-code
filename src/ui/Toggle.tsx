@@ -6,12 +6,15 @@ export function Toggle({
   checked,
   onChange,
   label,
+  title,
   disabled,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   /** Accessible name when there's no visible <label> tied to it. */
   label?: string;
+  /** Optional hover tooltip (e.g. to flag a non-obvious effect/scope). */
+  title?: string;
   disabled?: boolean;
 }) {
   return (
@@ -20,6 +23,7 @@ export function Toggle({
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      title={title}
       disabled={disabled}
       className={styles.switch}
       data-on={checked ? "" : undefined}

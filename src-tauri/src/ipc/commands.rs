@@ -403,6 +403,76 @@ pub async fn stop_task(
     handle.stop_task(task_id).await.map_err(|e| e.to_string())
 }
 
+/// Query a running session's LIVE MCP server status (real connection state +
+/// tools per server) via the `mcp_status` control request — the authoritative
+/// source the conversation view uses (NOT the stale `system/init` snapshot).
+/// Errors with "unknown session" when the conversation has no live `claude`
+/// process; the UI then falls back to the configured view.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_status(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+) -> Result<Vec<crate::supervisor::model::McpServerLive>, String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_status().await.map_err(|e| e.to_string())
+}
+
+/// Enable/disable a live MCP server in a running session (`mcp_toggle`). Optimistic
+/// — returns once sent; the UI re-polls `mcp_status` to reflect the new state, and a
+/// CLI rejection surfaces as a timeline control error.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_toggle(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    server_name: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_toggle(server_name, enabled).await.map_err(|e| e.to_string())
+}
+
+/// Reconnect a live MCP server (`mcp_reconnect`) — after a failure or once auth is
+/// granted. Optimistic; the UI re-polls `mcp_status`.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_reconnect(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    server_name: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_reconnect(server_name).await.map_err(|e| e.to_string())
+}
+
+/// Forget a live MCP server's stored OAuth credentials (`mcp_clear_auth`).
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_clear_auth(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    server_name: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_clear_auth(server_name).await.map_err(|e| e.to_string())
+}
+
+/// Start the OAuth flow for a live MCP server (`mcp_authenticate`). Returns the
+/// `authUrl` to open in the browser (the front opens it) and whether the user must
+/// finish a manual callback. Errors with "unknown session" when there's no live
+/// process.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_authenticate(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    server_name: String,
+) -> Result<crate::supervisor::model::McpAuthResult, String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_authenticate(server_name).await.map_err(|e| e.to_string())
+}
+
 /// Tear a session down and remove it from the registry.
 #[tauri::command]
 #[specta::specta]
@@ -851,6 +921,53 @@ pub fn terminal_close(
 ) -> Result<(), String> {
     terminals.close(&id);
     Ok(())
+}
+
+// ---- Extensions (MCP / plugins / skills / sub-agents) ----------------------
+//
+// Single boundary to [`crate::extensions`] — the only service that reads Claude's
+// on-disk config. Returns the *configured* picture for a repo across scopes; the
+// UI merges in live connection status from the running session's `system/init`.
+
+/// List the configured extensions visible to the repository (or worktree) at
+/// `repo_path`: MCP servers (+ enabled state), plugins, skills, sub-agents,
+/// each tagged with its scope. Best-effort — never errors on missing config; the
+/// blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_extensions(
+    repo_path: String,
+) -> Result<crate::extensions::ExtensionsSnapshot, String> {
+    tokio::task::spawn_blocking(move || crate::extensions::list_extensions(&repo_path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Enable or disable a plugin (by id `<plugin>@<marketplace>`) in the user's
+/// `~/.claude/settings.json`. USER-GLOBAL toggle (not per-repo); takes effect on
+/// the next (re)start of a conversation. The write is atomic and preserves every
+/// other key. The blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_plugin_enabled(plugin_id: String, enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::extensions::set_plugin_enabled(&plugin_id, enabled))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Everything a single plugin provides (skills / sub-agents / MCP servers) for the
+/// per-plugin explorer — scanned regardless of the plugin's enabled state so a
+/// disabled plugin stays browsable. `repo_path` selects the install relevant to the
+/// repo. Best-effort; the blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_plugin_contents(
+    repo_path: String,
+    plugin_id: String,
+) -> Result<crate::extensions::PluginContents, String> {
+    tokio::task::spawn_blocking(move || crate::extensions::list_plugin_contents(&repo_path, &plugin_id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ---- Persistence (conversation metadata) ----------------------------------

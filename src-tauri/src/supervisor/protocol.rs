@@ -197,9 +197,12 @@ pub struct TaskUsage {
 
 /// `system/init` — the session bootstrap message.
 ///
-/// Only the fields the supervisor needs early are typed; the CLI sends many
-/// more (agents, skills, plugins, mcp_servers, slash_commands, memory_paths, …)
-/// which serde ignores. Field casing on the wire is mixed, hence the renames.
+/// Only the fields the supervisor needs are typed; the CLI sends many more (agents,
+/// skills, plugins, mcp_servers, slash_commands, memory_paths, …) which serde
+/// ignores. The configured picture is read from on-disk config (see
+/// [`crate::extensions`]); the live MCP status is queried on demand via the
+/// `mcp_status` control request (NOT the init snapshot, which shows servers stuck
+/// at `pending`). Field casing on the wire is mixed, hence the renames.
 #[derive(Debug, Clone, Deserialize)]
 pub struct InitMsg {
     pub session_id: Option<String>,

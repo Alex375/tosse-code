@@ -59,6 +59,49 @@ pub struct SessionStatePayload {
     pub rate_limit: Option<RateLimitSnapshot>,
 }
 
+/// Live status of one MCP server, queried on demand from the running session via
+/// the `mcp_status` control request (NOT the `system/init` snapshot, which is
+/// point-in-time and shows servers stuck at `pending`). This is the authoritative
+/// real-time picture the conversation view shows — including claude.ai-hosted
+/// connectors that only exist in the live session. Distinct from the *configured*
+/// on-disk [`crate::extensions::McpServerInfo`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct McpServerLive {
+    /// Server name as the session reports it (`plugin:<p>:<s>` for a plugin server,
+    /// `claude.ai <Name>` for a connector).
+    pub name: String,
+    /// `connected` / `disconnected` / `pending` / `checking_status` / `failed` /
+    /// `needs-auth` / `disabled`.
+    pub status: String,
+    /// Where it comes from: `user` / `project` / `local` / `dynamic` (plugin) /
+    /// `claudeai` (account connector). `None` if absent.
+    pub scope: Option<String>,
+    /// Transport from the server config (`stdio` / `http` / `sse`).
+    pub transport: Option<String>,
+    /// Launch command for a stdio server (args omitted — may carry secrets).
+    pub command: Option<String>,
+    /// Endpoint for an http/sse server.
+    pub url: Option<String>,
+    /// Number of tools the server currently exposes (0 unless connected).
+    pub tool_count: u32,
+    /// Names of the tools the server exposes (empty unless connected) — shown when
+    /// the user expands a server row.
+    pub tools: Vec<String>,
+}
+
+/// Result of an `mcp_authenticate` control request (OAuth start for an http/sse
+/// server). The binary returns an `authUrl` to open in the browser; the loopback
+/// redirect is handled by the CLI itself in the common case. `requires_user_action`
+/// is true when the flow needs the user to paste back a callback URL (the rarer
+/// non-loopback path — surfaced to the UI). `error` carries a rejection message
+/// (auth not supported, server unknown, …) without it being a fatal session error.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct McpAuthResult {
+    pub auth_url: Option<String>,
+    pub requires_user_action: bool,
+    pub error: Option<String>,
+}
+
 /// Context-meter seed for a conversation, read from its on-disk transcript so the
 /// ring shows the real fill the moment a conversation is opened / its stream turned
 /// on — before the first new turn streams live usage. `context_window` is the model's
