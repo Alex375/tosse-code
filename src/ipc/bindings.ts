@@ -227,6 +227,21 @@ async interruptSession(session: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Query a running session's LIVE MCP server status (real connection state +
+ * tools per server) via the `mcp_status` control request — the authoritative
+ * source the conversation view uses (NOT the stale `system/init` snapshot).
+ * Errors with "unknown session" when the conversation has no live `claude`
+ * process; the UI then falls back to the configured view.
+ */
+async mcpStatus(session: string) : Promise<Result<McpServerLive[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_status", { session }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tear a session down and remove it from the registry.
  */
 async stopSession(session: string) : Promise<Result<null, string>> {
@@ -326,6 +341,34 @@ async createWorktree(repoPath: string, branch: string, baseRef: string | null, n
 async removeWorktree(repoPath: string, worktreePath: string, force: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("remove_worktree", { repoPath, worktreePath, force }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List the configured extensions visible to the repository (or worktree) at
+ * `repo_path`: MCP servers (+ enabled state), plugins, skills, sub-agents,
+ * each tagged with its scope. Best-effort — never errors on missing config; the
+ * blocking file IO runs off the async runtime.
+ */
+async listExtensions(repoPath: string) : Promise<Result<ExtensionsSnapshot, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_extensions", { repoPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable or disable a plugin (by id `<plugin>@<marketplace>`) in the user's
+ * `~/.claude/settings.json`. USER-GLOBAL toggle (not per-repo); takes effect on
+ * the next (re)start of a conversation. The write is atomic and preserves every
+ * other key. The blocking file IO runs off the async runtime.
+ */
+async setPluginEnabled(pluginId: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_plugin_enabled", { pluginId, enabled }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -569,6 +612,10 @@ tickEvent: "tick-event"
 /** user-defined types **/
 
 /**
+ * One sub-agent available to a repository (file-based or plugin-provided).
+ */
+export type AgentInfo = { name: string; description: string | null; model: string | null; scope: ExtScope; source: string | null }
+/**
  * A normalized background task, keyed by `task_id` and updated in place as its
  * `task_*` lifecycle events arrive. The single model behind the (future) sub-agent /
  * workflow / Monitor / background-Bash views — the rich per-producer detail (full
@@ -792,6 +839,33 @@ model: string | null; effort: string | null; ultracode: boolean; permission_mode
  */
 pending_reminder: string | null }
 /**
+ * Where a configuration entry originates. Drives the "by scope" grouping in the
+ * UI. Serialized snake_case so the TS union is `"user" | "project" | …`.
+ */
+export type ExtScope = 
+/**
+ * Configured globally for the user (`~/.claude*`).
+ */
+"user" | 
+/**
+ * Shared by the repository (committed `.mcp.json` / `.claude/`), or the
+ * project section of `~/.claude.json`.
+ */
+"project" | 
+/**
+ * Bound to this project but kept local (not shared) — `settings.local.json`
+ * or a `local`-scoped plugin install.
+ */
+"local" | 
+/**
+ * Provided by an installed plugin.
+ */
+"plugin"
+/**
+ * The full configured picture for one repository, across all scopes.
+ */
+export type ExtensionsSnapshot = { mcp_servers: McpServerInfo[]; plugins: PluginInfo[]; skills: SkillInfo[]; agents: AgentInfo[] }
+/**
  * A file's contents plus the guards the editor needs: `too_large` (skipped, over
  * [`MAX_FILE_BYTES`]) and `binary` (a NUL byte was found — not shown as text).
  * In both guard cases `content` is empty.
@@ -828,6 +902,73 @@ export type ImageContent = { path: string;
  */
 data_base64: string; too_large: boolean; size: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
+/**
+ * One MCP server visible to a repository, with its resolved enabled state. The
+ * live connection status (connected / needs-auth / …) is NOT here — it comes
+ * from the running session's `system/init` and is merged by the UI.
+ */
+export type McpServerInfo = { name: string; scope: ExtScope; 
+/**
+ * `"stdio"` | `"http"` | `"sse"` when declared (stdio is the implicit default).
+ */
+transport: string | null; 
+/**
+ * Launch command for a stdio server (e.g. `npx`, `railway`). Args omitted
+ * (may carry secrets).
+ */
+command: string | null; 
+/**
+ * Endpoint for an http/sse server, with any query string stripped.
+ */
+url: string | null; 
+/**
+ * Plugin id (`<plugin>@<marketplace>`) when `scope == Plugin`.
+ */
+source: string | null; 
+/**
+ * Resolved on-disk enabled state for this repo (project toggles applied).
+ */
+enabled: boolean }
+/**
+ * Live status of one MCP server, queried on demand from the running session via
+ * the `mcp_status` control request (NOT the `system/init` snapshot, which is
+ * point-in-time and shows servers stuck at `pending`). This is the authoritative
+ * real-time picture the conversation view shows — including claude.ai-hosted
+ * connectors that only exist in the live session. Distinct from the *configured*
+ * on-disk [`crate::extensions::McpServerInfo`].
+ */
+export type McpServerLive = { 
+/**
+ * Server name as the session reports it (`plugin:<p>:<s>` for a plugin server,
+ * `claude.ai <Name>` for a connector).
+ */
+name: string; 
+/**
+ * `connected` / `disconnected` / `pending` / `checking_status` / `failed` /
+ * `needs-auth` / `disabled`.
+ */
+status: string; 
+/**
+ * Where it comes from: `user` / `project` / `local` / `dynamic` (plugin) /
+ * `claudeai` (account connector). `None` if absent.
+ */
+scope: string | null; 
+/**
+ * Transport from the server config (`stdio` / `http` / `sse`).
+ */
+transport: string | null; 
+/**
+ * Launch command for a stdio server (args omitted — may carry secrets).
+ */
+command: string | null; 
+/**
+ * Endpoint for an http/sse server.
+ */
+url: string | null; 
+/**
+ * Number of tools the server currently exposes (0 unless connected).
+ */
+tool_count: number }
 /**
  * One authoritative content block of an assistant message.
  */
@@ -877,6 +1018,20 @@ active_id: string | null }
  * A window is `None` when the endpoint did not report it.
  */
 export type PlanUsage = { five_hour: UsageWindow | null; seven_day: UsageWindow | null }
+/**
+ * One installed plugin relevant to a repository (user-global, or project/local
+ * scoped to this repo).
+ */
+export type PluginInfo = { 
+/**
+ * `<plugin>@<marketplace>` — the key used in `enabledPlugins`.
+ */
+id: string; name: string; marketplace: string; version: string | null; description: string | null; enabled: boolean; scope: ExtScope; 
+/**
+ * What the plugin provides (scanned from its cache dir), regardless of
+ * enabled state — so the UI can show "5 skills" even when toggled off.
+ */
+skill_count: number; agent_count: number; command_count: number; mcp_count: number }
 /**
  * Typed return value of `ping`. Proves React -> Rust (typed command).
  */
@@ -1016,6 +1171,14 @@ export type SessionTaskEvent = { session: string; task: BackgroundTask }
  * fresher title.
  */
 export type SessionTitleEvent = { session: string; title: string; seq: number }
+/**
+ * One skill available to a repository (file-based or plugin-provided).
+ */
+export type SkillInfo = { name: string; description: string | null; scope: ExtScope; 
+/**
+ * Plugin id when plugin-provided; `None` for a user/project file skill.
+ */
+source: string | null }
 /**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code

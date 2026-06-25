@@ -16,11 +16,13 @@ use std::process::ExitStatus;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use super::assembler::Assembler;
 use super::control::{self, InboundControl, PermissionDecision, PermissionMode};
-use super::model::{ConversationItem, PermissionRequestPayload, SessionEmitter, SessionEvent};
+use super::model::{
+    ConversationItem, McpServerLive, PermissionRequestPayload, SessionEmitter, SessionEvent,
+};
 use super::protocol::CliMessage;
 use super::transport::{self, SpawnConfig, Transport, TransportError};
 
@@ -49,6 +51,9 @@ pub enum SessionCommand {
     /// Stop a single background task (a `run_in_background` Bash / Monitor /
     /// sub-agent) by its `task_id`, without ending the turn or the session.
     StopTask(String),
+    /// Query the session's live MCP server status; the reply (the parsed server
+    /// list) is delivered back over the oneshot once the CLI answers.
+    McpStatus(oneshot::Sender<Vec<McpServerLive>>),
     Shutdown,
 }
 
@@ -174,6 +179,19 @@ impl SessionHandle {
         self.send(SessionCommand::StopTask(task_id)).await
     }
 
+    /// Query the live MCP server status (connection state + tools per server),
+    /// queried from the running process via the `mcp_status` control request. The
+    /// wait is bounded so a non-answering CLI can't hang the caller; a dropped reply
+    /// (session ended) or a timeout surfaces as [`SessionError::Closed`].
+    pub async fn mcp_status(&self) -> Result<Vec<McpServerLive>, SessionError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(SessionCommand::McpStatus(tx)).await?;
+        match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+            Ok(Ok(servers)) => Ok(servers),
+            _ => Err(SessionError::Closed),
+        }
+    }
+
     pub async fn shutdown(&self) -> Result<(), SessionError> {
         self.send(SessionCommand::Shutdown).await
     }
@@ -273,6 +291,9 @@ struct SessionCore {
     /// Whether to restore the ultracode flag after init (the `--effort` spawn flag
     /// sets the effort level but not the separate ultracode flag).
     restore_ultracode: bool,
+    /// In-flight `mcp_status` queries, keyed by their outbound `request_id`. The
+    /// matching `control_response` fulfills (and removes) the reply channel.
+    pending_mcp: HashMap<String, oneshot::Sender<Vec<McpServerLive>>>,
     next_req: u64,
     /// Outbound JSON lines (→ the process stdin in production, → a test channel
     /// in unit tests).
@@ -304,6 +325,7 @@ impl SessionCore {
             pending_control: HashMap::new(),
             init_request_id: None,
             restore_ultracode: initial.ultracode,
+            pending_mcp: HashMap::new(),
             next_req: 0,
             outbound,
         }
@@ -476,6 +498,12 @@ impl SessionCore {
             eprintln!("[session {}] unparseable control_response (no request_id)", self.id);
             return;
         };
+        // An `mcp_status` reply we are awaiting: fulfill its channel and stop.
+        if let Some(reply) = self.pending_mcp.remove(&resp.request_id) {
+            // Ignore a closed receiver (caller gave up / timed out).
+            let _ = reply.send(control::parse_mcp_status(&v));
+            return;
+        }
         // The initialize handshake completes exactly once.
         if Some(resp.request_id.as_str()) == self.init_request_id.as_deref() {
             self.init_request_id = None;
@@ -739,6 +767,11 @@ impl SessionCore {
                 self.send_tracked(PendingControl::StopTask, |rid| {
                     control::stop_task_request(rid, &task_id)
                 });
+            }
+            SessionCommand::McpStatus(reply) => {
+                let rid = self.next_request_id();
+                self.pending_mcp.insert(rid.clone(), reply);
+                self.send(control::mcp_status_request(&rid));
             }
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown => {}
@@ -1258,6 +1291,42 @@ mod tests {
             !drain(&mut events).iter().any(|e| matches!(e, SessionEvent::Commands(_))),
             "the initialize handshake should be consumed exactly once"
         );
+    }
+
+    /// ACCEPTANCE (deterministic): an `McpStatus` command writes an `mcp_status`
+    /// control request, and the matching `control_response` is parsed and delivered
+    /// back over the reply channel (request/response correlation by request_id).
+    #[test]
+    fn mcp_status_round_trips_request_and_reply() {
+        let (mut core, _events, mut out) = test_core();
+        let (tx, mut rx) = oneshot::channel();
+
+        core.on_command(SessionCommand::McpStatus(tx));
+        let req = drain(&mut out)
+            .into_iter()
+            .find(|l| l["request"]["subtype"] == json!("mcp_status"))
+            .expect("an mcp_status control_request should be written");
+        let rid = req["request_id"].as_str().expect("request has an id").to_string();
+
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": rid,
+                    "response": { "mcpServers": [
+                        { "name": "playwright", "status": "connected", "scope": "user", "tools": [{ "name": "x" }] }
+                    ] }
+                }
+            }))
+            .unwrap(),
+        );
+
+        let servers = rx.try_recv().expect("the reply should be delivered");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "playwright");
+        assert_eq!(servers[0].status, "connected");
+        assert_eq!(servers[0].tool_count, 1);
     }
 
     /// LIVE end-to-end: spawn a real `claude`, run a tool to completion. In this

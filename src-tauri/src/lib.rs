@@ -1,3 +1,4 @@
+pub mod extensions;
 pub mod fs;
 pub mod git;
 mod ipc;
@@ -8,14 +9,14 @@ pub mod usage;
 
 use ipc::commands::{
     answer_permission, create_worktree, delete_conversation, delete_repo, fetch_slash_commands,
-    generate_conversation_title, get_plan_usage, interrupt_session, list_worktrees,
+    generate_conversation_title, get_plan_usage, interrupt_session, list_extensions, list_worktrees,
     load_persisted_state, load_session_context, load_session_history, load_subagent_transcript,
-    load_workflow_run, open_in_terminal, path_exists, ping, read_dir, read_file, read_image,
-    read_task_output, remove_worktree, request_user_attention, send_message,
-    set_active_conversation, set_effort_level, set_model, set_permission_mode, set_ultracode,
-    spawn_session, stop_session, stop_task, terminal_close, terminal_open, terminal_resize,
-    terminal_write, unwatch_dir, upsert_conversation, upsert_repo, watch_dir, wipe_all_data,
-    worktree_status, write_file, Sessions,
+    load_workflow_run, mcp_status, open_in_terminal, path_exists, ping, read_dir, read_file,
+    read_image, read_task_output, remove_worktree, request_user_attention, send_message,
+    set_active_conversation, set_effort_level, set_model, set_permission_mode, set_plugin_enabled,
+    set_ultracode, spawn_session, stop_session, stop_task, terminal_close, terminal_open,
+    terminal_resize, terminal_write, unwatch_dir, upsert_conversation, upsert_repo, watch_dir,
+    wipe_all_data, worktree_status, write_file, Sessions,
 };
 use ipc::events::{
     FsChangeEvent, FsWatchErrorEvent, SessionCommandsEvent, SessionMessageEvent,
@@ -46,6 +47,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             set_ultracode,
             generate_conversation_title,
             interrupt_session,
+            mcp_status,
             stop_session,
             stop_task,
             open_in_terminal,
@@ -54,6 +56,8 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             worktree_status,
             create_worktree,
             remove_worktree,
+            list_extensions,
+            set_plugin_enabled,
             path_exists,
             read_dir,
             read_file,

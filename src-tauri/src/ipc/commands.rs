@@ -403,6 +403,21 @@ pub async fn stop_task(
     handle.stop_task(task_id).await.map_err(|e| e.to_string())
 }
 
+/// Query a running session's LIVE MCP server status (real connection state +
+/// tools per server) via the `mcp_status` control request — the authoritative
+/// source the conversation view uses (NOT the stale `system/init` snapshot).
+/// Errors with "unknown session" when the conversation has no live `claude`
+/// process; the UI then falls back to the configured view.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_status(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+) -> Result<Vec<crate::supervisor::model::McpServerLive>, String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_status().await.map_err(|e| e.to_string())
+}
+
 /// Tear a session down and remove it from the registry.
 #[tauri::command]
 #[specta::specta]
@@ -723,6 +738,38 @@ pub fn terminal_close(
 ) -> Result<(), String> {
     terminals.close(&id);
     Ok(())
+}
+
+// ---- Extensions (MCP / plugins / skills / sub-agents) ----------------------
+//
+// Single boundary to [`crate::extensions`] — the only service that reads Claude's
+// on-disk config. Returns the *configured* picture for a repo across scopes; the
+// UI merges in live connection status from the running session's `system/init`.
+
+/// List the configured extensions visible to the repository (or worktree) at
+/// `repo_path`: MCP servers (+ enabled state), plugins, skills, sub-agents,
+/// each tagged with its scope. Best-effort — never errors on missing config; the
+/// blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_extensions(
+    repo_path: String,
+) -> Result<crate::extensions::ExtensionsSnapshot, String> {
+    tokio::task::spawn_blocking(move || crate::extensions::list_extensions(&repo_path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Enable or disable a plugin (by id `<plugin>@<marketplace>`) in the user's
+/// `~/.claude/settings.json`. USER-GLOBAL toggle (not per-repo); takes effect on
+/// the next (re)start of a conversation. The write is atomic and preserves every
+/// other key. The blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_plugin_enabled(plugin_id: String, enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::extensions::set_plugin_enabled(&plugin_id, enabled))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ---- Persistence (conversation metadata) ----------------------------------

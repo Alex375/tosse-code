@@ -7,6 +7,7 @@ import { WorktreeIndicator } from "./features/git/WorktreeIndicator";
 import { WorktreeManager } from "./features/git/WorktreeManager";
 import { EditorToggle } from "./features/editor/EditorToggle";
 import { FlightDeck } from "./features/flightdeck/FlightDeck";
+import { ExtensionsManager } from "./features/extensions/ExtensionsManager";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { AppErrorBanner } from "./ui/AppErrorBanner";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
@@ -113,6 +114,8 @@ export default function App() {
       )}
       {/* Mounted once, globally: opens for whichever repo the indicator/badge asks. */}
       <WorktreeManager />
+      {/* Idem: the extensions manager, opened per repo (sidebar) or per conversation (composer). */}
+      <ExtensionsManager />
     </Win>
   );
 }

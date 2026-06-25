@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
 
-use super::model::SlashCommand;
+use super::model::{McpServerLive, SlashCommand};
 
 /// Permission mode, switched at runtime via `set_permission_mode` (spec §4.5).
 /// The wire tokens are exactly these camelCase strings.
@@ -337,6 +337,60 @@ pub fn parse_generate_session_title(line: &Value) -> Option<String> {
     (!title.is_empty()).then(|| title.to_string())
 }
 
+/// `mcp_status` — query the LIVE connection status of every MCP server the
+/// session knows. This is what the official extension's `Query.mcpServerStatus()`
+/// sends; the response carries the real per-server status (connected / needs-auth
+/// / failed / …), unlike the point-in-time `system/init.mcp_servers` snapshot.
+/// (Subtype inferred from the minified extension bundle — verified live against
+/// the binary before being relied upon.)
+pub fn mcp_status_request(request_id: &str) -> Value {
+    control_request(request_id, json!({ "subtype": "mcp_status" }))
+}
+
+/// Parse an `mcp_status` control response into the live server list. The array
+/// lives at `response.response.mcpServers` (doubly nested, like initialize's
+/// commands — verified live against the binary). Each entry carries `name`,
+/// `status`, `scope`, a `config` object (transport/command/url), and a `tools`
+/// array when connected. Secrets in `config` (args/env/headers) are NOT surfaced.
+pub fn parse_mcp_status(line: &Value) -> Vec<McpServerLive> {
+    let Some(arr) = line
+        .get("response")
+        .and_then(|r| r.get("response"))
+        .and_then(|r| r.get("mcpServers"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|s| {
+            let name = s.get("name").and_then(Value::as_str)?.to_string();
+            let status = s
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            let scope = s.get("scope").and_then(Value::as_str).map(str::to_string);
+            let config = s.get("config");
+            let field = |k: &str| {
+                config
+                    .and_then(|c| c.get(k))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            };
+            let tool_count = s.get("tools").and_then(Value::as_array).map_or(0, Vec::len) as u32;
+            Some(McpServerLive {
+                name,
+                status,
+                scope,
+                transport: field("type"),
+                command: field("command"),
+                url: field("url"),
+                tool_count,
+            })
+        })
+        .collect()
+}
+
 /// A successful `control_response` carrying a permission ALLOW result (spec §5.2).
 /// Note the doubly-nested `response.response` and the camelCase result fields.
 pub fn permission_allow_response(request_id: &str, tool_use_id: &str, updated_input: Value) -> Value {
@@ -591,5 +645,120 @@ mod tests {
         assert_eq!(r["request_id"], json!("s-1"));
         assert_eq!(r["request"]["subtype"], json!("stop_task"));
         assert_eq!(r["request"]["task_id"], json!("tk_abc"));
+    }
+
+    #[test]
+    fn parses_mcp_status_response() {
+        // Shaped exactly like a real `mcp_status` control_response (verified live):
+        // doubly-nested `response.response.mcpServers`, per-server config + tools.
+        let line = json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "tosse-7",
+                "response": {
+                    "mcpServers": [
+                        {
+                            "name": "playwright",
+                            "status": "connected",
+                            "scope": "user",
+                            "config": { "type": "stdio", "command": "npx", "args": ["-y", "@playwright/mcp@latest"] },
+                            "tools": [{ "name": "browser_close" }, { "name": "browser_click" }]
+                        },
+                        {
+                            "name": "claude.ai Google Drive",
+                            "status": "needs-auth",
+                            "scope": "claudeai"
+                        }
+                    ]
+                }
+            }
+        });
+        let servers = parse_mcp_status(&line);
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].name, "playwright");
+        assert_eq!(servers[0].status, "connected");
+        assert_eq!(servers[0].scope.as_deref(), Some("user"));
+        assert_eq!(servers[0].transport.as_deref(), Some("stdio"));
+        assert_eq!(servers[0].command.as_deref(), Some("npx"));
+        assert_eq!(servers[0].tool_count, 2);
+        assert_eq!(servers[1].name, "claude.ai Google Drive");
+        assert_eq!(servers[1].status, "needs-auth");
+        assert_eq!(servers[1].scope.as_deref(), Some("claudeai"));
+        assert_eq!(servers[1].tool_count, 0);
+    }
+
+    #[test]
+    fn parse_mcp_status_tolerates_non_mcp_response() {
+        // An unrelated control_response (e.g. an initialize ack) yields no servers.
+        let line = json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "x", "response": { "commands": [] } } });
+        assert!(parse_mcp_status(&line).is_empty());
+    }
+
+    /// Live probe: confirm the `mcp_status` control request is answered by the real
+    /// binary and DUMP the raw `control_response` so we can read the exact response
+    /// shape (nesting + per-server fields) before building on it. Ignored by default
+    /// (spawns claude: network + auth). Run with:
+    ///   cargo test --lib --ignored live_mcp_status_probe -- --nocapture
+    #[tokio::test]
+    #[ignore = "spawns the real claude binary (network + auth); prints raw mcp_status responses"]
+    async fn live_mcp_status_probe() {
+        use crate::supervisor::protocol::CliMessage;
+        use crate::supervisor::transport::{SpawnConfig, Transport};
+        use std::time::Duration;
+
+        let cwd = std::env::current_dir().unwrap();
+        let (mut transport, mut rx) =
+            Transport::spawn(SpawnConfig::new(cwd)).expect("claude should spawn");
+        transport
+            .send_line(initialize_request("probe-init"))
+            .expect("send initialize");
+
+        // MCP servers connect asynchronously after startup, so query a few times
+        // with delays to watch the statuses settle (pending → connected/needs-auth).
+        for round in 0..3 {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+            let rid = format!("probe-mcp-{round}");
+            transport
+                .send_line(mcp_status_request(&rid))
+                .expect("send mcp_status");
+            let resp = tokio::time::timeout(Duration::from_secs(20), async {
+                while let Some(msg) = rx.recv().await {
+                    if let CliMessage::ControlResponse(v) = msg {
+                        let echoed = v
+                            .get("response")
+                            .and_then(|r| r.get("request_id"))
+                            .and_then(|x| x.as_str());
+                        if echoed == Some(rid.as_str()) {
+                            return Some(v);
+                        }
+                    }
+                }
+                None
+            })
+            .await
+            .ok()
+            .flatten();
+            eprintln!("=== mcp_status round {round} ===");
+            let servers = resp
+                .as_ref()
+                .and_then(|v| v.get("response"))
+                .and_then(|r| r.get("response"))
+                .and_then(|r| r.get("mcpServers"))
+                .and_then(|s| s.as_array());
+            match servers {
+                Some(list) => {
+                    for s in list {
+                        let name = s.get("name").and_then(Value::as_str).unwrap_or("?");
+                        let status = s.get("status").and_then(Value::as_str).unwrap_or("?");
+                        let scope = s.get("scope").and_then(Value::as_str).unwrap_or("-");
+                        let ntools = s.get("tools").and_then(Value::as_array).map_or(0, |t| t.len());
+                        eprintln!("  {name:42} status={status:14} scope={scope:10} tools={ntools}");
+                    }
+                }
+                None => eprintln!("  <no mcpServers in response>"),
+            }
+        }
+        transport.shutdown().await;
     }
 }

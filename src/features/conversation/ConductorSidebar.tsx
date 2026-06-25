@@ -17,6 +17,7 @@ import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { WorktreeBadge } from "../git/WorktreeBadge";
 import { useWorktreeUi } from "../git/worktreeUiStore";
+import { useExtensionsUi } from "../extensions/extensionsUiStore";
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   // Rich status keyed by the conversation's stable id (the message store routes
@@ -149,6 +150,7 @@ export function ConductorSidebar() {
   const groups = useConversationsByRepo();
   const activeId = useActiveConversationId();
   const openManager = useWorktreeUi((s) => s.openManager);
+  const openExtensions = useExtensionsUi((s) => s.openManager);
   const settingsOpen = useSettingsUi((s) => s.open);
   const openSettings = useSettingsUi((s) => s.openSettings);
   const closeSettings = useSettingsUi((s) => s.closeSettings);
@@ -211,6 +213,20 @@ export function ConductorSidebar() {
                     <Ico name="folder" className="sm" />
                     <span className="cv-repo-n">{repoName(repo.path)}</span>
                     <Ico name="branch" className="sm cv-repo-wt-hint" />
+                  </button>
+                  <button
+                    className="cv-repo-ext"
+                    title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
+                    onClick={() =>
+                      openExtensions({
+                        kind: "project",
+                        path: repo.path,
+                        title: repoName(repo.path),
+                        session: null,
+                      })
+                    }
+                  >
+                    <Ico name="layers" className="sm" />
                   </button>
                   <button
                     className="cv-repo-add"
