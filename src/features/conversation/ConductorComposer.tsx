@@ -582,6 +582,7 @@ export const ConductorComposer = forwardRef<
           usage={planUsage.data ?? null}
           usageLoading={planUsage.isFetching}
           usageError={planUsage.error}
+          usageUpdatedAt={planUsage.dataUpdatedAt}
           onOpenUsage={onOpenUsage}
           onRefreshUsage={() => void planUsage.refetch()}
         />

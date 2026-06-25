@@ -367,10 +367,10 @@
 .wf-pop-sep { height:1px; margin:3px 0; background:var(--wf-line-2); }
 .wf-pop-pill { display:inline-flex; align-items:center; gap:6px; font-size:11.5px; color:var(--wf-tx-hi); }
 .wf-pop-pill > i { width:7px; height:7px; border-radius:999px; flex:0 0 auto; }
-/* Forfait header carries a manual refresh button on the right. */
-.wf-pop-h-row { display:flex; align-items:center; justify-content:space-between; }
-.wf-pop-refresh { display:inline-flex; align-items:center; justify-content:center; padding:2px; margin:-2px; border:0; background:none; color:var(--wf-tx-lo); cursor:pointer; border-radius:5px; }
-.wf-pop-refresh:hover { color:var(--wf-tx-hi); background:var(--wf-panel-3); }
+/* Forfait header carries the "last refreshed" freshness note on the right (no manual
+   refresh button — the popover refetches on open). */
+.wf-pop-h-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.wf-pop-updated { font-size:10.5px; font-weight:400; color:var(--wf-tx-xlo); white-space:nowrap; }
 .wf-spin-fast { animation: wf-spin .8s linear infinite; transform-origin:50% 50%; }
 /* Real plan-usage window: label · % · reset on top, fill bar under. */
 .wf-pop-usage { display:flex; flex-direction:column; gap:4px; }
