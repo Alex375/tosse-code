@@ -26,7 +26,10 @@ screenshots/
 !.vscode/extensions.json
 
 # === Claude Code local artifacts (agent worktrees, etc.) ===
-.claude/
+# Ignore everything under .claude/ EXCEPT the shared workflow skills,
+# which are versioned on purpose (start / build-app / land / release).
+.claude/*
+!.claude/skills/
 
 # === tauri-specta bindings: COMMITTED on purpose, do NOT ignore ===
 # src/ipc/bindings.ts

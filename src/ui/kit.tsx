@@ -38,6 +38,7 @@ const WF_PATHS: Record<string, string> = {
   alert: "M11 4 3 17h16L11 4ZM11 9v4M11 16h.01",
   ask: "M8 8.5a3 3 0 1 1 4.2 2.7c-.8.4-1.2 1-1.2 1.9M11 16h.01",
   gauge: "M4 15a7 7 0 0 1 14 0M11 15l3.5-3.5",
+  pulse: "M3 11h4l2-4 3 8 2-5 2 1h3",
   bolt: "M12 3 5 13h5l-1 8 7-10h-5l1-8Z",
   shield: "M11 3 4 6v5c0 4 3 6 7 8 4-2 7-4 7-8V6l-7-3Z",
   commit: "M3 11h5m6 0h5M11 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z",
@@ -54,6 +55,7 @@ const WF_PATHS: Record<string, string> = {
   splith: "M4 5h14v12H4zM11 5v12",
   splitv: "M4 5h14v12H4zM4 11h14",
   sidebar: "M4 5h14v12H4zM9 5v12",
+  globe: "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM3 11h16M11 3c2.4 2.2 2.4 13.8 0 16M11 3c-2.4 2.2-2.4 13.8 0 16",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {
@@ -577,14 +579,37 @@ function planWindow(limitType: string | null): string {
   }
 }
 
-/** "dans 2h14" / "dans 43min" / "imminent" — computed at render (popover re-opens). */
+/** "dans 3j 4h" (≥24h) / "dans 2h14" / "dans 43min" / "imminent" — computed at render
+ *  (popover re-opens). The 7-day window resets days away, so above 24h we show days + hours
+ *  (hours-only was impractical: "dans 73h"); below 24h we keep hours + minutes. */
 function fmtReset(resetsAt: number | null): string {
   if (!resetsAt) return "—";
   const secs = resetsAt - Math.floor(Date.now() / 1000);
   if (secs <= 0) return "imminent";
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
+  if (h >= 24) {
+    const d = Math.floor(h / 24);
+    const rh = h % 24;
+    return rh > 0 ? `dans ${d}j ${rh}h` : `dans ${d}j`;
+  }
   return h > 0 ? `dans ${h}h${m.toString().padStart(2, "0")}` : `dans ${m}min`;
+}
+
+/** "à l'instant" / "il y a 3 min" / "il y a 2 h" / "il y a 1 j" — how long ago the shown
+ *  usage figures were last successfully fetched. `null`/0 (never fetched) → null so the
+ *  caller hides the line. Computed at render (the popover re-opens fresh each time). */
+function fmtAgo(ts: number | null | undefined): string | null {
+  if (!ts) return null;
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  if (secs < 30) return "à l'instant";
+  const m = Math.floor(secs / 60);
+  if (m < 1) return "il y a moins d'1 min";
+  if (m < 60) return `il y a ${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `il y a ${h} h`;
+  const d = Math.floor(h / 24);
+  return `il y a ${d} j`;
 }
 
 export function ContextRing({
@@ -596,6 +621,7 @@ export function ContextRing({
   usage,
   usageLoading,
   usageError,
+  usageUpdatedAt,
   onOpenUsage,
   onRefreshUsage,
 }: {
@@ -610,9 +636,15 @@ export function ContextRing({
   usageLoading?: boolean;
   /** Structured failure of the last usage fetch — drives a tailored guidance card. */
   usageError?: PlanUsageError | null;
-  /** Fired when the popover opens — caller throttles (e.g. only if data is stale). */
+  /** Timestamp (ms) of the last SUCCESSFUL usage fetch — the freshness of the shown
+   *  figures. Stays put when a later refresh fails (e.g. the endpoint rate-limits us),
+   *  so the "mis à jour …" line tells the truth about how old the numbers are. */
+  usageUpdatedAt?: number | null;
+  /** Fired when the popover opens — caller throttles (e.g. only if data is stale).
+   *  The popover refetches on open, so there's no manual refresh button. */
   onOpenUsage?: () => void;
-  /** Forced refresh from the manual button; also gates whether the button shows. */
+  /** Deliberate retry, wired only to the error card's « Réessayer » (recovery after a
+   *  failure) — there is no general refresh button (opening the popover refetches). */
   onRefreshUsage?: () => void;
 }) {
   const sz = 16;
@@ -666,20 +698,13 @@ export function ContextRing({
             <div className="wf-pop-sep" />
             <div className="wf-pop-h wf-pop-h-row">
               <span>Forfait</span>
-              {onRefreshUsage ? (
-                <button
-                  className="wf-pop-refresh"
-                  title="Rafraîchir l'usage"
-                  aria-label="Rafraîchir l'usage"
-                  aria-busy={usageLoading}
-                  disabled={usageLoading}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRefreshUsage();
-                  }}
-                >
-                  <Ico name="refresh" className={"sm" + (usageLoading ? " wf-spin-fast" : "")} />
-                </button>
+              {/* Freshness of the shown figures (replaces the manual refresh button —
+                  the popover already refetches on open). Reflects the last SUCCESS, so a
+                  rate-limited refresh doesn't fake-bump it. */}
+              {fmtAgo(usageUpdatedAt) ? (
+                <span className="wf-pop-updated">
+                  {usageLoading ? "rafraîchissement…" : `mis à jour ${fmtAgo(usageUpdatedAt)}`}
+                </span>
               ) : null}
             </div>
             {/* Real usage bars (precise %), when the endpoint reported them. */}

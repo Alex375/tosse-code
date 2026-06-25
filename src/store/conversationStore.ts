@@ -539,6 +539,17 @@ export const useToolResult = (
 ): ToolResult | undefined =>
   useConversationStore((s) => s.sessions[session]?.toolResults[toolUseId]);
 
+/** True if ANY of these tool_use ids has an error result. Lets a grouped run
+ *  section surface a failure (and auto-expand) without expanding every row. Returns
+ *  a primitive, so the default equality re-renders the section only on flip. */
+export const useRunErrored = (session: string, ids: string[]): boolean =>
+  useConversationStore((s) => {
+    const tr = s.sessions[session]?.toolResults;
+    if (!tr) return false;
+    for (const id of ids) if (tr[id]?.isError) return true;
+    return false;
+  });
+
 export const useTurnResult = (
   session: string,
   id: string,

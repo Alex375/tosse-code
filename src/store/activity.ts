@@ -1,6 +1,6 @@
 // "What is the agent doing right now?" — derived from the live stream, so it
 // always says something concrete even when the agent doesn't use TodoWrite. We
-// read the most recent main-thread tool_use ("Lit App.tsx", "Exécute pnpm test"),
+// read the most recent main-thread tool_use ("Read App.tsx", "Run pnpm test"),
 // fall back to the current to-do, then to "writing"/"thinking". Pure + testable;
 // the React selector `useLiveActivity` wraps it. Reusable by the conversation
 // thread's working indicator too, not just the FlightDeck card.
@@ -19,49 +19,63 @@ function truncate(s: string, n: number): string {
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
 }
 
-/** A human phrase for a tool_use in flight: name + its most telling argument. */
+/**
+ * A human phrase for a tool_use: short English verb + its most telling argument
+ * ("Read App.tsx", "Run pnpm test"). English by request — the tool action names
+ * read like the claude.ai/code transcript, and the in-flight indicator and the
+ * settled step row share this label so they stay identical. (The generic working
+ * states — "Réfléchit…", "Rédige une réponse…" — remain French in describeActivity.)
+ */
 export function toolActivityLabel(name: string, input: JsonValue): string {
   const fp = field(input, "file_path");
   const base = fp ? basename(fp) : null;
   switch (name) {
     case "Read":
-      return base ? `Lit ${base}` : "Lit un fichier";
+      return base ? `Read ${base}` : "Read a file";
     case "Edit":
     case "MultiEdit":
-      return base ? `Modifie ${base}` : "Modifie un fichier";
+      return base ? `Edit ${base}` : "Edit a file";
     case "Write":
-      return base ? `Écrit ${base}` : "Écrit un fichier";
+      return base ? `Write ${base}` : "Write a file";
     case "NotebookEdit": {
       const nb = field(input, "notebook_path");
-      return nb ? `Édite ${basename(nb)}` : "Édite un notebook";
+      return nb ? `Edit ${basename(nb)}` : "Edit a notebook";
     }
     case "Bash": {
       const c = field(input, "command");
-      return c ? `Exécute ${truncate(c, 38)}` : "Exécute une commande";
+      return c ? `Run ${truncate(c, 38)}` : "Run a command";
     }
     case "Grep": {
       const p = field(input, "pattern");
-      return p ? `Cherche « ${truncate(p, 28)} »` : "Cherche dans le code";
+      return p ? `Search "${truncate(p, 28)}"` : "Search the code";
     }
     case "Glob": {
       const p = field(input, "pattern");
-      return p ? `Liste ${truncate(p, 28)}` : "Liste des fichiers";
+      return p ? `Find ${truncate(p, 28)}` : "Find files";
     }
     // `Agent` is the wire name of the sub-agent tool (was `Task`); keep `Task` as an
     // alias so resumed/old transcripts still label correctly.
     case "Agent":
     case "Task": {
       const d = field(input, "description");
-      return d ? `Sous-agent : ${truncate(d, 28)}` : "Délègue à un sous-agent";
+      return d ? `Sub-agent: ${truncate(d, 28)}` : "Delegate to a sub-agent";
     }
     case "WebFetch":
-      return "Récupère une page web";
+      return "Fetch a web page";
     case "WebSearch": {
       const q = field(input, "query");
-      return q ? `Recherche « ${truncate(q, 26)} »` : "Recherche sur le web";
+      return q ? `Search "${truncate(q, 26)}"` : "Search the web";
     }
     case "TodoWrite":
-      return "Met à jour le plan";
+      return "Update the plan";
+    case "AskUserQuestion": {
+      const qs =
+        input && typeof input === "object" && !Array.isArray(input)
+          ? (input as Record<string, JsonValue>).questions
+          : undefined;
+      const n = Array.isArray(qs) ? qs.length : 0;
+      return n ? `Ask ${n} question${n > 1 ? "s" : ""}` : "Ask a question";
+    }
     default:
       return `${name}…`;
   }

@@ -227,6 +227,71 @@ async interruptSession(session: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Query a running session's LIVE MCP server status (real connection state +
+ * tools per server) via the `mcp_status` control request — the authoritative
+ * source the conversation view uses (NOT the stale `system/init` snapshot).
+ * Errors with "unknown session" when the conversation has no live `claude`
+ * process; the UI then falls back to the configured view.
+ */
+async mcpStatus(session: string) : Promise<Result<McpServerLive[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_status", { session }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable/disable a live MCP server in a running session (`mcp_toggle`). Optimistic
+ * — returns once sent; the UI re-polls `mcp_status` to reflect the new state, and a
+ * CLI rejection surfaces as a timeline control error.
+ */
+async mcpToggle(session: string, serverName: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_toggle", { session, serverName, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Reconnect a live MCP server (`mcp_reconnect`) — after a failure or once auth is
+ * granted. Optimistic; the UI re-polls `mcp_status`.
+ */
+async mcpReconnect(session: string, serverName: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_reconnect", { session, serverName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Forget a live MCP server's stored OAuth credentials (`mcp_clear_auth`).
+ */
+async mcpClearAuth(session: string, serverName: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_clear_auth", { session, serverName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start the OAuth flow for a live MCP server (`mcp_authenticate`). Returns the
+ * `authUrl` to open in the browser (the front opens it) and whether the user must
+ * finish a manual callback. Errors with "unknown session" when there's no live
+ * process.
+ */
+async mcpAuthenticate(session: string, serverName: string) : Promise<Result<McpAuthResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mcp_authenticate", { session, serverName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tear a session down and remove it from the registry.
  */
 async stopSession(session: string) : Promise<Result<null, string>> {
@@ -332,12 +397,165 @@ async removeWorktree(repoPath: string, worktreePath: string, force: boolean) : P
 }
 },
 /**
+ * List the configured extensions visible to the repository (or worktree) at
+ * `repo_path`: MCP servers (+ enabled state), plugins, skills, sub-agents,
+ * each tagged with its scope. Best-effort — never errors on missing config; the
+ * blocking file IO runs off the async runtime.
+ */
+async listExtensions(repoPath: string) : Promise<Result<ExtensionsSnapshot, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_extensions", { repoPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable or disable a plugin (by id `<plugin>@<marketplace>`) in the user's
+ * `~/.claude/settings.json`. USER-GLOBAL toggle (not per-repo); takes effect on
+ * the next (re)start of a conversation. The write is atomic and preserves every
+ * other key. The blocking file IO runs off the async runtime.
+ */
+async setPluginEnabled(pluginId: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_plugin_enabled", { pluginId, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Everything a single plugin provides (skills / sub-agents / MCP servers) for the
+ * per-plugin explorer — scanned regardless of the plugin's enabled state so a
+ * disabled plugin stays browsable. `repo_path` selects the install relevant to the
+ * repo. Best-effort; the blocking file IO runs off the async runtime.
+ */
+async listPluginContents(repoPath: string, pluginId: string) : Promise<Result<PluginContents, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_plugin_contents", { repoPath, pluginId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Whether a filesystem path currently exists. Used to detect a conversation
  * whose worktree cwd was removed, so the UI can fall back to the repo's main
  * checkout instead of failing to spawn `claude` in a directory that is gone.
  */
 async pathExists(path: string) : Promise<boolean> {
     return await TAURI_INVOKE("path_exists", { path });
+},
+/**
+ * Working-tree status: current branch, ahead/behind, and changed files.
+ */
+async gitStatus(cwd: string) : Promise<Result<GitStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_status", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Diff of one working-tree file against HEAD (old = HEAD, new = on-disk),
+ * for the source-control view's diff editor.
+ */
+async gitDiff(cwd: string, path: string, origPath: string | null) : Promise<Result<GitDiff, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_diff", { cwd, path, origPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * A page of commit history across all refs (for the graph / git tree).
+ */
+async gitLog(cwd: string, limit: number, skip: number) : Promise<Result<CommitInfo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_log", { cwd, limit, skip }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Local + remote-tracking branches with their upstream tracking counts.
+ */
+async gitBranches(cwd: string) : Promise<Result<BranchInfo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_branches", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Files changed by a single commit (name-status vs its first parent).
+ */
+async gitCommitFiles(cwd: string, oid: string) : Promise<Result<CommitFile[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_commit_files", { cwd, oid }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Diff of one file introduced by a commit (old = parent, new = commit).
+ */
+async gitCommitFileDiff(cwd: string, oid: string, path: string, origPath: string | null) : Promise<Result<GitDiff, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_commit_file_diff", { cwd, oid, path, origPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Stage all changes and commit them with `message`. Returns the new short oid.
+ */
+async gitCommit(cwd: string, message: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_commit", { cwd, message }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Push the current branch to its upstream.
+ */
+async gitPush(cwd: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_push", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Pull the current branch (`--ff-only`).
+ */
+async gitPull(cwd: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_pull", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Fetch all remotes (with prune).
+ */
+async gitFetch(cwd: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_fetch", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * List one directory level (dirs first, then files, alpha) for the file tree.
@@ -569,6 +787,15 @@ tickEvent: "tick-event"
 /** user-defined types **/
 
 /**
+ * One sub-agent available to a repository (file-based or plugin-provided).
+ */
+export type AgentInfo = { name: string; description: string | null; model: string | null; scope: ExtScope; source: string | null; 
+/**
+ * Absolute path to the agent's `.md` definition — the UI reads it to render a
+ * clean markdown view of the sub-agent.
+ */
+path: string }
+/**
  * A normalized background task, keyed by `task_id` and updated in place as its
  * `task_*` lifecycle events arrive. The single model behind the (future) sub-agent /
  * workflow / Monitor / background-Bash views — the rich per-producer detail (full
@@ -679,6 +906,82 @@ export type BackgroundTaskStatus =
  * Cancelled via `TaskStop` / session end (`"stopped"`/`"cancelled"`).
  */
 "stopped"
+/**
+ * One branch ref. `is_remote` distinguishes `refs/remotes/*` from local
+ * `refs/heads/*`; `ahead`/`behind` come from the branch's upstream tracking
+ * (`None` when it has no upstream).
+ */
+export type BranchInfo = { 
+/**
+ * Short name, e.g. `main` or `origin/feature`.
+ */
+name: string; 
+/**
+ * Commit oid the branch points at.
+ */
+oid: string; 
+/**
+ * The currently checked-out branch.
+ */
+is_head: boolean; 
+/**
+ * A remote-tracking branch (`refs/remotes/*`).
+ */
+is_remote: boolean; 
+/**
+ * Upstream short name; `None` when unset.
+ */
+upstream: string | null; 
+/**
+ * Commits ahead of upstream.
+ */
+ahead: number | null; 
+/**
+ * Commits behind upstream.
+ */
+behind: number | null }
+/**
+ * One file changed by a commit (name-status against its first parent).
+ */
+export type CommitFile = { path: string; 
+/**
+ * Source path for a rename/copy; `None` otherwise.
+ */
+orig_path: string | null; 
+/**
+ * Status letter: `M A D R C T`.
+ */
+status: string }
+/**
+ * One commit in the history. `parents` are full oids (0 = root, 1 = normal,
+ * 2+ = merge), which the front uses to draw the graph. `refs` are the branch/tag
+ * names pointing at this commit (decoration), for badges.
+ */
+export type CommitInfo = { 
+/**
+ * Full commit oid.
+ */
+oid: string; 
+/**
+ * Abbreviated oid (as git chooses it).
+ */
+short_oid: string; 
+/**
+ * Parent commit oids, in git's order.
+ */
+parents: string[]; author_name: string; author_email: string; 
+/**
+ * Author timestamp, Unix seconds.
+ */
+timestamp: number; 
+/**
+ * First line of the commit message.
+ */
+subject: string; 
+/**
+ * Ref names pointing here (branches/tags/`HEAD`), already de-decorated.
+ */
+refs: string[] }
 /**
  * Context-meter seed for a conversation, read from its on-disk transcript so the
  * ring shows the real fill the moment a conversation is opened / its stream turned
@@ -792,6 +1095,41 @@ model: string | null; effort: string | null; ultracode: boolean; permission_mode
  */
 pending_reminder: string | null }
 /**
+ * Where a configuration entry originates. Drives the "by scope" grouping in the
+ * UI. Serialized snake_case so the TS union is `"user" | "project" | …`.
+ */
+export type ExtScope = 
+/**
+ * Configured globally for the user (`~/.claude*`).
+ */
+"user" | 
+/**
+ * Shared by the repository (committed `.mcp.json` / `.claude/`), or the
+ * project section of `~/.claude.json`.
+ */
+"project" | 
+/**
+ * Bound to this project but kept local (not shared) — `settings.local.json`
+ * or a `local`-scoped plugin install.
+ */
+"local" | 
+/**
+ * Provided by an installed plugin.
+ */
+"plugin"
+/**
+ * The full configured picture for one repository, across all scopes.
+ */
+export type ExtensionsSnapshot = { mcp_servers: McpServerInfo[]; plugins: PluginInfo[]; skills: SkillInfo[]; agents: AgentInfo[]; 
+/**
+ * Config files that exist but could NOT be read/parsed (corrupt JSON, IO error).
+ * The scan still degrades to a usable snapshot, but these are surfaced so a
+ * broken config is never indiscernible from "nothing configured" — without them
+ * a corrupt `~/.claude.json` reads as an empty inventory, and a corrupt
+ * `settings.json` would (wrongly) show every plugin as enabled. Empty = clean.
+ */
+warnings: string[] }
+/**
  * A file's contents plus the guards the editor needs: `too_large` (skipped, over
  * [`MAX_FILE_BYTES`]) and `binary` (a NUL byte was found — not shown as text).
  * In both guard cases `content` is empty.
@@ -816,6 +1154,103 @@ export type FsEntry = { name: string; path: string; is_dir: boolean }
  */
 export type FsWatchErrorEvent = { message: string }
 /**
+ * A file's contents on both sides of a diff, handed to the front's Monaco diff
+ * editor (which computes the visual diff itself). An empty `old_text` means the
+ * file was added; an empty `new_text` means it was deleted. When either side is
+ * binary the texts are `None` and the front shows a "binary file" placeholder.
+ */
+export type GitDiff = { 
+/**
+ * Repo-relative path of the file being diffed.
+ */
+path: string; 
+/**
+ * "Before" side content. `None` when binary.
+ */
+old_text: string | null; 
+/**
+ * "After" side content. `None` when binary.
+ */
+new_text: string | null; 
+/**
+ * Either side looks binary — no text diff, the UI shows a placeholder.
+ */
+is_binary: boolean; 
+/**
+ * Human label for the "before" side (e.g. "HEAD", "a1b2c3d^").
+ */
+old_label: string; 
+/**
+ * Human label for the "after" side (e.g. "Working tree", "a1b2c3d").
+ */
+new_label: string }
+/**
+ * One changed path reported by `git status --porcelain=v2`. The `index_status` /
+ * `worktree_status` are the two halves of git's `XY` code (`.` = unchanged).
+ */
+export type GitFileEntry = { 
+/**
+ * Path relative to the repository root (forward slashes, as git emits).
+ */
+path: string; 
+/**
+ * For a rename/copy, the path it came from; `None` otherwise.
+ */
+orig_path: string | null; 
+/**
+ * Index (staged) status letter: `M A D R C T .` or `?` (untracked).
+ */
+index_status: string; 
+/**
+ * Working-tree (unstaged) status letter, same alphabet.
+ */
+worktree_status: string; 
+/**
+ * Index differs from HEAD (there is something staged).
+ */
+staged: boolean; 
+/**
+ * Working tree differs from the index (there is something unstaged).
+ */
+unstaged: boolean; 
+/**
+ * Not yet tracked by git.
+ */
+untracked: boolean }
+/**
+ * Summary of `git status`: the current branch, its upstream tracking counts and
+ * the changed files. Backs the source-control view's header + file list.
+ */
+export type GitStatus = { 
+/**
+ * Current branch name; `None` when detached.
+ */
+branch: string | null; 
+/**
+ * Full HEAD commit oid; `None` on an unborn branch.
+ */
+head: string | null; 
+/**
+ * Upstream ref short name (e.g. `origin/main`); `None` when unset.
+ */
+upstream: string | null; 
+/**
+ * Commits ahead of upstream.
+ */
+ahead: number; 
+/**
+ * Commits behind upstream.
+ */
+behind: number; 
+/**
+ * The branch has no commits yet (unborn HEAD).
+ */
+unborn: boolean; 
+/**
+ * Changed entries (staged + unstaged + untracked), in git's order.
+ */
+files: GitFileEntry[] }
+/**
  * An image file's bytes, base64-encoded for the webview to render as a `data:`
  * URL. Unlike [`read_file`], the binary content IS the payload here — images are
  * never decoded as text. `too_large` (over [`MAX_FILE_BYTES`]) leaves
@@ -828,6 +1263,87 @@ export type ImageContent = { path: string;
  */
 data_base64: string; too_large: boolean; size: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
+/**
+ * Result of an `mcp_authenticate` control request (OAuth start for an http/sse
+ * server). The binary returns an `authUrl` to open in the browser; the loopback
+ * redirect is handled by the CLI itself in the common case. `requires_user_action`
+ * is true when the flow needs the user to paste back a callback URL (the rarer
+ * non-loopback path — surfaced to the UI). `error` carries a rejection message
+ * (auth not supported, server unknown, …) without it being a fatal session error.
+ */
+export type McpAuthResult = { auth_url: string | null; requires_user_action: boolean; error: string | null }
+/**
+ * One MCP server visible to a repository, with its resolved enabled state. The
+ * live connection status (connected / needs-auth / …) is NOT here — it comes
+ * from the running session's `system/init` and is merged by the UI.
+ */
+export type McpServerInfo = { name: string; scope: ExtScope; 
+/**
+ * `"stdio"` | `"http"` | `"sse"` when declared (stdio is the implicit default).
+ */
+transport: string | null; 
+/**
+ * Launch command for a stdio server (e.g. `npx`, `railway`). Args omitted
+ * (may carry secrets).
+ */
+command: string | null; 
+/**
+ * Endpoint for an http/sse server, with any query string stripped.
+ */
+url: string | null; 
+/**
+ * Plugin id (`<plugin>@<marketplace>`) when `scope == Plugin`.
+ */
+source: string | null; 
+/**
+ * Resolved on-disk enabled state for this repo (project toggles applied).
+ */
+enabled: boolean }
+/**
+ * Live status of one MCP server, queried on demand from the running session via
+ * the `mcp_status` control request (NOT the `system/init` snapshot, which is
+ * point-in-time and shows servers stuck at `pending`). This is the authoritative
+ * real-time picture the conversation view shows — including claude.ai-hosted
+ * connectors that only exist in the live session. Distinct from the *configured*
+ * on-disk [`crate::extensions::McpServerInfo`].
+ */
+export type McpServerLive = { 
+/**
+ * Server name as the session reports it (`plugin:<p>:<s>` for a plugin server,
+ * `claude.ai <Name>` for a connector).
+ */
+name: string; 
+/**
+ * `connected` / `disconnected` / `pending` / `checking_status` / `failed` /
+ * `needs-auth` / `disabled`.
+ */
+status: string; 
+/**
+ * Where it comes from: `user` / `project` / `local` / `dynamic` (plugin) /
+ * `claudeai` (account connector). `None` if absent.
+ */
+scope: string | null; 
+/**
+ * Transport from the server config (`stdio` / `http` / `sse`).
+ */
+transport: string | null; 
+/**
+ * Launch command for a stdio server (args omitted — may carry secrets).
+ */
+command: string | null; 
+/**
+ * Endpoint for an http/sse server.
+ */
+url: string | null; 
+/**
+ * Number of tools the server currently exposes (0 unless connected).
+ */
+tool_count: number; 
+/**
+ * Names of the tools the server exposes (empty unless connected) — shown when
+ * the user expands a server row.
+ */
+tools: string[] }
 /**
  * One authoritative content block of an assistant message.
  */
@@ -877,6 +1393,30 @@ active_id: string | null }
  * A window is `None` when the endpoint did not report it.
  */
 export type PlanUsage = { five_hour: UsageWindow | null; seven_day: UsageWindow | null }
+/**
+ * Everything ONE plugin provides — for the per-plugin explorer (click a plugin →
+ * browse its skills / sub-agents / MCP servers, like Claude.ai's Customize panel).
+ * 
+ * Scanned straight from the plugin's install dir REGARDLESS of its enabled state:
+ * a disabled plugin must still be browsable. This is why it is a separate read
+ * from [`list_extensions`], which only folds an *enabled* plugin's contributions
+ * into the active snapshot.
+ */
+export type PluginContents = { skills: SkillInfo[]; agents: AgentInfo[]; mcp_servers: McpServerInfo[] }
+/**
+ * One installed plugin relevant to a repository (user-global, or project/local
+ * scoped to this repo).
+ */
+export type PluginInfo = { 
+/**
+ * `<plugin>@<marketplace>` — the key used in `enabledPlugins`.
+ */
+id: string; name: string; marketplace: string; version: string | null; description: string | null; enabled: boolean; scope: ExtScope; 
+/**
+ * What the plugin provides (scanned from its cache dir), regardless of
+ * enabled state — so the UI can show "5 skills" even when toggled off.
+ */
+skill_count: number; agent_count: number; command_count: number; mcp_count: number }
 /**
  * Typed return value of `ping`. Proves React -> Rust (typed command).
  */
@@ -1016,6 +1556,19 @@ export type SessionTaskEvent = { session: string; task: BackgroundTask }
  * fresher title.
  */
 export type SessionTitleEvent = { session: string; title: string; seq: number }
+/**
+ * One skill available to a repository (file-based or plugin-provided).
+ */
+export type SkillInfo = { name: string; description: string | null; scope: ExtScope; 
+/**
+ * Plugin id when plugin-provided; `None` for a user/project file skill.
+ */
+source: string | null; 
+/**
+ * Absolute path to the skill's `SKILL.md` — the UI reads it to render a clean
+ * markdown view of the skill.
+ */
+path: string }
 /**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code

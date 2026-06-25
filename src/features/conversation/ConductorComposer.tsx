@@ -19,6 +19,7 @@ import {
 } from "../../store/conversationsStore";
 import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
 import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts";
+import { useExtensionsUi } from "../extensions/extensionsUiStore";
 import { ChipBtn, ClaudeMark, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { useContextData } from "../../store/contextData";
 import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
@@ -171,6 +172,10 @@ export const ConductorComposer = forwardRef<
   const cwd = useConversationsStore(
     (s) => s.conversations.find((c) => c.id === session)?.cwd ?? null,
   );
+  const convName = useConversationsStore(
+    (s) => s.conversations.find((c) => c.id === session)?.name ?? "Conversation",
+  );
+  const openExtensions = useExtensionsUi((s) => s.openManager);
   const commands = useSlashCommands(cwd);
   const [slashToken, setSlashToken] = useState<SlashToken | null>(null);
   const [slashDismissed, setSlashDismissed] = useState(false);
@@ -528,6 +533,25 @@ export const ConductorComposer = forwardRef<
           ))}
         </Menu>
         <span style={{ marginLeft: "auto" }} />
+        {/* Extensions panel — what this conversation's Claude sees (MCP + live
+            status, plugins, skills, sub-agents), à la /mcp. Scans the session's
+            current cwd so a worktree shows its own config. */}
+        <button
+          type="button"
+          className="wf-chip"
+          onClick={() =>
+            openExtensions({
+              kind: "conversation",
+              path: state?.cwd ?? cwd ?? ".",
+              title: convName,
+              session,
+            })
+          }
+          title="Extensions de cette conversation — MCP (statut live), plugins, skills, sous-agents"
+        >
+          <Ico name="layers" className="sm" />
+          <span className="wf-chip-t">Extensions</span>
+        </button>
         {/* Worktree checkbox — only before the session spawns (first message).
             Explicit empty/checked box so the on/off state is unambiguous. */}
         {isFresh ? (
@@ -582,6 +606,7 @@ export const ConductorComposer = forwardRef<
           usage={planUsage.data ?? null}
           usageLoading={planUsage.isFetching}
           usageError={planUsage.error}
+          usageUpdatedAt={planUsage.dataUpdatedAt}
           onOpenUsage={onOpenUsage}
           onRefreshUsage={() => void planUsage.refetch()}
         />

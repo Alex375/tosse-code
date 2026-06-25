@@ -45,59 +45,59 @@ function entry(opts: {
 
 describe("toolActivityLabel", () => {
   it("names the file for read/edit/write", () => {
-    expect(toolActivityLabel("Read", { file_path: "src/App.tsx" })).toBe("Lit App.tsx");
-    expect(toolActivityLabel("Edit", { file_path: "a/b/middleware.ts" })).toBe("Modifie middleware.ts");
-    expect(toolActivityLabel("Write", { file_path: "x.ts" })).toBe("Écrit x.ts");
+    expect(toolActivityLabel("Read", { file_path: "src/App.tsx" })).toBe("Read App.tsx");
+    expect(toolActivityLabel("Edit", { file_path: "a/b/middleware.ts" })).toBe("Edit middleware.ts");
+    expect(toolActivityLabel("Write", { file_path: "x.ts" })).toBe("Write x.ts");
   });
 
   it("previews a Bash command and a Grep pattern", () => {
-    expect(toolActivityLabel("Bash", { command: "pnpm test" })).toBe("Exécute pnpm test");
-    expect(toolActivityLabel("Grep", { pattern: "TODO" })).toBe("Cherche « TODO »");
+    expect(toolActivityLabel("Bash", { command: "pnpm test" })).toBe("Run pnpm test");
+    expect(toolActivityLabel("Grep", { pattern: "TODO" })).toBe('Search "TODO"');
   });
 
   it("names the notebook for NotebookEdit (reads notebook_path, not file_path)", () => {
     expect(toolActivityLabel("NotebookEdit", { notebook_path: "nb/analysis.ipynb" })).toBe(
-      "Édite analysis.ipynb",
+      "Edit analysis.ipynb",
     );
   });
 
   it("labels the remaining known tools (MultiEdit, Glob, Task, WebFetch, WebSearch, TodoWrite)", () => {
-    expect(toolActivityLabel("MultiEdit", { file_path: "a/b/x.ts" })).toBe("Modifie x.ts");
-    expect(toolActivityLabel("Glob", { pattern: "**/*.ts" })).toBe("Liste **/*.ts");
-    expect(toolActivityLabel("Task", { description: "Audit auth" })).toBe("Sous-agent : Audit auth");
+    expect(toolActivityLabel("MultiEdit", { file_path: "a/b/x.ts" })).toBe("Edit x.ts");
+    expect(toolActivityLabel("Glob", { pattern: "**/*.ts" })).toBe("Find **/*.ts");
+    expect(toolActivityLabel("Task", { description: "Audit auth" })).toBe("Sub-agent: Audit auth");
     // `Agent` is the current wire name of the sub-agent tool (alias of `Task`).
-    expect(toolActivityLabel("Agent", { description: "Audit auth" })).toBe("Sous-agent : Audit auth");
-    expect(toolActivityLabel("WebFetch", { url: "https://x" })).toBe("Récupère une page web");
-    expect(toolActivityLabel("WebSearch", { query: "tauri updater" })).toBe(
-      "Recherche « tauri updater »",
-    );
-    expect(toolActivityLabel("TodoWrite", { todos: [] })).toBe("Met à jour le plan");
+    expect(toolActivityLabel("Agent", { description: "Audit auth" })).toBe("Sub-agent: Audit auth");
+    expect(toolActivityLabel("WebFetch", { url: "https://x" })).toBe("Fetch a web page");
+    expect(toolActivityLabel("WebSearch", { query: "tauri updater" })).toBe('Search "tauri updater"');
+    expect(toolActivityLabel("TodoWrite", { todos: [] })).toBe("Update the plan");
+    expect(toolActivityLabel("AskUserQuestion", { questions: [1, 2] })).toBe("Ask 2 questions");
+    expect(toolActivityLabel("AskUserQuestion", {})).toBe("Ask a question");
   });
 
   it("uses the no-argument fallback when the input carries no telling field", () => {
     // What the card shows on a tool_use whose input is still streaming in (built
     // incrementally) — every arg-dependent branch must have a graceful fallback.
-    expect(toolActivityLabel("Read", {})).toBe("Lit un fichier");
-    expect(toolActivityLabel("Edit", {})).toBe("Modifie un fichier");
-    expect(toolActivityLabel("Write", {})).toBe("Écrit un fichier");
-    expect(toolActivityLabel("NotebookEdit", {})).toBe("Édite un notebook");
-    expect(toolActivityLabel("Bash", {})).toBe("Exécute une commande");
-    expect(toolActivityLabel("Grep", {})).toBe("Cherche dans le code");
-    expect(toolActivityLabel("Glob", {})).toBe("Liste des fichiers");
-    expect(toolActivityLabel("Task", {})).toBe("Délègue à un sous-agent");
-    expect(toolActivityLabel("WebSearch", {})).toBe("Recherche sur le web");
+    expect(toolActivityLabel("Read", {})).toBe("Read a file");
+    expect(toolActivityLabel("Edit", {})).toBe("Edit a file");
+    expect(toolActivityLabel("Write", {})).toBe("Write a file");
+    expect(toolActivityLabel("NotebookEdit", {})).toBe("Edit a notebook");
+    expect(toolActivityLabel("Bash", {})).toBe("Run a command");
+    expect(toolActivityLabel("Grep", {})).toBe("Search the code");
+    expect(toolActivityLabel("Glob", {})).toBe("Find files");
+    expect(toolActivityLabel("Task", {})).toBe("Delegate to a sub-agent");
+    expect(toolActivityLabel("WebSearch", {})).toBe("Search the web");
   });
 
   it("trims internal whitespace and truncates a long argument with an ellipsis", () => {
     // 60-char command, over Bash's 38-char limit → sliced to 37 chars + "…" (38 total).
     const cmd = "echo " + "a".repeat(55);
     const label = toolActivityLabel("Bash", { command: cmd });
-    expect(label.startsWith("Exécute ")).toBe(true);
-    const shown = [...label.slice("Exécute ".length)];
+    expect(label.startsWith("Run ")).toBe(true);
+    const shown = [...label.slice("Run ".length)];
     expect(shown[shown.length - 1]).toBe("…");
     expect(shown.length).toBe(38); // 37 kept chars + the ellipsis
     // Whitespace runs collapse to a single space BEFORE the length check.
-    expect(toolActivityLabel("Grep", { pattern: "foo    bar" })).toBe("Cherche « foo bar »");
+    expect(toolActivityLabel("Grep", { pattern: "foo    bar" })).toBe('Search "foo bar"');
   });
 
   it("falls back to the tool name for unknown tools", () => {
@@ -112,7 +112,7 @@ describe("describeActivity", () => {
       turns: { t1: assistantTurn("t1", [toolUse("tu1", "Read", { file_path: "src/App.tsx" })]) },
       toolResults: {},
     });
-    expect(describeActivity(e)).toBe("Lit App.tsx");
+    expect(describeActivity(e)).toBe("Read App.tsx");
   });
 
   it("with parallel tools, shows a still-running earlier tool even if a later one finished first", () => {
@@ -130,7 +130,7 @@ describe("describeActivity", () => {
       },
       toolResults: { tu3: { toolUseId: "tu3", content: "", isError: false, parentToolUseId: null } },
     });
-    expect(describeActivity(e)).toBe("Lit b.ts");
+    expect(describeActivity(e)).toBe("Read b.ts");
   });
 
   it("prefers the current to-do once the tool has finished", () => {

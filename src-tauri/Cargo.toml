@@ -1,6 +1,6 @@
 [package]
 name = "tosse-code"
-version = "0.12.0"
+version = "0.13.0"
 description = "Tosse Code — desktop app to pilot Claude Code"
 authors = ["Tosse"]
 edition = "2021"
@@ -26,7 +26,10 @@ tauri-plugin-process = "2"
 # events. The Dock bounce is a separate, custom command (see request_user_attention).
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: keep object key order on round-trip, so editing the user's
+# `~/.claude/settings.json` (plugin enable/disable) rewrites only the changed
+# value and never re-sorts their whole config file.
+serde_json = { version = "1", features = ["preserve_order"] }
 
 # HTTP client for the internal `GET /api/oauth/usage` endpoint (real plan-usage %,
 # absent from stream-json). Already in the tree transitively (via tauri-plugin-updater)

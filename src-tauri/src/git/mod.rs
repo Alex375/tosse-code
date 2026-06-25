@@ -20,6 +20,21 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+// The git service is split by concern, but it is still ONE service: every
+// submodule below speaks `git` through the shared [`run_git`]/[`run_git_bytes`]
+// helpers and nothing outside `crate::git` shells out to git or parses its
+// output. Splitting keeps each file small (status, history/graph, branches,
+// write actions) without breaking that invariant.
+mod history;
+mod ops;
+mod refs;
+mod status;
+
+pub use history::{commit_file_diff, commit_files, log, CommitFile, CommitInfo};
+pub use ops::{commit, fetch, pull, push};
+pub use refs::{branches, BranchInfo};
+pub use status::{diff_worktree, status, GitFileEntry, GitStatus};
+
 /// Identity of one worktree of a repository (the cheap, always-listed part).
 ///
 /// A repository has exactly one MAIN worktree (the original checkout) plus any
@@ -113,6 +128,66 @@ fn run_git(dir: &str, args: &[&str]) -> Result<String, GitError> {
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Like [`run_git`] but returns raw stdout bytes — for reading file blobs
+/// (`git show <rev>:<path>`) whose content may be binary or non-UTF-8. Shared by
+/// the `status`/`history` submodules to build diffs.
+fn run_git_bytes(dir: &str, args: &[&str]) -> Result<Vec<u8>, GitError> {
+    let output = Command::new("git")
+        .env("LC_ALL", "C")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(GitError::Spawn)?;
+    if !output.status.success() {
+        return Err(GitError::Command {
+            args: args.join(" "),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(output.stdout)
+}
+
+/// A file's contents on both sides of a diff, handed to the front's Monaco diff
+/// editor (which computes the visual diff itself). An empty `old_text` means the
+/// file was added; an empty `new_text` means it was deleted. When either side is
+/// binary the texts are `None` and the front shows a "binary file" placeholder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct GitDiff {
+    /// Repo-relative path of the file being diffed.
+    pub path: String,
+    /// "Before" side content. `None` when binary.
+    pub old_text: Option<String>,
+    /// "After" side content. `None` when binary.
+    pub new_text: Option<String>,
+    /// Either side looks binary — no text diff, the UI shows a placeholder.
+    pub is_binary: bool,
+    /// Human label for the "before" side (e.g. "HEAD", "a1b2c3d^").
+    pub old_label: String,
+    /// Human label for the "after" side (e.g. "Working tree", "a1b2c3d").
+    pub new_label: String,
+}
+
+/// A byte sample looks binary if it contains a NUL in its first 8 KiB — the same
+/// cheap heuristic git itself uses to flag binary content.
+fn looks_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8192).any(|&b| b == 0)
+}
+
+/// Assemble a [`GitDiff`] from the two sides' raw bytes, decoding to UTF-8
+/// (lossy) unless either side looks binary.
+fn build_diff(path: &str, old: &[u8], new: &[u8], old_label: &str, new_label: &str) -> GitDiff {
+    let is_binary = looks_binary(old) || looks_binary(new);
+    GitDiff {
+        path: path.to_string(),
+        old_text: (!is_binary).then(|| String::from_utf8_lossy(old).into_owned()),
+        new_text: (!is_binary).then(|| String::from_utf8_lossy(new).into_owned()),
+        is_binary,
+        old_label: old_label.to_string(),
+        new_label: new_label.to_string(),
+    }
 }
 
 /// List every worktree of the repository that `repo_path` lives in. The main

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { BackgroundTask } from "../ipc/client";
-import { orderBashTasks, useBackgroundTasksStore } from "./backgroundTasksStore";
+import { orderBashTasks, orderMonitorTasks, useBackgroundTasksStore } from "./backgroundTasksStore";
 
 function task(over: Partial<BackgroundTask> = {}): BackgroundTask {
   return {
@@ -130,6 +130,49 @@ describe("orderBashTasks", () => {
         map(
           task({ task_id: "a", kind: "agent", status: "running" }),
           task({ task_id: "d", kind: "bash", status: "completed" }),
+        ),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("orderMonitorTasks", () => {
+  const map = (...ts: BackgroundTask[]): Record<string, BackgroundTask> =>
+    Object.fromEntries(ts.map((t) => [t.task_id, t]));
+
+  it("keeps only RUNNING monitor (drops agent/bash/workflow AND finished monitor)", () => {
+    const got = orderMonitorTasks(
+      map(
+        task({ task_id: "a", kind: "agent", status: "running" }),
+        task({ task_id: "b", kind: "bash", status: "running" }),
+        task({ task_id: "m", kind: "monitor", status: "running" }),
+        task({ task_id: "w", kind: "workflow", status: "running" }),
+        task({ task_id: "done", kind: "monitor", status: "completed" }),
+        task({ task_id: "stopped", kind: "monitor", status: "stopped" }),
+        task({ task_id: "failed", kind: "monitor", status: "failed" }),
+      ),
+    );
+    expect(got.map((t) => t.task_id)).toEqual(["m"]);
+  });
+
+  it("orders running monitors by task_id", () => {
+    const got = orderMonitorTasks(
+      map(
+        task({ task_id: "tk_3", kind: "monitor", status: "running" }),
+        task({ task_id: "tk_1", kind: "monitor", status: "running" }),
+        task({ task_id: "tk_2", kind: "monitor", status: "running" }),
+      ),
+    );
+    expect(got.map((t) => t.task_id)).toEqual(["tk_1", "tk_2", "tk_3"]);
+  });
+
+  it("is empty when there is no RUNNING monitor (none, or only finished)", () => {
+    expect(orderMonitorTasks({})).toEqual([]);
+    expect(
+      orderMonitorTasks(
+        map(
+          task({ task_id: "b", kind: "bash", status: "running" }),
+          task({ task_id: "d", kind: "monitor", status: "completed" }),
         ),
       ),
     ).toEqual([]);

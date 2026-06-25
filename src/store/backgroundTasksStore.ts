@@ -127,6 +127,28 @@ export const useBackgroundBashTasks = (session: string): BackgroundTask[] =>
     useShallow((s) => orderBashTasks(s.sessions[session] ?? EMPTY_TASKS)),
   );
 
+/**
+ * A conversation's RUNNING live watches (`kind: "monitor"`, status `running`), ordered
+ * by `task_id` (stable). The pinned <MonitorBar> lists exactly these — the watcher drops
+ * out of the bar the moment its stream ends (mirrors <BashBar>). A Monitor and a
+ * background Bash share `task_type:"local_bash"` on the wire; the core tells them apart
+ * by the spawning tool name, so `kind` is the only discriminator here. Pure (no hook) so
+ * it is unit-testable; the hook below wraps it. */
+export function orderMonitorTasks(
+  tasks: Record<string, BackgroundTask>,
+): BackgroundTask[] {
+  return Object.values(tasks)
+    .filter((t) => t.kind === "monitor" && t.status === "running")
+    .sort((a, b) => a.task_id.localeCompare(b.task_id));
+}
+
+/** A conversation's background Monitor watches, ordered for the pinned MonitorBar. Same
+ *  referential-stability guarantee as {@link useBackgroundBashTasks}. */
+export const useBackgroundMonitorTasks = (session: string): BackgroundTask[] =>
+  useBackgroundTasksStore(
+    useShallow((s) => orderMonitorTasks(s.sessions[session] ?? EMPTY_TASKS)),
+  );
+
 /** How many background tasks are currently RUNNING for a conversation. Drives the
  *  "backgrounding" agent status (idle main loop + live background work). A plain
  *  number → referentially stable, re-renders only when the count changes. */

@@ -403,6 +403,76 @@ pub async fn stop_task(
     handle.stop_task(task_id).await.map_err(|e| e.to_string())
 }
 
+/// Query a running session's LIVE MCP server status (real connection state +
+/// tools per server) via the `mcp_status` control request — the authoritative
+/// source the conversation view uses (NOT the stale `system/init` snapshot).
+/// Errors with "unknown session" when the conversation has no live `claude`
+/// process; the UI then falls back to the configured view.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_status(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+) -> Result<Vec<crate::supervisor::model::McpServerLive>, String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_status().await.map_err(|e| e.to_string())
+}
+
+/// Enable/disable a live MCP server in a running session (`mcp_toggle`). Optimistic
+/// — returns once sent; the UI re-polls `mcp_status` to reflect the new state, and a
+/// CLI rejection surfaces as a timeline control error.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_toggle(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    server_name: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_toggle(server_name, enabled).await.map_err(|e| e.to_string())
+}
+
+/// Reconnect a live MCP server (`mcp_reconnect`) — after a failure or once auth is
+/// granted. Optimistic; the UI re-polls `mcp_status`.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_reconnect(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    server_name: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_reconnect(server_name).await.map_err(|e| e.to_string())
+}
+
+/// Forget a live MCP server's stored OAuth credentials (`mcp_clear_auth`).
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_clear_auth(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    server_name: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_clear_auth(server_name).await.map_err(|e| e.to_string())
+}
+
+/// Start the OAuth flow for a live MCP server (`mcp_authenticate`). Returns the
+/// `authUrl` to open in the browser (the front opens it) and whether the user must
+/// finish a manual callback. Errors with "unknown session" when there's no live
+/// process.
+#[tauri::command]
+#[specta::specta]
+pub async fn mcp_authenticate(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    server_name: String,
+) -> Result<crate::supervisor::model::McpAuthResult, String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.mcp_authenticate(server_name).await.map_err(|e| e.to_string())
+}
+
 /// Tear a session down and remove it from the registry.
 #[tauri::command]
 #[specta::specta]
@@ -599,6 +669,134 @@ pub fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+// ---- Git history / source control -----------------------------------------
+//
+// The front's single boundary to the repository's history and working-tree
+// state. Like the worktree commands they forward to [`crate::git`] (the only
+// service that speaks `git`) and run the blocking subprocess off the async
+// runtime via `spawn_blocking`. `cwd` is the conversation's LIVE working
+// directory (it follows EnterWorktree/ExitWorktree), so every op is scoped to
+// the worktree the user is actually looking at.
+
+/// Working-tree status: current branch, ahead/behind, and changed files.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_status(cwd: String) -> Result<crate::git::GitStatus, String> {
+    tokio::task::spawn_blocking(move || crate::git::status(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Diff of one working-tree file against HEAD (old = HEAD, new = on-disk),
+/// for the source-control view's diff editor.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_diff(
+    cwd: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<crate::git::GitDiff, String> {
+    tokio::task::spawn_blocking(move || crate::git::diff_worktree(&cwd, &path, orig_path.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// A page of commit history across all refs (for the graph / git tree).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_log(
+    cwd: String,
+    limit: u32,
+    skip: u32,
+) -> Result<Vec<crate::git::CommitInfo>, String> {
+    tokio::task::spawn_blocking(move || crate::git::log(&cwd, limit, skip))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Local + remote-tracking branches with their upstream tracking counts.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_branches(cwd: String) -> Result<Vec<crate::git::BranchInfo>, String> {
+    tokio::task::spawn_blocking(move || crate::git::branches(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Files changed by a single commit (name-status vs its first parent).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_commit_files(
+    cwd: String,
+    oid: String,
+) -> Result<Vec<crate::git::CommitFile>, String> {
+    tokio::task::spawn_blocking(move || crate::git::commit_files(&cwd, &oid))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Diff of one file introduced by a commit (old = parent, new = commit).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_commit_file_diff(
+    cwd: String,
+    oid: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<crate::git::GitDiff, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::git::commit_file_diff(&cwd, &oid, &path, orig_path.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Stage all changes and commit them with `message`. Returns the new short oid.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_commit(cwd: String, message: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || crate::git::commit(&cwd, &message))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Push the current branch to its upstream.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_push(cwd: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::git::push(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Pull the current branch (`--ff-only`).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_pull(cwd: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::git::pull(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Fetch all remotes (with prune).
+#[tauri::command]
+#[specta::specta]
+pub async fn git_fetch(cwd: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::git::fetch(&cwd))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 // ---- Editor filesystem ----------------------------------------------------
 //
 // The front's single boundary to the editor's filesystem service. They forward
@@ -723,6 +921,53 @@ pub fn terminal_close(
 ) -> Result<(), String> {
     terminals.close(&id);
     Ok(())
+}
+
+// ---- Extensions (MCP / plugins / skills / sub-agents) ----------------------
+//
+// Single boundary to [`crate::extensions`] — the only service that reads Claude's
+// on-disk config. Returns the *configured* picture for a repo across scopes; the
+// UI merges in live connection status from the running session's `system/init`.
+
+/// List the configured extensions visible to the repository (or worktree) at
+/// `repo_path`: MCP servers (+ enabled state), plugins, skills, sub-agents,
+/// each tagged with its scope. Best-effort — never errors on missing config; the
+/// blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_extensions(
+    repo_path: String,
+) -> Result<crate::extensions::ExtensionsSnapshot, String> {
+    tokio::task::spawn_blocking(move || crate::extensions::list_extensions(&repo_path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Enable or disable a plugin (by id `<plugin>@<marketplace>`) in the user's
+/// `~/.claude/settings.json`. USER-GLOBAL toggle (not per-repo); takes effect on
+/// the next (re)start of a conversation. The write is atomic and preserves every
+/// other key. The blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_plugin_enabled(plugin_id: String, enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::extensions::set_plugin_enabled(&plugin_id, enabled))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Everything a single plugin provides (skills / sub-agents / MCP servers) for the
+/// per-plugin explorer — scanned regardless of the plugin's enabled state so a
+/// disabled plugin stays browsable. `repo_path` selects the install relevant to the
+/// repo. Best-effort; the blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_plugin_contents(
+    repo_path: String,
+    plugin_id: String,
+) -> Result<crate::extensions::PluginContents, String> {
+    tokio::task::spawn_blocking(move || crate::extensions::list_plugin_contents(&repo_path, &plugin_id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ---- Persistence (conversation metadata) ----------------------------------
