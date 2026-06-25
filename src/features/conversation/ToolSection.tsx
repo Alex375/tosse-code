@@ -18,6 +18,7 @@ import { QuestionnaireSummary } from "./QuestionnaireAsk";
 import { ToolResultBody } from "./ToolResultBody";
 import { toolMeta } from "./toolMeta";
 import {
+  basename,
   multiEdits,
   stepFilePath,
   stepLabel,
@@ -150,13 +151,25 @@ export function ToolStepRow({
         style={toggle ? { cursor: "pointer" } : undefined}
       >
         <Ico name={icon} className="sm cv-step-ico" />
-        {filePath ? (
-          <MentionPathChip path={filePath} className="cv-step-t" display={label} />
-        ) : (
-          <span className="cv-step-t" title={label}>
-            {label}
-          </span>
-        )}
+        {(() => {
+          // The whole row toggles the detail; only the file NAME is a clickable mention
+          // that opens the file. Split "Edit foo.ts" → "Edit " (toggles) + chip("foo.ts")
+          // (the chip stops propagation, so it opens instead of toggling).
+          const base = filePath ? basename(filePath) : null;
+          if (filePath && base && label.endsWith(base)) {
+            return (
+              <span className="cv-step-t" title={label}>
+                {label.slice(0, label.length - base.length)}
+                <MentionPathChip path={filePath} display={base} />
+              </span>
+            );
+          }
+          return (
+            <span className="cv-step-t" title={label}>
+              {label}
+            </span>
+          );
+        })()}
         <SummaryBadge summary={summary} />
         <span className="cv-step-end">
           {running ? (
@@ -178,14 +191,28 @@ export function ToolStepRow({
   );
 }
 
-/** A step in the LIVE thread: subscribes to its own result + the session's busy flag. */
-export function LiveToolStep({ session, step }: { session: string; step: ToolStep }) {
+/**
+ * A step in the LIVE thread: subscribes to its own result + the session's busy flag.
+ * `active` marks a step that belongs to the actively streaming turn; only then may a
+ * resultless step show the running spinner. Without it, a resultless step in a PAST
+ * turn (e.g. a tool_use left without a tool_result by an interrupt) would falsely spin
+ * whenever the session goes busy on a later turn — the session busy flag is global.
+ */
+export function LiveToolStep({
+  session,
+  step,
+  active = false,
+}: {
+  session: string;
+  step: ToolStep;
+  active?: boolean;
+}) {
   const result = useToolResult(session, step.id);
   const state = useSessionState(session);
   const joined: StepResult | undefined = result
     ? { content: result.content, isError: result.isError }
     : undefined;
-  const running = !result && (state?.busy ?? false);
+  const running = active && !result && (state?.busy ?? false);
   const isError = result?.isError ?? false;
   const summary = stepSummary(step.name, step.input, joined ? resultContentText(joined.content) : null);
   return (
@@ -222,21 +249,28 @@ export function StaticToolStep({ step, result }: { step: ToolStep; result: StepR
   );
 }
 
-/** The collapsible run container. Collapsed by default; auto-opens
- *  when a contained step errored, so a failure is visible without a click. */
+/** The collapsible run container. Collapsed by default; auto-opens when a contained
+ *  step errored (failure visible without a click) or while the run is actively running
+ *  (`live`) — so its steps appear live with their spinner — then collapses to the header
+ *  once the run settles. */
 export function ToolSection({
   title,
   errored,
+  live,
   children,
 }: {
   title: string;
   errored: boolean;
+  /** True while this is the actively-running trailing run of the live turn: the section
+   *  stays expanded so steps appear live (spinner → result), then collapses on settle. */
+  live?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(Boolean(live));
+  // Expanded while running or errored; collapses once the run settles (live → false).
   useEffect(() => {
-    if (errored) setOpen(true);
-  }, [errored]);
+    setOpen(Boolean(live) || errored);
+  }, [live, errored]);
 
   return (
     <div className={"cv-steps" + (errored ? " is-err" : "")}>

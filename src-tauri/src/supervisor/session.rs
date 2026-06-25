@@ -858,8 +858,14 @@ impl SessionCore {
             }
             SessionCommand::McpStatus(reply) => {
                 let rid = self.next_request_id();
-                self.pending_mcp.insert(rid.clone(), reply);
-                self.send(control::mcp_status_request(&rid));
+                // Only park the reply if the line actually went out. If the outbound
+                // channel is closed (process gone, not yet observed), dropping `reply`
+                // here resolves the caller's oneshot to `Err` immediately, so it returns
+                // `SessionError::Closed` at once instead of blocking the full 15s timeout
+                // on a request that can never be acked — same guard as `send_tracked`.
+                if self.send(control::mcp_status_request(&rid)) {
+                    self.pending_mcp.insert(rid, reply);
+                }
             }
             // Live MCP actions — fire-and-correlate: the bare-success ack is a no-op
             // (the UI re-polls `mcp_status`), a rejection surfaces as a control error.
@@ -880,8 +886,11 @@ impl SessionCore {
             }
             SessionCommand::McpAuthenticate { server_name, reply } => {
                 let rid = self.next_request_id();
-                self.pending_mcp_auth.insert(rid.clone(), reply);
-                self.send(control::mcp_authenticate_request(&rid, &server_name));
+                // Same closed-channel guard as McpStatus: drop `reply` on a failed send
+                // so the caller returns at once instead of blocking the full 30s timeout.
+                if self.send(control::mcp_authenticate_request(&rid, &server_name)) {
+                    self.pending_mcp_auth.insert(rid, reply);
+                }
             }
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown => {}

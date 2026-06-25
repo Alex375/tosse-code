@@ -111,6 +111,14 @@ impl std::error::Error for GitError {}
 /// carrying stderr on a non-zero exit. `dir` scopes the command to the right
 /// repository / worktree without changing the process's own cwd.
 fn run_git(dir: &str, args: &[&str]) -> Result<String, GitError> {
+    run_git_bytes(dir, args).map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// Like [`run_git`] but returns raw stdout bytes — for reading file blobs
+/// (`git show <rev>:<path>`) whose content may be binary or non-UTF-8. Shared by
+/// the `status`/`history` submodules to build diffs. The single spawn point for
+/// every git invocation in the core.
+fn run_git_bytes(dir: &str, args: &[&str]) -> Result<Vec<u8>, GitError> {
     let output = Command::new("git")
         // Force the C locale so git's messages are stable English — the UI keys
         // off them (e.g. detecting "not a git repository"), and they must not vary
@@ -127,27 +135,28 @@ fn run_git(dir: &str, args: &[&str]) -> Result<String, GitError> {
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(output.stdout)
 }
 
-/// Like [`run_git`] but returns raw stdout bytes — for reading file blobs
-/// (`git show <rev>:<path>`) whose content may be binary or non-UTF-8. Shared by
-/// the `status`/`history` submodules to build diffs.
-fn run_git_bytes(dir: &str, args: &[&str]) -> Result<Vec<u8>, GitError> {
-    let output = Command::new("git")
-        .env("LC_ALL", "C")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .map_err(GitError::Spawn)?;
-    if !output.status.success() {
-        return Err(GitError::Command {
-            args: args.join(" "),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        });
+/// Read a blob at `<rev>:<path>` for the "before" side of a diff, treating a
+/// genuinely-absent blob as an empty side (the legitimate added / renamed / unborn
+/// case) while still PROPAGATING any other git failure. Without this distinction a
+/// real error (corrupt object store, odd HEAD) is swallowed by `unwrap_or_default`
+/// and rendered as a 100%-added file instead of surfacing as an error.
+fn show_blob_or_empty(dir: &str, rev_path: &str) -> Result<Vec<u8>, GitError> {
+    match run_git_bytes(dir, &["show", rev_path]) {
+        Ok(bytes) => Ok(bytes),
+        // git's stable (LC_ALL=C) messages for "this path isn't in that rev":
+        // added file, the new name of a rename, or an unborn HEAD with no commits.
+        Err(GitError::Command { stderr, .. })
+            if stderr.contains("does not exist in")
+                || stderr.contains("exists on disk")
+                || stderr.contains("invalid object name") =>
+        {
+            Ok(Vec::new())
+        }
+        Err(e) => Err(e),
     }
-    Ok(output.stdout)
 }
 
 /// A file's contents on both sides of a diff, handed to the front's Monaco diff

@@ -533,6 +533,77 @@ export const useTimeline = (session: string): TimelineEntry[] =>
 export const useTurn = (session: string, id: string): Turn | undefined =>
   useConversationStore((s) => s.sessions[session]?.turns[id]);
 
+/** A render item for the thread. Consecutive main ASSISTANT turns coalesce into ONE
+ *  `ai` group, so a run of tool calls spread over several assistant messages renders as
+ *  one grouped response (not one section per message); a user message / error / etc.
+ *  breaks the group. */
+export type RenderItem =
+  | { kind: "ai"; ids: string[] }
+  | { kind: "user"; id: string }
+  | { kind: "notice"; id: string }
+  | { kind: "turn_result"; id: string }
+  | { kind: "error"; id: string };
+
+const EMPTY_PLAN: RenderItem[] = [];
+const EMPTY_BLOCKS: NormalizedBlock[] = [];
+
+/** Pure: fold the timeline into render items, coalescing consecutive assistant turns. */
+export function planTimelineRender(entry: SessionEntry | undefined): RenderItem[] {
+  if (!entry) return EMPTY_PLAN;
+  const out: RenderItem[] = [];
+  let aiGroup: { kind: "ai"; ids: string[] } | null = null;
+  for (const e of entry.timeline) {
+    if (e.kind === "turn") {
+      const t = entry.turns[e.id];
+      if (t && t.role === "assistant") {
+        if (!aiGroup) {
+          aiGroup = { kind: "ai", ids: [] };
+          out.push(aiGroup);
+        }
+        aiGroup.ids.push(e.id);
+        continue;
+      }
+      aiGroup = null;
+      out.push({ kind: "user", id: e.id });
+      continue;
+    }
+    aiGroup = null;
+    out.push({ kind: e.kind, id: e.id });
+  }
+  return out.length ? out : EMPTY_PLAN;
+}
+
+// Memoised on `timeline` identity: turn roles never change, so the plan is stable while
+// the agent streams (timeline ref unchanged) and recomputes only when an entry is added.
+const renderPlanCache = new Map<string, { timeline: TimelineEntry[]; result: RenderItem[] }>();
+
+export const useTimelineRender = (session: string): RenderItem[] =>
+  useConversationStore((s) => {
+    const entry = s.sessions[session];
+    if (!entry) return EMPTY_PLAN;
+    const cached = renderPlanCache.get(session);
+    if (cached && cached.timeline === entry.timeline) return cached.result;
+    const result = planTimelineRender(entry);
+    renderPlanCache.set(session, { timeline: entry.timeline, result });
+    return result;
+  });
+
+/** The blocks of an `ai` group: every grouped assistant turn's finalized blocks, in
+ *  order — so consecutive tool calls across several messages group into one run. */
+export const useGroupBlocks = (session: string, ids: string[]): NormalizedBlock[] =>
+  useConversationStore(
+    useShallow((s) => {
+      const entry = s.sessions[session];
+      if (!entry) return EMPTY_BLOCKS;
+      const out: NormalizedBlock[] = [];
+      for (const id of ids) {
+        const t = entry.turns[id];
+        if (t) for (const b of t.blocks) out.push(b);
+      }
+      return out.length ? out : EMPTY_BLOCKS;
+    }),
+  );
+
 export const useToolResult = (
   session: string,
   toolUseId: string,

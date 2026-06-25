@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{build_diff, run_git, run_git_bytes, GitDiff, GitError};
+use super::{build_diff, run_git, GitDiff, GitError};
 
 /// One changed path reported by `git status --porcelain=v2`. The `index_status` /
 /// `worktree_status` are the two halves of git's `XY` code (`.` = unchanged).
@@ -64,7 +64,7 @@ pub fn diff_worktree(cwd: &str, path: &str, orig_path: Option<&str>) -> Result<G
     // path doesn't exist at HEAD) — without this it would render as fully added.
     // A missing blob (genuine add / unborn) just yields an empty "before" side.
     let old_path = orig_path.unwrap_or(path);
-    let old = run_git_bytes(cwd, &["show", &format!("HEAD:{old_path}")]).unwrap_or_default();
+    let old = super::show_blob_or_empty(cwd, &format!("HEAD:{old_path}"))?;
     let new = std::fs::read(std::path::Path::new(cwd).join(path)).unwrap_or_default();
     Ok(build_diff(path, &old, &new, "HEAD", "Working tree"))
 }

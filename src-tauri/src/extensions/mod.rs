@@ -479,9 +479,14 @@ fn apply_plugin_enabled(text: &str, plugin_id: &str, enabled: bool) -> Result<St
 }
 
 /// Replace `path` atomically: write a sibling temp file, then rename over the
-/// target so a crash mid-write can never leave a truncated file.
+/// target so a crash mid-write can never leave a truncated file. The temp name is
+/// unique per call (pid + a monotonic counter) so two concurrent writes to the same
+/// target don't share — and clobber — one another's temp file.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let tmp = path.with_extension("json.tosse-tmp");
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.tosse-tmp.{}.{n}", std::process::id()));
     std::fs::write(&tmp, bytes).map_err(|e| format!("écriture du fichier temporaire : {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp); // don't leave the temp behind on failure

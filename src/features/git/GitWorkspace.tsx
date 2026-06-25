@@ -117,6 +117,28 @@ export function GitWorkspace({
     </div>
   );
 
+  // The conversation pane + (when a diff is open) its splitter and diff pane — the
+  // identical sub-tree shared by the row and column layouts. Hoisted so the splitter
+  // geometry (min widths, fraction math, drag wiring) lives in ONE place.
+  const convDiff = (
+    <>
+      <div
+        className={styles.wsConv}
+        style={{ flex: `${diffOpen ? gitConvFraction : 1} 1 0`, minWidth: 220 }}
+      >
+        {conversation}
+      </div>
+      {diffOpen ? (
+        <>
+          <Splitter axis="x" onMove={(x) => onConvDrag(x)} />
+          <div style={{ flex: `${1 - gitConvFraction} 1 0`, minWidth: 0, display: "flex" }}>
+            {diff}
+          </div>
+        </>
+      ) : null}
+    </>
+  );
+
   // The git-history section: header (tabs + branch) then the tree/files (history)
   // or changes/commit-box (changes). `vertical` stacks them top/bottom; otherwise
   // side by side. The first pane carries the divider border.
@@ -200,20 +222,7 @@ export function GitWorkspace({
           className={styles.wsRegion}
           style={{ flex: `${1 - gitHistFraction} 1 0`, flexDirection: "row", minWidth: 0 }}
         >
-          <div
-            className={styles.wsConv}
-            style={{ flex: `${diffOpen ? gitConvFraction : 1} 1 0`, minWidth: 220 }}
-          >
-            {conversation}
-          </div>
-          {diffOpen ? (
-            <>
-              <Splitter axis="x" onMove={(x) => onConvDrag(x)} />
-              <div style={{ flex: `${1 - gitConvFraction} 1 0`, minWidth: 0, display: "flex" }}>
-                {diff}
-              </div>
-            </>
-          ) : null}
+          {convDiff}
         </div>
         <Splitter axis="x" onMove={(x) => onHistDrag(x)} />
         <div className={styles.wsRegion} style={{ flex: `${gitHistFraction} 1 0`, minWidth: 0 }}>
@@ -227,20 +236,7 @@ export function GitWorkspace({
   return (
     <div ref={outerRef} className={styles.workspace}>
       <div ref={topRowRef} className={styles.wsTop} style={{ flex: `${1 - gitStripFraction} 1 0` }}>
-        <div
-          className={styles.wsConv}
-          style={{ flex: `${diffOpen ? gitConvFraction : 1} 1 0`, minWidth: 220 }}
-        >
-          {conversation}
-        </div>
-        {diffOpen ? (
-          <>
-            <Splitter axis="x" onMove={(x) => onConvDrag(x)} />
-            <div style={{ flex: `${1 - gitConvFraction} 1 0`, minWidth: 0, display: "flex" }}>
-              {diff}
-            </div>
-          </>
-        ) : null}
+        {convDiff}
       </div>
       <Splitter axis="y" onMove={onStripDrag} />
       <div className={styles.wsRegion} style={{ flex: `${gitStripFraction} 1 0`, minHeight: 0 }}>
