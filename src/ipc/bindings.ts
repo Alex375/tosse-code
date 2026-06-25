@@ -340,6 +340,117 @@ async pathExists(path: string) : Promise<boolean> {
     return await TAURI_INVOKE("path_exists", { path });
 },
 /**
+ * Working-tree status: current branch, ahead/behind, and changed files.
+ */
+async gitStatus(cwd: string) : Promise<Result<GitStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_status", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Diff of one working-tree file against HEAD (old = HEAD, new = on-disk),
+ * for the source-control view's diff editor.
+ */
+async gitDiff(cwd: string, path: string, origPath: string | null) : Promise<Result<GitDiff, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_diff", { cwd, path, origPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * A page of commit history across all refs (for the graph / git tree).
+ */
+async gitLog(cwd: string, limit: number, skip: number) : Promise<Result<CommitInfo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_log", { cwd, limit, skip }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Local + remote-tracking branches with their upstream tracking counts.
+ */
+async gitBranches(cwd: string) : Promise<Result<BranchInfo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_branches", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Files changed by a single commit (name-status vs its first parent).
+ */
+async gitCommitFiles(cwd: string, oid: string) : Promise<Result<CommitFile[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_commit_files", { cwd, oid }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Diff of one file introduced by a commit (old = parent, new = commit).
+ */
+async gitCommitFileDiff(cwd: string, oid: string, path: string, origPath: string | null) : Promise<Result<GitDiff, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_commit_file_diff", { cwd, oid, path, origPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Stage all changes and commit them with `message`. Returns the new short oid.
+ */
+async gitCommit(cwd: string, message: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_commit", { cwd, message }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Push the current branch to its upstream.
+ */
+async gitPush(cwd: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_push", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Pull the current branch (`--ff-only`).
+ */
+async gitPull(cwd: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_pull", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Fetch all remotes (with prune).
+ */
+async gitFetch(cwd: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("git_fetch", { cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * List one directory level (dirs first, then files, alpha) for the file tree.
  */
 async readDir(path: string) : Promise<Result<FsEntry[], string>> {
@@ -680,6 +791,82 @@ export type BackgroundTaskStatus =
  */
 "stopped"
 /**
+ * One branch ref. `is_remote` distinguishes `refs/remotes/*` from local
+ * `refs/heads/*`; `ahead`/`behind` come from the branch's upstream tracking
+ * (`None` when it has no upstream).
+ */
+export type BranchInfo = { 
+/**
+ * Short name, e.g. `main` or `origin/feature`.
+ */
+name: string; 
+/**
+ * Commit oid the branch points at.
+ */
+oid: string; 
+/**
+ * The currently checked-out branch.
+ */
+is_head: boolean; 
+/**
+ * A remote-tracking branch (`refs/remotes/*`).
+ */
+is_remote: boolean; 
+/**
+ * Upstream short name; `None` when unset.
+ */
+upstream: string | null; 
+/**
+ * Commits ahead of upstream.
+ */
+ahead: number | null; 
+/**
+ * Commits behind upstream.
+ */
+behind: number | null }
+/**
+ * One file changed by a commit (name-status against its first parent).
+ */
+export type CommitFile = { path: string; 
+/**
+ * Source path for a rename/copy; `None` otherwise.
+ */
+orig_path: string | null; 
+/**
+ * Status letter: `M A D R C T`.
+ */
+status: string }
+/**
+ * One commit in the history. `parents` are full oids (0 = root, 1 = normal,
+ * 2+ = merge), which the front uses to draw the graph. `refs` are the branch/tag
+ * names pointing at this commit (decoration), for badges.
+ */
+export type CommitInfo = { 
+/**
+ * Full commit oid.
+ */
+oid: string; 
+/**
+ * Abbreviated oid (as git chooses it).
+ */
+short_oid: string; 
+/**
+ * Parent commit oids, in git's order.
+ */
+parents: string[]; author_name: string; author_email: string; 
+/**
+ * Author timestamp, Unix seconds.
+ */
+timestamp: number; 
+/**
+ * First line of the commit message.
+ */
+subject: string; 
+/**
+ * Ref names pointing here (branches/tags/`HEAD`), already de-decorated.
+ */
+refs: string[] }
+/**
  * Context-meter seed for a conversation, read from its on-disk transcript so the
  * ring shows the real fill the moment a conversation is opened / its stream turned
  * on — before the first new turn streams live usage. `context_window` is the model's
@@ -815,6 +1002,103 @@ export type FsEntry = { name: string; path: string; is_dir: boolean }
  * hint instead of silently going stale. Not session-keyed (single active watch).
  */
 export type FsWatchErrorEvent = { message: string }
+/**
+ * A file's contents on both sides of a diff, handed to the front's Monaco diff
+ * editor (which computes the visual diff itself). An empty `old_text` means the
+ * file was added; an empty `new_text` means it was deleted. When either side is
+ * binary the texts are `None` and the front shows a "binary file" placeholder.
+ */
+export type GitDiff = { 
+/**
+ * Repo-relative path of the file being diffed.
+ */
+path: string; 
+/**
+ * "Before" side content. `None` when binary.
+ */
+old_text: string | null; 
+/**
+ * "After" side content. `None` when binary.
+ */
+new_text: string | null; 
+/**
+ * Either side looks binary — no text diff, the UI shows a placeholder.
+ */
+is_binary: boolean; 
+/**
+ * Human label for the "before" side (e.g. "HEAD", "a1b2c3d^").
+ */
+old_label: string; 
+/**
+ * Human label for the "after" side (e.g. "Working tree", "a1b2c3d").
+ */
+new_label: string }
+/**
+ * One changed path reported by `git status --porcelain=v2`. The `index_status` /
+ * `worktree_status` are the two halves of git's `XY` code (`.` = unchanged).
+ */
+export type GitFileEntry = { 
+/**
+ * Path relative to the repository root (forward slashes, as git emits).
+ */
+path: string; 
+/**
+ * For a rename/copy, the path it came from; `None` otherwise.
+ */
+orig_path: string | null; 
+/**
+ * Index (staged) status letter: `M A D R C T .` or `?` (untracked).
+ */
+index_status: string; 
+/**
+ * Working-tree (unstaged) status letter, same alphabet.
+ */
+worktree_status: string; 
+/**
+ * Index differs from HEAD (there is something staged).
+ */
+staged: boolean; 
+/**
+ * Working tree differs from the index (there is something unstaged).
+ */
+unstaged: boolean; 
+/**
+ * Not yet tracked by git.
+ */
+untracked: boolean }
+/**
+ * Summary of `git status`: the current branch, its upstream tracking counts and
+ * the changed files. Backs the source-control view's header + file list.
+ */
+export type GitStatus = { 
+/**
+ * Current branch name; `None` when detached.
+ */
+branch: string | null; 
+/**
+ * Full HEAD commit oid; `None` on an unborn branch.
+ */
+head: string | null; 
+/**
+ * Upstream ref short name (e.g. `origin/main`); `None` when unset.
+ */
+upstream: string | null; 
+/**
+ * Commits ahead of upstream.
+ */
+ahead: number; 
+/**
+ * Commits behind upstream.
+ */
+behind: number; 
+/**
+ * The branch has no commits yet (unborn HEAD).
+ */
+unborn: boolean; 
+/**
+ * Changed entries (staged + unstaged + untracked), in git's order.
+ */
+files: GitFileEntry[] }
 /**
  * An image file's bytes, base64-encoded for the webview to render as a `data:`
  * URL. Unlike [`read_file`], the binary content IS the payload here — images are

@@ -1,0 +1,557 @@
+/* Git panel — a JetBrains/PyCharm-style history + diff workspace. Modern/épuré,
+   on the --wf-* token palette so it blends with the rest of the shell. */
+
+/* ---- 2x2 Git workspace (GitWorkspace) ------------------------------------ */
+.workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wf-bg);
+  overflow: hidden;
+}
+.wsTop {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+}
+.wsConv {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.wsDiff {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+/* A generic flex-column region (the right column in vertical orientation, and the
+   strip wrapper) — keeps min-size at 0 so children can shrink/scroll. */
+.wsRegion {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.strip {
+  display: flex;
+  flex-direction: column;
+  /* Fill the fraction wrapper (wsRegion) so the inner stripBody/file lists get a
+     real height to flex into — without this they collapse to ~0. The divider line
+     is drawn by the adjacent Splitter, so no border here (avoids doubled lines). */
+  flex: 1;
+  min-height: 0;
+  background: var(--wf-bg);
+}
+.stripHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--wf-line);
+  background: var(--wf-bg-2);
+  flex: none;
+}
+.stripBody {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+}
+/* A pane inside the history section (tree / files / changes / commit box). The
+   divider border is applied inline per orientation by GitWorkspace. */
+.stripPane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* A file list that fills its pane (vs the capped .fileList used elsewhere). */
+.fileListFull {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* CommitBox (changes tab, bottom-right). */
+.commitColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  overflow: auto;
+}
+.commitBranchRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--wf-tx);
+}
+.commitAuthor {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wf-bg);
+  border-left: 1px solid var(--wf-line);
+  overflow: hidden;
+}
+/* When the region sits BELOW the conversation, the separator is on top instead. */
+.stacked {
+  border-left: none;
+  border-top: 1px solid var(--wf-line);
+}
+
+/* ---- Header: tabs + branch chip + global actions -------------------------- */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--wf-line);
+  background: var(--wf-bg-2);
+  flex: none;
+}
+.tabs {
+  display: flex;
+  gap: 2px;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: none;
+  border-radius: var(--wf-r);
+  background: transparent;
+  color: var(--wf-tx-lo);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tab:hover {
+  color: var(--wf-tx);
+  background: var(--wf-panel);
+}
+.tabActive {
+  color: var(--wf-tx-hi);
+  background: var(--wf-panel);
+}
+.spacer {
+  flex: 1;
+}
+.branchChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--wf-panel);
+  color: var(--wf-tx);
+  font-size: 11.5px;
+  max-width: 160px;
+  overflow: hidden;
+}
+.branchName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aheadBehind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--wf-tx-lo);
+  font-size: 11px;
+}
+.ab {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--wf-r);
+  background: transparent;
+  color: var(--wf-tx-lo);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.iconBtn:hover:not(:disabled) {
+  color: var(--wf-tx);
+  background: var(--wf-panel);
+}
+.iconBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.spin {
+  animation: gitspin 0.8s linear infinite;
+}
+@keyframes gitspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- Body + generic states ----------------------------------------------- */
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 24px;
+  color: var(--wf-tx-lo);
+  font-size: 12.5px;
+  text-align: center;
+}
+.error {
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--wf-err);
+  border-radius: var(--wf-r);
+  background: color-mix(in srgb, var(--wf-err) 12%, transparent);
+  color: var(--wf-err);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+/* ---- Changed-files list --------------------------------------------------- */
+.sectionLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 4px;
+  color: var(--wf-tx-xlo);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.count {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--wf-panel);
+  color: var(--wf-tx-lo);
+}
+.fileList {
+  overflow: auto;
+  flex: 0 1 auto;
+  max-height: 42%;
+}
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--wf-tx);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.fileRow:hover {
+  background: var(--wf-panel);
+}
+.fileRowSel {
+  background: var(--wf-panel-2, var(--wf-panel));
+}
+.fileRowSel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 2px;
+  height: 18px;
+  background: var(--wf-accent);
+  border-radius: 0 2px 2px 0;
+}
+.fileName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.fileDir {
+  color: var(--wf-tx-xlo);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.badge {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-family: var(--wf-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.badgeM {
+  color: var(--wf-att);
+}
+.badgeA {
+  color: var(--wf-run);
+}
+.badgeD {
+  color: var(--wf-err);
+}
+.badgeR {
+  color: var(--wf-wait);
+}
+.badgeU {
+  color: var(--wf-tx-lo);
+}
+
+/* ---- Commit footer (changes tab) ----------------------------------------- */
+.commitFooter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--wf-line);
+  background: var(--wf-bg-2);
+  flex: none;
+}
+.commitInput {
+  resize: none;
+  width: 100%;
+  min-height: 48px;
+  max-height: 120px;
+  padding: 7px 9px;
+  border: 1px solid var(--wf-line);
+  border-radius: var(--wf-r);
+  background: var(--wf-bg);
+  color: var(--wf-tx);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.commitInput:focus {
+  outline: none;
+  border-color: var(--wf-accent-dim, var(--wf-line-2, var(--wf-line)));
+}
+.commitActions {
+  display: flex;
+  gap: 6px;
+}
+.commitBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--wf-r);
+  background: var(--wf-accent);
+  color: #1a1109;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.commitBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---- Diff slot ------------------------------------------------------------ */
+.diffSlot {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid var(--wf-line);
+}
+.diffBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--wf-line);
+  background: var(--wf-bg-2);
+  font-size: 11.5px;
+  color: var(--wf-tx-lo);
+  flex: none;
+}
+.diffBarPath {
+  color: var(--wf-tx);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diffBarLabels {
+  margin-left: auto;
+  font-family: var(--wf-mono);
+  font-size: 10.5px;
+  color: var(--wf-tx-xlo);
+}
+.diffHost {
+  flex: 1;
+  min-height: 0;
+}
+.diffPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: var(--wf-tx-xlo);
+  font-size: 12px;
+}
+
+/* ---- History: commit list + graph ---------------------------------------- */
+.commitList {
+  overflow-y: auto;
+  /* Clip horizontally so a HEAD decorated with many worktree branches (or a wide
+     graph gutter) never forces a horizontal scrollbar — scroll is vertical. */
+  overflow-x: hidden;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.commitRow {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--wf-tx);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.commitRow:hover {
+  background: var(--wf-panel);
+}
+.commitRowSel {
+  background: var(--wf-panel-2, var(--wf-panel));
+}
+.graphGutter {
+  flex: none;
+  align-self: stretch;
+}
+.commitText {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 10px 5px 2px;
+  min-width: 0;
+  flex: 1;
+}
+.commitSubjectLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.commitSubject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.commitSub {
+  display: flex;
+  gap: 6px;
+  color: var(--wf-tx-xlo);
+  font-size: 10.5px;
+}
+.commitOid {
+  font-family: var(--wf-mono);
+}
+.refBadge {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 15px;
+  background: color-mix(in srgb, var(--wf-wait) 18%, transparent);
+  color: var(--wf-wait);
+  white-space: nowrap;
+}
+.refHead {
+  background: color-mix(in srgb, var(--wf-run) 20%, transparent);
+  color: var(--wf-run);
+}
+.refTag {
+  background: color-mix(in srgb, var(--wf-att) 18%, transparent);
+  color: var(--wf-att);
+}
+.loadMore {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-top: 1px solid var(--wf-line);
+  background: transparent;
+  color: var(--wf-tx-lo);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.loadMore:hover {
+  color: var(--wf-tx);
+  background: var(--wf-panel);
+}
+
+/* ---- History: selected-commit detail ------------------------------------- */
+.detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  border-top: 1px solid var(--wf-line);
+}
+.detailHead {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--wf-line);
+  background: var(--wf-bg-2);
+  flex: none;
+}
+.detailSubject {
+  font-size: 12.5px;
+  color: var(--wf-tx-hi);
+  margin-bottom: 3px;
+}
+.detailMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--wf-tx-xlo);
+  font-size: 10.5px;
+}

@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useEffect,
   useRef,
   type MouseEvent as ReactMouseEvent,
@@ -13,16 +15,15 @@ import { effectiveCwd } from "../git/worktree";
 import { Splitter } from "../editor/Splitter";
 import { clamp, useEditorLayout, useEditorStore } from "../editor/editorStore";
 import { SidePanel } from "./SidePanel";
-import { TodoBar } from "../todos/TodoBar";
-import { ConductorComposer, type ComposerHandle } from "./ConductorComposer";
+import { ConversationPane } from "./ConversationPane";
+import { type ComposerHandle } from "./ConductorComposer";
 import { ConductorSidebar } from "./ConductorSidebar";
-import { ConductorThread } from "./ConductorThread";
-import { FileMentionProvider } from "./FileMention";
-import { ReviewBar } from "./ReviewBar";
-import { AgentBar } from "./AgentBar";
-import { BashBar } from "./BashBar";
-import { MonitorBar } from "./MonitorBar";
-import { useStickToBottom } from "./useStickToBottom";
+
+// Lazy: the Git workspace pulls in Monaco's diff editor + ribbon overlay — its
+// own chunk, off the startup bundle, fetched only when Git mode is opened.
+const GitWorkspace = lazy(() =>
+  import("../git/GitWorkspace").then((m) => ({ default: m.GitWorkspace })),
+);
 
 // Interactive elements whose clicks must NOT be hijacked to focus the composer
 // (buttons, links, other fields, expandable tool-card headers via role=button…).
@@ -107,14 +108,30 @@ function MainArea({
   composerRef: RefObject<ComposerHandle>;
   onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
-  const { open, terminalOpen, orientation, editorFraction } = useEditorLayout();
+  const { open, terminalOpen, gitOpen, orientation, editorFraction } = useEditorLayout();
   const setEditorFraction = useEditorStore((s) => s.setEditorFraction);
   const liveState = useSessionState(conv.id);
   const cwd = effectiveCwd(conv, liveState);
   const areaRef = useRef<HTMLDivElement>(null);
   const sideBySide = orientation === "row";
-  // The side region shows when EITHER the editor or the terminal is open.
+  // The editor/terminal side region shows when either is open.
   const sideOpen = open || terminalOpen;
+
+  // Git mode takes over the whole area with its own 2x2 workspace (conversation
+  // minimized top-left, diff top-right, history + files strip at the bottom),
+  // independent of the editor/terminal region.
+  if (gitOpen) {
+    return (
+      <Suspense fallback={<div style={{ flex: 1, background: "var(--wf-bg)" }} />}>
+        <GitWorkspace
+          conv={conv}
+          cwd={cwd}
+          composerRef={composerRef}
+          onBackgroundClick={onBackgroundClick}
+        />
+      </Suspense>
+    );
+  }
 
   const onSplitDrag = (clientX: number, clientY: number) => {
     const rect = areaRef.current?.getBoundingClientRect();
@@ -176,43 +193,6 @@ function MainArea({
           </div>
         </>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * The active conversation's column: thread + todo bar + composer, sharing one
- * stick-to-bottom instance. The thread is the scroll container; the composer snaps it
- * to the bottom on send (`onSent`). Mounted with a per-conversation key so it remounts
- * on switch; the scroll position is remembered per conversation inside the hook (keyed
- * by `session`, the stable id), so reopening returns to where the user left off —
- * defaulting to the bottom when there is no memory yet.
- */
-function ConversationPane({
-  session,
-  cwd,
-  composerRef,
-  onBackgroundClick,
-}: {
-  session: string;
-  cwd: string;
-  composerRef: RefObject<ComposerHandle>;
-  onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
-}) {
-  const { scrollRef, onRender, scrollToBottom } = useStickToBottom(session);
-  return (
-    <div className="wf-col cv-pane" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
-      {/* Provide the conversation id + live cwd so file mentions in the thread
-          resolve + open in this conversation's editor. */}
-      <FileMentionProvider convId={session} cwd={cwd}>
-        <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
-      </FileMentionProvider>
-      <AgentBar session={session} />
-      <BashBar session={session} />
-      <MonitorBar session={session} />
-      <TodoBar session={session} />
-      <ReviewBar session={session} />
-      <ConductorComposer ref={composerRef} session={session} onSent={scrollToBottom} />
     </div>
   );
 }
