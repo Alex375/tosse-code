@@ -1,0 +1,220 @@
+/* ===========================================================================
+   ULTRA CODE — full-screen activation blast.
+   Plays once when the "Ultra code" tier is switched ON, then unmounts.
+   Layered: white flash → spinning rainbow rays → expanding shockwave rings →
+   exploding multicolor particles → punchy "ULTRA CODE" wordmark, with a short
+   viewport shake. Steady-state UI is untouched — this is the *moment* only.
+   Honors prefers-reduced-motion (a soft fade, no shake / no particles).
+   =========================================================================== */
+
+.ultra-blast {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  pointer-events: none;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  /* whole overlay fades out at the tail so nothing lingers */
+  animation: ub-overlay 2s ease forwards;
+}
+@keyframes ub-overlay {
+  0%, 78% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ---- white flash ---------------------------------------------------------- */
+.ultra-blast-flash {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, #fff 0%, #ffffffcc 18%, transparent 60%);
+  animation: ub-flash 0.55s ease-out forwards;
+}
+@keyframes ub-flash {
+  0% { opacity: 0; transform: scale(0.2); }
+  10% { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.6); }
+}
+
+/* ---- spinning rainbow rays ------------------------------------------------ */
+.ultra-blast-rays {
+  position: absolute;
+  width: 220vmax;
+  height: 220vmax;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    #b483e0, #ff3d7f, #ff8a3d, #ffd23d, #3dff7a,
+    #3dd2ff, #7a3dff, #ff3df0, #b483e0
+  );
+  /* slice the disc into hard wedges so it reads as rays, not a smear */
+  -webkit-mask: repeating-conic-gradient(from 0deg, #000 0deg 6deg, transparent 6deg 12deg);
+  mask: repeating-conic-gradient(from 0deg, #000 0deg 6deg, transparent 6deg 12deg);
+  mix-blend-mode: screen;
+  filter: blur(0.5px) saturate(1.4);
+  animation: ub-rays 1.9s cubic-bezier(0.16, 0.84, 0.3, 1) forwards;
+}
+@keyframes ub-rays {
+  0% { opacity: 0; transform: scale(0.1) rotate(0deg); }
+  14% { opacity: 0.95; }
+  100% { opacity: 0; transform: scale(1.05) rotate(190deg); }
+}
+
+/* ---- expanding shockwave rings ------------------------------------------- */
+.ultra-blast-ring {
+  position: absolute;
+  width: 12vmin;
+  height: 12vmin;
+  border-radius: 50%;
+  border: 0.6vmin solid;
+  mix-blend-mode: screen;
+  animation: ub-ring 1.5s cubic-bezier(0.1, 0.7, 0.2, 1) forwards;
+}
+.ultra-blast-ring:nth-child(1) { border-color: #b483e0; animation-delay: 0s; }
+.ultra-blast-ring:nth-child(2) { border-color: #3dd2ff; animation-delay: 0.16s; }
+.ultra-blast-ring:nth-child(3) { border-color: #ff3d7f; animation-delay: 0.32s; }
+@keyframes ub-ring {
+  0% { opacity: 0; transform: scale(0.2); border-width: 1.4vmin; }
+  8% { opacity: 1; }
+  100% { opacity: 0; transform: scale(14); border-width: 0.05vmin; }
+}
+
+/* ---- exploding particles -------------------------------------------------- */
+.ultra-blast-particles {
+  position: absolute;
+  inset: 0;
+}
+.ultra-blast-particle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--sz);
+  height: var(--sz);
+  border-radius: var(--shape);
+  background: var(--c);
+  box-shadow: 0 0 12px 2px var(--c);
+  mix-blend-mode: screen;
+  animation: ub-particle 1.6s cubic-bezier(0.12, 0.8, 0.25, 1) var(--d) forwards;
+}
+@keyframes ub-particle {
+  0% { opacity: 0; transform: translate(-50%, -50%) translate(0, 0) scale(0) rotate(0deg); }
+  10% { opacity: 1; transform: translate(-50%, -50%) translate(0, 0) scale(1) rotate(0deg); }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate(var(--tx), var(--ty)) scale(0.1) rotate(var(--rot));
+  }
+}
+
+/* ---- the wordmark --------------------------------------------------------- */
+.ultra-blast-title {
+  position: relative;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: clamp(34px, 9vw, 132px);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  background: linear-gradient(
+    100deg,
+    #b483e0, #ff3d7f, #ff8a3d, #ffd23d, #3dff7a, #3dd2ff, #7a3dff, #b483e0
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 36px rgba(180, 131, 224, 0.55);
+  filter: drop-shadow(0 4px 18px rgba(0, 0, 0, 0.5));
+  animation:
+    ub-title 1.9s cubic-bezier(0.16, 0.7, 0.2, 1) forwards,
+    ub-title-hue 1.9s linear forwards;
+}
+@keyframes ub-title {
+  0% { opacity: 0; transform: scale(0.3) rotate(-6deg); }
+  16% { opacity: 1; transform: scale(1.18) rotate(2deg); }
+  26% { transform: scale(0.97) rotate(0deg); }
+  34% { transform: scale(1.04); }
+  44% { transform: scale(1); }
+  82% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.25); }
+}
+@keyframes ub-title-hue {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+
+/* glitch echoes — two offset copies that jitter on the R/B channels */
+.ultra-blast-title::before,
+.ultra-blast-title::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.ultra-blast-title::before {
+  background: linear-gradient(100deg, #ff3d7f, #ff3d7f);
+  -webkit-background-clip: text;
+  background-clip: text;
+  mix-blend-mode: screen;
+  animation: ub-glitch-a 1.9s steps(2, end) forwards;
+}
+.ultra-blast-title::after {
+  background: linear-gradient(100deg, #3dd2ff, #3dd2ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  mix-blend-mode: screen;
+  animation: ub-glitch-b 1.9s steps(2, end) forwards;
+}
+@keyframes ub-glitch-a {
+  0%, 14% { opacity: 0; transform: translate(0, 0); }
+  16% { opacity: 0.8; transform: translate(-5px, 2px); }
+  20% { transform: translate(4px, -3px); }
+  24% { transform: translate(-3px, 1px); }
+  30% { opacity: 0; transform: translate(0, 0); }
+  100% { opacity: 0; }
+}
+@keyframes ub-glitch-b {
+  0%, 14% { opacity: 0; transform: translate(0, 0); }
+  16% { opacity: 0.8; transform: translate(5px, -2px); }
+  20% { transform: translate(-4px, 3px); }
+  24% { transform: translate(3px, -1px); }
+  30% { opacity: 0; transform: translate(0, 0); }
+  100% { opacity: 0; }
+}
+
+/* ---- viewport shake (applied to <body>) ---------------------------------- */
+.ultra-blast-shake {
+  animation: ub-shake 0.6s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@keyframes ub-shake {
+  0%, 100% { transform: translate(0, 0); }
+  10% { transform: translate(-7px, 4px) rotate(-0.4deg); }
+  20% { transform: translate(8px, -5px) rotate(0.5deg); }
+  30% { transform: translate(-9px, -3px) rotate(-0.3deg); }
+  40% { transform: translate(7px, 6px) rotate(0.4deg); }
+  50% { transform: translate(-6px, -4px); }
+  60% { transform: translate(5px, 3px) rotate(0.2deg); }
+  70% { transform: translate(-4px, 2px); }
+  80% { transform: translate(3px, -2px); }
+  90% { transform: translate(-2px, 1px); }
+}
+
+/* ---- accessibility: keep it, but calm it right down ----------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .ultra-blast-rays,
+  .ultra-blast-ring,
+  .ultra-blast-particles,
+  .ultra-blast-flash { display: none; }
+  .ultra-blast-shake { animation: none; }
+  .ultra-blast-title {
+    animation: ub-title-soft 1.2s ease both, ub-title-hue 1.2s linear forwards;
+  }
+  .ultra-blast-title::before,
+  .ultra-blast-title::after { display: none; }
+}
+@keyframes ub-title-soft {
+  0% { opacity: 0; transform: scale(0.92); }
+  20% { opacity: 1; transform: scale(1); }
+  78% { opacity: 1; }
+  100% { opacity: 0; }
+}

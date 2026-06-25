@@ -9,6 +9,7 @@ import { GitToggle } from "./features/git/GitToggle";
 import { EditorToggle } from "./features/editor/EditorToggle";
 import { FlightDeck } from "./features/flightdeck/FlightDeck";
 import { ExtensionsManager } from "./features/extensions/ExtensionsManager";
+import { UltraCodeBlast } from "./features/conversation/UltraCodeBlast";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { AppErrorBanner } from "./ui/AppErrorBanner";
 import { useGlobalSessionEvents } from "./ipc/useGlobalSessionEvents";
@@ -118,6 +119,8 @@ export default function App() {
       <WorktreeManager />
       {/* Idem: the extensions manager, opened per repo (sidebar) or per conversation (composer). */}
       <ExtensionsManager />
+      {/* Mounted once, globally: the full-screen "Ultra code" activation blast. */}
+      <UltraCodeBlast />
     </Win>
   );
 }
