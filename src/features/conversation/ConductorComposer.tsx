@@ -23,6 +23,7 @@ import { useExtensionsUi } from "../extensions/extensionsUiStore";
 import { ChipBtn, ClaudeMark, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { useContextData } from "../../store/contextData";
 import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
+import { useUltraBlast } from "../../store/ultraBlast";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
 import {
   SlashCommandMenu,
@@ -265,8 +266,12 @@ export const ConductorComposer = forwardRef<
   const applyEffort = (lvl: EffortLevel) => {
     const store = useConversationsStore.getState();
     // "Ultra code" is not an effort value — it's xhigh + a separate flag.
-    if (lvl === "ultracode") store.setConvUltracode(session);
-    else store.setConvEffort(session, lvl);
+    if (lvl === "ultracode") {
+      // Fire the full-screen blast only on the OFF→ON transition, not on a
+      // re-select while already ultra.
+      if (gaugeValue !== "ultracode") useUltraBlast.getState().fire();
+      store.setConvUltracode(session);
+    } else store.setConvEffort(session, lvl);
   };
 
   const chooseModel = (value: string) => {
