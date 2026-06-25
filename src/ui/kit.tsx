@@ -38,6 +38,7 @@ const WF_PATHS: Record<string, string> = {
   alert: "M11 4 3 17h16L11 4ZM11 9v4M11 16h.01",
   ask: "M8 8.5a3 3 0 1 1 4.2 2.7c-.8.4-1.2 1-1.2 1.9M11 16h.01",
   gauge: "M4 15a7 7 0 0 1 14 0M11 15l3.5-3.5",
+  pulse: "M3 11h4l2-4 3 8 2-5 2 1h3",
   bolt: "M12 3 5 13h5l-1 8 7-10h-5l1-8Z",
   shield: "M11 3 4 6v5c0 4 3 6 7 8 4-2 7-4 7-8V6l-7-3Z",
   commit: "M3 11h5m6 0h5M11 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z",

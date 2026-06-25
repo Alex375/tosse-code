@@ -91,9 +91,20 @@ const BASH_OUTPUTS: Record<string, string> = {
     "vite v5.4.2 building for production...\n✓ 1240 modules transformed.\ndist/index.html                   0.46 kB │ gzip:  0.30 kB\ndist/assets/index-a1b2c3.css     38.91 kB │ gzip:  7.12 kB\ndist/assets/index-d4e5f6.js     284.10 kB │ gzip: 92.34 kB\n✓ built in 9.40s\n",
 };
 
-/** The mock side of `read_task_output` — canned logs keyed by the demo task ids. */
+/** Canned event stream for the Monitor demo, returned by the mock's `read_task_output`
+ *  so the <MonitorBar>'s <TaskOutputPopover> tails real-shaped events in dev. One line
+ *  per event — the append-only shape the `Monitor` tool writes to `tasks/<id>.output`. */
+const MONITOR_OUTPUTS: Record<string, string> = {
+  tk_mon:
+    "[12:04:18] GET /api/health 200 4ms\n[12:04:19] GET /api/tasks 200 22ms\n[12:04:21] POST /api/login 401 8ms\n[12:04:23] GET /api/tasks 200 19ms\n[12:04:26] WARN slow query (842ms) tasks.list\n[12:04:28] GET /api/health 200 3ms\n",
+  tk_mon2:
+    "▶ build started\n✓ typecheck passed\n✓ 1240 modules transformed\n✓ built in 9.40s\n■ stream ended\n",
+};
+
+/** The mock side of `read_task_output` — canned logs keyed by the demo task ids
+ *  (background shell commands AND Monitor watches share the on-disk output sink). */
 export function mockTaskOutput(taskId: string): string | null {
-  return BASH_OUTPUTS[taskId] ?? null;
+  return BASH_OUTPUTS[taskId] ?? MONITOR_OUTPUTS[taskId] ?? null;
 }
 
 const MODEL = "claude-opus-4-8[1m]";
@@ -231,9 +242,9 @@ export class ScenarioDriver {
   private awaiting = false;
   private mode: "edit" | "question" = "edit";
   private pendingId: string | null = null;
-  /** Background Bash tasks emitted by the shell demo, so `stopBash` can re-emit a
+  /** Background tasks emitted by the shell / monitor demos, so `stopTask` can re-emit a
    *  known one as stopped (mirroring the core's `stop_task` → `task_*` flow). */
-  private bashTasks = new Map<string, BackgroundTask>();
+  private bgTasks = new Map<string, BackgroundTask>();
 
   constructor(
     private emit: ScenarioEmit,
@@ -463,9 +474,9 @@ export class ScenarioDriver {
     );
   }
 
-  /** Record + emit a background Bash task snapshot (so `stopBash` can find it later). */
-  private emitBash(t: BackgroundTask) {
-    this.bashTasks.set(t.task_id, t);
+  /** Record + emit a background task snapshot (so `stopTask` can find it later). */
+  private emitTask(t: BackgroundTask) {
+    this.bgTasks.set(t.task_id, t);
     this.emit.task?.(t);
   }
 
@@ -478,7 +489,7 @@ export class ScenarioDriver {
    */
   startShell() {
     this.reset();
-    this.bashTasks.clear();
+    this.bgTasks.clear();
     this.emit.state({ ...this.busyState });
 
     // --- foreground command: stays in flight a moment → "$ pnpm test…" at the bottom ---
@@ -537,7 +548,7 @@ export class ScenarioDriver {
       }),
     );
     this.step(60, () =>
-      this.emitBash(taskOf({ task_id: "tk_dev", kind: "bash", tool_use_id: "toolu_dev", label: "pnpm dev", status: "running" })),
+      this.emitTask(taskOf({ task_id: "tk_dev", kind: "bash", tool_use_id: "toolu_dev", label: "pnpm dev", status: "running" })),
     );
 
     // --- background #2: a build that COMPLETES a few seconds later ---
@@ -562,7 +573,7 @@ export class ScenarioDriver {
       }),
     );
     this.step(60, () =>
-      this.emitBash(taskOf({ task_id: "tk_build", kind: "bash", tool_use_id: "toolu_build", label: "pnpm build", status: "running" })),
+      this.emitTask(taskOf({ task_id: "tk_build", kind: "bash", tool_use_id: "toolu_build", label: "pnpm build", status: "running" })),
     );
 
     this.step(220, () =>
@@ -572,7 +583,7 @@ export class ScenarioDriver {
     this.step(40, () => this.emit.state(idleState()));
     // …the build finishes a few seconds later: its row flips to completed (duration + exit).
     this.step(6000, () =>
-      this.emitBash(
+      this.emitTask(
         taskOf({
           task_id: "tk_build",
           kind: "bash",
@@ -587,18 +598,111 @@ export class ScenarioDriver {
     );
   }
 
-  /** Mock the `stop_task` command: re-emit a known background Bash task as stopped,
-   *  exactly as the core would after the CLI kills it (the bar reflects it). */
-  stopBash(taskId: string) {
-    const t = this.bashTasks.get(taskId);
+  /**
+   * Background-monitor demo (`?demo=monitor`): the agent launches the `Monitor` tool —
+   * a live watch whose every stdout line is an event (read from disk, NOT the wire). One
+   * watch KEEPS streaming (persistent → Stop button + live event tail) and a second one
+   * ENDS a few seconds later ("stream ended"). Exercises the pinned <MonitorBar>, its
+   * <TaskOutputPopover> event tail, and stop_task end to end.
+   */
+  startMonitor() {
+    this.reset();
+    this.bgTasks.clear();
+    this.emit.state({ ...this.busyState });
+
+    this.step(220, () =>
+      this.emit.item({ kind: "message_started", id: "m1", role: "assistant", parent_tool_use_id: null }),
+    );
+    const t1 = "Je mets en place deux watches en arrière-plan — tu peux continuer à me parler pendant ce temps.\n\n";
+    this.streamText("m1", t1);
+    this.step(150, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "m1",
+        parent_tool_use_id: null,
+        blocks: [
+          { type: "text", text: t1 },
+          { type: "tool_use", id: "toolu_mon", name: "Monitor", input: { command: "tail -F /var/log/app.log", description: "watch des logs applicatifs", persistent: true, timeout_ms: 0 } },
+        ],
+      }),
+    );
+    this.step(120, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_mon",
+        content:
+          "Monitor started (task tk_mon, persistent). You will be notified on each event. Keep working…",
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+    this.step(60, () =>
+      this.emitTask(taskOf({ task_id: "tk_mon", kind: "monitor", tool_use_id: "toolu_mon", label: "watch des logs applicatifs", status: "running" })),
+    );
+
+    // --- second watch: a build monitor that ENDS a few seconds later (stream ended) ---
+    this.step(240, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "m1b",
+        parent_tool_use_id: null,
+        blocks: [
+          { type: "tool_use", id: "toolu_mon2", name: "Monitor", input: { command: "pnpm build --watch", description: "watch du build", persistent: false, timeout_ms: 8000 } },
+        ],
+      }),
+    );
+    this.step(60, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_mon2",
+        content: "Monitor started (task tk_mon2, timeout 8000ms). You will be notified on each event. Keep working…",
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+    this.step(60, () =>
+      this.emitTask(taskOf({ task_id: "tk_mon2", kind: "monitor", tool_use_id: "toolu_mon2", label: "watch du build", status: "running" })),
+    );
+
+    this.step(220, () =>
+      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.009, num_turns: 1, duration_ms: 5200 }),
+    );
+    // Idle main loop, but the watches keep running → conversation "backgrounding".
+    this.step(40, () => this.emit.state(idleState()));
+    // …the build watch ends a few seconds later: its row drops out of the bar.
+    this.step(6000, () =>
+      this.emitTask(
+        taskOf({
+          task_id: "tk_mon2",
+          kind: "monitor",
+          tool_use_id: "toolu_mon2",
+          label: "watch du build",
+          status: "completed",
+          duration_ms: 6400,
+          summary: 'Monitor "watch du build" stream ended',
+          output_file: "tasks/tk_mon2.output",
+        }),
+      ),
+    );
+  }
+
+  /** Mock the `stop_task` command: re-emit a known background task as stopped, exactly
+   *  as the core would after the CLI kills it (the bar reflects it). Kind-aware summary
+   *  so a watch reads "Monitor … stopped" and a command "Background command … stopped". */
+  stopTask(taskId: string) {
+    const t = this.bgTasks.get(taskId);
     if (!t) return;
+    const fallback =
+      t.kind === "monitor"
+        ? `Monitor "${t.label}" stopped`
+        : `Background command "${t.label}" stopped`;
     const stopped: BackgroundTask = {
       ...t,
       status: "stopped",
-      summary: t.summary ?? `Background command "${t.label}" stopped`,
+      summary: t.summary ?? fallback,
       duration_ms: t.duration_ms ?? 4200,
     };
-    this.emitBash(stopped);
+    this.emitTask(stopped);
   }
 
   /** Resume the turn after the user answers the pending prompt. */

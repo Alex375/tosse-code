@@ -193,6 +193,7 @@ export const mockCommands = {
     if (demo === "question") driver.startQuestion();
     else if (demo === "background") driver.startBackground();
     else if (demo === "shell") driver.startShell();
+    else if (demo === "monitor") driver.startMonitor();
     else driver.start();
     return ok(null);
   },
@@ -274,8 +275,9 @@ export const mockCommands = {
 
   async stopTask(session: string, taskId: string): Promise<Result<null, string>> {
     // Mirror the core: the CLI kills the task, which settles to `stopped` via its
-    // `task_*` lifecycle. The driver re-emits the known bg-Bash snapshot as stopped.
-    getRecord(session).driver.stopBash(taskId);
+    // `task_*` lifecycle. The driver re-emits the known bg task snapshot as stopped
+    // (a background Bash command or a Monitor watch).
+    getRecord(session).driver.stopTask(taskId);
     return ok(null);
   },
 
@@ -284,7 +286,8 @@ export const mockCommands = {
     taskId: string,
   ): Promise<Result<string | null, string>> {
     // No on-disk output file in the browser mock — canned logs per demo task id so the
-    // BashOutputPopover renders real-shaped content (and tails) in dev/Playwright.
+    // task-output popover (Bash command output AND Monitor event streams) renders
+    // real-shaped content (and tails) in dev/Playwright.
     return ok(mockTaskOutput(taskId));
   },
 

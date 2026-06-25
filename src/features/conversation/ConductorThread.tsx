@@ -572,6 +572,9 @@ function AssistantBlocks({ session, blocks }: { session: string; blocks: Normali
           // A detached background Bash moves to the pinned BashBar (see BashBlock).
           if (b.name === "Bash")
             return <BashBlock key={i} session={session} toolUseId={b.id} input={b.input} />;
+          // A Monitor is ALWAYS a background watch (never inline) — surfaced in the
+          // pinned MonitorBar, like a detached Bash. Suppress its inline card.
+          if (b.name === "Monitor") return null;
           return (
             <ConductorToolCard key={i} session={session} toolUseId={b.id} name={b.name} input={b.input} />
           );

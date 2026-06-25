@@ -357,6 +357,17 @@
 }
 .cv-bgstop:hover { background:color-mix(in srgb, var(--wf-err) 16%, transparent); color:var(--wf-err); }
 
+/* Live watches (the Monitor tool) — pinned rows in the same .cv-bgagents container as
+   the Bash-bg and sub-agent bars, reusing the .cv-bashrow layout. A watch is a CONTINUOUS
+   stream (not a one-shot command), so it carries an accent "pulse" glyph + a "watch" tag
+   to read distinctly from a "$ command" Bash row. */
+.cv-monrow-ico { flex:0 0 auto; color:var(--wf-accent); }
+.cv-monrow-tag {
+  flex:0 0 auto; margin-left:auto; padding:1px 8px; border-radius:999px;
+  font-size:10.5px; letter-spacing:.02em;
+  color:var(--wf-accent); background:color-mix(in srgb, var(--wf-accent) 13%, transparent);
+}
+
 /* The live foreground shell command in the working indicator (registre 1): a terminal
    "$ command…" line, ellipsised to one row. */
 .cv-shellrun {

@@ -21,6 +21,7 @@ import { FileMentionProvider } from "./FileMention";
 import { ReviewBar } from "./ReviewBar";
 import { AgentBar } from "./AgentBar";
 import { BashBar } from "./BashBar";
+import { MonitorBar } from "./MonitorBar";
 import { useStickToBottom } from "./useStickToBottom";
 
 // Interactive elements whose clicks must NOT be hijacked to focus the composer
@@ -208,6 +209,7 @@ function ConversationPane({
       </FileMentionProvider>
       <AgentBar session={session} />
       <BashBar session={session} />
+      <MonitorBar session={session} />
       <TodoBar session={session} />
       <ReviewBar session={session} />
       <ConductorComposer ref={composerRef} session={session} onSent={scrollToBottom} />
