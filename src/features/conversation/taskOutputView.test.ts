@@ -30,6 +30,12 @@ describe("pickOutputView", () => {
     expect(pickOutputView({ ...base, text: "", running: true })).toBe("empty-running");
   });
 
+  it("a RUNNING task with no output path yet is 'empty-running', NOT 'unavailable'", () => {
+    // The path lands a beat after task_started, and a Monitor's start tool_result may
+    // never carry the marker — a live watch must not show "conversation rouverte".
+    expect(pickOutputView({ ...base, hasPath: false, running: true })).toBe("empty-running");
+  });
+
   it("DISTINGUISHES a finished EMPTY file from an absent one — the core fix", () => {
     // "" = the file is there and empty → genuinely produced no output.
     expect(pickOutputView({ ...base, text: "", running: false })).toBe("empty-done");

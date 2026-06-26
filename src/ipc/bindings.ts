@@ -98,19 +98,6 @@ async loadWorkflowRun(sessionId: string, runId: string) : Promise<Result<Workflo
 }
 },
 /**
- * Read the current contents of a background task's output file
- * (`tasks/<task_id>.output`, the sink for background `Bash` and `Monitor`). `null`
- * if absent. One-shot read — live tailing is layered on by the display task.
- */
-async readTaskOutput(sessionId: string, taskId: string) : Promise<Result<string | null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("read_task_output", { sessionId, taskId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Read a background task's output from the ABSOLUTE path the CLI reported
  * (`BackgroundTask.output_file`). The CLI writes Bash-bg / Monitor output to a temp dir
  * the app can't reconstruct, so the live tail reads this path directly. `null` if

@@ -41,8 +41,13 @@ export function pickOutputView(s: {
   if (s.text) return "output"; // non-empty content wins, even mid-poll
   if (s.loading && s.text === null) return "loading";
   if (s.err) return "error";
-  if (!s.hasPath) return "unavailable";
-  if (s.running) return "empty-running"; // running: null OR "" so far
+  // A RUNNING task is "still warming up", never "unavailable" — even before its output
+  // path is known (the path lands a beat after the task starts; a Monitor's start
+  // tool_result may never carry the marker). Check running BEFORE !hasPath so a live
+  // task never shows the "conversation rouverte" message (which means the task lifecycle
+  // is gone — only true once finished and unresolvable).
+  if (s.running) return "empty-running"; // running: path unknown, or null/"" so far
+  if (!s.hasPath) return "unavailable"; // finished + no path → resumed conversation
   if (s.text === "") return "empty-done"; // finished + confirmed empty file
   return "unloaded"; // finished + null: absent/unreadable, NOT "no output"
 }

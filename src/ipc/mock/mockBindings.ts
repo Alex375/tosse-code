@@ -291,19 +291,11 @@ export const mockCommands = {
     return ok(null);
   },
 
-  async readTaskOutput(
-    _sessionId: string,
-    taskId: string,
-  ): Promise<Result<string | null, string>> {
-    // No on-disk output file in the browser mock — canned logs per demo task id so the
+  async readTaskOutputFile(path: string): Promise<Result<string | null, string>> {
+    // No on-disk output file in the browser mock — the mock derives the demo task id from
+    // the file's basename (`…/tasks/<task_id>.output`) and serves canned logs so the
     // task-output popover (Bash command output AND Monitor event streams) renders
     // real-shaped content (and tails) in dev/Playwright.
-    return ok(mockTaskOutput(taskId));
-  },
-
-  async readTaskOutputFile(path: string): Promise<Result<string | null, string>> {
-    // The real reader opens the absolute path; the mock derives the demo task id from the
-    // file's basename (`…/tasks/<task_id>.output`) and serves the same canned logs.
     const taskId = path.split("/").pop()?.replace(/\.output$/, "") ?? "";
     return ok(mockTaskOutput(taskId));
   },

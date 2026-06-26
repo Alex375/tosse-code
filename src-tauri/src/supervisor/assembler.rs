@@ -51,6 +51,12 @@ pub struct Assembler {
     /// Live background tasks keyed by `task_id`, updated in place on every `task_*`
     /// transition (spec §6.2).
     background_tasks: HashMap<String, BackgroundTask>,
+    /// Reverse index `tool_use_id → task_id`. Lets `record_tool` / `set_task_output_file`
+    /// reconcile a tracked task from its spawning tool_use in O(1) instead of scanning
+    /// `background_tasks` — most `Bash` tool_uses are foreground and spawn no task, so the
+    /// scan was pure waste on every one. Kept in lock-step with each task's `tool_use_id`
+    /// via [`Assembler::link_tool_use`].
+    tasks_by_tool_use: HashMap<String, String>,
 }
 
 /// The last-announced friendly labels for the three controls (see [`Assembler`]).
@@ -321,9 +327,20 @@ impl Assembler {
         }
     }
 
+    /// Maintain the `tool_use_id → task_id` reverse index (consumed by `record_tool` /
+    /// `set_task_output_file` for an O(1) reconcile). No-op for an absent/empty id.
+    fn link_tool_use(&mut self, tool_use_id: Option<&str>, task_id: &str) {
+        if let Some(id) = tool_use_id {
+            if !id.is_empty() {
+                self.tasks_by_tool_use.insert(id.to_string(), task_id.to_string());
+            }
+        }
+    }
+
     /// A background task was created: classify its producer (from `task_type` + the
     /// correlated tool name), seed a [`BackgroundTask`] keyed by `task_id`, and emit.
     fn ingest_task_started(&mut self, t: &TaskStartedMsg, out: &mut Vec<SessionEvent>) {
+        self.link_tool_use(t.tool_use_id.as_deref(), &t.task_id);
         // Owned copies so the immutable `tool_names` read doesn't outlive the mutable
         // `background_tasks` borrow below.
         let tool = t.tool_use_id.as_deref().and_then(|id| self.tool_names.get(id));
@@ -425,7 +442,12 @@ impl Assembler {
         if t.summary.is_some() {
             task.summary = t.summary.clone();
         }
-        if t.output_file.is_some() {
+        // Fill output_file from the notification only if we don't ALREADY have one. For a
+        // Bash/Monitor the start tool_result already captured the live-tailable TEMP path
+        // (`set_task_output_file`) — the notification must not clobber it. An Agent had
+        // none set earlier (no marker), so this is where its transcript path lands (and
+        // the agent_id extraction below depends on it).
+        if task.output_file.is_none() && t.output_file.is_some() {
             task.output_file = t.output_file.clone();
         }
         if let Some(usage) = &t.usage {
@@ -464,6 +486,7 @@ impl Assembler {
     /// was joined mid-run) still yields a usable entry, classified from whatever the
     /// late event carries.
     fn task_entry(&mut self, task_id: &str, tool_use_id: Option<&str>) -> &mut BackgroundTask {
+        self.link_tool_use(tool_use_id, task_id);
         let tool_name = tool_use_id
             .and_then(|id| self.tool_names.get(id))
             .map(|t| t.name.clone());
@@ -613,11 +636,8 @@ impl Assembler {
         //    `local_bash` → Bash fallback, or `Other`) — the name is authoritative;
         //  - backfill a `Bash`'s raw command (a SEPARATE field from the `label` name) so
         //    the output popover can show `$ command` alongside the name.
-        if let Some(task) = self
-            .background_tasks
-            .values_mut()
-            .find(|t| t.tool_use_id.as_deref() == Some(id))
-        {
+        let task_id = self.tasks_by_tool_use.get(id).cloned();
+        if let Some(task) = task_id.as_deref().and_then(|tid| self.background_tasks.get_mut(tid)) {
             let mut changed = false;
             let corrected = classify_task(None, Some(name));
             if corrected != task.kind {
@@ -648,11 +668,8 @@ impl Assembler {
             return;
         }
         self.tool_names.entry(tool_use_id.to_string()).or_default().output_file = Some(path.clone());
-        if let Some(task) = self
-            .background_tasks
-            .values_mut()
-            .find(|t| t.tool_use_id.as_deref() == Some(tool_use_id))
-        {
+        let task_id = self.tasks_by_tool_use.get(tool_use_id).cloned();
+        if let Some(task) = task_id.as_deref().and_then(|tid| self.background_tasks.get_mut(tid)) {
             if task.output_file.as_deref() != Some(path.as_str()) {
                 task.output_file = Some(path);
                 out.push(SessionEvent::Task(task.clone()));
@@ -829,34 +846,30 @@ fn is_bg_capable_tool(name: &str) -> bool {
     matches!(name, "Agent" | "Workflow" | "Bash" | "Monitor")
 }
 
-/// Flatten a tool_result `content` (a string, or an array of `{type:"text", text}`
-/// blocks) into one string. `None` when there is no textual content.
-fn tool_result_text(content: &Value) -> Option<String> {
-    match content {
-        Value::String(s) => Some(s.clone()),
-        Value::Array(arr) => {
-            let joined: String = arr
-                .iter()
-                .filter_map(|b| b.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!joined.is_empty()).then_some(joined)
-        }
-        _ => None,
-    }
-}
-
 /// Extract the absolute output path a background `Bash`/`Monitor` tool_result announces
 /// ("…Output is being written to: `/tmp/claude-<uid>/<slug>/<session>/tasks/<id>.output`.
 /// …"). The path runs from the marker to the `.output` suffix (the sentence continues
 /// after it). `None` when the marker is absent (a normal, foreground tool_result).
+///
+/// Scans the BORROWED text (a string, or each `{text}` block of an array) in place — it
+/// never copies the content, so a large Read/grep result is not cloned just to look for a
+/// marker that foreground results never carry. Only the matched path is allocated.
 fn output_file_from_tool_result(content: &Value) -> Option<String> {
-    const MARKER: &str = "Output is being written to: ";
-    const SUFFIX: &str = ".output";
-    let text = tool_result_text(content)?;
-    let after = &text[text.find(MARKER)? + MARKER.len()..];
-    let end = after.find(SUFFIX)? + SUFFIX.len();
-    Some(after[..end].to_string())
+    fn extract(text: &str) -> Option<String> {
+        const MARKER: &str = "Output is being written to: ";
+        const SUFFIX: &str = ".output";
+        let after = &text[text.find(MARKER)? + MARKER.len()..];
+        let end = after.find(SUFFIX)? + SUFFIX.len();
+        Some(after[..end].to_string())
+    }
+    match content {
+        Value::String(s) => extract(s),
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .find_map(extract),
+        _ => None,
+    }
 }
 
 /// Extract a sub-agent's id from its transcript `output_file`
@@ -1501,7 +1514,7 @@ mod tests {
         );
         // An ordinary tool_result (no marker) yields nothing.
         assert_eq!(output_file_from_tool_result(&serde_json::json!("done, 3 files")), None);
-        // Array-of-text content is flattened before matching.
+        // Each text block of an array is scanned in place (no whole-content copy).
         let arr = serde_json::json!([{"type":"text","text":"Output is being written to: /t/sess/tasks/k.output."}]);
         assert_eq!(
             output_file_from_tool_result(&arr).as_deref(),
@@ -1532,6 +1545,49 @@ mod tests {
         assert_eq!(
             task.expect("a re-emitted Task event").output_file.as_deref(),
             Some("/tmp/claude-501/s/tasks/tk.output"),
+        );
+    }
+
+    /// A terminal `task_notification` must NOT clobber the live TEMP `output_file` already
+    /// captured from the start tool_result marker — that temp path is the live-tailable
+    /// one; the notification's path may point elsewhere (a session-dir path the CLI does
+    /// not actually write for a Bash/Monitor). Regression guard for the completion read.
+    #[test]
+    fn notification_does_not_clobber_the_captured_output_file() {
+        let mut asm = Assembler::new();
+        let started: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_started","task_id":"tk_bash","tool_use_id":"tu_bash","description":"d","task_type":"local_bash"}"#,
+        )
+        .unwrap();
+        asm.ingest(&started);
+        // The start tool_result announces the real, live-tailable TEMP path.
+        let result: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu_bash",
+                 "content": "Running in background. Output is being written to: /tmp/claude-1/s/tasks/tk_bash.output. You will be notified.",
+                 "is_error": false}
+            ]},
+            "session_id": "s"
+        }))
+        .unwrap();
+        asm.ingest(&result);
+        // A terminal notification carrying a DIFFERENT (session-dir) path must leave the
+        // already-captured temp path intact.
+        let notif: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_notification","task_id":"tk_bash","tool_use_id":"tu_bash","status":"completed","output_file":"/Users/x/.claude/projects/-x/s/tasks/tk_bash.output","summary":"done"}"#,
+        )
+        .unwrap();
+        let task = asm.ingest(&notif).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        let task = task.expect("a terminal Task event");
+        assert_eq!(task.status, BackgroundTaskStatus::Completed);
+        assert_eq!(
+            task.output_file.as_deref(),
+            Some("/tmp/claude-1/s/tasks/tk_bash.output"),
+            "the live temp path captured from the marker must survive the notification"
         );
     }
 
