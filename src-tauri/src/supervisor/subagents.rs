@@ -194,6 +194,33 @@ fn read_task_output_in(config_dir: &Path, session_id: &str, task_id: &str) -> Op
     }
 }
 
+/// Read a background task's output from the ABSOLUTE path the CLI reported on the wire
+/// (`BackgroundTask.output_file`). This is the reliable reader: the CLI writes Bash-bg /
+/// Monitor output to a temp dir (`/tmp/claude-<uid>/<slug>/<session>/tasks/<id>.output`),
+/// NOT under the session dir, so the path can't be reconstructed — only echoed.
+///
+/// Guarded so this can't become an arbitrary-file read: the path must name a
+/// `…/tasks/<file>.output` file (a `tasks` parent dir + an `.output` extension). Same
+/// gatekeeper principle as [`is_safe_id`]. `None` when the guard fails or the file is
+/// absent/unreadable (a non-NotFound IO error is logged).
+pub fn read_task_output_file(path: &str) -> Option<String> {
+    let p = Path::new(path);
+    let is_output = p.extension().and_then(|e| e.to_str()) == Some("output");
+    let in_tasks_dir = p.parent().and_then(|d| d.file_name()).and_then(|n| n.to_str()) == Some("tasks");
+    if !is_output || !in_tasks_dir {
+        eprintln!("[subagents] refusing non-task output path {path:?}");
+        return None;
+    }
+    match std::fs::read_to_string(p) {
+        Ok(c) => Some(c),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            eprintln!("[subagents] cannot read task output {path:?}: {e}");
+            None
+        }
+    }
+}
+
 /// Depth-bounded search for a file named exactly `file_name` under `root`. Returns
 /// the first match (sub-agent transcript ids are unique, so the first hit is the
 /// one). `depth` counts remaining directory levels to descend.
@@ -321,6 +348,39 @@ mod tests {
         assert!(load_subagent_transcript_in(&base, "nope", "x").is_empty());
         assert!(load_workflow_run_in(&base, "nope", "wf_x").is_none());
         assert!(read_task_output_in(&base, "nope", "x").is_none());
+    }
+
+    /// Reading by the CLI-reported ABSOLUTE path (the reliable reader: the CLI writes
+    /// background output to a temp dir, not the session dir). Reads a real `tasks/*.output`
+    /// file, and refuses any path that is not a `…/tasks/<file>.output` (no arbitrary read).
+    #[test]
+    fn read_task_output_file_reads_absolute_path_and_guards() {
+        let dir = std::env::temp_dir()
+            .join(format!("tosse-taskout-{}", std::process::id()))
+            .join("tasks");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("by7jmgia3.output");
+        std::fs::write(&path, "live tail line\n").unwrap();
+        assert_eq!(
+            read_task_output_file(path.to_str().unwrap()).as_deref(),
+            Some("live tail line\n"),
+        );
+        // Empty file (a no-output command) reads back as "" — distinct from absent.
+        let empty = dir.join("empty.output");
+        std::fs::write(&empty, "").unwrap();
+        assert_eq!(read_task_output_file(empty.to_str().unwrap()).as_deref(), Some(""));
+        // Absent file → None (not an error).
+        assert!(read_task_output_file(dir.join("gone.output").to_str().unwrap()).is_none());
+        // Guard: a path that isn't a `tasks/*.output` file is refused outright.
+        assert!(read_task_output_file("/etc/passwd").is_none());
+        assert!(read_task_output_file(dir.join("notes.txt").to_str().unwrap()).is_none());
+        let elsewhere = std::env::temp_dir().join("nottasks");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("x.output"), "nope").unwrap();
+        assert!(read_task_output_file(elsewhere.join("x.output").to_str().unwrap()).is_none());
+
+        std::fs::remove_dir_all(std::env::temp_dir().join(format!("tosse-taskout-{}", std::process::id()))).ok();
+        std::fs::remove_dir_all(&elsewhere).ok();
     }
 
     #[test]

@@ -13,7 +13,6 @@
 
 import { useState } from "react";
 import { useBackgroundMonitorTasks, useSessionTasks } from "../../store/backgroundTasksStore";
-import { useConversationsStore } from "../../store/conversationsStore";
 import { useStopTask } from "../../ipc/useCommands";
 import { Ico, RunDots } from "../../ui/kit";
 import { TaskOutputPopover } from "./TaskOutputPopover";
@@ -24,9 +23,6 @@ export function MonitorBar({ session }: { session: string }) {
   // The full task map (running + finished) — so an open popover survives its watch ending
   // (the row is gone from `rows`, but the snapshot lingers here).
   const allTasks = useSessionTasks(session);
-  const claudeSessionId = useConversationsStore(
-    (s) => s.conversations.find((c) => c.id === session)?.sessionId ?? null,
-  );
   const stopTask = useStopTask(session);
   const [openedId, setOpenedId] = useState<string | null>(null);
 
@@ -63,8 +59,7 @@ export function MonitorBar({ session }: { session: string }) {
 
       <TaskOutputPopover
         open={!!opened}
-        sessionId={claudeSessionId}
-        taskId={opened?.task_id ?? null}
+        outputFile={opened?.output_file ?? null}
         running={opened?.status === "running"}
         icon="pulse"
         title={opened?.label ?? "surveillance"}
@@ -76,6 +71,7 @@ export function MonitorBar({ session }: { session: string }) {
         unavailableText="Flux indisponible (conversation rouverte)."
         emptyRunningText="La surveillance tourne — aucun événement pour l'instant…"
         emptyDoneText="Aucun événement capté."
+        unloadedText="Flux indisponible (impossible de le charger)."
         onClose={() => setOpenedId(null)}
       />
     </div>

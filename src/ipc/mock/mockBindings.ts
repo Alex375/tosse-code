@@ -301,6 +301,13 @@ export const mockCommands = {
     return ok(mockTaskOutput(taskId));
   },
 
+  async readTaskOutputFile(path: string): Promise<Result<string | null, string>> {
+    // The real reader opens the absolute path; the mock derives the demo task id from the
+    // file's basename (`…/tasks/<task_id>.output`) and serves the same canned logs.
+    const taskId = path.split("/").pop()?.replace(/\.output$/, "") ?? "";
+    return ok(mockTaskOutput(taskId));
+  },
+
   async openInTerminal(cwd: string, sessionId: string): Promise<Result<null, string>> {
     // No OS terminal in the browser mock — just log what the real command would run.
     console.info(`[mock] openInTerminal: cd ${cwd} && claude --resume ${sessionId}`);

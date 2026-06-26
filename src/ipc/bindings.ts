@@ -111,6 +111,21 @@ async readTaskOutput(sessionId: string, taskId: string) : Promise<Result<string 
 }
 },
 /**
+ * Read a background task's output from the ABSOLUTE path the CLI reported
+ * (`BackgroundTask.output_file`). The CLI writes Bash-bg / Monitor output to a temp dir
+ * the app can't reconstruct, so the live tail reads this path directly. `null` if
+ * absent. One-shot read — the display task layers the polling on top. The reader guards
+ * the path (must be a `…/tasks/*.output` file) against an arbitrary-file read.
+ */
+async readTaskOutputFile(path: string) : Promise<Result<string | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_task_output_file", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Fetch the real subscription usage percentages (5h + weekly windows). The stream
  * only carries a coarse rate-limit status, so this replicates the CLI's internal
  * `GET /api/oauth/usage` (OAuth token read from `~/.claude/.credentials.json` then
@@ -813,9 +828,18 @@ task_id: string; kind: BackgroundTaskKind;
  */
 tool_use_id: string | null; 
 /**
- * Human label (the `description`: a sub-agent's task, a Bash command, …).
+ * Human label = the NAME the agent gave the task (the tool's `description`, e.g.
+ * "build the app"). This is the meaningful, readable line shown pinned in the UI.
+ * `None` when the agent gave no description (the UI then falls back to `command`).
  */
 label: string | null; 
+/**
+ * The raw shell command of a `Bash` task (captured from the tool_use input). Shown
+ * IN ADDITION to `label` in the output popover (the name says what, the command
+ * says how), and used as the pinned-line fallback when there is no `label`. `None`
+ * for non-Bash tasks.
+ */
+command: string | null; 
 /**
  * Sub-agent type (`Agent` only, e.g. `"Explore"`).
  */
@@ -856,8 +880,11 @@ duration_ms: number | null;
  */
 summary: string | null; 
 /**
- * On-disk file holding the task's full output: `tasks/<id>.output` for
- * Bash-bg/Monitor, the sub-agent transcript for `Agent`.
+ * ABSOLUTE on-disk path holding the task's full output. The CLI writes a Bash-bg /
+ * Monitor output to a TEMP dir (`/tmp/claude-<uid>/<slug>/<session>/tasks/<id>.output`),
+ * NOT under the session dir — so this path (taken verbatim from the wire: the Bash
+ * tool_result at start, then `task_notification.output_file`) is the ONLY reliable
+ * way to read it back. For an `Agent` it is the sub-agent transcript path.
  */
 output_file: string | null }
 /**
