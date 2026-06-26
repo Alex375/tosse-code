@@ -33,8 +33,19 @@ import { QuestionnaireAsk } from "./QuestionnaireAsk";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { SubAgentTranscript } from "./SubAgentTranscript";
 import { ThinkingBlock } from "./ThinkingBlock";
-import { groupBlocks, runHeader, type ToolStep } from "./toolGroup";
-import { LiveToolStep, ToolSection } from "./ToolSection";
+import {
+  atomsToSegments,
+  countWorkSteps,
+  flattenWork,
+  groupBlocks,
+  liveVisibleStart,
+  runHeader,
+  splitFinalMessage,
+  type Segment,
+  type ToolStep,
+} from "./toolGroup";
+import { useDisplay } from "../../store/display";
+import { LiveToolStep, ToolSection, WorkBlockContext } from "./ToolSection";
 import { LiveSubThread } from "./LiveSubThread";
 import { resolveTranscriptSource } from "./transcriptSource";
 import type { StickToBottom } from "./useStickToBottom";
@@ -425,12 +436,150 @@ function LiveRunSection({
   );
 }
 
+/** Render a list of segments as the grouped transcript nodes. `active` marks segments
+ *  belonging to the live turn (gates the running spinner); `liveIdx` is the index of the
+ *  one run that should render EXPANDED & live (its steps appear as they stream), or -1.
+ *  Shared by the normal flow and the inside of a folded <ClaudeWorkBlock>. */
+function renderSegments(
+  session: string,
+  segs: Segment[],
+  active: boolean,
+  liveIdx: number,
+): ReactNode[] {
+  return segs.map((seg, i) => {
+    if (seg.kind === "text") return <StreamMarkdown key={seg.key} text={seg.text} />;
+    if (seg.kind === "thinking")
+      return <ThinkingBlock key={seg.key} text={seg.text} finalized />;
+    if (seg.kind === "agent")
+      // A sub-agent always renders inline (live lifecycle + drill-in transcript),
+      // never grouped nor hidden by the live-trailing suppression.
+      return (
+        <SubAgentCard
+          key={seg.key}
+          session={session}
+          toolUseId={seg.step.id}
+          input={seg.step.input}
+        />
+      );
+    // A `run` of regular tools. The trailing run of the live turn renders EXPANDED so its
+    // steps appear live (spinner → result), then collapses to its header on settle. Past
+    // / non-trailing runs render collapsed. `active` gates the spinner so a resultless
+    // step in a PAST turn never spins when the session is busy later.
+    return (
+      <LiveRunSection
+        key={seg.key}
+        session={session}
+        steps={seg.steps}
+        active={active}
+        live={i === liveIdx}
+      />
+    );
+  });
+}
+
 /**
- * An assistant turn's blocks as the grouped transcript: prose / thinking inline, and
- * every run of consecutive tool calls coalesced into one section (see `groupBlocks`).
- * While the turn is the live one (`live`), its TRAILING run renders EXPANDED so each
- * step appears live (spinner while running → result/output on completion); it collapses
- * to the section header once the turn settles. Past / non-trailing runs are collapsed.
+ * The "clean output" fold: one collapsible block holding a round's intermediate work (tool
+ * runs, thinking, in-between prose, sub-agents), so only the round's FINAL message stays in
+ * clear. Collapsed by default and expandable any time — including mid-stream. The block
+ * header carries NO error indicator: a mid-run failure is folded like the rest, flagged
+ * only by the discreet alert glyph on the command section / step row INSIDE (the user opens
+ * the block to inspect). A conversation-stopping error is a separate timeline item (Notice
+ * / turn_result), rendered outside the block, always visible. Children render under
+ * WorkBlockContext so the inner sections / steps inherit that muted error behaviour.
+ */
+function ClaudeWorkBlock({ count, children }: { count: number; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const label =
+    count > 0 ? `Travail de Claude · ${count} étape${count > 1 ? "s" : ""}` : "Travail de Claude";
+  return (
+    <div className="cv-work">
+      <button
+        type="button"
+        className="cv-work-h"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <Ico name="spark" className="sm cv-work-ico" />
+        <span className="cv-work-t">{label}</span>
+        <span className="cv-work-chev" data-open={open ? "1" : undefined}>
+          <Ico name="chev" className="sm" />
+        </span>
+      </button>
+      {open ? (
+        <div className="cv-work-b">
+          <WorkBlockContext.Provider value={true}>{children}</WorkBlockContext.Provider>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Render `work` segments folded into one block (settled rounds: everything but the final
+ *  message). The block content is rendered with the SAME components as the normal thread —
+ *  it reads identically, just behind a fold. */
+function foldedBlock(session: string, work: Segment[]): ReactNode {
+  if (work.length === 0) return null;
+  return (
+    <ClaudeWorkBlock count={countWorkSteps(work)}>
+      {renderSegments(session, work, false, -1)}
+    </ClaudeWorkBlock>
+  );
+}
+
+/**
+ * Clean-output rendering of the LIVE round: settled work folds into the block, while the
+ * trailing region stays visible — both the sliding window (last LIVE_WINDOW steps) AND any
+ * still-running command / sub-agent (which stays live past the window until it finishes,
+ * then folds in). Subscribes to this session's tool results so the fold boundary advances
+ * the instant a tool settles. Only the single live group mounts this, so past groups don't
+ * re-render on every streamed result.
+ */
+function LiveCleanBlocks({
+  session,
+  work,
+  final,
+}: {
+  session: string;
+  work: Segment[];
+  final: Segment[];
+}) {
+  const toolResults = useConversationStore((s) => s.sessions[session]?.toolResults);
+  const isRunning = (id: string) => !toolResults?.[id];
+  const atoms = flattenWork(work);
+  const split = liveVisibleStart(atoms, isRunning, LIVE_WINDOW);
+  const folded = atomsToSegments(atoms.slice(0, split), "fold");
+  const visible = atomsToSegments(atoms.slice(split), "vis");
+  // Expand the trailing run of the visible region so its steps show live (spinner → result).
+  let liveIdx = -1;
+  visible.forEach((s, i) => {
+    if (s.kind === "run") liveIdx = i;
+  });
+  return (
+    <>
+      {foldedBlock(session, folded)}
+      {visible.length > 0 ? renderSegments(session, visible, true, liveIdx) : null}
+      {final.length > 0 ? renderSegments(session, final, false, -1) : null}
+    </>
+  );
+}
+
+/** The live sliding window: how many trailing steps stay visible (current activity) before
+ *  the rest fold into the block. */
+const LIVE_WINDOW = 3;
+
+/**
+ * An assistant turn's blocks as the grouped transcript. Default: prose / thinking inline,
+ * every run of consecutive tool calls coalesced into one section (`groupBlocks`); the live
+ * turn's trailing run shows EXPANDED & live, collapsing on settle.
+ *
+ * When the "clean output" pref is ON, each round folds its intermediate work into one
+ * <ClaudeWorkBlock>, leaving only the FINAL message in clear:
+ *  - settled round with a final message → block (all work) + final message;
+ *  - round with only a final message (no work) → just the message, no block;
+ *  - settled round with no final message (ends on tools) → rendered normally (not folded);
+ *  - while live → the work folds into the block as it settles, but the trailing run's last
+ *    {@link LIVE_WINDOW} steps stay visible & live (sliding window); the block is still
+ *    expandable to inspect what already folded.
  */
 function AssistantBlocks({
   session,
@@ -441,43 +590,35 @@ function AssistantBlocks({
   blocks: NormalizedBlock[];
   live: boolean;
 }) {
+  const cleanOutput = useDisplay((s) => s.cleanOutput);
   const segments = groupBlocks(blocks);
-  const lastIdx = segments.length - 1;
-  return (
-    <>
-      {segments.map((seg, i) => {
-        if (seg.kind === "text") return <StreamMarkdown key={seg.key} text={seg.text} />;
-        if (seg.kind === "thinking")
-          return <ThinkingBlock key={seg.key} text={seg.text} finalized />;
-        if (seg.kind === "agent")
-          // A sub-agent always renders inline (live lifecycle + drill-in transcript),
-          // never grouped nor hidden by the live-trailing suppression.
-          return (
-            <SubAgentCard
-              key={seg.key}
-              session={session}
-              toolUseId={seg.step.id}
-              input={seg.step.input}
-            />
-          );
-        // A `run` of regular tools. The actively-running trailing run of the live turn
-        // renders EXPANDED so its steps appear live (spinner → result, output on
-        // completion), then collapses to the section header once the turn settles. Past
-        // / non-trailing runs render collapsed. `active={live}` gates the spinner so a
-        // resultless step in a PAST turn never spins when the session is busy later.
-        const liveRun = live && i === lastIdx;
-        return (
-          <LiveRunSection
-            key={seg.key}
-            session={session}
-            steps={seg.steps}
-            active={live}
-            live={liveRun}
-          />
-        );
-      })}
-    </>
-  );
+
+  if (!cleanOutput) {
+    const lastIdx = segments.length - 1;
+    return <>{renderSegments(session, segments, live, live ? lastIdx : -1)}</>;
+  }
+
+  const { work, final } = splitFinalMessage(segments);
+
+  // Settled round ending on tools (no closing prose): don't fold — render as usual.
+  if (final.length === 0 && !live) {
+    return <>{renderSegments(session, segments, false, -1)}</>;
+  }
+
+  // Settled round: everything but the final message folds into ONE block (sub-agents
+  // included — at turn end all work is regrouped under "Travail de Claude").
+  if (!live) {
+    return (
+      <>
+        {foldedBlock(session, work)}
+        {final.length > 0 ? renderSegments(session, final, false, -1) : null}
+      </>
+    );
+  }
+
+  // Live round: settled work folds, but the sliding window AND any still-running command /
+  // sub-agent stay visible (delegated to LiveCleanBlocks, which watches tool results).
+  return <LiveCleanBlocks session={session} work={work} final={final} />;
 }
 
 function MsgAI({

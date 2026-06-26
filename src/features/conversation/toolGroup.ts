@@ -129,6 +129,124 @@ export function groupBlocks(
   return out;
 }
 
+/**
+ * Split a round's segments into the intermediate WORK and the FINAL message, for the
+ * "collapse work" display mode. The final message = the trailing run of `text` segments
+ * (the agent's closing prose); everything before it is work to fold. An intermediate
+ * `text` separated from the end by a tool run stays in `work`.
+ *
+ *  - work + final  → fold `work` behind one block, show `final` in clear.
+ *  - only final (no work)        → `work` empty: render the message bare, no block.
+ *  - only work (no trailing text) → `final` empty: the caller decides (e.g. don't fold
+ *    a settled round that ends on tools — see AssistantBlocks).
+ */
+export function splitFinalMessage(segments: Segment[]): {
+  work: Segment[];
+  final: Segment[];
+} {
+  let i = segments.length;
+  while (i > 0 && segments[i - 1].kind === "text") i--;
+  return { work: segments.slice(0, i), final: segments.slice(i) };
+}
+
+// ---- Clean-output folding (live, running-aware) ----------------------------
+// A round's work flattens to ATOMS (one per tool step / thinking / prose / sub-agent) so
+// the live fold can be decided per item: settled work folds into the block, while the
+// sliding window AND any still-running tool stay visible. The kept atoms reconstruct back
+// into segments for rendering.
+
+export type WorkAtom =
+  | { kind: "step"; key: string; step: ToolStep }
+  | { kind: "agent"; key: string; step: ToolStep }
+  | { kind: "thinking"; key: string; text: string }
+  | { kind: "text"; key: string; text: string };
+
+/** Flatten work segments into per-item atoms (a run → one atom per step). */
+export function flattenWork(segs: Segment[]): WorkAtom[] {
+  const out: WorkAtom[] = [];
+  for (const seg of segs) {
+    if (seg.kind === "run") {
+      for (const step of seg.steps) out.push({ kind: "step", key: `${seg.key}-${step.id}`, step });
+    } else if (seg.kind === "agent") {
+      out.push({ kind: "agent", key: seg.key, step: seg.step });
+    } else if (seg.kind === "thinking") {
+      out.push({ kind: "thinking", key: seg.key, text: seg.text });
+    } else {
+      out.push({ kind: "text", key: seg.key, text: seg.text });
+    }
+  }
+  return out;
+}
+
+/** Reconstruct segments from atoms, re-coalescing consecutive steps into runs. `keyPrefix`
+ *  keeps reconstructed run keys stable per call-site (the visible vs the folded side), so a
+ *  run section isn't remounted as the fold boundary slides. */
+export function atomsToSegments(atoms: WorkAtom[], keyPrefix: string): Segment[] {
+  const out: Segment[] = [];
+  let run: ToolStep[] | null = null;
+  let runOrd = 0;
+  for (const a of atoms) {
+    if (a.kind === "step") {
+      if (!run) {
+        run = [];
+        out.push({ kind: "run", key: `${keyPrefix}-run-${runOrd++}`, steps: run });
+      }
+      run.push(a.step);
+      continue;
+    }
+    run = null;
+    if (a.kind === "agent") out.push({ kind: "agent", key: a.key, step: a.step });
+    else if (a.kind === "thinking") out.push({ kind: "thinking", key: a.key, text: a.text });
+    else out.push({ kind: "text", key: a.key, text: a.text });
+  }
+  return out;
+}
+
+/**
+ * The atom index from which work stays VISIBLE in clean-output LIVE mode; everything before
+ * folds into the block. The visible (trailing) region covers BOTH:
+ *  - the sliding window: the last `window` tool steps, and
+ *  - every still-running tool — a running command / sub-agent stays live even past the
+ *    window, and only folds once it finishes.
+ * Running tools sit at the trailing edge (nothing settles after an unsettled call), so the
+ * visible region is always a trailing slice — `min(firstRunning, windowStart)`.
+ */
+export function liveVisibleStart(
+  atoms: WorkAtom[],
+  isRunning: (id: string) => boolean,
+  window: number,
+): number {
+  let runningStart = atoms.length;
+  for (let i = 0; i < atoms.length; i++) {
+    const a = atoms[i];
+    if ((a.kind === "step" || a.kind === "agent") && isRunning(a.step.id)) {
+      runningStart = i;
+      break;
+    }
+  }
+  let windowStart = atoms.length;
+  let steps = 0;
+  for (let i = atoms.length - 1; i >= 0; i--) {
+    windowStart = i;
+    if (atoms[i].kind === "step") {
+      steps++;
+      if (steps >= window) break;
+    }
+  }
+  return Math.min(runningStart, windowStart);
+}
+
+/** How many "étapes" a stretch of work represents, for the "Travail de Claude — N
+ *  étapes" header: every tool step across its runs. Prose and thinking are not counted as
+ *  steps (and sub-agents render inline, not inside a block). */
+export function countWorkSteps(segments: Segment[]): number {
+  let n = 0;
+  for (const s of segments) {
+    if (s.kind === "run") n += s.steps.length;
+  }
+  return n;
+}
+
 /** Short English verb per tool, for a run section's action summary. */
 export function toolVerb(name: string): string {
   switch (name) {
