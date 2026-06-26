@@ -7,10 +7,13 @@ import { create } from "zustand";
 const STORAGE_KEY = "tosse:display";
 
 export interface DisplayPrefs {
-  /** "Clean output": fold each assistant round's intermediate work (tool runs, thinking,
-   *  in-between text, sub-agents) into ONE collapsible "Travail de Claude — N étapes"
-   *  block, so only the round's FINAL message stays in clear. Per round, not globally —
-   *  every round keeps its own block + final message. See ConductorThread/AssistantBlocks. */
+  /** "Clean output": fold an assistant response's intermediate work (tool runs, thinking,
+   *  in-between narration, sub-agents) into ONE collapsible "Travail de Claude — N étapes"
+   *  block, so only the response's CONCLUDING message stays in clear. Per response, not
+   *  globally — each response keeps its own block + concluding message. When a response spans
+   *  several turns (the agent narrates between tool batches), only its LAST message stays in
+   *  clear; the in-between narration folds with the work — that's the point of the condensed
+   *  view. See ConductorThread/CleanBlocks. */
   cleanOutput: boolean;
 }
 

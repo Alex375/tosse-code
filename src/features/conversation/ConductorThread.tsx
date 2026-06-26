@@ -41,11 +41,13 @@ import {
   liveVisibleStart,
   runHeader,
   splitFinalMessage,
+  workStepIds,
   type Segment,
   type ToolStep,
 } from "./toolGroup";
 import { useDisplay } from "../../store/display";
-import { LiveToolStep, ToolSection, WorkBlockContext } from "./ToolSection";
+import { LiveToolStep, ToolSection } from "./ToolSection";
+import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
 import { resolveTranscriptSource } from "./transcriptSource";
 import type { StickToBottom } from "./useStickToBottom";
@@ -478,14 +480,14 @@ function renderSegments(
 }
 
 /**
- * The "clean output" fold: one collapsible block holding a round's intermediate work (tool
- * runs, thinking, in-between prose, sub-agents), so only the round's FINAL message stays in
- * clear. Collapsed by default and expandable any time — including mid-stream. The block
- * header carries NO error indicator: a mid-run failure is folded like the rest, flagged
- * only by the discreet alert glyph on the command section / step row INSIDE (the user opens
- * the block to inspect). A conversation-stopping error is a separate timeline item (Notice
- * / turn_result), rendered outside the block, always visible. Children render under
- * WorkBlockContext so the inner sections / steps inherit that muted error behaviour.
+ * The "clean output" fold: one collapsible block holding a response's intermediate work (tool
+ * runs, thinking, in-between prose, sub-agents), so only the response's concluding message
+ * stays in clear. Collapsed by default and expandable any time — including mid-stream.
+ *
+ * The fold header carries NO error indicator: a failed tool inside is folded like the rest,
+ * flagged only by the small alert glyph on its command section / step row (visible once the
+ * block is open). A conversation-stopping error is a separate timeline item (Notice /
+ * turn_result) rendered outside the block, always visible.
  */
 function ClaudeWorkBlock({ count, children }: { count: number; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -505,61 +507,8 @@ function ClaudeWorkBlock({ count, children }: { count: number; children: ReactNo
           <Ico name="chev" className="sm" />
         </span>
       </button>
-      {open ? (
-        <div className="cv-work-b">
-          <WorkBlockContext.Provider value={true}>{children}</WorkBlockContext.Provider>
-        </div>
-      ) : null}
+      {open ? <div className="cv-work-b">{children}</div> : null}
     </div>
-  );
-}
-
-/** Render `work` segments folded into one block (settled rounds: everything but the final
- *  message). The block content is rendered with the SAME components as the normal thread —
- *  it reads identically, just behind a fold. */
-function foldedBlock(session: string, work: Segment[]): ReactNode {
-  if (work.length === 0) return null;
-  return (
-    <ClaudeWorkBlock count={countWorkSteps(work)}>
-      {renderSegments(session, work, false, -1)}
-    </ClaudeWorkBlock>
-  );
-}
-
-/**
- * Clean-output rendering of the LIVE round: settled work folds into the block, while the
- * trailing region stays visible — both the sliding window (last LIVE_WINDOW steps) AND any
- * still-running command / sub-agent (which stays live past the window until it finishes,
- * then folds in). Subscribes to this session's tool results so the fold boundary advances
- * the instant a tool settles. Only the single live group mounts this, so past groups don't
- * re-render on every streamed result.
- */
-function LiveCleanBlocks({
-  session,
-  work,
-  final,
-}: {
-  session: string;
-  work: Segment[];
-  final: Segment[];
-}) {
-  const toolResults = useConversationStore((s) => s.sessions[session]?.toolResults);
-  const isRunning = (id: string) => !toolResults?.[id];
-  const atoms = flattenWork(work);
-  const split = liveVisibleStart(atoms, isRunning, LIVE_WINDOW);
-  const folded = atomsToSegments(atoms.slice(0, split), "fold");
-  const visible = atomsToSegments(atoms.slice(split), "vis");
-  // Expand the trailing run of the visible region so its steps show live (spinner → result).
-  let liveIdx = -1;
-  visible.forEach((s, i) => {
-    if (s.kind === "run") liveIdx = i;
-  });
-  return (
-    <>
-      {foldedBlock(session, folded)}
-      {visible.length > 0 ? renderSegments(session, visible, true, liveIdx) : null}
-      {final.length > 0 ? renderSegments(session, final, false, -1) : null}
-    </>
   );
 }
 
@@ -568,18 +517,84 @@ function LiveCleanBlocks({
 const LIVE_WINDOW = 3;
 
 /**
+ * The clean-output body of one assistant response: the fold + the trailing region + the final
+ * message, rendered as ONE component so it has stable React identity. That stability is what
+ * fixes the fold collapsing on settle — the SAME `<ClaudeWorkBlock>` fiber spans the live and
+ * the settled render, so a block the user expanded mid-stream stays open when the response
+ * finishes (live → settled is just a prop change here, not a remount).
+ *
+ * It subscribes to EXACTLY this response's tool results (which ids are still running) via a
+ * shallow-compared boolean array, so a settled response never re-renders while a LATER turn
+ * streams — only the live one (whose ids gain results) re-renders.
+ *
+ *  - live: settled work folds; the sliding window AND any still-running command / sub-agent
+ *    stay visible (see {@link liveVisibleStart}); the trailing run shows live.
+ *  - settled, with a final message: ALL the work folds, the final message shows in clear.
+ *  - settled, ending on tools (no final): rendered unfolded — folding everything would leave
+ *    nothing in clear.
+ */
+function CleanBlocks({
+  session,
+  work,
+  final,
+  live,
+}: {
+  session: string;
+  work: Segment[];
+  final: Segment[];
+  live: boolean;
+}) {
+  const ids = workStepIds(work);
+  // Per-id "still running?" of THIS response's tools (no result yet). Shallow-compared so the
+  // component re-renders only when one of ITS ids settles — a past response never re-renders
+  // while a later turn streams.
+  const running = useConversationStore(
+    useShallow((s) => {
+      const tr = s.sessions[session]?.toolResults;
+      return ids.map((id) => !tr?.[id]);
+    }),
+  );
+  const runningById = new Map<string, boolean>();
+  ids.forEach((id, i) => runningById.set(id, running[i] ?? false));
+  const isRunning = (id: string) => runningById.get(id) ?? false;
+
+  // Settled response ending on tools (no closing prose): render unfolded — folding everything
+  // would leave nothing in clear.
+  if (final.length === 0 && !live) {
+    return <>{renderSegments(session, work, false, -1)}</>;
+  }
+
+  const atoms = flattenWork(work);
+  const split = live ? liveVisibleStart(atoms, isRunning, LIVE_WINDOW) : atoms.length;
+  const folded = atomsToSegments(atoms.slice(0, split), "fold");
+  const visible = live ? atomsToSegments(atoms.slice(split), "vis") : [];
+  // Expand the trailing run of the visible region so its steps show live (spinner → result).
+  let liveIdx = -1;
+  visible.forEach((s, i) => {
+    if (s.kind === "run") liveIdx = i;
+  });
+
+  return (
+    <>
+      {folded.length > 0 ? (
+        <ClaudeWorkBlock count={countWorkSteps(folded)}>
+          {renderSegments(session, folded, false, -1)}
+        </ClaudeWorkBlock>
+      ) : null}
+      {visible.length > 0 ? renderSegments(session, visible, true, liveIdx) : null}
+      {final.length > 0 ? renderSegments(session, final, false, -1) : null}
+    </>
+  );
+}
+
+/**
  * An assistant turn's blocks as the grouped transcript. Default: prose / thinking inline,
  * every run of consecutive tool calls coalesced into one section (`groupBlocks`); the live
  * turn's trailing run shows EXPANDED & live, collapsing on settle.
  *
- * When the "clean output" pref is ON, each round folds its intermediate work into one
- * <ClaudeWorkBlock>, leaving only the FINAL message in clear:
- *  - settled round with a final message → block (all work) + final message;
- *  - round with only a final message (no work) → just the message, no block;
- *  - settled round with no final message (ends on tools) → rendered normally (not folded);
- *  - while live → the work folds into the block as it settles, but the trailing run's last
- *    {@link LIVE_WINDOW} steps stay visible & live (sliding window); the block is still
- *    expandable to inspect what already folded.
+ * When the "clean output" pref is ON, the response's intermediate work folds into one
+ * <ClaudeWorkBlock>, leaving only the concluding message in clear — see {@link CleanBlocks}
+ * for the live / settled / ends-on-tools cases and the stable-fold behaviour.
  */
 function AssistantBlocks({
   session,
@@ -598,27 +613,12 @@ function AssistantBlocks({
     return <>{renderSegments(session, segments, live, live ? lastIdx : -1)}</>;
   }
 
+  // Clean output: fold this response's intermediate work, keep the concluding message in
+  // clear. Rendered through ONE component (CleanBlocks) so the fold keeps its open state
+  // across the live → settled transition; it handles the live / settled / ends-on-tools
+  // cases internally.
   const { work, final } = splitFinalMessage(segments);
-
-  // Settled round ending on tools (no closing prose): don't fold — render as usual.
-  if (final.length === 0 && !live) {
-    return <>{renderSegments(session, segments, false, -1)}</>;
-  }
-
-  // Settled round: everything but the final message folds into ONE block (sub-agents
-  // included — at turn end all work is regrouped under "Travail de Claude").
-  if (!live) {
-    return (
-      <>
-        {foldedBlock(session, work)}
-        {final.length > 0 ? renderSegments(session, final, false, -1) : null}
-      </>
-    );
-  }
-
-  // Live round: settled work folds, but the sliding window AND any still-running command /
-  // sub-agent stay visible (delegated to LiveCleanBlocks, which watches tool results).
-  return <LiveCleanBlocks session={session} work={work} final={final} />;
+  return <CleanBlocks session={session} work={work} final={final} live={live} />;
 }
 
 function MsgAI({

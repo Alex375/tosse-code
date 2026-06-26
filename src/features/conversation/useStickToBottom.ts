@@ -161,8 +161,14 @@ export function useStickToBottom(convId: string, preserveKey?: unknown): StickTo
     const settled = grew.current && stableFrames.current >= SETTLE_STABLE_FRAMES;
     if (settled || performance.now() - settleStart.current > SETTLE_MAX_MS) {
       restoring.current = false;
+      // Seed the preservation anchor from the just-restored position. Otherwise, a conversation
+      // restored mid-thread that the user never scrolled has no anchor (onScroll is the only
+      // other capture point) and `distFromBottom` stays 0 — so a "clean output" toggle would
+      // fall through to `scrollHeight - clientHeight` and snap to the bottom. Seeding here keeps
+      // the user on the same content even when they toggle before scrolling.
+      captureAnchor();
     }
-  }, []);
+  }, [captureAnchor]);
 
   const followIfPinned = useCallback(() => {
     const el = scrollEl.current;

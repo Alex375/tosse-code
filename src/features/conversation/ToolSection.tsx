@@ -4,10 +4,10 @@
 // by the live thread (ConductorThread) and the off-thread transcript
 // (SubAgentTranscript) so the two never diverge — the live side feeds <LiveToolStep>
 // (subscribes to the store for its result), the disk side feeds <StaticToolStep>
-// (result handed in). Collapsed by default; a step/section auto-expands on error so
-// failures are never hidden.
+// (result handed in). Collapsed by default; an error is flagged ONLY by a small alert glyph
+// on the row / section — no auto-expand, no red text (the user opens it on purpose).
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { JsonValue } from "../../ipc/client";
 import { field } from "../../agent/ask";
 import { useSessionState, useToolResult } from "../../store/conversationStore";
@@ -27,13 +27,6 @@ import {
   type StepSummary,
   type ToolStep,
 } from "./toolGroup";
-
-/** True when steps render INSIDE a folded "Travail de Claude" block (clean-output mode):
- *  errors are de-emphasised there — no auto-expand and no red text — since the user opens
- *  the block deliberately to inspect a failure. A small alert glyph still hints at it.
- *  Outside the block (live thread, the live tail of the active turn) this stays false, so
- *  the "errors are never hidden" invariant holds where it matters. */
-export const WorkBlockContext = createContext(false);
 
 export interface StepResult {
   content: JsonValue;
@@ -141,19 +134,13 @@ export function ToolStepRow({
   hasDetail: boolean;
   children: ReactNode;
 }) {
-  const muted = useContext(WorkBlockContext);
-  // Inside a folded work block, an error neither auto-expands nor reddens the row — the
-  // user opens the block on purpose. Elsewhere it auto-expands so failures are never hidden.
-  const autoErr = isError && !muted;
+  // An error is NOT auto-expanded and NOT reddened — it's flagged only by the small alert
+  // glyph (cv-step-errico) on the right. The user opens the row on purpose to inspect it.
   const [open, setOpen] = useState(false);
-  // An error arrives after mount (live), so expand via effect, not initial state.
-  useEffect(() => {
-    if (autoErr) setOpen(true);
-  }, [autoErr]);
   const toggle = hasDetail ? () => setOpen((o) => !o) : undefined;
 
   return (
-    <div className={"cv-step" + (autoErr ? " is-err" : "")}>
+    <div className="cv-step">
       <div
         className="cv-step-h"
         onClick={toggle}
@@ -260,10 +247,10 @@ export function StaticToolStep({ step, result }: { step: ToolStep; result: StepR
   );
 }
 
-/** The collapsible run container. Collapsed by default; auto-opens when a contained
- *  step errored (failure visible without a click) or while the run is actively running
- *  (`live`) — so its steps appear live with their spinner — then collapses to the header
- *  once the run settles. */
+/** The collapsible run container. Collapsed by default; auto-opens only while the run is
+ *  actively running (`live`) — so its steps appear live with their spinner — then collapses
+ *  to the header once the run settles. A contained error does NOT auto-open it: it's flagged
+ *  by the small alert glyph on the header (no red title). */
 export function ToolSection({
   title,
   errored,
@@ -277,18 +264,16 @@ export function ToolSection({
   live?: boolean;
   children: ReactNode;
 }) {
-  const muted = useContext(WorkBlockContext);
-  // Inside a folded work block, a contained error doesn't auto-expand the section nor
-  // redden its title — only the discreet alert glyph hints at it. Outside, errors expand.
-  const autoErr = errored && !muted;
+  // Expanded only while actively running (`live`); collapses once the run settles. An error
+  // does NOT auto-expand the section nor redden its title — it's flagged only by the small
+  // alert glyph (rendered below off `errored`) on the right.
   const [open, setOpen] = useState(Boolean(live));
-  // Expanded while running or errored; collapses once the run settles (live → false).
   useEffect(() => {
-    setOpen(Boolean(live) || autoErr);
-  }, [live, autoErr]);
+    setOpen(Boolean(live));
+  }, [live]);
 
   return (
-    <div className={"cv-steps" + (autoErr ? " is-err" : "")}>
+    <div className="cv-steps">
       <button
         type="button"
         className="cv-steps-h"

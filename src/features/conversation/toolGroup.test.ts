@@ -12,6 +12,7 @@ import {
   stepIcon,
   stepLabel,
   stepSummary,
+  workStepIds,
   type Segment,
   type ToolStep,
 } from "./toolGroup";
@@ -287,7 +288,7 @@ describe("splitFinalMessage", () => {
 });
 
 describe("countWorkSteps", () => {
-  it("counts tool steps across runs, ignoring prose/thinking and sub-agents", () => {
+  it("counts tool steps across runs PLUS sub-agents, ignoring prose/thinking", () => {
     const s = segs([
       text("intro"),
       tool("a", "Read"),
@@ -296,12 +297,31 @@ describe("countWorkSteps", () => {
       tool("ag", "Agent"),
       tool("c", "Bash"),
     ]);
-    // runs: [Read, Edit] (2) + [Bash] (1) = 3 ; the Agent renders inline, not counted.
-    expect(countWorkSteps(s)).toBe(3);
+    // runs: [Read, Edit] (2) + [Bash] (1) = 3 steps, + the sub-agent (folds into the block
+    // in clean-output, so it counts as work) = 4.
+    expect(countWorkSteps(s)).toBe(4);
   });
 
   it("is zero for prose/thinking only", () => {
     expect(countWorkSteps(segs([text("a"), thinking("b")]))).toBe(0);
+  });
+});
+
+describe("workStepIds", () => {
+  it("lists run step ids + sub-agent ids in order, skipping prose/thinking", () => {
+    const s = segs([
+      text("intro"),
+      tool("a", "Read"),
+      tool("b", "Edit"),
+      thinking("hmm"),
+      tool("ag", "Agent"),
+      tool("c", "Bash"),
+    ]);
+    expect(workStepIds(s)).toEqual(["a", "b", "ag", "c"]);
+  });
+
+  it("is empty for prose/thinking only", () => {
+    expect(workStepIds(segs([text("a"), thinking("b")]))).toEqual([]);
   });
 });
 

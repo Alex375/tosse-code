@@ -120,7 +120,8 @@
 .cv-steps-chev { margin-left:auto; display:inline-flex; color:var(--wf-tx-xlo); transform:rotate(90deg); transition:transform .15s ease; }
 .cv-steps-chev[data-open] { transform:rotate(0deg); }
 .cv-steps-b { padding:2px 0 2px 9px; margin:1px 0 2px 9px; border-left:1px solid var(--wf-line); display:flex; flex-direction:column; gap:1px; }
-.cv-steps.is-err .cv-steps-t { color:var(--wf-err); }
+/* An error is flagged ONLY by the small alert glyph (.cv-steps-errico) — never a red title
+   and never an auto-expand. */
 
 /* "Travail de Claude" fold (collapse-work display): the round's intermediate work behind
    ONE discreet collapsible, leaving only the final message in clear. Same chrome-less
@@ -134,8 +135,8 @@
 .cv-work-chev { margin-left:auto; display:inline-flex; color:var(--wf-tx-xlo); transform:rotate(90deg); transition:transform .15s ease; }
 .cv-work-chev[data-open] { transform:rotate(0deg); }
 .cv-work-b { padding:2px 0 2px 6px; margin:2px 0 2px 9px; border-left:1px solid var(--wf-line); display:flex; flex-direction:column; gap:2px; }
-/* The fold header carries NO error indicator: a mid-run failure is folded like the rest,
-   flagged only by the alert glyph on the command section / step row inside. */
+/* The fold header carries NO error indicator: a failed tool inside is folded like the rest,
+   flagged only by the small alert glyph on the command section / step row inside. */
 
 /* A single compact step row inside a section. */
 .cv-step { border-radius:6px; }

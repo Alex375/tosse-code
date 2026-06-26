@@ -130,15 +130,22 @@ export function groupBlocks(
 }
 
 /**
- * Split a round's segments into the intermediate WORK and the FINAL message, for the
- * "collapse work" display mode. The final message = the trailing run of `text` segments
- * (the agent's closing prose); everything before it is work to fold. An intermediate
- * `text` separated from the end by a tool run stays in `work`.
+ * Split a grouped assistant response's segments into the intermediate WORK and the FINAL
+ * message, for the "collapse work" display mode. The final message = the trailing run of
+ * `text` segments (the response's CONCLUDING prose); everything before it is work to fold.
+ *
+ * NOTE on grouping: an assistant "response" is one OR MORE consecutive turns concatenated
+ * (MsgAIGroup). So when the agent narrates between tool batches ("let me check…", then more
+ * tools, then "done"), only the CONCLUDING prose stays in clear; the in-between narration
+ * folds with the work. This is intentional for "clean output" — the user opted to see only
+ * the response's final message, with all the mechanics (tools, thinking, interim narration)
+ * tucked behind the one fold. Mirrors the user-facing copy "n'afficher que le message final
+ * de chaque réponse".
  *
  *  - work + final  → fold `work` behind one block, show `final` in clear.
  *  - only final (no work)        → `work` empty: render the message bare, no block.
  *  - only work (no trailing text) → `final` empty: the caller decides (e.g. don't fold
- *    a settled round that ends on tools — see AssistantBlocks).
+ *    a settled response that ends on tools — see AssistantBlocks).
  */
 export function splitFinalMessage(segments: Segment[]): {
   work: Segment[];
@@ -204,12 +211,15 @@ export function atomsToSegments(atoms: WorkAtom[], keyPrefix: string): Segment[]
 
 /**
  * The atom index from which work stays VISIBLE in clean-output LIVE mode; everything before
- * folds into the block. The visible (trailing) region covers BOTH:
- *  - the sliding window: the last `window` tool steps, and
- *  - every still-running tool — a running command / sub-agent stays live even past the
- *    window, and only folds once it finishes.
- * Running tools sit at the trailing edge (nothing settles after an unsettled call), so the
- * visible region is always a trailing slice — `min(firstRunning, windowStart)`.
+ * folds into the block. The visible region is `min(firstRunning, windowStart)`:
+ *  - the sliding window: the last `window` tool steps stay visible, AND
+ *  - every still-running tool stays visible — we NEVER fold a tool that is still running,
+ *    so the fold can't extend past the FIRST running atom.
+ * In a PARALLEL batch where an early tool is still running while later ones have already
+ * settled, the whole batch stays visible until that early tool finishes — a single leading
+ * fold can't skip around a running tool, and a tool in progress must stay on screen. It all
+ * folds normally the moment the batch settles. (So the visible region is not necessarily the
+ * sliding window alone; a front-running tool can widen it.)
  */
 export function liveVisibleStart(
   atoms: WorkAtom[],
@@ -237,14 +247,28 @@ export function liveVisibleStart(
 }
 
 /** How many "étapes" a stretch of work represents, for the "Travail de Claude — N
- *  étapes" header: every tool step across its runs. Prose and thinking are not counted as
- *  steps (and sub-agents render inline, not inside a block). */
+ *  étapes" header: every tool step across its runs PLUS each sub-agent (in clean-output the
+ *  sub-agents fold into the block too, so they count as work). Prose and thinking are not
+ *  steps and are not counted. */
 export function countWorkSteps(segments: Segment[]): number {
   let n = 0;
   for (const s of segments) {
     if (s.kind === "run") n += s.steps.length;
+    else if (s.kind === "agent") n += 1;
   }
   return n;
+}
+
+/** The tool_use ids of a stretch of work — run steps + sub-agents, in order. Lets a fold
+ *  subscribe to EXACTLY its own tools' results (running / errored) instead of the whole
+ *  result map, so a settled round doesn't re-render while a later turn streams. */
+export function workStepIds(segments: Segment[]): string[] {
+  const ids: string[] = [];
+  for (const s of segments) {
+    if (s.kind === "run") for (const st of s.steps) ids.push(st.id);
+    else if (s.kind === "agent") ids.push(s.step.id);
+  }
+  return ids;
 }
 
 /** Short English verb per tool, for a run section's action summary. */
