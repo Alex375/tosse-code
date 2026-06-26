@@ -68,6 +68,13 @@
   background: var(--error-bg);
   color: var(--text-primary);
 }
+/* A command/tool that produced no output: a discreet muted note, not an empty box. */
+.emptyNote {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--fs-code);
+  color: var(--text-muted);
+  font-style: italic;
+}
 
 /* status dot */
 .dotOk {

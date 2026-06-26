@@ -8,6 +8,7 @@ function task(over: Partial<BackgroundTask> = {}): BackgroundTask {
     kind: "agent",
     tool_use_id: "toolu_1",
     label: "do the thing",
+    command: null,
     subagent_type: "Explore",
     model: "claude-haiku-4-5",
     agent_id: "aa11",
