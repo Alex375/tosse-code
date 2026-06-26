@@ -8,6 +8,7 @@ import { AgentBar } from "./AgentBar";
 import { BashBar } from "./BashBar";
 import { MonitorBar } from "./MonitorBar";
 import { useStickToBottom } from "./useStickToBottom";
+import { useDisplay } from "../../store/display";
 
 /**
  * The active conversation's column: thread + bars + composer, sharing one
@@ -31,7 +32,10 @@ export function ConversationPane({
   composerRef: RefObject<ComposerHandle>;
   onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
-  const { scrollRef, onRender, scrollToBottom } = useStickToBottom(session);
+  // Toggling "clean output" folds/unfolds every round → big height change. Pass it as the
+  // preserve key so the thread re-anchors instead of jumping when the user flips it.
+  const cleanOutput = useDisplay((s) => s.cleanOutput);
+  const { scrollRef, onRender, scrollToBottom } = useStickToBottom(session, cleanOutput);
   return (
     <div className="wf-col cv-pane" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
       {/* Provide the conversation id + live cwd so file mentions in the thread

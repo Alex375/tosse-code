@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { NormalizedBlock } from "../../ipc/client";
 import {
+  atomsToSegments,
+  countWorkSteps,
+  flattenWork,
   groupBlocks,
   isHiddenInline,
+  liveVisibleStart,
   runHeader,
+  splitFinalMessage,
   stepLabel,
   stepSummary,
+  type Segment,
   type ToolStep,
 } from "./toolGroup";
 
@@ -185,5 +191,126 @@ describe("stepSummary", () => {
 
   it("returns null for tools without a cheap summary", () => {
     expect(stepSummary("Read", { file_path: "/a" }, "x\ny")).toBeNull();
+  });
+});
+
+// Build segments via groupBlocks so the helpers are tested on real shapes.
+const segs = (blocks: NormalizedBlock[]): Segment[] => groupBlocks(blocks);
+
+describe("splitFinalMessage", () => {
+  it("treats the trailing text as the final message, the rest as work", () => {
+    const { work, final } = splitFinalMessage(
+      segs([tool("a", "Read"), tool("b", "Edit"), text("Voilà, c'est fait.")]),
+    );
+    expect(work.map((s) => s.kind)).toEqual(["run"]);
+    expect(final.map((s) => s.kind)).toEqual(["text"]);
+    if (final[0].kind === "text") expect(final[0].text).toBe("Voilà, c'est fait.");
+  });
+
+  it("keeps an INTERMEDIATE text (followed by tools) inside work", () => {
+    const { work, final } = splitFinalMessage(
+      segs([text("Je commence."), tool("a", "Read"), text("Terminé.")]),
+    );
+    // Only the LAST text is the final message; the opening text stays work.
+    expect(work.map((s) => s.kind)).toEqual(["text", "run"]);
+    expect(final).toHaveLength(1);
+    if (final[0].kind === "text") expect(final[0].text).toBe("Terminé.");
+  });
+
+  it("only a final message (no work) → empty work", () => {
+    const { work, final } = splitFinalMessage(segs([text("Juste une réponse.")]));
+    expect(work).toEqual([]);
+    expect(final).toHaveLength(1);
+  });
+
+  it("no trailing text (ends on tools) → empty final", () => {
+    const { work, final } = splitFinalMessage(segs([tool("a", "Read"), tool("b", "Bash")]));
+    expect(work.map((s) => s.kind)).toEqual(["run"]);
+    expect(final).toEqual([]);
+  });
+
+  it("folds several trailing text segments together as the final message", () => {
+    const { work, final } = splitFinalMessage(
+      segs([tool("a", "Read"), text("Première ligne."), text("Seconde ligne.")]),
+    );
+    expect(work.map((s) => s.kind)).toEqual(["run"]);
+    expect(final.map((s) => s.kind)).toEqual(["text", "text"]);
+  });
+});
+
+describe("countWorkSteps", () => {
+  it("counts tool steps across runs, ignoring prose/thinking and sub-agents", () => {
+    const s = segs([
+      text("intro"),
+      tool("a", "Read"),
+      tool("b", "Edit"),
+      thinking("hmm"),
+      tool("ag", "Agent"),
+      tool("c", "Bash"),
+    ]);
+    // runs: [Read, Edit] (2) + [Bash] (1) = 3 ; the Agent renders inline, not counted.
+    expect(countWorkSteps(s)).toBe(3);
+  });
+
+  it("is zero for prose/thinking only", () => {
+    expect(countWorkSteps(segs([text("a"), thinking("b")]))).toBe(0);
+  });
+});
+
+describe("flattenWork / atomsToSegments", () => {
+  it("flattens a run into one atom per step, then reconstructs it", () => {
+    const work = segs([text("intro"), tool("a", "Read"), tool("b", "Edit"), tool("ag", "Agent")]);
+    const atoms = flattenWork(work);
+    expect(atoms.map((a) => a.kind)).toEqual(["text", "step", "step", "agent"]);
+    const back = atomsToSegments(atoms, "x");
+    // The two consecutive steps re-coalesce into one run; text + agent stay separate.
+    expect(back.map((s) => s.kind)).toEqual(["text", "run", "agent"]);
+    if (back[1].kind === "run") expect(back[1].steps.map((s) => s.id)).toEqual(["a", "b"]);
+  });
+
+  it("gives reconstructed runs stable, prefixed keys (no remount as the fold slides)", () => {
+    const atoms = flattenWork(segs([tool("a", "Read"), tool("b", "Edit")]));
+    const a = atomsToSegments(atoms, "vis");
+    const b = atomsToSegments(atoms.slice(1), "vis");
+    expect(a[0].key).toBe("vis-run-0");
+    expect(b[0].key).toBe("vis-run-0"); // same key though it now holds only the 2nd step
+  });
+});
+
+describe("liveVisibleStart", () => {
+  const none = () => false;
+  it("keeps the last `window` steps visible when nothing runs", () => {
+    const atoms = flattenWork(segs([tool("a", "Read"), tool("b", "Read"), tool("c", "Read"), tool("d", "Read")]));
+    // 4 steps, window 3 → fold the first, keep the last 3.
+    expect(liveVisibleStart(atoms, none, 3)).toBe(1);
+  });
+
+  it("keeps a still-running tool visible even beyond the window", () => {
+    const atoms = flattenWork(
+      segs([tool("a", "Read"), tool("b", "Read"), tool("c", "Read"), tool("d", "Read"), tool("e", "Read")]),
+    );
+    // 'a' is still running → everything from index 0 stays visible despite the 3-step window.
+    const running = (id: string) => id === "a";
+    expect(liveVisibleStart(atoms, running, 3)).toBe(0);
+  });
+
+  it("keeps a running sub-agent visible while settled steps before it fold", () => {
+    const atoms = flattenWork(
+      segs([
+        tool("a", "Read"),
+        tool("b", "Read"),
+        tool("c", "Read"),
+        tool("d", "Read"),
+        tool("ag", "Agent"),
+      ]),
+    );
+    const running = (id: string) => id === "ag";
+    // step 'a' folds; b,c,d (the window) + the running sub-agent stay visible.
+    expect(liveVisibleStart(atoms, running, 3)).toBe(1);
+  });
+
+  it("keeps everything visible when there are fewer than `window` steps", () => {
+    const atoms = flattenWork(segs([tool("a", "Read"), tool("b", "Read")]));
+    expect(liveVisibleStart(atoms, none, 3)).toBe(0);
   });
 });

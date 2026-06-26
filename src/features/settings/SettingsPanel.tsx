@@ -7,7 +7,9 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { wipeAllData } from "../../store/conversationsStore";
 import { useSettingsUi, type SettingsSection } from "../../store/settingsUi";
+import { useDisplay } from "../../store/display";
 import { Ico } from "../../ui/kit";
+import { Toggle } from "../../ui/Toggle";
 import { UpdateSection } from "./UpdateSection";
 import { NotificationsSection } from "./NotificationsSection";
 import styles from "./SettingsPanel.module.css";
@@ -106,6 +108,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 <div className={styles.desc}>
                   Application de bureau pour piloter Claude Code.
                 </div>
+
+                <DisplayPrefs />
               </div>
             )}
 
@@ -153,5 +157,37 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
         </div>
       </div>
     </div>
+  );
+}
+
+/** Display prefs in the Général tab. Today: "Clean output" — fold each round's work behind
+ *  a "Travail de Claude" block so only the final message stays in clear (same pref the
+ *  composer chip toggles). */
+function DisplayPrefs() {
+  const cleanOutput = useDisplay((s) => s.cleanOutput);
+  const set = useDisplay((s) => s.set);
+  return (
+    <>
+      <div className={styles.section} style={{ marginTop: 22 }}>
+        Affichage
+      </div>
+      <div className={styles.toggleList}>
+        <div className={styles.toggleRow}>
+          <div className={styles.toggleText}>
+            <div className={styles.toggleTitle}>Clean output</div>
+            <div className={styles.toggleHint}>
+              N'affiche que le message final de chaque réponse ; les outils, la réflexion et les
+              étapes intermédiaires sont repliés derrière un bloc « Travail de Claude », dépliable
+              à la demande.
+            </div>
+          </div>
+          <Toggle
+            checked={cleanOutput}
+            onChange={(v) => set({ cleanOutput: v })}
+            label="Clean output"
+          />
+        </div>
+      </div>
+    </>
   );
 }
