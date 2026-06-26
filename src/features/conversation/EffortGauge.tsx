@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { ChipBtn, Menu } from "../../ui/kit";
+import { EFFORT_LABELS } from "../../agent/subagentMeta";
 
 /**
  * Claude Code reasoning-effort levels (low → xhigh), plus the top "Ultra code"
@@ -11,13 +12,9 @@ import { ChipBtn, Menu } from "../../ui/kit";
  */
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "ultracode";
 
-const LABELS: Record<EffortLevel, string> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra",
-  ultracode: "Ultra code",
-};
+// Display labels are shared with the read-only effort surfaces (FlightDeck card,
+// agent meta) via subagentMeta.EFFORT_LABELS so they can never drift.
+const LABELS: Record<EffortLevel, string> = EFFORT_LABELS;
 const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "ultracode"];
 
 /** Effort levels a model supports (Claude Code per-model table; [] = no effort).
