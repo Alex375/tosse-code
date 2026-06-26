@@ -103,6 +103,23 @@ describe("toolActivityLabel", () => {
   it("falls back to the tool name for unknown tools", () => {
     expect(toolActivityLabel("Frobnicate", {})).toBe("Frobnicate…");
   });
+
+  it("names the activated skill directly", () => {
+    expect(toolActivityLabel("Skill", { skill: "code-review" })).toBe("Skill : code-review");
+    expect(toolActivityLabel("Skill", { skill: "code-review", args: "--fix" })).toBe(
+      "Skill : code-review",
+    );
+    expect(toolActivityLabel("Skill", {})).toBe("Skill");
+  });
+
+  it("renders an MCP tool as `<server> : <tool>` instead of its raw wire name", () => {
+    expect(toolActivityLabel("mcp__claude_ai_TOSSE__create_task", {})).toBe(
+      "claude ai TOSSE : create_task",
+    );
+    expect(toolActivityLabel("mcp__playwright__browser_click", {})).toBe(
+      "playwright : browser_click",
+    );
+  });
 });
 
 describe("describeActivity", () => {

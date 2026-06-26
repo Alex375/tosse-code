@@ -4,6 +4,7 @@ import {
   groupBlocks,
   isHiddenInline,
   runHeader,
+  stepIcon,
   stepLabel,
   stepSummary,
   type ToolStep,
@@ -136,6 +137,53 @@ describe("runHeader", () => {
         mkStep("Grep"),
       ]),
     ).toBe("Read · Edit · Write · Run · +1");
+  });
+
+  it("aggregates MCP tools of one server as a count", () => {
+    expect(
+      runHeader([
+        mkStep("mcp__claude_ai_TOSSE__create_task"),
+        mkStep("mcp__claude_ai_TOSSE__get_tasks"),
+        mkStep("mcp__claude_ai_TOSSE__update_task"),
+      ]),
+    ).toBe("claude ai TOSSE · 3 tools");
+  });
+
+  it("keeps separate MCP servers apart, singularising the count", () => {
+    expect(
+      runHeader([
+        mkStep("mcp__claude_ai_TOSSE__create_task"),
+        mkStep("mcp__claude_ai_TOSSE__get_tasks"),
+        mkStep("mcp__playwright__browser_click"),
+      ]),
+    ).toBe("claude ai TOSSE · 2 tools · playwright · 1 tool");
+  });
+
+  it("mixes native verbs and MCP server groups", () => {
+    expect(
+      runHeader([
+        mkStep("Read"),
+        mkStep("Read"),
+        mkStep("mcp__claude_ai_TOSSE__create_task"),
+        mkStep("mcp__claude_ai_TOSSE__get_tasks"),
+        mkStep("mcp__claude_ai_TOSSE__update_task"),
+      ]),
+    ).toBe("Read ×2 · claude ai TOSSE · 3 tools");
+  });
+
+  it("uses the full `<server> : <tool>` label for a single MCP step", () => {
+    expect(runHeader([mkStep("mcp__claude_ai_TOSSE__create_task")])).toBe(
+      "claude ai TOSSE : create_task",
+    );
+  });
+});
+
+describe("stepIcon", () => {
+  it("maps known tools, MCP tools (plug) and unknowns (cog)", () => {
+    expect(stepIcon("Read")).toBe("file");
+    expect(stepIcon("Skill")).toBe("wand");
+    expect(stepIcon("mcp__claude_ai_TOSSE__create_task")).toBe("plug");
+    expect(stepIcon("Frobnicate")).toBe("cog");
   });
 });
 

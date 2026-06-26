@@ -11,6 +11,7 @@ import type { JsonValue, NormalizedBlock } from "../../ipc/client";
 import { field } from "../../agent/ask";
 import { toolActivityLabel } from "../../store/activity";
 import { isRunInBackground } from "../../agent/subagentMeta";
+import { parseMcpToolName, prettyMcpServer } from "../../agent/toolNames";
 import { basename, toolMeta } from "./toolMeta";
 import { diffCounts, lineDiff } from "./lineDiff";
 
@@ -32,7 +33,17 @@ export const TOOL_ICON: Record<string, string> = {
   TodoWrite: "list",
   NotebookEdit: "diff",
   AskUserQuestion: "form",
+  // A skill/command invocation gets the wand glyph (distinct from the sub-agent spark).
+  Skill: "wand",
 };
+
+/** Icon token for a step's glyph. MCP tools have variable `mcp__server__tool` names that
+ *  can't be table-keyed, so they all resolve to one plug glyph; everything else uses
+ *  TOOL_ICON, falling back to a cog for unknown tools. */
+export function stepIcon(name: string): string {
+  if (parseMcpToolName(name)) return "plug";
+  return TOOL_ICON[name] ?? "cog";
+}
 
 export interface ToolStep {
   /** tool_use id — joins to its result. */
@@ -152,23 +163,36 @@ export function toolVerb(name: string): string {
 
 /**
  * A clear, DETERMINISTIC header for a run section (no LLM call): for a single step,
- * its full label ("Read App.tsx"); otherwise the distinct action verbs in order,
- * with a ×N when a verb repeats — "Read · Search · Find", "Run ×3", "Edit ×2 · Run".
- * Capped so it stays one line.
+ * its full label ("Read App.tsx"); otherwise the groups in first-seen order. A native
+ * tool groups by its action verb with a ×N when it repeats — "Read · Search · Find",
+ * "Run ×3", "Edit ×2 · Run". MCP tools group by their server, shown as a count —
+ * "claude ai TOSSE · 3 tools · playwright · 1 tool" — since their raw `mcp__…` names
+ * are too verbose to list. Capped so it stays one line.
  */
 export function runHeader(steps: ToolStep[]): string {
   if (steps.length === 1) return stepLabel(steps[0].name, steps[0].input);
+  // A group is either a native action verb or one MCP server; keyed so the two never
+  // collide. `display` holds the human label, `mcp` flags the count-style rendering.
   const order: string[] = [];
   const counts = new Map<string, number>();
+  const display = new Map<string, string>();
+  const mcpKeys = new Set<string>();
   for (const s of steps) {
-    const v = toolVerb(s.name);
-    if (!counts.has(v)) order.push(v);
-    counts.set(v, (counts.get(v) ?? 0) + 1);
+    const m = parseMcpToolName(s.name);
+    const key = m ? `mcp:${m.server}` : `verb:${toolVerb(s.name)}`;
+    if (!counts.has(key)) {
+      order.push(key);
+      display.set(key, m ? prettyMcpServer(m.server) : toolVerb(s.name));
+      if (m) mcpKeys.add(key);
+    }
+    counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const MAX = 4;
-  const parts = order.slice(0, MAX).map((v) => {
-    const n = counts.get(v) ?? 1;
-    return n > 1 ? `${v} ×${n}` : v;
+  const parts = order.slice(0, MAX).map((key) => {
+    const n = counts.get(key) ?? 1;
+    const label = display.get(key) ?? key;
+    if (mcpKeys.has(key)) return `${label} · ${n} ${n === 1 ? "tool" : "tools"}`;
+    return n > 1 ? `${label} ×${n}` : label;
   });
   if (order.length > MAX) parts.push(`+${order.length - MAX}`);
   return parts.join(" · ");

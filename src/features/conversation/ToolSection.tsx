@@ -21,9 +21,9 @@ import {
   basename,
   multiEdits,
   stepFilePath,
+  stepIcon,
   stepLabel,
   stepSummary,
-  TOOL_ICON,
   type StepSummary,
   type ToolStep,
 } from "./toolGroup";
@@ -217,7 +217,7 @@ export function LiveToolStep({
   const summary = stepSummary(step.name, step.input, joined ? resultContentText(joined.content) : null);
   return (
     <ToolStepRow
-      icon={TOOL_ICON[step.name] ?? "cog"}
+      icon={stepIcon(step.name)}
       label={stepLabel(step.name, step.input)}
       filePath={stepFilePath(step.input)}
       summary={summary}
@@ -236,7 +236,7 @@ export function StaticToolStep({ step, result }: { step: ToolStep; result: StepR
   const summary = stepSummary(step.name, step.input, result ? resultContentText(result.content) : null);
   return (
     <ToolStepRow
-      icon={TOOL_ICON[step.name] ?? "cog"}
+      icon={stepIcon(step.name)}
       label={stepLabel(step.name, step.input)}
       filePath={stepFilePath(step.input)}
       summary={summary}
