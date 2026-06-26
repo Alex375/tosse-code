@@ -39,15 +39,24 @@ pub struct Assembler {
     /// never on the optimistic click. So the line always reflects what the model
     /// actually got, and it also catches a change made from the chat (e.g. /model).
     announced: Announced,
-    /// `tool_use.id` → tool `name`, recorded from each assistant `tool_use` block.
-    /// The ONLY way to tell a background `Bash` from a `Monitor` apart (both carry
+    /// `tool_use.id` → the tool that spawned it (name + captured Bash command),
+    /// recorded from each assistant `tool_use` block. The tool NAME is the ONLY way to
+    /// tell a background `Bash` from a `Monitor` apart (both carry
     /// `task_type:"local_bash"`): we correlate a `task_*`'s `tool_use_id` back to the
-    /// tool that spawned it. Populated before the matching `task_started` (the tool
-    /// must be requested before it runs).
-    tool_names: HashMap<String, String>,
+    /// tool that spawned it. The `command` is captured for `Bash` so a background
+    /// command can show its real `$ command` (the wire's `task_started` carries only a
+    /// `description`, not the input). Populated before the matching `task_started` (the
+    /// tool must be requested before it runs).
+    tool_names: HashMap<String, ToolUse>,
     /// Live background tasks keyed by `task_id`, updated in place on every `task_*`
     /// transition (spec §6.2).
     background_tasks: HashMap<String, BackgroundTask>,
+    /// Reverse index `tool_use_id → task_id`. Lets `record_tool` / `set_task_output_file`
+    /// reconcile a tracked task from its spawning tool_use in O(1) instead of scanning
+    /// `background_tasks` — most `Bash` tool_uses are foreground and spawn no task, so the
+    /// scan was pure waste on every one. Kept in lock-step with each task's `tool_use_id`
+    /// via [`Assembler::link_tool_use`].
+    tasks_by_tool_use: HashMap<String, String>,
 }
 
 /// The last-announced friendly labels for the three controls (see [`Assembler`]).
@@ -56,6 +65,23 @@ struct Announced {
     model: Option<String>,
     effort: Option<String>,
     permission: Option<String>,
+}
+
+/// A background-capable `tool_use` the assembler is tracking by id (see
+/// [`Assembler::tool_names`]).
+#[derive(Debug, Default)]
+struct ToolUse {
+    /// Tool name (`Bash` / `Monitor` / `Agent` / `Workflow`) — classifies the task.
+    name: String,
+    /// The `command` of a `Bash` tool_use. Present only once the ASSEMBLED assistant
+    /// message lands (the streamed `content_block_start` carries an empty input), so it
+    /// can arrive AFTER the task is already tracked. `None` for non-Bash tools.
+    command: Option<String>,
+    /// ABSOLUTE path of the task's output file, parsed from the background tool_result
+    /// ("…Output is being written to: <path>"). Captured here so it can seed a task
+    /// whose `task_started` is yet to arrive (and vice-versa). `None` until that
+    /// tool_result is seen.
+    output_file: Option<String>,
 }
 
 impl Assembler {
@@ -301,20 +327,37 @@ impl Assembler {
         }
     }
 
+    /// Maintain the `tool_use_id → task_id` reverse index (consumed by `record_tool` /
+    /// `set_task_output_file` for an O(1) reconcile). No-op for an absent/empty id.
+    fn link_tool_use(&mut self, tool_use_id: Option<&str>, task_id: &str) {
+        if let Some(id) = tool_use_id {
+            if !id.is_empty() {
+                self.tasks_by_tool_use.insert(id.to_string(), task_id.to_string());
+            }
+        }
+    }
+
     /// A background task was created: classify its producer (from `task_type` + the
     /// correlated tool name), seed a [`BackgroundTask`] keyed by `task_id`, and emit.
     fn ingest_task_started(&mut self, t: &TaskStartedMsg, out: &mut Vec<SessionEvent>) {
-        let tool_name = t
-            .tool_use_id
-            .as_deref()
-            .and_then(|id| self.tool_names.get(id))
-            .map(String::as_str);
-        let kind = classify_task(t.task_type.as_deref(), tool_name);
+        self.link_tool_use(t.tool_use_id.as_deref(), &t.task_id);
+        // Owned copies so the immutable `tool_names` read doesn't outlive the mutable
+        // `background_tasks` borrow below.
+        let tool = t.tool_use_id.as_deref().and_then(|id| self.tool_names.get(id));
+        let tool_name = tool.map(|t| t.name.clone());
+        let tool_command = tool.and_then(|t| t.command.clone());
+        let tool_output_file = tool.and_then(|t| t.output_file.clone());
+        let kind = classify_task(t.task_type.as_deref(), tool_name.as_deref());
+        // The label is the NAME the agent gave the task (`description`, e.g. "build the
+        // app") — the meaningful pinned line. The raw command lives in its own field; the
+        // command and the output path arrive on their own schedule (assistant message /
+        // tool_result) and `record_tool` / `set_task_output_file` backfill them later.
+        let label = t.description.clone();
         // `task_started` normally arrives FIRST, so the common path inserts a fresh entry.
         // If a lazy entry already exists (the stream was joined mid-run and a
         // `task_updated`/`task_progress` was seen first), MERGE the authoritative identity
         // in rather than clobbering any status/progress already accumulated — and backfill
-        // `tool_use_id` so a later tool name can still reach it via `record_tool_name`.
+        // `tool_use_id` so a later tool name can still reach it via `record_tool`.
         let task = self
             .background_tasks
             .entry(t.task_id.clone())
@@ -322,7 +365,8 @@ impl Assembler {
                 task_id: t.task_id.clone(),
                 kind,
                 tool_use_id: t.tool_use_id.clone(),
-                label: t.description.clone(),
+                label: label.clone(),
+                command: tool_command.clone(),
                 subagent_type: t.subagent_type.clone(),
                 model: None,
                 agent_id: None,
@@ -332,7 +376,7 @@ impl Assembler {
                 tool_uses: None,
                 duration_ms: None,
                 summary: None,
-                output_file: None,
+                output_file: tool_output_file.clone(),
             });
         if task.tool_use_id.is_none() {
             task.tool_use_id = t.tool_use_id.clone();
@@ -341,7 +385,13 @@ impl Assembler {
             task.kind = kind;
         }
         if task.label.is_none() {
-            task.label = t.description.clone();
+            task.label = label;
+        }
+        if task.command.is_none() {
+            task.command = tool_command;
+        }
+        if task.output_file.is_none() {
+            task.output_file = tool_output_file;
         }
         if task.subagent_type.is_none() {
             task.subagent_type = t.subagent_type.clone();
@@ -392,7 +442,12 @@ impl Assembler {
         if t.summary.is_some() {
             task.summary = t.summary.clone();
         }
-        if t.output_file.is_some() {
+        // Fill output_file from the notification only if we don't ALREADY have one. For a
+        // Bash/Monitor the start tool_result already captured the live-tailable TEMP path
+        // (`set_task_output_file`) — the notification must not clobber it. An Agent had
+        // none set earlier (no marker), so this is where its transcript path lands (and
+        // the agent_id extraction below depends on it).
+        if task.output_file.is_none() && t.output_file.is_some() {
             task.output_file = t.output_file.clone();
         }
         if let Some(usage) = &t.usage {
@@ -431,9 +486,10 @@ impl Assembler {
     /// was joined mid-run) still yields a usable entry, classified from whatever the
     /// late event carries.
     fn task_entry(&mut self, task_id: &str, tool_use_id: Option<&str>) -> &mut BackgroundTask {
+        self.link_tool_use(tool_use_id, task_id);
         let tool_name = tool_use_id
             .and_then(|id| self.tool_names.get(id))
-            .map(String::clone);
+            .map(|t| t.name.clone());
         self.background_tasks
             .entry(task_id.to_string())
             .or_insert_with(|| BackgroundTask {
@@ -441,6 +497,7 @@ impl Assembler {
                 kind: classify_task(None, tool_name.as_deref()),
                 tool_use_id: tool_use_id.map(str::to_string),
                 label: None,
+                command: None,
                 subagent_type: None,
                 model: None,
                 agent_id: None,
@@ -527,7 +584,9 @@ impl Assembler {
                     if cb.get("type").and_then(Value::as_str) == Some("tool_use") {
                         let id = cb.get("id").and_then(Value::as_str).unwrap_or_default();
                         let name = cb.get("name").and_then(Value::as_str).unwrap_or_default();
-                        self.record_tool_name(id, name, out);
+                        // Input is empty at content_block_start (it streams later); the
+                        // command is captured from the assembled assistant message.
+                        self.record_tool(id, name, cb.get("input"), out);
                     }
                 }
             }
@@ -537,34 +596,82 @@ impl Assembler {
         }
     }
 
-    /// Record a background-capable tool_use's `id → name` for later `task_*`
-    /// correlation, and — belt-and-suspenders — re-classify an ALREADY-tracked task
-    /// that turns out to belong to it (covers the rare wire ordering where a
-    /// `task_started` beat the tool name). Only background-CAPABLE tools are kept, which
-    /// keeps the map small — though note `Bash` qualifies even when run in the foreground,
-    /// so it is NOT strictly bounded to calls that actually spawn a task.
-    fn record_tool_name(&mut self, id: &str, name: &str, out: &mut Vec<SessionEvent>) {
+    /// Record a background-capable tool_use's `id → (name, command)` for later `task_*`
+    /// correlation, and — belt-and-suspenders — reconcile an ALREADY-tracked task that
+    /// turns out to belong to it: re-classify it (covers the rare wire ordering where a
+    /// `task_started` beat the tool name) and backfill a `Bash`'s raw command (which
+    /// lands only with the ASSEMBLED assistant message, often AFTER the task is already
+    /// tracked) so the output popover can show it. Only background-CAPABLE tools are
+    /// kept, which keeps the map small — though note `Bash` qualifies even when run in
+    /// the foreground, so it is NOT strictly bounded to calls that actually spawn a task.
+    fn record_tool(&mut self, id: &str, name: &str, input: Option<&Value>, out: &mut Vec<SessionEvent>) {
         if id.is_empty() || !is_bg_capable_tool(name) {
             return;
         }
-        // Called twice for the same tool_use (streamed `content_block_start`, then the
-        // assembled assistant message). Once `id → name` is recorded, the second call is a
-        // no-op — skip re-inserting and the redundant re-classification scan below.
-        if self.tool_names.get(id).map(String::as_str) == Some(name) {
+        // The Bash command is present only in the ASSEMBLED assistant message's input —
+        // the streamed `content_block_start` carries an empty input — so it lands on the
+        // SECOND call for this id.
+        let command = (name == "Bash")
+            .then(|| input.and_then(|i| i.get("command")).and_then(Value::as_str))
+            .flatten()
+            .map(str::to_string);
+
+        // Called (at least) twice for the same tool_use: streamed `content_block_start`
+        // (name only), then the assembled assistant message (name + full input). No-op
+        // when nothing new arrived — the name is already recorded and no command appeared.
+        let known = self.tool_names.get(id);
+        let name_known = known.map(|t| t.name.as_str()) == Some(name);
+        let command_new = command.is_some() && known.and_then(|t| t.command.as_deref()) != command.as_deref();
+        if name_known && !command_new {
             return;
         }
-        self.tool_names.insert(id.to_string(), name.to_string());
-        // If a task for this tool_use already exists but was classified before the name
-        // was known (ambiguous `local_bash` → Bash fallback, or `Other`), correct it now
-        // — the tool name is the authoritative signal — and re-emit so the UI updates.
-        if let Some(task) = self
-            .background_tasks
-            .values_mut()
-            .find(|t| t.tool_use_id.as_deref() == Some(id))
-        {
+        let entry = self.tool_names.entry(id.to_string()).or_default();
+        entry.name = name.to_string();
+        if command.is_some() {
+            entry.command = command.clone();
+        }
+
+        // Reconcile an already-tracked task spawned by this tool_use:
+        //  - re-classify if the (now-known) name changes its kind (ambiguous
+        //    `local_bash` → Bash fallback, or `Other`) — the name is authoritative;
+        //  - backfill a `Bash`'s raw command (a SEPARATE field from the `label` name) so
+        //    the output popover can show `$ command` alongside the name.
+        let task_id = self.tasks_by_tool_use.get(id).cloned();
+        if let Some(task) = task_id.as_deref().and_then(|tid| self.background_tasks.get_mut(tid)) {
+            let mut changed = false;
             let corrected = classify_task(None, Some(name));
             if corrected != task.kind {
                 task.kind = corrected;
+                changed = true;
+            }
+            if let Some(cmd) = &command {
+                if task.command.as_deref() != Some(cmd.as_str()) {
+                    task.command = Some(cmd.clone());
+                    changed = true;
+                }
+            }
+            if changed {
+                out.push(SessionEvent::Task(task.clone()));
+            }
+        }
+    }
+
+    /// Capture a background task's ABSOLUTE output path, parsed from its Bash/Monitor
+    /// tool_result ("…Output is being written to: <path>"). Stash it by `tool_use_id`
+    /// (so a not-yet-started task picks it up in [`Self::ingest_task_started`]) AND, if
+    /// the task is already tracked, set it and re-emit. This is the ONLY wire source of
+    /// the path early enough to live-tail the output (the CLI writes it to a temp dir,
+    /// so the path can't be reconstructed; `task_notification.output_file` only confirms
+    /// it at the very end).
+    fn set_task_output_file(&mut self, tool_use_id: &str, path: String, out: &mut Vec<SessionEvent>) {
+        if tool_use_id.is_empty() {
+            return;
+        }
+        self.tool_names.entry(tool_use_id.to_string()).or_default().output_file = Some(path.clone());
+        let task_id = self.tasks_by_tool_use.get(tool_use_id).cloned();
+        if let Some(task) = task_id.as_deref().and_then(|tid| self.background_tasks.get_mut(tid)) {
+            if task.output_file.as_deref() != Some(path.as_str()) {
+                task.output_file = Some(path);
                 out.push(SessionEvent::Task(task.clone()));
             }
         }
@@ -585,8 +692,8 @@ impl Assembler {
         // the name is known before `task_started` even though this message arrives at
         // end-of-turn.
         for b in &blocks {
-            if let NormalizedBlock::ToolUse { id, name, .. } = b {
-                self.record_tool_name(id, name, out);
+            if let NormalizedBlock::ToolUse { id, name, input } = b {
+                self.record_tool(id, name, Some(input), out);
             }
         }
         out.push(SessionEvent::Item(ConversationItem::AssistantMessage {
@@ -631,13 +738,22 @@ impl Assembler {
         if let Some(Value::Array(blocks)) = u.message.get("content") {
             for b in blocks {
                 if b.get("type").and_then(Value::as_str) == Some("tool_result") {
+                    let tool_use_id = b
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let content = b.get("content").cloned().unwrap_or(Value::Null);
+                    // A background `Bash`/`Monitor` tool_result announces where its output
+                    // is being written ("…Output is being written to: <path>"). Capture
+                    // that absolute path NOW so the output popover can read (and live-tail)
+                    // it — the CLI writes to a temp dir the app can't reconstruct.
+                    if let Some(path) = output_file_from_tool_result(&content) {
+                        self.set_task_output_file(&tool_use_id, path, out);
+                    }
                     out.push(SessionEvent::Item(ConversationItem::ToolResult {
-                        tool_use_id: b
-                            .get("tool_use_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        content: b.get("content").cloned().unwrap_or(Value::Null),
+                        tool_use_id,
+                        content,
                         is_error: b.get("is_error").and_then(Value::as_bool).unwrap_or(false),
                         parent_tool_use_id: u.parent_tool_use_id.clone(),
                     }));
@@ -728,6 +844,32 @@ fn change_notice(control: &str, icon: &str, from: &str, to: &str) -> SessionEven
 /// leak; terminal-task pruning is deferred to whoever (the fleet view) consumes them.
 fn is_bg_capable_tool(name: &str) -> bool {
     matches!(name, "Agent" | "Workflow" | "Bash" | "Monitor")
+}
+
+/// Extract the absolute output path a background `Bash`/`Monitor` tool_result announces
+/// ("…Output is being written to: `/tmp/claude-<uid>/<slug>/<session>/tasks/<id>.output`.
+/// …"). The path runs from the marker to the `.output` suffix (the sentence continues
+/// after it). `None` when the marker is absent (a normal, foreground tool_result).
+///
+/// Scans the BORROWED text (a string, or each `{text}` block of an array) in place — it
+/// never copies the content, so a large Read/grep result is not cloned just to look for a
+/// marker that foreground results never carry. Only the matched path is allocated.
+fn output_file_from_tool_result(content: &Value) -> Option<String> {
+    fn extract(text: &str) -> Option<String> {
+        const MARKER: &str = "Output is being written to: ";
+        const SUFFIX: &str = ".output";
+        let after = &text[text.find(MARKER)? + MARKER.len()..];
+        let end = after.find(SUFFIX)? + SUFFIX.len();
+        Some(after[..end].to_string())
+    }
+    match content {
+        Value::String(s) => extract(s),
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .find_map(extract),
+        _ => None,
+    }
 }
 
 /// Extract a sub-agent's id from its transcript `output_file`
@@ -1279,6 +1421,173 @@ mod tests {
         assert_eq!(
             corrected.expect("a re-classify Task event").kind,
             BackgroundTaskKind::Monitor
+        );
+    }
+
+    /// The label is the NAME the agent gave the task (`description`), and the raw command
+    /// lands in its OWN field — so the pinned line reads "build the app" while the popover
+    /// can still show `$ <command>`. Here the assembled assistant message precedes the task.
+    #[test]
+    fn background_bash_keeps_name_label_and_captures_command() {
+        let mut asm = Assembler::new();
+        let assistant: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "assistant",
+            "message": {"id": "m", "role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_bash", "name": "Bash",
+                 "input": {"command": "npm run build && ./scripts/sign.sh", "description": "Build the app", "run_in_background": true}}
+            ]},
+            "session_id": "s"
+        }))
+        .unwrap();
+        asm.ingest(&assistant);
+        let started: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_started","task_id":"tk_bash","tool_use_id":"tu_bash","description":"Build the app","task_type":"local_bash"}"#,
+        )
+        .unwrap();
+        let task = asm.ingest(&started).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        let task = task.expect("a Task event");
+        assert_eq!(task.kind, BackgroundTaskKind::Bash);
+        assert_eq!(task.label.as_deref(), Some("Build the app"), "label = the name");
+        assert_eq!(
+            task.command.as_deref(),
+            Some("npm run build && ./scripts/sign.sh"),
+            "the raw command is captured in its own field"
+        );
+    }
+
+    /// The realistic streamed ordering: `content_block_start` (name only) →
+    /// `task_started` (command not known yet) → the assembled `assistant` message carries
+    /// the full command and BACKFILLS the `command` field (re-emitting the task), leaving
+    /// the `label` name intact.
+    #[test]
+    fn late_bash_command_backfills_the_command_field() {
+        let mut asm = Assembler::new();
+        let cbs: CliMessage = serde_json::from_str(
+            r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_bash","name":"Bash","input":{}}},"session_id":"s"}"#,
+        )
+        .unwrap();
+        asm.ingest(&cbs);
+        let started: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_started","task_id":"tk_bash","tool_use_id":"tu_bash","description":"Watch the log","task_type":"local_bash"}"#,
+        )
+        .unwrap();
+        let first = asm.ingest(&started).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        let first = first.expect("a Task event");
+        assert_eq!(first.label.as_deref(), Some("Watch the log"));
+        assert_eq!(first.command, None, "command not known yet");
+
+        let assistant: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "assistant",
+            "message": {"id": "m", "role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu_bash", "name": "Bash",
+                 "input": {"command": "tail -f log.txt", "description": "Watch the log", "run_in_background": true}}
+            ]},
+            "session_id": "s"
+        }))
+        .unwrap();
+        let backfilled = asm.ingest(&assistant).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        let backfilled =
+            backfilled.expect("the assistant message must re-emit the task with the command");
+        assert_eq!(backfilled.label.as_deref(), Some("Watch the log"), "name unchanged");
+        assert_eq!(backfilled.command.as_deref(), Some("tail -f log.txt"));
+    }
+
+    /// The background Bash tool_result announces the ABSOLUTE output path; the assembler
+    /// parses it and sets `output_file` on the task (the only wire source early enough to
+    /// live-tail it — the CLI writes to a temp dir, not the session dir).
+    #[test]
+    fn captures_output_file_path_from_background_tool_result() {
+        // The exact format captured live from claude 2.1.187.
+        let real = "Command running in background with ID: by7jmgia3. Output is being written to: /private/tmp/claude-501/-Users-x-Repos-y/sess-1/tasks/by7jmgia3.output. You will be notified when it completes.";
+        assert_eq!(
+            output_file_from_tool_result(&serde_json::json!(real)).as_deref(),
+            Some("/private/tmp/claude-501/-Users-x-Repos-y/sess-1/tasks/by7jmgia3.output"),
+        );
+        // An ordinary tool_result (no marker) yields nothing.
+        assert_eq!(output_file_from_tool_result(&serde_json::json!("done, 3 files")), None);
+        // Each text block of an array is scanned in place (no whole-content copy).
+        let arr = serde_json::json!([{"type":"text","text":"Output is being written to: /t/sess/tasks/k.output."}]);
+        assert_eq!(
+            output_file_from_tool_result(&arr).as_deref(),
+            Some("/t/sess/tasks/k.output"),
+        );
+
+        // End-to-end: task_started → its tool_result sets output_file and re-emits.
+        let mut asm = Assembler::new();
+        let started: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_started","task_id":"tk_bash","tool_use_id":"tu_bash","description":"d","task_type":"local_bash"}"#,
+        )
+        .unwrap();
+        asm.ingest(&started);
+        let result: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu_bash",
+                 "content": "Command running in background with ID: x. Output is being written to: /tmp/claude-501/s/tasks/tk.output. You will be notified.",
+                 "is_error": false}
+            ]},
+            "session_id": "s"
+        }))
+        .unwrap();
+        let task = asm.ingest(&result).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        assert_eq!(
+            task.expect("a re-emitted Task event").output_file.as_deref(),
+            Some("/tmp/claude-501/s/tasks/tk.output"),
+        );
+    }
+
+    /// A terminal `task_notification` must NOT clobber the live TEMP `output_file` already
+    /// captured from the start tool_result marker — that temp path is the live-tailable
+    /// one; the notification's path may point elsewhere (a session-dir path the CLI does
+    /// not actually write for a Bash/Monitor). Regression guard for the completion read.
+    #[test]
+    fn notification_does_not_clobber_the_captured_output_file() {
+        let mut asm = Assembler::new();
+        let started: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_started","task_id":"tk_bash","tool_use_id":"tu_bash","description":"d","task_type":"local_bash"}"#,
+        )
+        .unwrap();
+        asm.ingest(&started);
+        // The start tool_result announces the real, live-tailable TEMP path.
+        let result: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu_bash",
+                 "content": "Running in background. Output is being written to: /tmp/claude-1/s/tasks/tk_bash.output. You will be notified.",
+                 "is_error": false}
+            ]},
+            "session_id": "s"
+        }))
+        .unwrap();
+        asm.ingest(&result);
+        // A terminal notification carrying a DIFFERENT (session-dir) path must leave the
+        // already-captured temp path intact.
+        let notif: CliMessage = serde_json::from_str(
+            r#"{"type":"system","subtype":"task_notification","task_id":"tk_bash","tool_use_id":"tu_bash","status":"completed","output_file":"/Users/x/.claude/projects/-x/s/tasks/tk_bash.output","summary":"done"}"#,
+        )
+        .unwrap();
+        let task = asm.ingest(&notif).into_iter().find_map(|e| match e {
+            SessionEvent::Task(t) => Some(t),
+            _ => None,
+        });
+        let task = task.expect("a terminal Task event");
+        assert_eq!(task.status, BackgroundTaskStatus::Completed);
+        assert_eq!(
+            task.output_file.as_deref(),
+            Some("/tmp/claude-1/s/tasks/tk_bash.output"),
+            "the live temp path captured from the marker must survive the notification"
         );
     }
 

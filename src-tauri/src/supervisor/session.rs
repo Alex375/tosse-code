@@ -1653,7 +1653,8 @@ mod tests {
     ///      we receive normalized [`SessionEvent::Task`] events,
     ///   2. the producer is CLASSIFIED as [`BackgroundTaskKind::Bash`],
     ///   3. the task reaches a terminal status with an `output_file`, and
-    ///   4. the DISK READER ([`super::subagents::read_task_output`]) reads that file back.
+    ///   4. the DISK READER ([`super::subagents::read_task_output_file`]) reads it back
+    ///      from the absolute `output_file` path the wire carried.
     ///
     /// Ignored by default (needs the binary, network, auth, quota). Run with:
     ///   cargo test -p tosse-code --lib -- --ignored live_background_task --nocapture
@@ -1684,7 +1685,6 @@ mod tests {
             .await
             .expect("send should queue");
 
-        let mut session_id: Option<String> = None;
         let mut bg_task: Option<crate::supervisor::model::BackgroundTask> = None;
 
         let drain_loop = async {
@@ -1696,11 +1696,6 @@ mod tests {
                             .answer_permission(p.request_id, PermissionDecision::Allow { updated_input: None })
                             .await
                             .ok();
-                    }
-                    SessionEvent::State(s) => {
-                        if s.session_id.is_some() {
-                            session_id = s.session_id.clone();
-                        }
                     }
                     SessionEvent::Task(t) => {
                         // Keep the latest snapshot of our background Bash task. The
@@ -1730,19 +1725,13 @@ mod tests {
         eprintln!("[live] ingested background task: {task:#?}");
         assert_eq!(task.kind, BackgroundTaskKind::Bash);
 
-        // The disk reader should read the task's output file back. Prefer reading via
-        // the session-scoped reader (the same path the IPC command uses); fall back to
-        // the absolute output_file the notification carried.
-        if let Some(sid) = &session_id {
-            if let Some(out) = crate::supervisor::subagents::read_task_output(sid, &task.task_id) {
-                eprintln!("[live] read_task_output:\n{out}");
-                assert!(out.contains("tosse-bg-done"), "output file should hold the echo");
-                return;
-            }
-        }
+        // The disk reader reads the task's output back from the ABSOLUTE path the CLI
+        // reported on the wire (the CLI writes background output to a temp dir, not the
+        // session dir, so this echoed `output_file` is the only reliable source).
         let output_file = task.output_file.expect("a finished background task carries an output_file");
-        let out = std::fs::read_to_string(&output_file).expect("output file should be readable");
-        eprintln!("[live] output_file {output_file}:\n{out}");
+        let out = crate::supervisor::subagents::read_task_output_file(&output_file)
+            .expect("output file should be readable via the absolute path");
+        eprintln!("[live] read_task_output_file {output_file}:\n{out}");
         assert!(out.contains("tosse-bg-done"), "output file should hold the echo");
     }
 }

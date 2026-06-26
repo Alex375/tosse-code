@@ -426,6 +426,13 @@
   white-space:pre-wrap; word-break:break-word;
 }
 
+/* The raw `$ command` line in a task-output popover header, under the name. The name
+   says WHAT the task does; this says HOW (the actual shell command). */
+.cv-taskout-cmd {
+  margin-top:2px; font-size:11px; line-height:1.5; color:var(--wf-tx-lo);
+  word-break:break-word; overflow-wrap:break-word;
+}
+
 .cv-todolist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
 .cv-todo-i { display:flex; align-items:flex-start; gap:9px; font-size:12.5px; line-height:1.45; color:var(--wf-tx); }
 .cv-todo-i .cv-check { margin-top:1px; transition:border-color .2s ease, background .2s ease; }

@@ -172,6 +172,9 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
         open={!!openTask}
         sessionId={claudeSessionId}
         agentId={openedAgentId}
+        liveSession={convId}
+        toolUseId={openTask?.tool_use_id ?? null}
+        running={openTask?.status === "running"}
         label={openTask?.label ?? "Sous-agent"}
         subtitle={
           openTask

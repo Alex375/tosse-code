@@ -48,6 +48,11 @@
 .ag-card-name { font:inherit; font-size:13px; font-weight:600; flex:1; min-width:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--wf-tx-hi); background:transparent; border:0; cursor:pointer; padding:0; }
 .ag-card-name:hover { text-decoration:underline; }
 .ag-card-tags { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+/* Reasoning-effort tag on a card, next to the worktree chip.
+   The bolt is tinted; the ultracode tier flips the whole tag to the coral accent. */
+.ag-eff .wf-ico { width:12px; height:12px; color:var(--wf-tx-lo); }
+.ag-eff.ultra { color:var(--wf-accent); border-color:color-mix(in srgb, var(--wf-accent) 40%, var(--wf-line)); }
+.ag-eff.ultra .wf-ico { color:var(--wf-accent); }
 .ag-card-act { padding:9px 11px; background:var(--wf-bg-2); border:1px solid var(--wf-line); border-radius:var(--wf-r); min-height:38px; display:flex; align-items:center; }
 .ag-card-foot { display:flex; align-items:center; flex-wrap:wrap; gap:8px 13px; min-width:0; font-size:11px; color:var(--wf-tx-lo); }
 .ag-card-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:11px; border-top:1px solid var(--wf-line); }

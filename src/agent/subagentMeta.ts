@@ -14,6 +14,27 @@ export function shortModel(m: string): string {
   return m.replace(/^claude-/, "").replace(/-\d{8}$/, "").replace(/\[.*\]$/, "");
 }
 
+/** Canonical display labels for the reasoning-effort levels, folding the
+ *  ultracode tier in. The CLI's effort enum is EXACTLY low/medium/high/xhigh;
+ *  "Ultra code" is xhigh + a separate `ultracode` flag (see EffortGauge, which
+ *  reuses this map so the gauge and every read-only surface never drift). */
+export const EFFORT_LABELS = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra",
+  ultracode: "Ultra code",
+} as const;
+
+/** Friendly label for a conversation's live reasoning effort, or null when
+ *  unknown (no `get_settings` read-back yet). `ultracode` outranks the raw
+ *  effort. An unrecognised effort string falls through to itself (forward-compat). */
+export function effortLabel(effort: string | null | undefined, ultracode?: boolean): string | null {
+  if (ultracode) return EFFORT_LABELS.ultracode;
+  if (!effort) return null;
+  return (EFFORT_LABELS as Record<string, string>)[effort] ?? effort;
+}
+
 /** ms → "0.8s" / "1m 04s" — compact wall-clock for a finished sub-agent. */
 export function fmtDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { createPortal } from "react-dom";
 import { commands } from "../../ipc/client";
 import { Ico } from "../../ui/kit";
+import { pickOutputView } from "./taskOutputView";
 import styles from "./TranscriptPopover.module.css";
 
 /** How often to re-read the output file while the task is still running. */
@@ -21,46 +22,54 @@ const POLL_MS = 1500;
 
 export function TaskOutputPopover({
   open,
-  sessionId,
-  taskId,
+  outputFile,
   running,
   icon,
   title,
   titleMono = false,
+  commandLine,
   subtitle,
   loadingText,
   unreadableText,
   unavailableText,
   emptyRunningText,
   emptyDoneText,
+  unloadedText,
   onClose,
 }: {
   open: boolean;
-  /** Claude's own session_id (durable) — the key for the on-disk output file. */
-  sessionId: string | null;
-  /** The background task's id; null when it can't be resolved (resumed conversation). */
-  taskId: string | null;
+  /** ABSOLUTE on-disk path of the task's output (`BackgroundTask.output_file`, taken
+   *  verbatim from the wire). The CLI writes it to a temp dir the app can't reconstruct,
+   *  so this is the only reliable source. `null` until the path is known (or on a resumed
+   *  conversation, where the live task lifecycle is gone). */
+  outputFile: string | null;
   /** Whether the task is still running — drives the live polling + the subtitle. */
   running: boolean;
   /** Header glyph (a named {@link Ico}). */
   icon: string;
-  /** Header title line. */
+  /** Header title line — the NAME the agent gave the task (or the command if unnamed). */
   title: ReactNode;
   /** Render the title monospace — true for a real shell command (`$ cmd`); a prose label
-   *  (a Monitor's description) stays proportional, like <TranscriptPopover>. Default false. */
+   *  (a name / a Monitor's description) stays proportional, like <TranscriptPopover>. */
   titleMono?: boolean;
+  /** The raw shell command, shown on its own `$ command` mono line UNDER the title (so
+   *  the popover shows both the name and the command). Omitted when there is none. */
+  commandLine?: string;
   /** The line under the title (already resolved by the caller, e.g. summary or status). */
   subtitle: string;
   /** Placeholder while the first read is in flight. */
   loadingText: string;
   /** Placeholder when the read failed (gets the error string). */
   unreadableText: (err: string) => string;
-  /** Placeholder when the task id / session is unresolvable (resumed conversation). */
+  /** Placeholder when the output path is unresolvable (resumed conversation). */
   unavailableText: string;
   /** Placeholder when running but nothing has been written yet. */
   emptyRunningText: string;
-  /** Placeholder when finished with no captured output. */
+  /** Placeholder when finished and the file is present but EMPTY (genuinely no output). */
   emptyDoneText: string;
+  /** Placeholder when finished but the output file is absent/unreadable (read returned
+   *  null) — we don't have the output, as opposed to it being empty. */
+  unloadedText: string;
   onClose: () => void;
 }) {
   const [text, setText] = useState<string | null>(null);
@@ -72,12 +81,15 @@ export function TaskOutputPopover({
   const atBottomRef = useRef(true);
 
   const fetchOutput = useCallback(async () => {
-    if (!sessionId || !taskId) return;
+    if (!outputFile) return;
     setLoading(true);
     try {
-      const res = await commands.readTaskOutput(sessionId, taskId);
+      const res = await commands.readTaskOutputFile(outputFile);
       if (res.status === "ok") {
-        setText(res.data ?? "");
+        // Keep null distinct from "": null = absent/unreadable file, "" = present but
+        // empty (genuinely no output). Coercing null → "" is what made the popover
+        // claim "no output" when it had simply failed to load the file.
+        setText(res.data);
         setErr(null);
       } else {
         setErr(res.error);
@@ -85,12 +97,12 @@ export function TaskOutputPopover({
     } catch (e) {
       // Never swallow a thrown IPC/transport error: surface it; `finally` guarantees we
       // never get stuck on "Chargement…".
-      console.error("readTaskOutput threw:", e);
+      console.error("readTaskOutputFile threw:", e);
       setErr(String(e));
     } finally {
       setLoading(false);
     }
-  }, [sessionId, taskId]);
+  }, [outputFile]);
 
   // Initial read on open, then poll while the task runs. Depending on `running` means the
   // final read fires automatically when it stops (the interval is cleared and a fresh
@@ -108,7 +120,7 @@ export function TaskOutputPopover({
   useEffect(() => {
     setText(null);
     setErr(null);
-  }, [taskId]);
+  }, [outputFile]);
 
   useEffect(() => {
     if (!open) return;
@@ -134,19 +146,36 @@ export function TaskOutputPopover({
     atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   };
 
+  const view = pickOutputView({
+    text,
+    loading,
+    err,
+    hasPath: !!outputFile,
+    running,
+  });
   let body: ReactNode;
-  if (text != null && text !== "") {
-    body = <pre className="cv-bashout wf-mono">{text}</pre>;
-  } else if (loading && text == null) {
-    body = <div className={styles.note}>{loadingText}</div>;
-  } else if (err) {
-    body = <div className={styles.note}>{unreadableText(err)}</div>;
-  } else if (!sessionId || !taskId) {
-    body = <div className={styles.note}>{unavailableText}</div>;
-  } else if (running) {
-    body = <div className={styles.note}>{emptyRunningText}</div>;
-  } else {
-    body = <div className={styles.note}>{emptyDoneText}</div>;
+  switch (view) {
+    case "output":
+      body = <pre className="cv-bashout wf-mono">{text}</pre>;
+      break;
+    case "loading":
+      body = <div className={styles.note}>{loadingText}</div>;
+      break;
+    case "error":
+      body = <div className={styles.note}>{unreadableText(err ?? "")}</div>;
+      break;
+    case "unavailable":
+      body = <div className={styles.note}>{unavailableText}</div>;
+      break;
+    case "empty-running":
+      body = <div className={styles.note}>{emptyRunningText}</div>;
+      break;
+    case "empty-done":
+      body = <div className={styles.note}>{emptyDoneText}</div>;
+      break;
+    case "unloaded":
+      body = <div className={styles.note}>{unloadedText}</div>;
+      break;
   }
 
   return createPortal(
@@ -156,6 +185,9 @@ export function TaskOutputPopover({
           <Ico name={icon} className="sm" />
           <div className={styles.titles}>
             <div className={styles.title + (titleMono ? " wf-mono" : "")}>{title}</div>
+            {commandLine ? (
+              <div className="cv-taskout-cmd wf-mono">$ {commandLine}</div>
+            ) : null}
             <div className={styles.subtitle}>{subtitle}</div>
           </div>
           <button className={styles.close} onClick={onClose} aria-label="Fermer" title="Fermer (Échap)">

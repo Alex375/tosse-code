@@ -11,7 +11,6 @@
 
 import { useState } from "react";
 import { useBackgroundBashTasks, useSessionTasks } from "../../store/backgroundTasksStore";
-import { useConversationsStore } from "../../store/conversationsStore";
 import { useStopTask } from "../../ipc/useCommands";
 import { Ico, RunDots } from "../../ui/kit";
 import { BashOutputPopover } from "./BashOutputPopover";
@@ -22,9 +21,6 @@ export function BashBar({ session }: { session: string }) {
   // The full task map (running + finished) — so an open popover survives its command
   // finishing (the row is gone from `rows`, but the snapshot lingers here).
   const allTasks = useSessionTasks(session);
-  const claudeSessionId = useConversationsStore(
-    (s) => s.conversations.find((c) => c.id === session)?.sessionId ?? null,
-  );
   const stopTask = useStopTask(session);
   const [openedId, setOpenedId] = useState<string | null>(null);
 
@@ -43,10 +39,18 @@ export function BashBar({ session }: { session: string }) {
             title="Voir la sortie de la commande"
           >
             <RunDots />
-            <span className="cv-bashrow-cmd wf-mono">
-              <span className="cv-bashrow-p" aria-hidden="true">$</span>
-              {t.label ?? "commande"}
-            </span>
+            {t.label ? (
+              // The NAME the agent gave the command ("build the app") — prose, the
+              // meaningful line. The raw command is in the popover.
+              <span className="cv-bashrow-cmd">{t.label}</span>
+            ) : (
+              // No name → fall back to the raw `$ command` (mono), better than a generic
+              // "commande".
+              <span className="cv-bashrow-cmd wf-mono">
+                <span className="cv-bashrow-p" aria-hidden="true">$</span>
+                {t.command ?? "commande"}
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -62,9 +66,9 @@ export function BashBar({ session }: { session: string }) {
 
       <BashOutputPopover
         open={!!opened}
-        sessionId={claudeSessionId}
-        taskId={opened?.task_id ?? null}
-        command={opened?.label ?? "commande"}
+        outputFile={opened?.output_file ?? null}
+        name={opened?.label ?? null}
+        command={opened?.command ?? null}
         running={opened?.status === "running"}
         summary={opened?.summary ?? null}
         onClose={() => setOpenedId(null)}

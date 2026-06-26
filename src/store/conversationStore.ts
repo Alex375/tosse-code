@@ -648,6 +648,30 @@ export const useSubThread = (
     useShallow((s) => s.sessions[session]?.subThreads[parentToolUseId] ?? EMPTY_IDS),
   );
 
+/** The `prompt` an `Agent`/`Task` tool_use was launched with — read from the spawning
+ *  tool_use block. A drill-down (AgentBar / FlightDeck badge) only has the
+ *  `BackgroundTask` (no prompt), so it looks it up here to prepend it to the live
+ *  sub-thread, which streams ONLY the sub-agent's replies. Scans turns lazily (called
+ *  only while a transcript popover is open) and returns a primitive → no spurious
+ *  re-renders. */
+export const useSubAgentPrompt = (
+  session: string,
+  toolUseId: string,
+): string | null =>
+  useConversationStore((s) => {
+    const entry = s.sessions[session];
+    if (!entry || !toolUseId) return null;
+    for (const id in entry.turns) {
+      for (const b of entry.turns[id].blocks) {
+        if (b.type === "tool_use" && b.id === toolUseId) {
+          const p = (b.input as { prompt?: unknown } | null)?.prompt;
+          return typeof p === "string" ? p : null;
+        }
+      }
+    }
+    return null;
+  });
+
 /**
  * tool_use ids of the sub-agents (`Agent`/`Task`) this conversation launched DETACHED
  * (`run_in_background: true`). Captured at write time (see `bgAgentIds` in the

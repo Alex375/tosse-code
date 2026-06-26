@@ -32,6 +32,7 @@ function taskOf(p: Partial<BackgroundTask> & { task_id: string }): BackgroundTas
     kind: "agent",
     tool_use_id: null,
     label: null,
+    command: null,
     subagent_type: null,
     model: null,
     agent_id: null,
@@ -571,7 +572,7 @@ export class ScenarioDriver {
       }),
     );
     this.step(60, () =>
-      this.emitTask(taskOf({ task_id: "tk_dev", kind: "bash", tool_use_id: "toolu_dev", label: "pnpm dev", status: "running" })),
+      this.emitTask(taskOf({ task_id: "tk_dev", kind: "bash", tool_use_id: "toolu_dev", label: "pnpm dev", command: "pnpm dev --host", status: "running", output_file: "tasks/tk_dev.output" })),
     );
 
     // --- background #2: a build that COMPLETES a few seconds later ---
@@ -596,7 +597,7 @@ export class ScenarioDriver {
       }),
     );
     this.step(60, () =>
-      this.emitTask(taskOf({ task_id: "tk_build", kind: "bash", tool_use_id: "toolu_build", label: "pnpm build", status: "running" })),
+      this.emitTask(taskOf({ task_id: "tk_build", kind: "bash", tool_use_id: "toolu_build", label: "production build", command: "pnpm build", status: "running", output_file: "tasks/tk_build.output" })),
     );
 
     this.step(220, () =>
@@ -611,7 +612,8 @@ export class ScenarioDriver {
           task_id: "tk_build",
           kind: "bash",
           tool_use_id: "toolu_build",
-          label: "pnpm build",
+          label: "production build",
+          command: "pnpm build",
           status: "completed",
           duration_ms: 9400,
           summary: 'Background command "pnpm build" completed (exit code 0)',
@@ -660,7 +662,7 @@ export class ScenarioDriver {
       }),
     );
     this.step(60, () =>
-      this.emitTask(taskOf({ task_id: "tk_mon", kind: "monitor", tool_use_id: "toolu_mon", label: "watch des logs applicatifs", status: "running" })),
+      this.emitTask(taskOf({ task_id: "tk_mon", kind: "monitor", tool_use_id: "toolu_mon", label: "watch des logs applicatifs", status: "running", output_file: "tasks/tk_mon.output" })),
     );
 
     // --- second watch: a build monitor that ENDS a few seconds later (stream ended) ---
@@ -684,7 +686,7 @@ export class ScenarioDriver {
       }),
     );
     this.step(60, () =>
-      this.emitTask(taskOf({ task_id: "tk_mon2", kind: "monitor", tool_use_id: "toolu_mon2", label: "watch du build", status: "running" })),
+      this.emitTask(taskOf({ task_id: "tk_mon2", kind: "monitor", tool_use_id: "toolu_mon2", label: "watch du build", status: "running", output_file: "tasks/tk_mon2.output" })),
     );
 
     this.step(220, () =>

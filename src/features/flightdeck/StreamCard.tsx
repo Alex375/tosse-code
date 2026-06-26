@@ -5,7 +5,8 @@
 import { Dot, Pill, ContextMeter, TodoPips, Ico, type TodoSeg } from "../../ui/kit";
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { agentStatusToDot, rowAttention } from "../../agent/status";
-import { useTodos, useTodoSummary } from "../../store/conversationStore";
+import { effortLabel } from "../../agent/subagentMeta";
+import { useTodos, useTodoSummary, useSessionState } from "../../store/conversationStore";
 import { useContextData } from "../../store/contextData";
 import { WorktreeIndicator } from "../git/WorktreeIndicator";
 import type { Conversation } from "../../store/conversationsStore";
@@ -48,6 +49,12 @@ export function StreamCard({
   const todos = useTodos(conv.id);
   const summary = useTodoSummary(conv.id);
   const { ctx, ready } = useContextData(conv.id);
+  // The agent's live reasoning effort (get_settings read-back) — same data the
+  // conversation composer's gauge shows, surfaced read-only on the card. Null until
+  // the session has reported settings (never spawned this run → no chip).
+  const state = useSessionState(conv.id);
+  const effort = effortLabel(state?.effort, state?.ultracode);
+  const ultra = !!state?.ultracode;
 
   const cls =
     "wf-card ag-card" +
@@ -67,6 +74,12 @@ export function StreamCard({
 
       <div className="ag-card-tags">
         <WorktreeIndicator conv={conv} repoPath={repoPath} />
+        {effort ? (
+          <span className={"wf-tag ag-eff" + (ultra ? " ultra" : "")} title={`Effort de réflexion : ${effort}`}>
+            <Ico name="bolt" className="sm" />
+            {effort}
+          </span>
+        ) : null}
       </div>
 
       <StateBlock convId={conv.id} status={status} />

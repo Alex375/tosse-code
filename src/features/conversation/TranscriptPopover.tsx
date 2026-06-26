@@ -8,14 +8,20 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { createPortal } from "react-dom";
 import type { ConversationItem } from "../../ipc/client";
 import { commands } from "../../ipc/client";
+import { useSubAgentPrompt, useSubThread } from "../../store/conversationStore";
 import { Ico } from "../../ui/kit";
 import { SubAgentTranscript } from "./SubAgentTranscript";
+import { LiveSubThread } from "./LiveSubThread";
+import { resolveTranscriptSource } from "./transcriptSource";
 import styles from "./TranscriptPopover.module.css";
 
 export function TranscriptPopover({
   open,
   sessionId,
   agentId,
+  liveSession,
+  toolUseId,
+  running = false,
   label,
   subtitle,
   onClose,
@@ -25,6 +31,12 @@ export function TranscriptPopover({
   sessionId: string | null;
   /** The sub-agent's id; null when it can't be resolved (e.g. resumed conversation). */
   agentId: string | null;
+  /** The store session key (conversation's stable id) for the live sub-thread fallback. */
+  liveSession?: string | null;
+  /** The Agent tool_use id that spawned the sub-agent — the live sub-thread's parent key. */
+  toolUseId?: string | null;
+  /** Whether the task is still running (prefer the live sub-thread while it is). */
+  running?: boolean;
   label: ReactNode;
   /** Optional second line in the header (e.g. subagent_type · model). */
   subtitle?: ReactNode;
@@ -35,11 +47,21 @@ export function TranscriptPopover({
   const [err, setErr] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
+  // Live sub-thread fallback: when the agent_id can't be resolved (or the disk
+  // transcript isn't written yet) but the agent streamed into the store, render that —
+  // the same source the inline <SubAgentCard> uses. Fixes the FlightDeck drill-down
+  // showing "transcript indisponible" for an agent that renders fine in the thread.
+  const liveIds = useSubThread(liveSession ?? "", toolUseId ?? "");
+  // The prompt the sub-agent was launched with — the live sub-thread carries only its
+  // replies, so prepend it as the opening user turn (the disk transcript already has it).
+  const promptText = useSubAgentPrompt(liveSession ?? "", toolUseId ?? "");
+
   // Open at the BOTTOM (most recent), like the conversation thread: a sub-agent's
-  // transcript is read from its latest output, not its opening prompt.
+  // transcript is read from its latest output, not its opening prompt. Tracks both the
+  // disk items and the live sub-thread length so either source lands scrolled to bottom.
   useLayoutEffect(() => {
-    if (items && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-  }, [items]);
+    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+  }, [items, liveIds.length]);
 
   const fetchTranscript = useCallback(async () => {
     if (!sessionId || !agentId) return;
@@ -75,16 +97,37 @@ export function TranscriptPopover({
   if (!open) return null;
 
   let body: ReactNode;
-  if (items && items.length > 0) {
-    body = <SubAgentTranscript items={items} />;
-  } else if (loading) {
-    body = <div className={styles.note}>Chargement du transcript…</div>;
-  } else if (err) {
-    body = <div className={styles.note}>Transcript illisible : {err}</div>;
-  } else if (!sessionId || !agentId) {
-    body = <div className={styles.note}>Transcript indisponible (conversation rouverte).</div>;
-  } else {
-    body = <div className={styles.note}>Le sous-agent n'a pas encore écrit de transcript.</div>;
+  switch (
+    resolveTranscriptSource({
+      running,
+      liveCount: liveIds.length,
+      diskCount: items?.length ?? 0,
+      loading,
+      error: err != null,
+      resolvable: !!(sessionId && agentId),
+    })
+  ) {
+    case "live":
+      body = <LiveSubThread session={liveSession ?? ""} ids={liveIds} promptText={promptText} />;
+      break;
+    case "disk":
+      body = <SubAgentTranscript items={items!} />;
+      break;
+    case "loading":
+      body = <div className={styles.note}>Chargement du transcript…</div>;
+      break;
+    case "error":
+      body = <div className={styles.note}>Transcript illisible : {err}</div>;
+      break;
+    case "working":
+      body = <div className={styles.note}>Le sous-agent travaille…</div>;
+      break;
+    case "unavailable":
+      body = <div className={styles.note}>Transcript indisponible (conversation rouverte).</div>;
+      break;
+    case "empty":
+      body = <div className={styles.note}>Le sous-agent n'a pas encore écrit de transcript.</div>;
+      break;
   }
 
   return createPortal(

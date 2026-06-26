@@ -235,20 +235,17 @@ pub async fn load_workflow_run(
     .map_err(|e| e.to_string())
 }
 
-/// Read the current contents of a background task's output file
-/// (`tasks/<task_id>.output`, the sink for background `Bash` and `Monitor`). `null`
-/// if absent. One-shot read — live tailing is layered on by the display task.
+/// Read a background task's output from the ABSOLUTE path the CLI reported
+/// (`BackgroundTask.output_file`). The CLI writes Bash-bg / Monitor output to a temp dir
+/// the app can't reconstruct, so the live tail reads this path directly. `null` if
+/// absent. One-shot read — the display task layers the polling on top. The reader guards
+/// the path (must be a `…/tasks/*.output` file) against an arbitrary-file read.
 #[tauri::command]
 #[specta::specta]
-pub async fn read_task_output(
-    session_id: String,
-    task_id: String,
-) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || {
-        crate::supervisor::subagents::read_task_output(&session_id, &task_id)
-    })
-    .await
-    .map_err(|e| e.to_string())
+pub async fn read_task_output_file(path: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || crate::supervisor::subagents::read_task_output_file(&path))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Fetch the real subscription usage percentages (5h + weekly windows). The stream

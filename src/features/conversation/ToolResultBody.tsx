@@ -5,7 +5,7 @@ import styles from "./ToolCard.module.css";
 
 /** Defensive renderer: tool_result content can be string | array | object | null. */
 function contentToText(content: JsonValue): string {
-  if (content == null) return "(no output)";
+  if (content == null) return "";
   if (typeof content === "string") return content;
   if (typeof content === "number" || typeof content === "boolean")
     return String(content);
@@ -27,6 +27,13 @@ function contentToText(content: JsonValue): string {
   return JSON.stringify(content, null, 2);
 }
 
+/** True when a tool_result carries no textual output (null, empty, or whitespace) —
+ *  e.g. a command that printed nothing. Surfaced as a discreet note rather than a
+ *  blank box. Pure + exported for unit testing. */
+export function isEmptyResult(content: JsonValue): boolean {
+  return contentToText(content).trim() === "";
+}
+
 export function ToolResultBody({
   content,
   isError,
@@ -34,10 +41,19 @@ export function ToolResultBody({
   content: JsonValue;
   isError: boolean;
 }) {
+  // No textual output on SUCCESS (the common "command printed nothing" case) → a
+  // discreet muted note instead of an empty <pre>.
+  if (!isError && isEmptyResult(content)) {
+    return <div className={styles.emptyNote}>Aucune sortie.</div>;
+  }
   const text = contentToText(content);
+  // An errored result keeps its red bubble, but an empty body must still say something —
+  // a blank red box would carry no information (the CLI almost always attaches a message,
+  // but a null/empty error result is possible).
+  const shown = isError && text.trim() === "" ? "(erreur sans message)" : text;
   return (
     <Expandable fadeColor={isError ? "var(--error-bg)" : undefined}>
-      <pre className={clsx(styles.pre, isError && styles.errorOutput)}>{text}</pre>
+      <pre className={clsx(styles.pre, isError && styles.errorOutput)}>{shown}</pre>
     </Expandable>
   );
 }

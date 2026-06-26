@@ -282,8 +282,15 @@ pub struct BackgroundTask {
     /// The `tool_use` block that spawned the task (== `parent_tool_use_id` of any
     /// streamed child content). Lets the UI anchor the task under its tool card.
     pub tool_use_id: Option<String>,
-    /// Human label (the `description`: a sub-agent's task, a Bash command, …).
+    /// Human label = the NAME the agent gave the task (the tool's `description`, e.g.
+    /// "build the app"). This is the meaningful, readable line shown pinned in the UI.
+    /// `None` when the agent gave no description (the UI then falls back to `command`).
     pub label: Option<String>,
+    /// The raw shell command of a `Bash` task (captured from the tool_use input). Shown
+    /// IN ADDITION to `label` in the output popover (the name says what, the command
+    /// says how), and used as the pinned-line fallback when there is no `label`. `None`
+    /// for non-Bash tasks.
+    pub command: Option<String>,
     /// Sub-agent type (`Agent` only, e.g. `"Explore"`).
     pub subagent_type: Option<String>,
     /// Model the sub-agent ran on (`Agent` only), e.g. `"claude-haiku-4-5"`. Captured
@@ -308,8 +315,11 @@ pub struct BackgroundTask {
     pub duration_ms: Option<u64>,
     /// End-of-task human summary (from the `task_notification`).
     pub summary: Option<String>,
-    /// On-disk file holding the task's full output: `tasks/<id>.output` for
-    /// Bash-bg/Monitor, the sub-agent transcript for `Agent`.
+    /// ABSOLUTE on-disk path holding the task's full output. The CLI writes a Bash-bg /
+    /// Monitor output to a TEMP dir (`/tmp/claude-<uid>/<slug>/<session>/tasks/<id>.output`),
+    /// NOT under the session dir — so this path (taken verbatim from the wire: the Bash
+    /// tool_result at start, then `task_notification.output_file`) is the ONLY reliable
+    /// way to read it back. For an `Agent` it is the sub-agent transcript path.
     pub output_file: Option<String>,
 }
 

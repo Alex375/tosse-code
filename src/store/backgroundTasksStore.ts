@@ -19,6 +19,7 @@ function taskEqual(a: BackgroundTask, b: BackgroundTask): boolean {
     a.kind === b.kind &&
     a.tool_use_id === b.tool_use_id &&
     a.label === b.label &&
+    a.command === b.command &&
     a.subagent_type === b.subagent_type &&
     a.model === b.model &&
     a.agent_id === b.agent_id &&
