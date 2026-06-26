@@ -35,11 +35,13 @@ import { SubAgentTranscript } from "./SubAgentTranscript";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { groupBlocks, runHeader, type ToolStep } from "./toolGroup";
 import { LiveToolStep, ToolSection } from "./ToolSection";
+import { LiveSubThread } from "./LiveSubThread";
+import { resolveTranscriptSource } from "./transcriptSource";
 import type { StickToBottom } from "./useStickToBottom";
 import styles from "./ConductorThread.module.css";
 
 
-function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
+export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
   return (
     <div className={"cv-msg cv-user" + (queued ? " is-queued" : "")}>
       <Avatar user><UserMark /></Avatar>
@@ -305,46 +307,47 @@ function SubAgentCard({
   // keep the thread clean. All hooks above have run, so this conditional render is safe.
   if (isBackgroundAgentInput(input)) return null;
 
-  // Prefer the live sub-thread while running (smooth, no IPC); the disk transcript
-  // is authoritative once finished and the only source on a resumed conversation.
-  const showLive = running && liveIds.length > 0;
-
-  // The prompt sent to the sub-agent (the Agent tool's `prompt` input). The live
-  // sub-thread streams only the sub-agent's REPLIES, so we prepend the prompt as the
-  // opening user turn — otherwise the transcript starts mid-conversation. (The disk
-  // transcript already carries it as its first user_message.)
+  // The prompt sent to the sub-agent (the Agent tool's `prompt` input) — prepended to
+  // the live view since the live sub-thread streams only the sub-agent's REPLIES. (The
+  // disk transcript already carries it as its first user_message.)
   const promptText = field(input, "prompt");
-  const liveBody = (
-    <div className="cv-subtranscript">
-      {promptText ? <MsgUser text={promptText} /> : null}
-      {liveIds.map((id) => (
-        <TurnRow key={id} session={session} turnId={id} />
-      ))}
-    </div>
-  );
 
+  // Live → disk → fallback, resolved in one shared place (mirrored by <TranscriptPopover>).
   let body: ReactNode = null;
   if (open) {
-    if (showLive) {
-      body = liveBody;
-    } else if (disk && disk.length > 0) {
-      body = <SubAgentTranscript items={disk} />;
-    } else if (liveIds.length > 0) {
-      body = liveBody;
-    } else if (loading) {
-      body = <div className={styles.subEmpty}>Chargement du transcript…</div>;
-    } else if (err) {
-      body = <div className={styles.subEmpty}>Transcript illisible : {err}</div>;
-    } else if (running) {
-      body = <div className={styles.subEmpty}>Le sous-agent travaille…</div>;
-    } else {
-      body = (
-        <div className={styles.subEmpty}>
-          {claudeSessionId && agentId
-            ? "Aucun transcript pour ce sous-agent."
-            : "Transcript indisponible (conversation rouverte)."}
-        </div>
-      );
+    switch (
+      resolveTranscriptSource({
+        running,
+        liveCount: liveIds.length,
+        diskCount: disk?.length ?? 0,
+        loading,
+        error: err != null,
+        resolvable: !!(claudeSessionId && agentId),
+      })
+    ) {
+      case "live":
+        body = <LiveSubThread session={session} ids={liveIds} promptText={promptText} />;
+        break;
+      case "disk":
+        body = <SubAgentTranscript items={disk!} />;
+        break;
+      case "loading":
+        body = <div className={styles.subEmpty}>Chargement du transcript…</div>;
+        break;
+      case "error":
+        body = <div className={styles.subEmpty}>Transcript illisible : {err}</div>;
+        break;
+      case "working":
+        body = <div className={styles.subEmpty}>Le sous-agent travaille…</div>;
+        break;
+      case "unavailable":
+        body = (
+          <div className={styles.subEmpty}>Transcript indisponible (conversation rouverte).</div>
+        );
+        break;
+      case "empty":
+        body = <div className={styles.subEmpty}>Aucun transcript pour ce sous-agent.</div>;
+        break;
     }
   }
 
@@ -704,7 +707,7 @@ function StreamFollow({ session, onRender }: { session: string; onRender: () => 
   return null;
 }
 
-function TurnRow({
+export function TurnRow({
   session,
   turnId,
   busy = false,

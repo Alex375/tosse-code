@@ -92,6 +92,9 @@ export function AgentBar({ session }: { session: string }) {
         open={!!opened}
         sessionId={claudeSessionId}
         agentId={openedAgentId}
+        liveSession={session}
+        toolUseId={opened?.tool_use_id ?? null}
+        running={opened?.status === "running"}
         label={opened?.label ?? "Sous-agent"}
         subtitle={
           opened
