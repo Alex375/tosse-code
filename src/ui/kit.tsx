@@ -56,6 +56,10 @@ const WF_PATHS: Record<string, string> = {
   splitv: "M4 5h14v12H4zM4 11h14",
   sidebar: "M4 5h14v12H4zM9 5v12",
   globe: "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM3 11h16M11 3c2.4 2.2 2.4 13.8 0 16M11 3c-2.4 2.2-2.4 13.8 0 16",
+  // A magic wand + sparkle — a skill/command invocation.
+  wand: "M4 18 13 9M15 3l.9 2.1L18 6l-2.1.9L15 9l-.9-2.1L12 6l2.1-.9z",
+  // A plug — an MCP server tool call.
+  plug: "M7 3v4M13 3v4M5 7h10v2a5 5 0 0 1-10 0V7ZM10 14v5",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {

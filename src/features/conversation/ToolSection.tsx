@@ -4,8 +4,8 @@
 // by the live thread (ConductorThread) and the off-thread transcript
 // (SubAgentTranscript) so the two never diverge — the live side feeds <LiveToolStep>
 // (subscribes to the store for its result), the disk side feeds <StaticToolStep>
-// (result handed in). Collapsed by default; a step/section auto-expands on error so
-// failures are never hidden.
+// (result handed in). Collapsed by default; an error is flagged ONLY by a small alert glyph
+// on the row / section — no auto-expand, no red text (the user opens it on purpose).
 
 import { useEffect, useState, type ReactNode } from "react";
 import type { JsonValue } from "../../ipc/client";
@@ -21,9 +21,9 @@ import {
   basename,
   multiEdits,
   stepFilePath,
+  stepIcon,
   stepLabel,
   stepSummary,
-  TOOL_ICON,
   type StepSummary,
   type ToolStep,
 } from "./toolGroup";
@@ -134,15 +134,13 @@ export function ToolStepRow({
   hasDetail: boolean;
   children: ReactNode;
 }) {
+  // An error is NOT auto-expanded and NOT reddened — it's flagged only by the small alert
+  // glyph (cv-step-errico) on the right. The user opens the row on purpose to inspect it.
   const [open, setOpen] = useState(false);
-  // An error arrives after mount (live), so expand via effect, not initial state.
-  useEffect(() => {
-    if (isError) setOpen(true);
-  }, [isError]);
   const toggle = hasDetail ? () => setOpen((o) => !o) : undefined;
 
   return (
-    <div className={"cv-step" + (isError ? " is-err" : "")}>
+    <div className="cv-step">
       <div
         className="cv-step-h"
         onClick={toggle}
@@ -217,7 +215,7 @@ export function LiveToolStep({
   const summary = stepSummary(step.name, step.input, joined ? resultContentText(joined.content) : null);
   return (
     <ToolStepRow
-      icon={TOOL_ICON[step.name] ?? "cog"}
+      icon={stepIcon(step.name)}
       label={stepLabel(step.name, step.input)}
       filePath={stepFilePath(step.input)}
       summary={summary}
@@ -236,7 +234,7 @@ export function StaticToolStep({ step, result }: { step: ToolStep; result: StepR
   const summary = stepSummary(step.name, step.input, result ? resultContentText(result.content) : null);
   return (
     <ToolStepRow
-      icon={TOOL_ICON[step.name] ?? "cog"}
+      icon={stepIcon(step.name)}
       label={stepLabel(step.name, step.input)}
       filePath={stepFilePath(step.input)}
       summary={summary}
@@ -249,10 +247,10 @@ export function StaticToolStep({ step, result }: { step: ToolStep; result: StepR
   );
 }
 
-/** The collapsible run container. Collapsed by default; auto-opens when a contained
- *  step errored (failure visible without a click) or while the run is actively running
- *  (`live`) — so its steps appear live with their spinner — then collapses to the header
- *  once the run settles. */
+/** The collapsible run container. Collapsed by default; auto-opens only while the run is
+ *  actively running (`live`) — so its steps appear live with their spinner — then collapses
+ *  to the header once the run settles. A contained error does NOT auto-open it: it's flagged
+ *  by the small alert glyph on the header (no red title). */
 export function ToolSection({
   title,
   errored,
@@ -266,14 +264,16 @@ export function ToolSection({
   live?: boolean;
   children: ReactNode;
 }) {
+  // Expanded only while actively running (`live`); collapses once the run settles. An error
+  // does NOT auto-expand the section nor redden its title — it's flagged only by the small
+  // alert glyph (rendered below off `errored`) on the right.
   const [open, setOpen] = useState(Boolean(live));
-  // Expanded while running or errored; collapses once the run settles (live → false).
   useEffect(() => {
-    setOpen(Boolean(live) || errored);
-  }, [live, errored]);
+    setOpen(Boolean(live));
+  }, [live]);
 
   return (
-    <div className={"cv-steps" + (errored ? " is-err" : "")}>
+    <div className="cv-steps">
       <button
         type="button"
         className="cv-steps-h"

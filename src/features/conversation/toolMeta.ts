@@ -6,12 +6,15 @@ import {
   FolderTree,
   Globe,
   ListTodo,
+  Plug,
   Search,
+  Sparkles,
   TerminalSquare,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
 import type { JsonValue } from "../../ipc/client";
+import { parseMcpToolName } from "../../agent/toolNames";
 
 export type ToolKind = "edit" | "write" | "bash" | "plain";
 
@@ -76,9 +79,12 @@ export function toolMeta(name: string, input: JsonValue): ToolMeta {
     case "Agent":
     case "Task":
       return { icon: Bot, primaryArg: str(obj.description), suppressed: false, kind: "plain" };
+    case "Skill":
+      return { icon: Sparkles, primaryArg: str(obj.skill), suppressed: false, kind: "plain" };
     default:
       return {
-        icon: Wrench,
+        // MCP tools (`mcp__server__tool`) get a plug; everything else a generic wrench.
+        icon: parseMcpToolName(name) ? Plug : Wrench,
         primaryArg: fileArg ?? str(obj.command) ?? str(obj.pattern),
         suppressed: /^(mcp__ide__|ide_)/.test(name),
         kind: "plain",

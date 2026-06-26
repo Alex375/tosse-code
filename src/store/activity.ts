@@ -7,6 +7,7 @@
 import type { JsonValue, SessionEntry } from "./types";
 import { todoSummary } from "./todos";
 import { field } from "../agent/ask";
+import { mcpStepLabel } from "../agent/toolNames";
 import { useConversationStore } from "./conversationStore";
 
 function basename(p: string): string {
@@ -76,8 +77,18 @@ export function toolActivityLabel(name: string, input: JsonValue): string {
       const n = Array.isArray(qs) ? qs.length : 0;
       return n ? `Ask ${n} question${n > 1 ? "s" : ""}` : "Ask a question";
     }
-    default:
-      return `${name}…`;
+    // A skill/command invocation: name it directly so the step reads "Skill : code-review"
+    // without having to expand the box.
+    case "Skill": {
+      const s = field(input, "skill");
+      return s && s.trim() ? `Skill : ${s.trim()}` : "Skill";
+    }
+    default: {
+      // MCP tools arrive as `mcp__<server>__<tool>` — show "<server> : <tool>" instead
+      // of the raw wire name. Falls through to the generic "<name>…" otherwise.
+      const mcp = mcpStepLabel(name);
+      return mcp ?? `${name}…`;
+    }
   }
 }
 

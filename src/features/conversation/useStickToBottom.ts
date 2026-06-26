@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import {
   clampRestoreTop,
   initialTarget,
@@ -33,11 +33,45 @@ export interface StickToBottom {
   scrollToBottom: () => void;
 }
 
-export function useStickToBottom(convId: string): StickToBottom {
+/**
+ * `preserveKey`: when this value changes (e.g. the user toggles the "clean output"
+ * display, which folds/unfolds every round and so changes the thread height a lot), the
+ * scroll is re-anchored so the user stays on the SAME content instead of jumping. If
+ * pinned to the bottom we stay pinned; otherwise we keep the element at the top of the
+ * viewport in place (falling back to the distance from the bottom).
+ */
+export function useStickToBottom(convId: string, preserveKey?: unknown): StickToBottom {
   const scrollEl = useRef<HTMLDivElement | null>(null);
   const following = useRef(true);
   const lastTop = useRef(0);
   const smoothUntil = useRef(0);
+
+  // --- scroll-preservation anchor (for `preserveKey` changes) ---
+  // The element at the top of the viewport + its offset from the viewport top, captured
+  // (coalesced) on user scroll. Its DOM node survives the re-render (stable keys), so after
+  // a height-changing toggle we restore scrollTop to keep that element at the same offset.
+  const anchor = useRef<{ node: HTMLElement; gap: number } | null>(null);
+  const distFromBottom = useRef(0);
+  const captureQueued = useRef(false);
+
+  const captureAnchor = useCallback(() => {
+    captureQueued.current = false;
+    const el = scrollEl.current;
+    if (!el) return;
+    distFromBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    anchor.current = null;
+    const inner = el.querySelector(".cv-thread-inner");
+    if (!inner) return;
+    const top = el.getBoundingClientRect().top;
+    for (const child of Array.from(inner.children) as HTMLElement[]) {
+      const r = child.getBoundingClientRect();
+      // First element whose bottom is below the viewport top = the topmost visible row.
+      if (r.bottom - top > 8) {
+        anchor.current = { node: child, gap: r.top - top };
+        break;
+      }
+    }
+  }, []);
 
   // --- initial-restore state (one window per mount, i.e. per conversation) ---
   const restoring = useRef(true);
@@ -80,7 +114,13 @@ export function useStickToBottom(convId: string): StickToBottom {
     lastTop.current = top;
     // Remember where this conversation is, so reopening it returns here.
     writeScrollMemo(convId, { top, atBottom: following.current });
-  }, [convId]);
+    // Refresh the preservation anchor (coalesced to one capture per frame) so a later
+    // `preserveKey` toggle re-anchors on what the user is currently looking at.
+    if (!captureQueued.current) {
+      captureQueued.current = true;
+      requestAnimationFrame(captureAnchor);
+    }
+  }, [convId, captureAnchor]);
 
   const scrollRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -121,8 +161,14 @@ export function useStickToBottom(convId: string): StickToBottom {
     const settled = grew.current && stableFrames.current >= SETTLE_STABLE_FRAMES;
     if (settled || performance.now() - settleStart.current > SETTLE_MAX_MS) {
       restoring.current = false;
+      // Seed the preservation anchor from the just-restored position. Otherwise, a conversation
+      // restored mid-thread that the user never scrolled has no anchor (onScroll is the only
+      // other capture point) and `distFromBottom` stays 0 — so a "clean output" toggle would
+      // fall through to `scrollHeight - clientHeight` and snap to the bottom. Seeding here keeps
+      // the user on the same content even when they toggle before scrolling.
+      captureAnchor();
     }
-  }, []);
+  }, [captureAnchor]);
 
   const followIfPinned = useCallback(() => {
     const el = scrollEl.current;
@@ -164,6 +210,35 @@ export function useStickToBottom(convId: string): StickToBottom {
       cancelAnimationFrame(raf);
     };
   }, [applyRestore]);
+
+  // Re-anchor when `preserveKey` flips (a toggle that changes the thread height a lot).
+  // Runs as a layout effect AFTER the new layout is committed but before paint, so the
+  // jump is never visible. Skips the initial mount (no toggle yet).
+  const preserveInited = useRef(false);
+  useLayoutEffect(() => {
+    if (!preserveInited.current) {
+      preserveInited.current = true;
+      return;
+    }
+    const el = scrollEl.current;
+    if (!el || restoring.current) return;
+    if (following.current) {
+      el.scrollTop = el.scrollHeight; // stay pinned to the bottom
+    } else {
+      const a = anchor.current;
+      if (a && a.node.isConnected) {
+        // Restore so the anchored row keeps the same offset from the viewport top.
+        const top = el.getBoundingClientRect().top;
+        const currentGap = a.node.getBoundingClientRect().top - top;
+        el.scrollTop += currentGap - a.gap;
+      } else {
+        // No usable anchor → keep the same distance from the bottom.
+        el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - distFromBottom.current);
+      }
+    }
+    lastTop.current = el.scrollTop;
+    programmaticTop.current = el.scrollTop;
+  }, [preserveKey]);
 
   return { scrollRef, onRender, scrollToBottom };
 }
