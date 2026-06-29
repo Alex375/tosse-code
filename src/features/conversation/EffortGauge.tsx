@@ -3,29 +3,37 @@ import { ChipBtn, Menu } from "../../ui/kit";
 import { EFFORT_LABELS } from "../../agent/subagentMeta";
 
 /**
- * Claude Code reasoning-effort levels (low → xhigh), plus the top "Ultra code"
- * tier. The CLI's runtime `effortLevel` enum is EXACTLY low/medium/high/xhigh
- * (verified against the binary); there is NO "max" wire value — it was a phantom
- * the CLI silently swallowed. "Ultra code" is NOT an effort value either: it is
- * xhigh + a separate `ultracode` flag, handled by the composer. Which levels a
- * model supports is per-model (Ultra code only on xhigh-capable models).
+ * Claude Code reasoning-effort levels (low → max), plus the top "Ultra code" tier.
+ * The CLI's runtime `effortLevel` enum is low/medium/high/xhigh/max (binary 2.1.187,
+ * `gD`). `max` is the deepest pure-effort level — ABOVE xhigh, which the CLI itself
+ * describes as "just below maximum". It was a phantom up to 2.1.186 (a `--effort`
+ * spawn alias the runtime control swallowed), promoted to a real runtime level in
+ * 2.1.187 — verified live (set it on Opus 4.8 / Sonnet 4.6, read back via
+ * get_settings). "Ultra code" is NOT an effort value: it is xhigh + a separate
+ * `ultracode` flag, handled by the composer. Which levels a model supports is
+ * per-model (see effortLevelsForModel); Ultra code only on xhigh-capable models.
  */
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "ultracode";
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode";
 
 // Display labels are shared with the read-only effort surfaces (FlightDeck card,
 // agent meta) via subagentMeta.EFFORT_LABELS so they can never drift.
 const LABELS: Record<EffortLevel, string> = EFFORT_LABELS;
-const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "ultracode"];
+// max sits between xhigh and ultracode: it is the top *pure-effort* rung, while
+// ultracode (xhigh + workflows) stays the app's special top step. The ordering also
+// drives clampEffort — keeping max AFTER xhigh means clamping an xhigh request on a
+// max-but-not-xhigh model (Sonnet 4.6) lands on `high`, never jumps UP to max.
+const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
 
-/** Effort levels a model supports (Claude Code per-model table; [] = no effort).
- *  Conservative on purpose: a level the model doesn't accept would be silently
- *  swallowed by the CLI, so we only offer what's safe. The live `get_settings`
- *  read-back keeps the gauge honest if reality ever differs. */
+/** Effort levels a model supports (mirrors the binary's per-model table — `yUe`
+ *  gates `max`, `eve` gates `xhigh`; both verified live against 2.1.187). `[]` = no
+ *  effort. A level the model doesn't accept is silently swallowed by the CLI, so we
+ *  only offer what's safe; the live `get_settings` read-back keeps the gauge honest
+ *  if reality ever differs. NOTE: Sonnet 4.6 accepts `max` but NOT `xhigh`. */
 export function effortLevelsForModel(model: string | null | undefined): EffortLevel[] {
   const m = (model || "").toLowerCase();
   if (m.includes("haiku")) return []; // Haiku 4.5 has no effort support → slider hidden
-  if (m.includes("opus")) return ["low", "medium", "high", "xhigh"]; // xhigh-capable
-  if (m.includes("sonnet")) return ["low", "medium", "high"]; // no xhigh
+  if (m.includes("opus")) return ["low", "medium", "high", "xhigh", "max"]; // xhigh + max
+  if (m.includes("sonnet")) return ["low", "medium", "high", "max"]; // max, but no xhigh
   return ["low", "medium", "high"]; // safe fallback
 }
 

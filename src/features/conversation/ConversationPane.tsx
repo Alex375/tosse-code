@@ -7,6 +7,7 @@ import { ReviewBar } from "./ReviewBar";
 import { AgentBar } from "./AgentBar";
 import { BashBar } from "./BashBar";
 import { MonitorBar } from "./MonitorBar";
+import { WorkflowBar } from "./WorkflowBar";
 import { useStickToBottom } from "./useStickToBottom";
 import { useDisplay } from "../../store/display";
 
@@ -44,6 +45,7 @@ export function ConversationPane({
         <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
       </FileMentionProvider>
       <AgentBar session={session} />
+      <WorkflowBar session={session} />
       <BashBar session={session} />
       <MonitorBar session={session} />
       <TodoBar session={session} />

@@ -17,7 +17,9 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "../../ipc/client";
 import type { FsEntry } from "../../ipc/client";
+import { useAppErrors } from "../../store/appErrors";
 import { baseName, dirName, imageMimeForPath, isImagePath, languageForPath } from "./language";
+import { isWithin, joinPath, uniqueDest, validateName } from "./fileOps";
 
 /** Debounce before an edited buffer is autosaved to disk (ms). */
 const AUTOSAVE_MS = 1000;
@@ -65,6 +67,21 @@ export interface FileBuffer {
   pendingReveal: { line: number; column: number; seq: number } | null;
 }
 
+/** What kind of inline tree edit is in progress (the input the FileTree shows). */
+export type EditKind = "newFile" | "newDir" | "rename";
+
+/** An in-progress inline edit in the tree: a "new file/folder" input inside a
+ *  directory, or a rename input over an existing node. */
+export interface EditTarget {
+  kind: EditKind;
+  /** The directory the new entry goes in / the renamed item currently lives in. */
+  parentPath: string;
+  /** The existing path being renamed (rename only). */
+  targetPath?: string;
+  /** The input's initial value (basename for rename, "" for a new entry). */
+  initial: string;
+}
+
 interface ConvEditor {
   /** The tree root (a cwd). Reset wipes tree state when this moves. */
   root: string;
@@ -75,6 +92,8 @@ interface ConvEditor {
   /** Read error per directory path (surfaced in the tree; also stops the
    *  auto-load effect from retrying a failing read forever). */
   dirErrors: Record<string, string>;
+  /** The single in-progress inline edit (new file/folder or rename), or null. */
+  editing: EditTarget | null;
   /** Open tab paths, in tab order. */
   tabs: string[];
   activeTab: string | null;
@@ -86,6 +105,14 @@ interface ConvEditor {
    * tab. Null when there is no preview tab.
    */
   previewTab: string | null;
+}
+
+/** The app-internal file clipboard for cut/copy/paste in the explorer (paths +
+ *  whether a paste should copy or move). Module-global like VS Code's, so a paste
+ *  can target a different conversation's tree. */
+export interface FileClipboard {
+  paths: string[];
+  mode: "copy" | "cut";
 }
 
 interface EditorState {
@@ -125,6 +152,10 @@ interface EditorState {
   // ---- Per conversation ----
   byConv: Record<string, ConvEditor>;
 
+  /** The explorer's cut/copy clipboard (paths + copy|cut), or null. Global, so a
+   *  paste can target any conversation's tree. */
+  clipboard: FileClipboard | null;
+
   // ---- Layout actions ----
   toggleOpen: () => void;
   setOpen: (open: boolean) => void;
@@ -148,6 +179,25 @@ interface EditorState {
   /** Initialise a conversation's tree at `root`, resetting it if the root moved. */
   ensureConv: (convId: string, root: string) => void;
   toggleDir: (convId: string, path: string) => Promise<void>;
+
+  // ---- Explorer mutations (context menu) ----
+  /** Begin creating a new file/folder inside `parentDir`: expands it and shows an
+   *  inline input. `commitEdit` finishes; `cancelEdit` aborts. */
+  startCreate: (convId: string, parentDir: string, kind: "newFile" | "newDir") => void;
+  /** Begin renaming `path`: shows an inline input pre-filled with its basename. */
+  startRename: (convId: string, path: string) => void;
+  /** Cancel the in-progress inline edit (Escape / empty / blur-without-change). */
+  cancelEdit: (convId: string) => void;
+  /** Finish the in-progress inline edit with `name` (create or rename on disk). An
+   *  empty/unchanged name is treated as a cancel. */
+  commitEdit: (convId: string, name: string) => Promise<void>;
+  /** Move `path` to the OS trash (recoverable). Closes any open tab under it. */
+  deletePath: (convId: string, path: string) => Promise<void>;
+  /** Put `paths` on the explorer clipboard for a later paste (copy | cut). */
+  setClipboard: (paths: string[], mode: "copy" | "cut") => void;
+  /** Paste the clipboard into `targetDir`: copies (or moves, for cut) each entry,
+   *  resolving a non-colliding name. A cut is consumed once pasted. */
+  pasteInto: (convId: string, targetDir: string) => Promise<void>;
 
   // ---- Tabs / buffers ----
   /** Open a file. `preview` (single-click) uses the reusable temporary tab;
@@ -323,6 +373,21 @@ function clearAutosave(convId: string, path: string): void {
   }
 }
 
+/** Clear every pending autosave at `path` OR under it (for a directory). Called
+ *  BEFORE a destructive op (delete / rename / move) so a debounced timer can't fire
+ *  mid-op and write the buffer back to its OLD path — which would resurrect a file
+ *  we just deleted, or recreate one we just moved away. */
+function clearAutosaveUnder(convId: string, path: string): void {
+  const exact = timerKey(convId, path);
+  const prefix = exact + "/";
+  for (const key of [...autosaveTimers.keys()]) {
+    if (key === exact || key.startsWith(prefix)) {
+      clearTimeout(autosaveTimers.get(key)!);
+      autosaveTimers.delete(key);
+    }
+  }
+}
+
 // ---- Immutable update helpers ----------------------------------------------
 
 function emptyConv(root: string): ConvEditor {
@@ -332,6 +397,7 @@ function emptyConv(root: string): ConvEditor {
     expanded: {},
     loadingDirs: {},
     dirErrors: {},
+    editing: null,
     tabs: [],
     activeTab: null,
     buffers: {},
@@ -394,9 +460,107 @@ export const useEditorStore = create<EditorState>()((set, get) => {
     saveLayout(get());
   }
 
+  /** Surface a file-operation failure on the app-level error banner (the unified
+   *  "zero silent error" channel) — these aren't tied to a conversation turn. */
+  function reportFsError(message: string, detail?: string): void {
+    console.error(message, detail ?? "");
+    useAppErrors.getState().pushError(message, detail ?? null);
+  }
+
+  /** Re-read a directory we've already loaded, so a create/rename/delete shows in
+   *  the tree immediately (without waiting on the debounced fs watcher). No-op for
+   *  a directory that isn't loaded (it'll read fresh when expanded). */
+  async function refreshDir(convId: string, dir: string): Promise<void> {
+    const conv = get().byConv[convId];
+    if (!conv || conv.dirs[dir] === undefined) return;
+    const res = await safeCmd(() => commands.readDir(dir));
+    if (res.status === "ok") {
+      patchConv(convId, (c) => (c.dirs[dir] !== undefined ? { ...c, dirs: { ...c.dirs, [dir]: res.data } } : c));
+    } else {
+      // The op succeeded but the re-read failed → the tree now shows a STALE
+      // listing. Never let that pass silently (zero-silent-error): surface it on
+      // the app banner so the user knows the view may be out of date and can act.
+      reportFsError("Arborescence non rafraîchie — elle peut être périmée.", res.error);
+    }
+  }
+
+  /** Drop cached tree state for `path` and everything beneath it (after a delete
+   *  or a move), so a stale listing/expansion never lingers. */
+  function dropTreeCache(convId: string, path: string): void {
+    patchConv(convId, (c) => {
+      const prune = <T>(rec: Record<string, T>): Record<string, T> => {
+        const next = { ...rec };
+        for (const key of Object.keys(next)) {
+          if (isWithin(path, key)) delete next[key];
+        }
+        return next;
+      };
+      return { ...c, dirs: prune(c.dirs), expanded: prune(c.expanded), dirErrors: prune(c.dirErrors) };
+    });
+  }
+
+  /** Rebase open buffers/tabs after `from` was renamed/moved to `to`: the buffer at
+   *  `from` itself, AND every open file UNDER `from` when a DIRECTORY moved, follow
+   *  to the matching path under `to` — keeping the tab and its (possibly unsaved)
+   *  content instead of dropping it. Pending autosaves migrate with them, so an
+   *  unsaved edit lands on the new path (never the old one). */
+  function retargetOpenBuffers(convId: string, from: string, to: string): void {
+    const conv = get().byConv[convId];
+    if (!conv) return;
+    const moves: Array<{ oldPath: string; newPath: string }> = [];
+    for (const p of Object.keys(conv.buffers)) {
+      if (p === from) moves.push({ oldPath: p, newPath: to });
+      else if (p.startsWith(from + "/")) moves.push({ oldPath: p, newPath: to + p.slice(from.length) });
+    }
+    if (moves.length === 0) return;
+    const remap = new Map(moves.map((m) => [m.oldPath, m.newPath]));
+    patchConv(convId, (c) => {
+      const buffers = { ...c.buffers };
+      for (const { oldPath, newPath } of moves) {
+        const b = buffers[oldPath];
+        if (!b) continue;
+        delete buffers[oldPath];
+        buffers[newPath] = { ...b, path: newPath, name: baseName(newPath), language: languageForPath(newPath) };
+      }
+      const map = (t: string) => remap.get(t) ?? t;
+      return {
+        ...c,
+        buffers,
+        tabs: c.tabs.map(map),
+        activeTab: c.activeTab ? map(c.activeTab) : c.activeTab,
+        previewTab: c.previewTab ? map(c.previewTab) : c.previewTab,
+      };
+    });
+    // Migrate autosave: drop the old timers; reschedule a save under the NEW path
+    // for any buffer that's still dirty (the edit follows the file to its new home).
+    for (const { oldPath, newPath } of moves) {
+      clearAutosave(convId, oldPath);
+      const b = get().byConv[convId]?.buffers[newPath];
+      if (b && b.dirty && !b.binary && !b.tooLarge) {
+        autosaveTimers.set(
+          timerKey(convId, newPath),
+          setTimeout(() => {
+            autosaveTimers.delete(timerKey(convId, newPath));
+            void get().saveBuffer(convId, newPath);
+          }, AUTOSAVE_MS),
+        );
+      }
+    }
+  }
+
+  /** Close any open tab at or under `path` (used when it's deleted/moved away). */
+  function closeBuffersUnder(convId: string, path: string): void {
+    const conv = get().byConv[convId];
+    if (!conv) return;
+    for (const tab of [...conv.tabs]) {
+      if (isWithin(path, tab)) get().closeTab(convId, tab);
+    }
+  }
+
   return {
     ...layout,
     byConv: {},
+    clipboard: null,
 
     // Git is a mutually-exclusive mode: opening it hides the editor/terminal
     // region, and opening the editor or terminal closes Git — so a lit toggle
@@ -488,6 +652,150 @@ export const useEditorStore = create<EditorState>()((set, get) => {
           expanded: { ...c.expanded, [path]: true },
         };
       });
+    },
+
+    // ---- Explorer mutations (context menu) ----
+
+    startCreate: (convId, parentDir, kind) => {
+      const conv = get().byConv[convId];
+      if (!conv) return;
+      const isRoot = parentDir === conv.root;
+      const arm = () =>
+        patchConv(convId, (c) => ({
+          ...c,
+          expanded: isRoot ? c.expanded : { ...c.expanded, [parentDir]: true },
+          editing: { kind, parentPath: parentDir, initial: "" },
+        }));
+      // The dir must be loaded for the inline input to render inside it. Load it
+      // first if needed (toggleDir loads + expands), then arm the editor — but ONLY
+      // if the read succeeded. On a read error toggleDir already surfaced it in the
+      // tree (dirErrors); arming over an unreadable dir would show an input that
+      // never renders (and let a doomed create be typed).
+      if (!isRoot && conv.dirs[parentDir] === undefined) {
+        void get().toggleDir(convId, parentDir).then(() => {
+          if (get().byConv[convId]?.dirs[parentDir] !== undefined) arm();
+        });
+      } else {
+        arm();
+      }
+    },
+
+    startRename: (convId, path) =>
+      patchConv(convId, (c) => ({
+        ...c,
+        editing: { kind: "rename", parentPath: dirName(path), targetPath: path, initial: baseName(path) },
+      })),
+
+    cancelEdit: (convId) => patchConv(convId, (c) => (c.editing ? { ...c, editing: null } : c)),
+
+    commitEdit: async (convId, rawName) => {
+      const conv = get().byConv[convId];
+      const editing = conv?.editing;
+      if (!conv || !editing) return;
+      const name = rawName.trim();
+      // Clear the inline input up front (the disk op + refresh run async).
+      patchConv(convId, (c) => ({ ...c, editing: null }));
+      if (!name) return; // empty = a deliberate cancel (legitimate, not an error)
+      // A non-empty but invalid name ("/", ".", "..") is NOT a silent no-op: tell
+      // the user why nothing happened instead of swallowing it.
+      const invalid = validateName(name);
+      if (invalid) {
+        reportFsError(`Nom invalide : « ${name} »`, invalid);
+        return;
+      }
+      const dir = editing.parentPath;
+      const dest = joinPath(dir, name);
+
+      if (editing.kind === "rename") {
+        if (!editing.targetPath || name === editing.initial) return; // unchanged = no-op
+        // Stop any pending autosave on the source BEFORE the move, so a debounced
+        // write can't fire mid-rename and recreate the file at its old path.
+        clearAutosaveUnder(convId, editing.targetPath);
+        const res = await safeCmd(() => commands.renameEntry(editing.targetPath!, dest));
+        if (res.status !== "ok") {
+          reportFsError(`Renommage impossible : « ${baseName(editing.targetPath)} »`, res.error);
+          return;
+        }
+        retargetOpenBuffers(convId, editing.targetPath, dest);
+        dropTreeCache(convId, editing.targetPath);
+        await refreshDir(convId, dir);
+        return;
+      }
+
+      // New file / new folder.
+      const res = await safeCmd(() =>
+        editing.kind === "newDir" ? commands.createDir(dest) : commands.createFile(dest),
+      );
+      if (res.status !== "ok") {
+        reportFsError(`Création impossible : « ${name} »`, res.error);
+        return;
+      }
+      await refreshDir(convId, dir);
+      // Open a freshly created file so the user can start editing right away.
+      if (editing.kind === "newFile") void get().openFile(convId, dest, { preview: false });
+    },
+
+    deletePath: async (convId, path) => {
+      // Stop any pending autosave under the target BEFORE the trash op, so a
+      // debounced write can't fire mid-delete and resurrect the file.
+      clearAutosaveUnder(convId, path);
+      const res = await safeCmd(() => commands.deleteToTrash(path));
+      if (res.status !== "ok") {
+        reportFsError(`Suppression impossible : « ${baseName(path)} »`, res.error);
+        return;
+      }
+      closeBuffersUnder(convId, path);
+      dropTreeCache(convId, path);
+      await refreshDir(convId, dirName(path));
+    },
+
+    setClipboard: (paths, mode) => set({ clipboard: { paths, mode } }),
+
+    pasteInto: async (convId, targetDir) => {
+      const clip = get().clipboard;
+      if (!clip || clip.paths.length === 0) return;
+      const movedSourceDirs = new Set<string>();
+      try {
+        for (const src of clip.paths) {
+          // Never paste a folder into itself or its own subtree.
+          if (isWithin(src, targetDir)) {
+            reportFsError("Collage impossible : un dossier ne peut pas être collé dans lui-même.");
+            continue;
+          }
+          // A cut into the SAME directory is a no-op (VS Code does nothing).
+          if (clip.mode === "cut" && dirName(src) === targetDir) continue;
+
+          // `pathExists` (the collision probe) is the one IPC call here NOT wrapped
+          // by `safeCmd`; the surrounding try/catch is its safety net so a transport
+          // rejection surfaces instead of vanishing as an unhandled rejection.
+          const dest = await uniqueDest(targetDir, baseName(src), (p) => commands.pathExists(p));
+          if (clip.mode === "cut") {
+            // Stop the source's pending autosave before the move (anti-resurrection).
+            clearAutosaveUnder(convId, src);
+          }
+          const res =
+            clip.mode === "copy"
+              ? await safeCmd(() => commands.copyEntry(src, dest))
+              : await safeCmd(() => commands.renameEntry(src, dest));
+          if (res.status !== "ok") {
+            reportFsError(`Collage impossible : « ${baseName(src)} »`, res.error);
+            continue;
+          }
+          if (clip.mode === "cut") {
+            retargetOpenBuffers(convId, src, dest);
+            dropTreeCache(convId, src);
+            movedSourceDirs.add(dirName(src));
+          }
+        }
+        await refreshDir(convId, targetDir);
+        // A cut is consumed once pasted; refresh the dirs the items left.
+        if (clip.mode === "cut") {
+          for (const dir of movedSourceDirs) await refreshDir(convId, dir);
+          set({ clipboard: null });
+        }
+      } catch (e) {
+        reportFsError("Collage impossible.", e instanceof Error ? e.message : String(e));
+      }
     },
 
     openFile: async (convId, path, opts) => {
@@ -683,7 +991,10 @@ export const useEditorStore = create<EditorState>()((set, get) => {
             c.dirs[dir] !== undefined ? { ...c, dirs: { ...c.dirs, [dir]: res.data } } : c,
           );
         } else {
-          console.error("readDir (live refresh) failed:", res.error);
+          // A live refresh that fails leaves the tree stale — surface it instead of
+          // swallowing (zero-silent-error). Deduped by message, so a flapping watch
+          // shows one banner, not a flood.
+          reportFsError("Arborescence non rafraîchie — elle peut être périmée.", res.error);
         }
       }
 

@@ -25,7 +25,7 @@ import {
   useTurnResult,
 } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
-import { useTaskByToolUse } from "../../store/backgroundTasksStore";
+import { useBackgroundTasksStore, useTaskByToolUse } from "../../store/backgroundTasksStore";
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
@@ -35,6 +35,7 @@ import { SubAgentTranscript } from "./SubAgentTranscript";
 import { ThinkingBlock } from "./ThinkingBlock";
 import {
   atomsToSegments,
+  atomStillRunning,
   countWorkSteps,
   flattenWork,
   groupBlocks,
@@ -46,9 +47,11 @@ import {
   type ToolStep,
 } from "./toolGroup";
 import { useDisplay } from "../../store/display";
-import { LiveToolStep, ToolSection } from "./ToolSection";
+import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
+import { UserText } from "./userText";
 import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
+import { WorkflowCard } from "./WorkflowCard";
 import { resolveTranscriptSource } from "./transcriptSource";
 import type { StickToBottom } from "./useStickToBottom";
 import styles from "./ConductorThread.module.css";
@@ -65,7 +68,7 @@ export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
             en attente
           </span>
         ) : null}
-        {text}
+        <UserText text={text} />
       </div>
     </div>
   );
@@ -463,6 +466,16 @@ function renderSegments(
           input={seg.step.input}
         />
       );
+    if (seg.kind === "workflow")
+      // A Workflow renders as a persistent inline card (opens the live overview / report).
+      return (
+        <WorkflowCard
+          key={seg.key}
+          session={session}
+          toolUseId={seg.step.id}
+          input={seg.step.input}
+        />
+      );
     // A `run` of regular tools. The trailing run of the live turn renders EXPANDED so its
     // steps appear live (spinner → result), then collapses to its header on settle. Past
     // / non-trailing runs render collapsed. `active` gates the spinner so a resultless
@@ -477,39 +490,6 @@ function renderSegments(
       />
     );
   });
-}
-
-/**
- * The "clean output" fold: one collapsible block holding a response's intermediate work (tool
- * runs, thinking, in-between prose, sub-agents), so only the response's concluding message
- * stays in clear. Collapsed by default and expandable any time — including mid-stream.
- *
- * The fold header carries NO error indicator: a failed tool inside is folded like the rest,
- * flagged only by the small alert glyph on its command section / step row (visible once the
- * block is open). A conversation-stopping error is a separate timeline item (Notice /
- * turn_result) rendered outside the block, always visible.
- */
-function ClaudeWorkBlock({ count, children }: { count: number; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const label =
-    count > 0 ? `Travail de Claude · ${count} étape${count > 1 ? "s" : ""}` : "Travail de Claude";
-  return (
-    <div className="cv-work">
-      <button
-        type="button"
-        className="cv-work-h"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-      >
-        <Ico name="spark" className="sm cv-work-ico" />
-        <span className="cv-work-t">{label}</span>
-        <span className="cv-work-chev" data-open={open ? "1" : undefined}>
-          <Ico name="chev" className="sm" />
-        </span>
-      </button>
-      {open ? <div className="cv-work-b">{children}</div> : null}
-    </div>
-  );
 }
 
 /** The live sliding window: how many trailing steps stay visible (current activity) before
@@ -545,17 +525,33 @@ function CleanBlocks({
   live: boolean;
 }) {
   const ids = workStepIds(work);
-  // Per-id "still running?" of THIS response's tools (no result yet). Shallow-compared so the
-  // component re-renders only when one of ITS ids settles — a past response never re-renders
-  // while a later turn streams.
-  const running = useConversationStore(
+  // Per-id "has a tool_result?" for THIS response's tools. Shallow-compared so the component
+  // re-renders only when one of ITS ids settles — a past response never re-renders while a
+  // later turn streams.
+  const hasResult = useConversationStore(
     useShallow((s) => {
       const tr = s.sessions[session]?.toolResults;
-      return ids.map((id) => !tr?.[id]);
+      return ids.map((id) => !!tr?.[id]);
+    }),
+  );
+  // Per-id background-task status (or null when none). A sub-agent's tool_result can land
+  // before its terminal task_notification, so the result alone would fold a card that still
+  // shows the running dot — see atomStillRunning. Shallow-compared, same scoping as above.
+  const taskStatus = useBackgroundTasksStore(
+    useShallow((s) => {
+      const tasks = s.sessions[session];
+      return ids.map((id) => {
+        if (tasks) {
+          for (const t of Object.values(tasks)) if (t.tool_use_id === id) return t.status;
+        }
+        return null;
+      });
     }),
   );
   const runningById = new Map<string, boolean>();
-  ids.forEach((id, i) => runningById.set(id, running[i] ?? false));
+  ids.forEach((id, i) =>
+    runningById.set(id, atomStillRunning({ hasResult: hasResult[i] ?? false, taskStatus: taskStatus[i] ?? null })),
+  );
   const isRunning = (id: string) => runningById.get(id) ?? false;
 
   // Settled response ending on tools (no closing prose): render unfolded — folding everything

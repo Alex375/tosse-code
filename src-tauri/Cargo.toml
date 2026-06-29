@@ -1,6 +1,6 @@
 [package]
 name = "tosse-code"
-version = "0.17.0"
+version = "0.18.0"
 description = "Tosse Code — desktop app to pilot Claude Code"
 authors = ["Tosse"]
 edition = "2021"
@@ -49,6 +49,13 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # tree when the agent (or anything) writes under the conversation's working dir.
 # macOS FSEvents under the hood — one cheap recursive watch (see `fs/mod.rs`).
 notify = "6"
+
+# Safe delete for the file explorer's context menu: moves an item to the OS
+# trash/recycle bin (recoverable) instead of an irreversible `remove_*`, the VS
+# Code default for "Delete". Uses the native NSFileManager trash API on macOS, so
+# it needs NO Finder-automation permission (unlike an osascript Finder delete) —
+# important given the app is unsigned and we avoid extra permission prompts.
+trash = "5"
 
 # Integrated terminal: a real interactive PTY (the user's login shell) per
 # conversation. `portable-pty` (the wezterm PTY layer) opens the pty, spawns the

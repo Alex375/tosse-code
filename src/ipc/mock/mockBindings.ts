@@ -9,6 +9,7 @@ import type {
   ContextFill,
   ConversationItem,
   ConversationRecord,
+  DiskConversation,
   ExtensionsSnapshot,
   FileContent,
   FsChangeEvent,
@@ -28,6 +29,7 @@ import type {
   Pong,
   RepoRecord,
   Result,
+  SearchHit,
   SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
@@ -40,10 +42,13 @@ import type {
   TerminalOutputEvent,
   TickEvent,
   UsageError,
+  WorkflowJournal,
+  WorkflowPhase,
+  WorkflowRun,
   WorktreeInfo,
   WorktreeStatus,
 } from "../bindings";
-import { DEMO_SUBAGENT_TRANSCRIPT, idleState, mockTaskOutput, MOCK_SESSION_ID, ScenarioDriver } from "./scenario";
+import { DEMO_SUBAGENT_TRANSCRIPT, DEMO_WORKFLOW_RUN, idleState, isDemoWorkflowDone, mockTaskOutput, MOCK_SESSION_ID, ScenarioDriver } from "./scenario";
 
 // A small slash-command catalogue so the browser/Playwright build exercises the
 // `/` autocomplete menu without a real `claude` process.
@@ -204,6 +209,7 @@ export const mockCommands = {
     else if (demo === "background") driver.startBackground();
     else if (demo === "shell") driver.startShell();
     else if (demo === "monitor") driver.startMonitor();
+    else if (demo === "workflow") driver.startWorkflow();
     else driver.start();
     return ok(null);
   },
@@ -306,10 +312,12 @@ export const mockCommands = {
     return ok(null);
   },
 
-  async loadSessionHistory(_sessionId: string): Promise<Result<ConversationItem[], string>> {
-    // No on-disk transcript in the browser mock — history lives only in the live
-    // scenario stream. Empty means "nothing to replay", so reload is a no-op and
-    // keeps whatever the scenario already rendered.
+  async loadSessionHistory(sessionId: string): Promise<Result<ConversationItem[], string>> {
+    // No real on-disk transcript in the browser mock. For the history panel's demo rows
+    // return a representative transcript so the PREVIEW pane renders real-shaped content
+    // in dev/Playwright; otherwise empty ("nothing to replay" → reload stays a no-op and
+    // keeps whatever the live scenario already rendered).
+    if (HISTORY_DEMO_SESSION_IDS.has(sessionId)) return ok(DEMO_SUBAGENT_TRANSCRIPT);
     return ok([]);
   },
 
@@ -322,10 +330,57 @@ export const mockCommands = {
     return ok(DEMO_SUBAGENT_TRANSCRIPT);
   },
 
+  async loadWorkflowRun(
+    _sessionId: string,
+    _runId: string,
+  ): Promise<Result<WorkflowRun | null, string>> {
+    // Mirror reality: the manifest exists only once the run is DONE. While running, null →
+    // the modal shows its live overview; after, the rich 3-panel view.
+    return ok(isDemoWorkflowDone() ? DEMO_WORKFLOW_RUN : null);
+  },
+
+  async loadWorkflowJournal(
+    _sessionId: string,
+    _runId: string,
+  ): Promise<Result<WorkflowJournal | null, string>> {
+    // Live progress counts (the mid-run signal), kept consistent with the demo's 2 wire ticks
+    // (r-correctness done, r-perf running). Grows to "all done" once the run finishes.
+    return ok(isDemoWorkflowDone() ? { started: 3, done: 3 } : { started: 2, done: 1 });
+  },
+
+  async loadWorkflowPhases(
+    _sessionId: string,
+    _runId: string,
+  ): Promise<Result<WorkflowPhase[], string>> {
+    // The declared phase list (from the script's meta) — available from t=0, so the live
+    // overview can show upcoming steps. Mirror the demo run's phases.
+    return ok(DEMO_WORKFLOW_RUN.phases ?? []);
+  },
+
   async loadSessionContext(_sessionId: string): Promise<Result<ContextFill, string>> {
     // No transcript in the browser mock; the scenario's baseState already carries a
     // context fill, so nothing to seed here.
     return ok({ context_tokens: null, context_window: null });
+  },
+
+  async listDiskConversations(): Promise<Result<DiskConversation[], string>> {
+    // A representative set so the history panel renders real-shaped rows in
+    // dev/Playwright (two repos, one orphan-style worktree conversation).
+    return ok(MOCK_DISK_CONVERSATIONS);
+  },
+
+  async primeHistoryIndex(): Promise<Result<number, string>> {
+    return ok(MOCK_DISK_CONVERSATIONS.length);
+  },
+
+  async searchConversations(query: string): Promise<Result<SearchHit[], string>> {
+    const q = query.trim().toLowerCase();
+    if (!q) return ok([]);
+    const hits: SearchHit[] = MOCK_DISK_CONVERSATIONS.filter(
+      (c) =>
+        (c.title ?? "").toLowerCase().includes(q) || c.excerpt.toLowerCase().includes(q),
+    ).map((c, i) => ({ session_id: c.session_id, score: 100 - i, snippet: c.excerpt }));
+    return ok(hits);
   },
 
   async getPlanUsage(): Promise<Result<PlanUsage, UsageError>> {
@@ -443,10 +498,13 @@ export const mockCommands = {
     return ok(null);
   },
 
-  async pathExists(_path: string): Promise<boolean> {
-    // No real filesystem in the browser mock — everything "exists" so the normal
-    // spawn flow runs (the deleted-worktree recovery is exercised in the real app).
-    return true;
+  async pathExists(path: string): Promise<boolean> {
+    // A `__throw__` path simulates a transport rejection (exercises the paste
+    // collision-probe error path). Otherwise everything "exists" by default so the
+    // worktree spawn flow runs unchanged — except a `__free__` path, which reports
+    // missing so a paste's collision probe resolves to the bare name at once.
+    if (path.includes("__throw__")) throw new Error("mock pathExists transport failure");
+    return !path.includes("__free__");
   },
 
   // ---- Git history / source control: synthetic data so the Git panel renders in
@@ -536,6 +594,49 @@ export const mockCommands = {
   },
 
   async writeFile(_path: string, _content: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  // Mutating tree ops (explorer context menu). Same `__fail__`/`__throw__`
+  // sentinels so unit tests can drive both the success and the error-surfacing
+  // paths deterministically without a real filesystem.
+  async createFile(path: string): Promise<Result<null, string>> {
+    if (path.includes("__throw__")) throw new Error("mock createFile transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock createFile failed" };
+    return ok(null);
+  },
+
+  async createDir(path: string): Promise<Result<null, string>> {
+    if (path.includes("__throw__")) throw new Error("mock createDir transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock createDir failed" };
+    return ok(null);
+  },
+
+  async renameEntry(from: string, to: string): Promise<Result<null, string>> {
+    if (from.includes("__throw__") || to.includes("__throw__"))
+      throw new Error("mock renameEntry transport failure");
+    if (from.includes("__fail__") || to.includes("__fail__"))
+      return { status: "error", error: "mock renameEntry failed" };
+    return ok(null);
+  },
+
+  async copyEntry(from: string, to: string): Promise<Result<null, string>> {
+    if (from.includes("__throw__") || to.includes("__throw__"))
+      throw new Error("mock copyEntry transport failure");
+    if (from.includes("__fail__") || to.includes("__fail__"))
+      return { status: "error", error: "mock copyEntry failed" };
+    return ok(null);
+  },
+
+  async deleteToTrash(path: string): Promise<Result<null, string>> {
+    if (path.includes("__throw__")) throw new Error("mock deleteToTrash transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock deleteToTrash failed" };
+    return ok(null);
+  },
+
+  async revealInFinder(path: string): Promise<Result<null, string>> {
+    if (path.includes("__throw__")) throw new Error("mock revealInFinder transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock revealInFinder failed" };
     return ok(null);
   },
 
@@ -745,3 +846,37 @@ function mockWorktreeList(repoPath: string): WorktreeInfo[] {
   }
   return list;
 }
+
+// Demo on-disk conversations for the history panel (dev/Playwright only).
+const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
+  {
+    session_id: MOCK_SESSION_ID,
+    cwd: "/Users/dev/demo-repo",
+    repo_root: "/Users/dev/demo-repo",
+    git_branch: "main",
+    title: "Refonte de l'authentification",
+    excerpt: "Le déploiement casse au login, il faut revoir l'auth du serveur",
+    mtime_ms: Date.now() - 3_600_000,
+  },
+  {
+    session_id: "demo-orphan-2222",
+    cwd: "/Users/dev/demo-repo/.claude/worktrees/feat-dark-mode",
+    repo_root: "/Users/dev/demo-repo",
+    git_branch: "feat/dark-mode",
+    title: null,
+    excerpt: "Ajoute un toggle de dark mode dans les réglages",
+    mtime_ms: Date.now() - 4 * 86_400_000,
+  },
+  {
+    session_id: "demo-other-3333",
+    cwd: "/Users/dev/other-project",
+    repo_root: "/Users/dev/other-project",
+    git_branch: null,
+    title: "Script d'import CSV",
+    excerpt: "Parser le CSV et insérer les lignes en base",
+    mtime_ms: Date.now() - 20 * 86_400_000,
+  },
+];
+
+// Session ids of the history-panel demo rows — their preview renders a sample transcript.
+const HISTORY_DEMO_SESSION_IDS = new Set(MOCK_DISK_CONVERSATIONS.map((c) => c.session_id));

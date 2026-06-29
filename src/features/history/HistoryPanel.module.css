@@ -1,0 +1,387 @@
+/* Conversation-history search panel. Reuses the conductor theme tokens (--wf-*) and
+   mirrors the extensions-manager modal chrome, with a two-pane body (list / preview). */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-scrim);
+}
+
+.panel {
+  width: 1280px;
+  max-width: 95vw;
+  height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--wf-panel);
+  border: 1px solid var(--wf-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--wf-line);
+  flex: 0 0 auto;
+}
+.head .wf-ico {
+  color: var(--wf-tx-lo);
+}
+.title {
+  flex: 1;
+  font-weight: 600;
+  color: var(--wf-tx-hi);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.titleSub {
+  color: var(--wf-tx-lo);
+  font-weight: 500;
+}
+.titleSub::before {
+  content: "·";
+  margin: 0 8px;
+  color: var(--wf-tx-xlo);
+}
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wf-tx-lo);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.iconBtn:hover {
+  background: var(--wf-panel-3);
+  color: var(--wf-tx-hi);
+}
+.spin {
+  animation: hist-spin 0.9s linear infinite;
+}
+@keyframes hist-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- Two-pane body ---- */
+.body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 380px 1fr;
+}
+.listCol {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Grid items default to min-width:auto, letting wide content blow the track out;
+     pin to 0 so the column keeps its track width and inner content wraps/scrolls. */
+  min-width: 0;
+  border-right: 1px solid var(--wf-line);
+}
+.previewCol {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Same: without this, a wide transcript line (table/pre/long path) widens the 1fr
+     track and overflows the modal to the right. */
+  min-width: 0;
+}
+
+/* ---- Search + filters ---- */
+.searchRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--wf-line);
+  flex: 0 0 auto;
+}
+.searchRow .wf-ico {
+  color: var(--wf-tx-lo);
+}
+.searchInput {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--wf-tx-hi);
+}
+.searchInput::placeholder {
+  color: var(--wf-tx-xlo);
+}
+
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--wf-line);
+  flex: 0 0 auto;
+}
+.repoSelect {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--wf-line-2);
+  background: var(--wf-panel-2);
+  color: var(--wf-tx);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.periodChips {
+  display: flex;
+  gap: 6px;
+}
+.chip {
+  height: 25px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  border: 1px solid var(--wf-line-2);
+  background: transparent;
+  color: var(--wf-tx-lo);
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.chip:hover {
+  color: var(--wf-tx-hi);
+  background: var(--wf-panel-3);
+}
+.chipOn {
+  color: #1a0f0a;
+  background: var(--wf-accent);
+  border-color: var(--wf-accent);
+  font-weight: 600;
+}
+
+/* ---- List ---- */
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 10px 16px;
+}
+.group {
+  margin-bottom: 14px;
+}
+.groupH {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--wf-tx-lo);
+}
+.groupH .wf-ico {
+  color: var(--wf-tx-xlo);
+}
+.groupName {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.groupCount {
+  font-family: var(--wf-mono);
+  font-size: 10px;
+  color: var(--wf-tx-xlo);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.row:hover {
+  background: var(--wf-panel-2);
+}
+.rowOn {
+  background: var(--wf-panel-3);
+  border-color: var(--wf-line-2);
+}
+.rowName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rowTitle {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--wf-tx-hi);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.presentTag {
+  flex: 0 0 auto;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: #9fe0c0;
+  border: 1px solid #2f5547;
+}
+.rowExcerpt {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--wf-tx-lo);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--wf-tx-xlo);
+}
+.metaSep {
+  color: var(--wf-tx-xlo);
+}
+/* Repo tag on a search-result row (the list is flat, not grouped, so each row needs to
+   show which repo it belongs to). */
+.repoTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--wf-tx);
+  background: var(--wf-panel-3);
+  border: 1px solid var(--wf-line-2);
+  border-radius: 6px;
+  padding: 1px 7px 1px 5px;
+}
+.repoTag .wf-ico {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  color: var(--wf-tx-xlo);
+}
+.repoTagName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Preview ---- */
+.previewHead {
+  flex: 0 0 auto;
+  padding: 16px 22px 13px;
+  border-bottom: 1px solid var(--wf-line);
+}
+.previewTitle {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--wf-tx-hi);
+  margin-bottom: 8px;
+  line-height: 1.3;
+}
+.previewMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--wf-tx-lo);
+  margin-bottom: 13px;
+}
+.previewMeta .wf-ico {
+  color: var(--wf-tx-xlo);
+  width: 14px;
+  height: 14px;
+}
+.reactivateBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 31px;
+  padding: 0 15px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #1a0f0a;
+  background: var(--wf-accent);
+  border: 1px solid var(--wf-accent);
+  transition: filter 0.12s ease;
+}
+.reactivateBtn:hover {
+  filter: brightness(1.05);
+}
+.reactivateBtn .wf-ico {
+  color: #1a0f0a;
+}
+.previewBody {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 22px 24px;
+}
+.previewEmpty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 30px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--wf-tx-lo);
+}
+
+.empty {
+  padding: 26px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--wf-tx-lo);
+}
+.error {
+  margin: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #f0a9af;
+  background: var(--wf-err-bg);
+  border: 1px solid #5c3036;
+  white-space: pre-wrap;
+}

@@ -20,10 +20,11 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "../ipc/client";
-import type { ConversationItem, ConversationRecord, PermissionMode, RepoRecord } from "../ipc/client";
+import type { ConversationItem, ConversationRecord, DiskConversation, PermissionMode, RepoRecord } from "../ipc/client";
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
+import { useWorkflowLiveStore } from "./workflowLive";
 import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
@@ -384,6 +385,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // persisted context-window so the localStorage cache doesn't keep orphans.
     useConversationStore.getState().dropSession(id);
     useBackgroundTasksStore.getState().dropSession(id);
+    useWorkflowLiveStore.getState().drop(id);
     clearCachedWindow(id);
     clearTodoBarOpen(id);
     clearComposerDraft(id);
@@ -650,6 +652,68 @@ export function createConversationInWorktree(repoId: string, cwd: string): strin
 /** Branch/dir name for an app-created worktree when starting a conversation in one. */
 function autoWorktreeBranch(): string {
   return `wt-${Date.now().toString(36)}`;
+}
+
+/** The existing repo whose path is the longest prefix of `cwd`, or a freshly-added
+ *  repo at `repoRoot` when the cwd belongs to a repo the app never opened. Mirrors
+ *  the front's existing longest-prefix conversation↔repo association. */
+function resolveOrCreateRepoForCwd(cwd: string, repoRoot: string): Repo {
+  const store = useConversationsStore.getState();
+  const match = store.repos
+    .filter((r) => cwd === r.path || cwd.startsWith(r.path.replace(/\/+$/, "") + "/"))
+    .sort((a, b) => b.path.length - a.path.length)[0];
+  return match ?? store.addRepo(repoRoot);
+}
+
+/**
+ * Bring a conversation discovered on disk (the history panel) back into the app.
+ *
+ * Reuses the existing repo whose path is the longest prefix of its cwd, else
+ * AUTO-ADDS a repo at the derived repo root (so a conversation from a folder the app
+ * never opened still lands in the sidebar, grouped under its repo). Inserts the
+ * conversation row with a FRESH stable id — the original was forgotten when it left
+ * the app — while preserving Claude's `session_id` so the next message resumes it
+ * (`--resume`). When the same `session_id` is already present (it was never actually
+ * forgotten), just selects it instead of duplicating. Returns the stable id.
+ *
+ * Lazy as ever: NO `claude` process is spawned here; selection + the first message
+ * drive the (re)spawn, and the thread fills from the on-disk transcript.
+ */
+export function reactivateDiskConversation(d: DiskConversation): string {
+  const store = useConversationsStore.getState();
+  const existing = store.conversations.find((c) => c.sessionId === d.session_id);
+  if (existing) {
+    store.selectConversation(existing.id);
+    return existing.id;
+  }
+  const repo = resolveOrCreateRepoForCwd(d.cwd, d.repo_root);
+  // Keep the original cwd as-is. If its worktree was since removed, the FIRST message's
+  // spawn fails with a missing-cwd error and `ensureConversationSession`'s existing
+  // fallback repoints to the repo's main checkout and starts a FRESH session (with a
+  // notice) — the same graceful path an in-app conversation gets when its worktree is
+  // deleted. Pre-resolving to repo_root here would instead let the spawn succeed and the
+  // `--resume` fail silently (the fallback's `cwd` guard wouldn't trigger), so don't.
+  const cwd = d.cwd;
+  const id = uid();
+  useConversationsStore.getState().addConversation({
+    id,
+    name: (d.title ?? "").trim() || d.excerpt.trim() || DEFAULT_CONV_NAME,
+    repoId: repo.id,
+    cwd,
+    // The transcript's last-message time is the best available creation/activity proxy
+    // (the real created_at was lost with the SQLite row), and keeps recency ordering sane.
+    createdAt: d.mtime_ms,
+    lastActivityAt: d.mtime_ms,
+    sessionId: d.session_id,
+    handle: null, // no live process until the first message (lazy)
+    liveCwd: null,
+    model: DEFAULT_MODEL,
+    effort: DEFAULT_EFFORT,
+    ultracode: false,
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    pendingReminder: null,
+  });
+  return id;
 }
 
 /**
@@ -1000,6 +1064,7 @@ export async function wipeAllData(): Promise<void> {
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
   useBackgroundTasksStore.getState().clear();
+  useWorkflowLiveStore.getState().clear();
   useGitViewStore.getState().clearAll();
 }
 

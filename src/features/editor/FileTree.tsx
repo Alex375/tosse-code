@@ -1,9 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { commands } from "../../ipc/client";
 import type { FsEntry } from "../../ipc/client";
+import { useAppErrors } from "../../store/appErrors";
 import { Ico } from "../../ui/kit";
-import { baseName } from "./language";
-import { useEditorStore } from "./editorStore";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { baseName, dirName } from "./language";
+import { useEditorStore, type EditTarget } from "./editorStore";
+import { FileContextMenu, type CtxMenuEntry } from "./FileContextMenu";
 import { fileIconUrl, folderIconUrl, useFileIcons, type IconMap } from "./fileIcons";
 import styles from "./editor.module.css";
 
@@ -26,16 +30,97 @@ function EntryIcon({ entry, isOpen, iconMap }: { entry: FsEntry; isOpen: boolean
   );
 }
 
+/** A generic icon for an in-progress "new file / new folder" inline input (no
+ *  FsEntry exists yet). */
+function NewEntryIcon({ kind }: { kind: "newFile" | "newDir" }) {
+  return (
+    <span className={styles.rowIcon + (kind === "newDir" ? " " + styles.dirIcon : "")}>
+      <Ico name={kind === "newDir" ? "folder" : "file"} className="sm" />
+    </span>
+  );
+}
+
+/** The inline name editor shown in the tree for a rename or a new file/folder.
+ *  Enter commits, Escape cancels, blur commits; a `settled` latch makes the
+ *  blur-after-commit/cancel a no-op so the op never fires twice. */
+function EditRow({
+  depth,
+  icon,
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  depth: number;
+  icon: ReactNode;
+  initial: string;
+  onCommit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const settled = useRef(false);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    // Select the stem (everything before the extension) à la VS Code, so typing
+    // replaces the name but keeps the extension; a new/extensionless entry selects all.
+    const dot = initial.lastIndexOf(".");
+    if (dot > 0) el.setSelectionRange(0, dot);
+    else el.select();
+  }, [initial]);
+
+  const commit = () => {
+    if (settled.current) return;
+    settled.current = true;
+    onCommit(value);
+  };
+  const cancel = () => {
+    if (settled.current) return;
+    settled.current = true;
+    onCancel();
+  };
+
+  return (
+    <div className={styles.row + " " + styles.rowEdit} style={{ paddingLeft: depth * INDENT + 8 }}>
+      <span className={styles.twisty} />
+      {icon}
+      <input
+        ref={inputRef}
+        className={styles.editInput}
+        value={value}
+        spellCheck={false}
+        // Let the webview's native copy/paste menu open in the input instead of the
+        // tree's custom file menu.
+        onContextMenu={(e) => e.stopPropagation()}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        }}
+        onBlur={commit}
+      />
+    </div>
+  );
+}
+
 /**
  * The file tree for a conversation, rooted at its working directory. Lazily
  * expands one level per click (`toggleDir` reads exactly that directory), so even
  * a huge repo only reads what the user opens. Selects just the tree-relevant
- * slice (dirs / expanded / errors / activeTab) with a shallow comparison, so
- * typing in an open buffer — which mutates a sibling part of the store — never
- * re-renders it.
+ * slice (dirs / expanded / errors / activeTab / editing) with a shallow
+ * comparison, so typing in an open buffer — which mutates a sibling part of the
+ * store — never re-renders it. Right-click opens a VS Code-style context menu
+ * (new / rename / delete / cut / copy / paste / reveal).
  */
 export function FileTree({ convId, root, width }: { convId: string; root: string; width: number }) {
-  const { dirs, expanded, loadingDirs, dirErrors, activeTab } = useEditorStore(
+  const { dirs, expanded, loadingDirs, dirErrors, activeTab, editing } = useEditorStore(
     useShallow((s) => {
       const c = s.byConv[convId];
       return {
@@ -44,16 +129,37 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
         loadingDirs: c?.loadingDirs ?? EMPTY_FLAGS,
         dirErrors: c?.dirErrors ?? EMPTY_ERRORS,
         activeTab: c?.activeTab ?? null,
+        editing: c?.editing ?? null,
       };
     }),
   );
   const toggleDir = useEditorStore((s) => s.toggleDir);
   const openFile = useEditorStore((s) => s.openFile);
   const setTreeCollapsed = useEditorStore((s) => s.setTreeCollapsed);
+  const startCreate = useEditorStore((s) => s.startCreate);
+  const startRename = useEditorStore((s) => s.startRename);
+  const cancelEdit = useEditorStore((s) => s.cancelEdit);
+  const commitEdit = useEditorStore((s) => s.commitEdit);
+  const deletePath = useEditorStore((s) => s.deletePath);
+  const setClipboard = useEditorStore((s) => s.setClipboard);
+  const pasteInto = useEditorStore((s) => s.pasteInto);
+  const clipboard = useEditorStore((s) => s.clipboard);
 
   // Material file/folder icons (the map is loaded by EditorPanel, which stays
   // mounted while the editor is shown — even when this tree is collapsed).
   const iconMap = useFileIcons();
+
+  // Open context menu (cursor anchor + the entry it targets, null = root) and the
+  // pending delete confirmation.
+  const [menu, setMenu] = useState<{ x: number; y: number; target: FsEntry | null } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<FsEntry | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Paths cut to the clipboard — dimmed in the tree until pasted (or replaced).
+  const cutSet = useMemo(
+    () => (clipboard?.mode === "cut" ? new Set(clipboard.paths) : EMPTY_SET),
+    [clipboard],
+  );
 
   // Load + expand the root the first time it's shown (or after a root move). The
   // `!dirErrors[root]` guard is essential: without it, a failing read (deleted
@@ -67,10 +173,81 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
 
   const rootEntries = dirs[root];
   const rootIcon = iconMap ? folderIconUrl(iconMap, root, true) : null;
+  const editingNewAtRoot = editing && editing.kind !== "rename" && editing.parentPath === root;
+
+  function openMenu(e: React.MouseEvent, target: FsEntry | null) {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, target });
+  }
+
+  /** Copy text to the system clipboard, surfacing a failure (the unified channel). */
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      useAppErrors.getState().pushError("Copie dans le presse-papier impossible.", String(err));
+    }
+  }
+
+  /** Reveal a path in the OS file manager, surfacing a failure. The `.catch` is
+   *  essential: the generated binding RE-THROWS a genuine transport Error, which a
+   *  bare `void promise` would drop as an unhandled rejection (zero-silent-error). */
+  function reveal(path: string) {
+    void commands
+      .revealInFinder(path)
+      .then((res) => {
+        if (res.status !== "ok")
+          useAppErrors.getState().pushError(`« Révéler dans le Finder » a échoué : ${baseName(path)}`, res.error);
+      })
+      .catch((e) =>
+        useAppErrors.getState().pushError(`« Révéler dans le Finder » a échoué : ${baseName(path)}`, String(e)),
+      );
+  }
+
+  /** A path relative to the tree root (for "Copy Relative Path"). */
+  function relPath(p: string): string {
+    if (p === root) return baseName(p);
+    return p.startsWith(root + "/") ? p.slice(root.length + 1) : baseName(p);
+  }
+
+  /** The context-menu entries for the right-clicked target (null = root / empty). */
+  function buildEntries(target: FsEntry | null): CtxMenuEntry[] {
+    const hasClip = !!clipboard && clipboard.paths.length > 0;
+    if (!target) {
+      return [
+        { label: "Nouveau fichier", icon: "file", onClick: () => startCreate(convId, root, "newFile") },
+        { label: "Nouveau dossier", icon: "folder", onClick: () => startCreate(convId, root, "newDir") },
+        "sep",
+        { label: "Coller", icon: "clipboard", disabled: !hasClip, onClick: () => void pasteInto(convId, root) },
+        "sep",
+        { label: "Copier le chemin", icon: "link", onClick: () => void copyText(root) },
+        { label: "Révéler dans le Finder", icon: "external", onClick: () => reveal(root) },
+      ];
+    }
+    // New entries land inside a folder, or beside a file (in its parent dir).
+    const dir = target.is_dir ? target.path : dirName(target.path);
+    return [
+      { label: "Nouveau fichier", icon: "file", onClick: () => startCreate(convId, dir, "newFile") },
+      { label: "Nouveau dossier", icon: "folder", onClick: () => startCreate(convId, dir, "newDir") },
+      "sep",
+      { label: "Couper", icon: "scissors", onClick: () => setClipboard([target.path], "cut") },
+      { label: "Copier", icon: "copy", onClick: () => setClipboard([target.path], "copy") },
+      { label: "Coller", icon: "clipboard", disabled: !hasClip, onClick: () => void pasteInto(convId, dir) },
+      "sep",
+      { label: "Copier le chemin", icon: "link", onClick: () => void copyText(target.path) },
+      { label: "Copier le chemin relatif", icon: "link", onClick: () => void copyText(relPath(target.path)) },
+      "sep",
+      { label: "Renommer", icon: "pencil", onClick: () => startRename(convId, target.path) },
+      { label: "Supprimer", icon: "trash", danger: true, onClick: () => setConfirmDelete(target) },
+      "sep",
+      { label: "Révéler dans le Finder", icon: "external", onClick: () => reveal(target.path) },
+    ];
+  }
 
   return (
     <div className={styles.tree} style={{ width, flex: `0 0 ${width}px` }}>
-      <div className={styles.treeHead} title={root}>
+      <div className={styles.treeHead} title={root} onContextMenu={(e) => openMenu(e, null)}>
         {rootIcon ? (
           <img src={rootIcon} className={styles.entryIcon} alt="" draggable={false} />
         ) : (
@@ -89,7 +266,7 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
           <Ico name="x" className="sm" />
         </button>
       </div>
-      <div className={styles.treeBody}>
+      <div className={styles.treeBody} onContextMenu={(e) => openMenu(e, null)}>
         {dirErrors[root] ? (
           <div className={styles.treeError} title={dirErrors[root]}>
             <Ico name="alert" className="sm" />
@@ -100,27 +277,72 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
           </div>
         ) : rootEntries === undefined ? (
           <div className={styles.treeLoading}>Chargement…</div>
-        ) : rootEntries.length === 0 ? (
-          <div className={styles.treeEmpty}>Dossier vide</div>
         ) : (
-          rootEntries.map((e) => (
-            <TreeNode
-              key={e.path}
-              entry={e}
-              depth={0}
-              dirs={dirs}
-              expanded={expanded}
-              loadingDirs={loadingDirs}
-              dirErrors={dirErrors}
-              activeTab={activeTab}
-              iconMap={iconMap}
-              onToggleDir={(p) => void toggleDir(convId, p)}
-              onOpenFile={(p) => void openFile(convId, p, { preview: true })}
-              onPinFile={(p) => void openFile(convId, p, { preview: false })}
-            />
-          ))
+          <>
+            {editingNewAtRoot ? (
+              <EditRow
+                depth={0}
+                icon={<NewEntryIcon kind={editing.kind === "newDir" ? "newDir" : "newFile"} />}
+                initial=""
+                onCommit={(name) => void commitEdit(convId, name)}
+                onCancel={() => cancelEdit(convId)}
+              />
+            ) : null}
+            {rootEntries.length === 0 && !editingNewAtRoot ? (
+              <div className={styles.treeEmpty}>Dossier vide</div>
+            ) : (
+              rootEntries.map((e) => (
+                <TreeNode
+                  key={e.path}
+                  entry={e}
+                  depth={0}
+                  dirs={dirs}
+                  expanded={expanded}
+                  loadingDirs={loadingDirs}
+                  dirErrors={dirErrors}
+                  activeTab={activeTab}
+                  editing={editing}
+                  cutSet={cutSet}
+                  iconMap={iconMap}
+                  onToggleDir={(p) => void toggleDir(convId, p)}
+                  onOpenFile={(p) => void openFile(convId, p, { preview: true })}
+                  onPinFile={(p) => void openFile(convId, p, { preview: false })}
+                  onContextMenu={openMenu}
+                  onCommitEdit={(name) => void commitEdit(convId, name)}
+                  onCancelEdit={() => cancelEdit(convId)}
+                />
+              ))
+            )}
+          </>
         )}
       </div>
+
+      {menu ? (
+        <FileContextMenu x={menu.x} y={menu.y} entries={buildEntries(menu.target)} onClose={() => setMenu(null)} />
+      ) : null}
+
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        danger
+        busy={deleting}
+        title={confirmDelete ? `Supprimer « ${confirmDelete.name} » ?` : ""}
+        confirmLabel="Déplacer vers la corbeille"
+        onCancel={() => {
+          if (!deleting) setConfirmDelete(null);
+        }}
+        onConfirm={() => {
+          if (!confirmDelete) return;
+          setDeleting(true);
+          void deletePath(convId, confirmDelete.path).finally(() => {
+            setDeleting(false);
+            setConfirmDelete(null);
+          });
+        }}
+      >
+        {confirmDelete?.is_dir
+          ? "Le dossier et tout son contenu seront déplacés vers la corbeille (récupérables depuis le Finder)."
+          : "Le fichier sera déplacé vers la corbeille (récupérable depuis le Finder)."}
+      </ConfirmDialog>
     </div>
   );
 }
@@ -128,6 +350,7 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
 const EMPTY_DIRS: Record<string, FsEntry[]> = {};
 const EMPTY_FLAGS: Record<string, boolean> = {};
 const EMPTY_ERRORS: Record<string, string> = {};
+const EMPTY_SET: Set<string> = new Set();
 
 interface NodeProps {
   entry: FsEntry;
@@ -137,10 +360,15 @@ interface NodeProps {
   loadingDirs: Record<string, boolean>;
   dirErrors: Record<string, string>;
   activeTab: string | null;
+  editing: EditTarget | null;
+  cutSet: Set<string>;
   iconMap: IconMap | null;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onPinFile: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, entry: FsEntry) => void;
+  onCommitEdit: (name: string) => void;
+  onCancelEdit: () => void;
 }
 
 function TreeNode({
@@ -151,36 +379,54 @@ function TreeNode({
   loadingDirs,
   dirErrors,
   activeTab,
+  editing,
+  cutSet,
   iconMap,
   onToggleDir,
   onOpenFile,
   onPinFile,
+  onContextMenu,
+  onCommitEdit,
+  onCancelEdit,
 }: NodeProps) {
   const isOpen = entry.is_dir && !!expanded[entry.path];
   const children = isOpen ? dirs[entry.path] : undefined;
   const active = !entry.is_dir && activeTab === entry.path;
   const err = entry.is_dir ? dirErrors[entry.path] : undefined;
+  const renaming = editing?.kind === "rename" && editing.targetPath === entry.path;
+  const newHere = isOpen && editing && editing.kind !== "rename" && editing.parentPath === entry.path;
 
   return (
     <>
-      <button
-        type="button"
-        className={styles.row + (active ? " " + styles.rowActive : "")}
-        style={{ paddingLeft: depth * INDENT + 8 }}
-        onClick={() => (entry.is_dir ? onToggleDir(entry.path) : onOpenFile(entry.path))}
-        onDoubleClick={() => (entry.is_dir ? undefined : onPinFile(entry.path))}
-        title={entry.name}
-      >
-        {entry.is_dir ? (
-          <span className={styles.twisty + (isOpen ? " " + styles.twistyOpen : "")}>
-            <Ico name="chev" className="sm" />
-          </span>
-        ) : (
-          <span className={styles.twisty} />
-        )}
-        <EntryIcon entry={entry} isOpen={isOpen} iconMap={iconMap} />
-        <span className={styles.rowName}>{entry.name}</span>
-      </button>
+      {renaming ? (
+        <EditRow
+          depth={depth}
+          icon={<EntryIcon entry={entry} isOpen={isOpen} iconMap={iconMap} />}
+          initial={entry.name}
+          onCommit={onCommitEdit}
+          onCancel={onCancelEdit}
+        />
+      ) : (
+        <button
+          type="button"
+          className={styles.row + (active ? " " + styles.rowActive : "") + (cutSet.has(entry.path) ? " " + styles.rowCut : "")}
+          style={{ paddingLeft: depth * INDENT + 8 }}
+          onClick={() => (entry.is_dir ? onToggleDir(entry.path) : onOpenFile(entry.path))}
+          onDoubleClick={() => (entry.is_dir ? undefined : onPinFile(entry.path))}
+          onContextMenu={(e) => onContextMenu(e, entry)}
+          title={entry.name}
+        >
+          {entry.is_dir ? (
+            <span className={styles.twisty + (isOpen ? " " + styles.twistyOpen : "")}>
+              <Ico name="chev" className="sm" />
+            </span>
+          ) : (
+            <span className={styles.twisty} />
+          )}
+          <EntryIcon entry={entry} isOpen={isOpen} iconMap={iconMap} />
+          <span className={styles.rowName}>{entry.name}</span>
+        </button>
+      )}
       {err ? (
         <div
           className={styles.treeError}
@@ -190,6 +436,15 @@ function TreeNode({
           <Ico name="alert" className="sm" />
           Lecture impossible.
         </div>
+      ) : null}
+      {newHere ? (
+        <EditRow
+          depth={depth + 1}
+          icon={<NewEntryIcon kind={editing.kind === "newDir" ? "newDir" : "newFile"} />}
+          initial=""
+          onCommit={onCommitEdit}
+          onCancel={onCancelEdit}
+        />
       ) : null}
       {isOpen && children === undefined && loadingDirs[entry.path] ? (
         <div className={styles.treeLoading} style={{ paddingLeft: (depth + 1) * INDENT + 22 }}>
@@ -207,10 +462,15 @@ function TreeNode({
               loadingDirs={loadingDirs}
               dirErrors={dirErrors}
               activeTab={activeTab}
+              editing={editing}
+              cutSet={cutSet}
               iconMap={iconMap}
               onToggleDir={onToggleDir}
               onOpenFile={onOpenFile}
               onPinFile={onPinFile}
+              onContextMenu={onContextMenu}
+              onCommitEdit={onCommitEdit}
+              onCancelEdit={onCancelEdit}
             />
           ))
         : null}

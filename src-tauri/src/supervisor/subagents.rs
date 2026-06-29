@@ -20,6 +20,9 @@
 //! We locate the session dir by scanning every project dir for a `<session_id>`
 //! directory, mirroring how [`super::history`] globs for the transcript: Claude's
 //! cwd→slug encoding is lossy (both `/` and `.` map to `-`), so we never invert it.
+//! A session that moves its cwd mid-run (EnterWorktree) splits its artifacts across
+//! MULTIPLE slugs, so we probe EVERY matching session dir, not just the first (see
+//! [`session_dirs`]).
 //!
 //! NOTE for consumers: when a LIVE [`super::model::BackgroundTask`] is in hand, its
 //! `output_file` already carries the exact absolute artifact path the CLI reported —
@@ -30,7 +33,7 @@
 use std::path::{Path, PathBuf};
 
 use super::history::{claude_config_dir, parse_transcript_str, project_dirs};
-use super::model::{ConversationItem, WorkflowRun};
+use super::model::{ConversationItem, WorkflowJournal, WorkflowPhase, WorkflowRun};
 
 /// Cap on how deep we recurse under `subagents/` looking for a transcript — enough
 /// for `subagents/workflows/wf_<id>/agent-<id>.jsonl` (depth 3) with margin, while
@@ -52,15 +55,24 @@ fn is_safe_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Find a session's artifact directory (`<config>/projects/<slug>/<session_id>`) by
-/// scanning every project dir for a subdirectory named `session_id`. The loud-on-IO-error
-/// scan lives in [`super::history::project_dirs`] (shared with the transcript lookup), so
-/// a permission/IO error is never silently equated with "absent" (finding #4).
-fn find_session_dir(config_dir: &Path, session_id: &str) -> Option<PathBuf> {
+/// EVERY artifact directory for a session (`<config>/projects/<slug>/<session_id>`),
+/// across ALL project slugs that hold such a subdir.
+///
+/// A session that MOVES its cwd mid-run (the native `EnterWorktree` tool) writes artifacts
+/// under MORE THAN ONE slug: the early ones land under the original cwd's slug, while a
+/// workflow (or sub-agent) launched AFTER the move lands under the worktree's slug. So a
+/// single "first match wins" lookup is wrong — it may return the original-cwd dir (which
+/// holds `tool-results/`/`subagents/` but no `workflows/`) and miss the manifest entirely,
+/// surfacing as a permanent "workflow indisponible". Callers therefore probe every match
+/// for the artifact they want. Order follows [`super::history::project_dirs`] (filesystem
+/// order); its loud-on-IO-error scan means a permission/IO error is never silently equated
+/// with "absent" (finding #4).
+fn session_dirs(config_dir: &Path, session_id: &str) -> Vec<PathBuf> {
     project_dirs(config_dir)
         .into_iter()
         .map(|dir| dir.join(session_id))
-        .find(|candidate| candidate.is_dir())
+        .filter(|candidate| candidate.is_dir())
+        .collect()
 }
 
 /// Load and normalize a sub-agent's full transcript into the same
@@ -86,11 +98,12 @@ fn load_subagent_transcript_in(
         eprintln!("[subagents] refusing unsafe id (session={session_id:?}, agent={agent_id:?})");
         return Vec::new();
     }
-    let Some(session_dir) = find_session_dir(config_dir, session_id) else {
-        return Vec::new();
-    };
+    // Probe every project slug holding this session (a cwd move splits artifacts across
+    // slugs) for the agent transcript; the first dir that has it wins.
     let file_name = format!("agent-{agent_id}.jsonl");
-    let Some(path) = find_file_recursive(&session_dir.join("subagents"), &file_name, MAX_SUBAGENT_DEPTH)
+    let Some(path) = session_dirs(config_dir, session_id)
+        .into_iter()
+        .find_map(|dir| find_file_recursive(&dir.join("subagents"), &file_name, MAX_SUBAGENT_DEPTH))
     else {
         return Vec::new();
     };
@@ -117,52 +130,433 @@ fn load_subagent_transcript_in(
 }
 
 /// Read a workflow run's manifest (`workflows/<run_id>.json`) into a [`WorkflowRun`].
-/// `run_id` is the `"wf_…"` id; for convenience a bare id is also tried with the
-/// `wf_` prefix. `None` when the session/manifest is absent or unparseable.
-pub fn load_workflow_run(session_id: &str, run_id: &str) -> Option<WorkflowRun> {
-    let dir = claude_config_dir()?;
-    load_workflow_run_in(&dir, session_id, run_id)
+/// `run_id` is the `"wf_…"` id; for convenience a bare id is also tried with the `wf_` prefix.
+///
+/// `Ok(None)` = the manifest is ABSENT (normal: no run yet, or it's still running and the CLI
+/// writes the manifest only at the end). `Err(msg)` = the manifest EXISTS but could not be read
+/// or parsed (corrupt, truncated mid-write, CLI schema drift, IO error) — a REAL failure that
+/// MUST surface to the user, never be silently equated with "missing" (unified error policy).
+pub fn load_workflow_run(session_id: &str, run_id: &str) -> Result<Option<WorkflowRun>, String> {
+    match claude_config_dir() {
+        Some(dir) => load_workflow_run_in(&dir, session_id, run_id),
+        None => Ok(None),
+    }
 }
 
-fn load_workflow_run_in(config_dir: &Path, session_id: &str, run_id: &str) -> Option<WorkflowRun> {
+fn load_workflow_run_in(
+    config_dir: &Path,
+    session_id: &str,
+    run_id: &str,
+) -> Result<Option<WorkflowRun>, String> {
     if !is_safe_id(session_id) || !is_safe_id(run_id) {
         eprintln!("[subagents] refusing unsafe id (session={session_id:?}, run={run_id:?})");
-        return None;
+        return Ok(None);
     }
-    let workflows = find_session_dir(config_dir, session_id)?.join("workflows");
-    // Try `<run_id>.json`; a bare id (no `wf_`) also tries the `wf_`-prefixed name. The
-    // first existing file wins; if none exists we fall through to the read below, which
-    // maps NotFound → None.
-    let mut candidates = vec![workflows.join(format!("{run_id}.json"))];
+    // The manifest is named `<run_id>.json`; a bare id (no `wf_`) also tries the
+    // `wf_`-prefixed name. Probe these names under the `workflows/` of EVERY project slug
+    // holding this session — a workflow launched after an EnterWorktree sits under the
+    // worktree's slug, not the original cwd's. The first existing file wins.
+    let mut names = vec![format!("{run_id}.json")];
     if !run_id.starts_with("wf_") {
-        candidates.push(workflows.join(format!("wf_{run_id}.json")));
+        names.push(format!("wf_{run_id}.json"));
     }
-    let path = candidates
-        .iter()
-        .find(|p| p.is_file())
-        .cloned()
-        .unwrap_or_else(|| candidates[0].clone());
+    let path = session_dirs(config_dir, session_id).into_iter().find_map(|dir| {
+        let workflows = dir.join("workflows");
+        names.iter().map(|n| workflows.join(n)).find(|p| p.is_file())
+    });
+    // Absent everywhere = normal ("no run to show, or not written yet").
+    let Some(path) = path else {
+        return Ok(None);
+    };
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
-        // Absent manifest = normal ("no run to show"). A non-NotFound IO error on an
-        // existing file is a real failure → log it.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(e) => {
-            eprintln!("[subagents] cannot read workflow manifest {}: {e}", path.display());
-            return None;
-        }
+        // The file existed a moment ago; if it's now gone (a race with the writer), treat as
+        // absent. Any other IO error on an existing file is a REAL failure → surface it.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("lecture du manifeste {} : {e}", path.display())),
     };
-    // A present-but-unparseable manifest (corrupt, truncated mid-write, or a CLI schema
-    // change) is a REAL failure, NOT the normal "absent → None" state — so log it loudly
-    // (finding #1/#6: never silently equate "broken" with "missing"). Re-capture the
-    // fixture if a CLI upgrade changes the manifest shape.
-    match serde_json::from_str::<WorkflowRun>(&content) {
-        Ok(run) => Some(run),
-        Err(e) => {
-            eprintln!("[subagents] failed to parse workflow manifest {}: {e}", path.display());
-            None
+    // A present-but-unparseable manifest (corrupt, truncated mid-write, or a CLI schema change)
+    // is a REAL failure, NOT the normal "absent" state — surface it so the UI shows the error
+    // instead of a misleading "introuvable". Re-capture the fixture if the CLI shape changes.
+    serde_json::from_str::<WorkflowRun>(&content)
+        .map(Some)
+        .map_err(|e| format!("manifeste illisible {} : {e}", path.display()))
+}
+
+/// Read a RUNNING workflow's live progress from its append-only journal
+/// (`subagents/workflows/<run_id>/journal.jsonl`). The rich manifest is written only at the
+/// END of a run, so during the run this journal is the only on-disk "how far along" signal:
+/// we count `{"type":"started"}` (agents spawned) and `{"type":"result"}` (agents done). The
+/// run dir is named exactly `<run_id>` (the `wf_…` id). Probes every project slug holding the
+/// session (a cwd move splits artifacts across slugs).
+///
+/// `Ok(None)` = no journal yet (normal: the very first moments, or a resumed past run). `Err`
+/// = a real IO error reading an existing journal (surfaced, never silent). Individual malformed
+/// JSON lines are skipped (the journal is appended live, so a final partial line is expected).
+pub fn load_workflow_journal(session_id: &str, run_id: &str) -> Result<Option<WorkflowJournal>, String> {
+    match claude_config_dir() {
+        Some(dir) => load_workflow_journal_in(&dir, session_id, run_id),
+        None => Ok(None),
+    }
+}
+
+fn load_workflow_journal_in(
+    config_dir: &Path,
+    session_id: &str,
+    run_id: &str,
+) -> Result<Option<WorkflowJournal>, String> {
+    if !is_safe_id(session_id) || !is_safe_id(run_id) {
+        eprintln!("[subagents] refusing unsafe id (session={session_id:?}, run={run_id:?})");
+        return Ok(None);
+    }
+    let mut content: Option<String> = None;
+    for dir in session_dirs(config_dir, session_id) {
+        let path = dir.join("subagents").join("workflows").join(run_id).join("journal.jsonl");
+        match std::fs::read_to_string(&path) {
+            Ok(c) => {
+                content = Some(c);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // An existing journal that won't read (permission/IO) is a REAL failure → surface.
+            Err(e) => return Err(format!("lecture du journal {} : {e}", path.display())),
         }
     }
+    let Some(content) = content else {
+        return Ok(None);
+    };
+    // Count by entry `type`. A malformed line (e.g. the final partial line of a live append)
+    // is skipped — that's expected, not an error.
+    let mut started = 0u64;
+    let mut done = 0u64;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            match v.get("type").and_then(|t| t.as_str()) {
+                Some("started") => started += 1,
+                Some("result") => done += 1,
+                _ => {}
+            }
+        }
+    }
+    Ok(Some(WorkflowJournal { started, done }))
+}
+
+/// The declared phases of a workflow, read from its SCRIPT's `meta.phases` — the only source
+/// of the FULL phase list (including not-yet-reached phases) that exists DURING the run. The
+/// rich manifest (which also carries `phases`) is written only at the end; the wire's
+/// `task_progress` reveals a phase only once reached. But the script is written at t=0 (under
+/// `workflows/scripts/…-<run_id>.js`), so parsing its `meta.phases` lets the live overview show
+/// upcoming steps too. `meta` is a guaranteed pure literal (the Workflow tool enforces this),
+/// so the string-aware scan in [`extract_meta_phases`] is reliable.
+///
+/// `Ok(vec)` (possibly empty) = no script/phases yet, the NORMAL state. `Err` = a real IO
+/// failure reading an existing script (surfaced, never silent). The script file name embeds
+/// the run id and ends with `-<run_id>.js`, so we anchor the match on that suffix (not a loose
+/// substring) to avoid picking another run whose id is a prefix.
+pub fn load_workflow_phases(session_id: &str, run_id: &str) -> Result<Vec<WorkflowPhase>, String> {
+    match claude_config_dir() {
+        Some(dir) => load_workflow_phases_in(&dir, session_id, run_id),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn load_workflow_phases_in(
+    config_dir: &Path,
+    session_id: &str,
+    run_id: &str,
+) -> Result<Vec<WorkflowPhase>, String> {
+    if !is_safe_id(session_id) || !is_safe_id(run_id) {
+        eprintln!("[subagents] refusing unsafe id (session={session_id:?}, run={run_id:?})");
+        return Ok(Vec::new());
+    }
+    let suffix = format!("-{run_id}.js");
+    for dir in session_dirs(config_dir, session_id) {
+        let scripts = dir.join("workflows").join("scripts");
+        let entries = match std::fs::read_dir(&scripts) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("scan de {} : {e}", scripts.display())),
+        };
+        // The script is `<workflow-name>-<run_id>.js` (suffix anchored). Fall back to a loose
+        // contains() only if no suffix match, for forward-compat with a naming change.
+        let mut loose: Option<std::path::PathBuf> = None;
+        let mut exact: Option<std::path::PathBuf> = None;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(&suffix) {
+                exact = Some(entry.path());
+                break;
+            }
+            if loose.is_none() && name.ends_with(".js") && name.contains(run_id) {
+                loose = Some(entry.path());
+            }
+        }
+        if let Some(path) = exact.or(loose) {
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("lecture du script {} : {e}", path.display()))?;
+            let phases = extract_meta_phases(&content);
+            if !phases.is_empty() {
+                return Ok(phases);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+/// Byte of a JS identifier (so a `key` match isn't part of a longer word).
+fn is_ident_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_' || c == b'$'
+}
+
+/// Index of the delimiter matching the opener at `s[start]` (`open`/`close`, e.g. `[`/`]`),
+/// skipping any that appear INSIDE a JS string literal (`'…'`, `"…"`, `` `…` ``) so brackets
+/// or braces in a `detail` string never throw the scan off. `None` if unbalanced.
+fn match_delim(s: &[u8], start: usize, open: u8, close: u8) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut i = start;
+    let mut quote: Option<u8> = None;
+    while i < s.len() {
+        let c = s[i];
+        match quote {
+            Some(q) => {
+                if c == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => {
+                if c == b'\'' || c == b'"' || c == b'`' {
+                    quote = Some(c);
+                } else if c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse exactly `len` hex digits of `s` starting at `start` into a codepoint. `None` if any
+/// digit is missing/non-hex (so a malformed `\x`/`\u` degrades gracefully).
+fn hex_val(s: &[u8], start: usize, len: usize) -> Option<u32> {
+    if len == 0 || start + len > s.len() {
+        return None;
+    }
+    let mut v: u32 = 0;
+    for &b in &s[start..start + len] {
+        let d = (b as char).to_digit(16)?;
+        v = v * 16 + d;
+    }
+    Some(v)
+}
+
+/// Push a codepoint's UTF-8 bytes to `out` (dropping an invalid scalar value silently — a
+/// surrogate half can't appear in well-formed source).
+fn push_char(out: &mut Vec<u8>, cp: u32) {
+    if let Some(c) = char::from_u32(cp) {
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+    }
+}
+
+/// Read a JS string literal at `s[start]` (a quote byte). Returns the UNESCAPED content and the
+/// index just past the closing quote. `None` if unterminated. Handles the common JS escapes,
+/// including `\uXXXX`, `\u{X..}` and `\xNN` (decoded to UTF-8) and `\0 \b \f \v` — an unknown
+/// escape preserves BOTH the backslash and the char (so e.g. a Windows path `\\t` already
+/// collapsed, or a stray `\d`, is not silently corrupted).
+fn read_js_string(s: &[u8], start: usize) -> Option<(String, usize)> {
+    let q = s[start];
+    let mut i = start + 1;
+    let mut out: Vec<u8> = Vec::new();
+    while i < s.len() {
+        let c = s[i];
+        if c == b'\\' && i + 1 < s.len() {
+            let n = s[i + 1];
+            match n {
+                b'n' => { out.push(b'\n'); i += 2; }
+                b't' => { out.push(b'\t'); i += 2; }
+                b'r' => { out.push(b'\r'); i += 2; }
+                b'b' => { out.push(0x08); i += 2; }
+                b'f' => { out.push(0x0c); i += 2; }
+                b'v' => { out.push(0x0b); i += 2; }
+                b'0' => { out.push(0x00); i += 2; }
+                b'\'' | b'"' | b'`' | b'\\' | b'/' => { out.push(n); i += 2; }
+                b'x' => {
+                    // \xNN — exactly two hex digits.
+                    if let Some(cp) = hex_val(s, i + 2, 2) {
+                        push_char(&mut out, cp);
+                        i += 4;
+                    } else {
+                        out.push(b'\\'); // malformed → keep literal backslash + 'x'
+                        i += 1;
+                    }
+                }
+                b'u' => {
+                    // \u{X..} (1-6 hex) or \uXXXX (exactly 4 hex).
+                    if s.get(i + 2) == Some(&b'{') {
+                        if let Some(end) = (i + 3..s.len().min(i + 11)).find(|&j| s[j] == b'}') {
+                            if let Some(cp) = hex_val(s, i + 3, end - (i + 3)) {
+                                push_char(&mut out, cp);
+                                i = end + 1;
+                                continue;
+                            }
+                        }
+                        out.push(b'\\');
+                        i += 1;
+                    } else if let Some(cp) = hex_val(s, i + 2, 4) {
+                        push_char(&mut out, cp);
+                        i += 6;
+                    } else {
+                        out.push(b'\\');
+                        i += 1;
+                    }
+                }
+                // Unknown escape: preserve the backslash (then the char is copied next loop).
+                _ => { out.push(b'\\'); i += 1; }
+            }
+            continue;
+        }
+        if c == q {
+            return Some((String::from_utf8_lossy(&out).into_owned(), i + 1));
+        }
+        out.push(c);
+        i += 1;
+    }
+    None
+}
+
+/// Read the string value of `key` in an object-literal slice (`key: "…"`). String-aware: it
+/// skips over string contents, so it never matches `key` appearing inside another value.
+/// `None` if the key is absent or its value isn't a string literal.
+fn obj_str_value(obj: &str, key: &str) -> Option<String> {
+    let b = obj.as_bytes();
+    let kb = key.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\'' || c == b'"' || c == b'`' {
+            match read_js_string(b, i) {
+                Some((_, end)) => {
+                    i = end;
+                    continue;
+                }
+                None => return None,
+            }
+        }
+        if c == kb[0] && i + kb.len() <= b.len() && &b[i..i + kb.len()] == kb {
+            let before_ok = i == 0 || !is_ident_byte(b[i - 1]);
+            let after = i + kb.len();
+            let after_ok = after >= b.len() || !is_ident_byte(b[after]);
+            if before_ok && after_ok {
+                let mut j = after;
+                while j < b.len() && b[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < b.len() && b[j] == b':' {
+                    j += 1;
+                    while j < b.len() && b[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if j < b.len() && (b[j] == b'\'' || b[j] == b'"' || b[j] == b'`') {
+                        return read_js_string(b, j).map(|(v, _)| v);
+                    }
+                    return None; // present but not a string value
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract `meta.phases` (title + optional detail, in order) from a workflow script's source.
+/// `meta` is a guaranteed pure literal, so a string-aware scan suffices: locate the `phases:`
+/// array, split its top-level `{…}` objects, and read each object's `title`/`detail`. Robust to
+/// brackets/braces/quotes inside a `detail`. Returns `[]` if there is no `phases` array.
+pub fn extract_meta_phases(script: &str) -> Vec<WorkflowPhase> {
+    let b = script.as_bytes();
+    let key = b"phases";
+    let mut i = 0;
+    let mut array: Option<(usize, usize)> = None;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\'' || c == b'"' || c == b'`' {
+            match read_js_string(b, i) {
+                Some((_, end)) => {
+                    i = end;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        if c == b'p' && i + key.len() <= b.len() && &b[i..i + key.len()] == key {
+            let before_ok = i == 0 || !is_ident_byte(b[i - 1]);
+            let after = i + key.len();
+            let after_ok = after >= b.len() || !is_ident_byte(b[after]);
+            if before_ok && after_ok {
+                let mut j = after;
+                while j < b.len() && b[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < b.len() && b[j] == b':' {
+                    j += 1;
+                    while j < b.len() && b[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if j < b.len() && b[j] == b'[' {
+                        if let Some(close) = match_delim(b, j, b'[', b']') {
+                            array = Some((j, close));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    let Some((open, close)) = array else {
+        return Vec::new();
+    };
+    let mut phases = Vec::new();
+    let mut k = open + 1;
+    while k < close {
+        let c = b[k];
+        if c == b'{' {
+            if let Some(end) = match_delim(b, k, b'{', b'}') {
+                let obj = &script[k..=end];
+                if let Some(title) = obj_str_value(obj, "title") {
+                    phases.push(WorkflowPhase {
+                        title,
+                        detail: obj_str_value(obj, "detail"),
+                    });
+                }
+                k = end + 1;
+                continue;
+            }
+        }
+        if c == b'\'' || c == b'"' || c == b'`' {
+            if let Some((_, end)) = read_js_string(b, k) {
+                k = end;
+                continue;
+            }
+        }
+        k += 1;
+    }
+    phases
 }
 
 /// Read a background task's output from the ABSOLUTE path the CLI reported on the wire
@@ -205,7 +599,7 @@ fn find_file_recursive(root: &Path, file_name: &str, depth: usize) -> Option<Pat
     }
     // An absent dir → `None` (nothing to find); a permission/IO error is DISTINCT and
     // logged before `None`, never silently equated with "not found" (mirrors the policy
-    // of `find_session_dir` / `project_dirs`).
+    // of `session_dirs` / `project_dirs`).
     let entries = match std::fs::read_dir(root) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
@@ -288,7 +682,7 @@ mod tests {
         assert_eq!(wf_items.len(), 1, "the nested workflow agent transcript should be found");
 
         // --- workflow manifest ---
-        let run = load_workflow_run_in(&base, session_id, "wf_abc").expect("manifest parses");
+        let run = load_workflow_run_in(&base, session_id, "wf_abc").unwrap().expect("manifest parses");
         assert_eq!(run.run_id, "wf_abc");
         assert_eq!(run.task_id.as_deref(), Some("tk1"));
         assert_eq!(run.status.as_deref(), Some("completed"));
@@ -298,16 +692,206 @@ mod tests {
         assert_eq!(run.phases[0].title, "Review");
         assert_eq!(run.result["ok"], serde_json::json!(true));
         // A bare id (no `wf_`) resolves to the same manifest via the prefix retry.
-        assert!(load_workflow_run_in(&base, session_id, "abc").is_some());
+        assert!(load_workflow_run_in(&base, session_id, "abc").unwrap().is_some());
 
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A session that MOVED its cwd mid-run (EnterWorktree) has its `<session_id>` dir under
+    /// TWO project slugs: the original cwd holds early artifacts (e.g. `subagents/`) but no
+    /// `workflows/`, while the worktree slug holds the manifest + workflow-agent transcripts.
+    /// The readers must probe BOTH and find the artifact under the second slug — the previous
+    /// "first match wins" lookup returned the manifest-less dir and reported it as absent.
+    #[test]
+    fn artifacts_split_across_two_project_slugs_are_found() {
+        let base = std::env::temp_dir().join(format!("tosse-sub-split-{}", std::process::id()));
+        let session_id = "ssssssss-1111-2222-3333-444444444444";
+        // Slug A (original cwd): exists for this session but has only subagents/, no workflows/.
+        // Its name sorts BEFORE slug B, so it is the one a first-match lookup would return.
+        let slug_a = base.join("projects").join("-repo").join(session_id);
+        std::fs::create_dir_all(slug_a.join("subagents")).unwrap();
+        // Slug B (worktree cwd): holds the manifest AND the workflow agent transcript.
+        let slug_b = base
+            .join("projects")
+            .join("-repo--claude-worktrees-feat")
+            .join(session_id);
+        std::fs::create_dir_all(slug_b.join("workflows")).unwrap();
+        std::fs::create_dir_all(slug_b.join("subagents/workflows/wf_split")).unwrap();
+        std::fs::write(
+            slug_b.join("workflows/wf_split.json"),
+            r#"{"runId":"wf_split","status":"running"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            slug_b.join("subagents/workflows/wf_split/agent-zzz.jsonl"),
+            "{\"type\":\"assistant\",\"isSidechain\":true,\"uuid\":\"a\",\"message\":{\"id\":\"m\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n",
+        )
+        .unwrap();
+
+        // The manifest is found under slug B even though slug A's session dir matches first.
+        let run = load_workflow_run_in(&base, session_id, "wf_split").unwrap().expect("manifest under slug B");
+        assert_eq!(run.run_id, "wf_split");
+        // The workflow agent transcript is likewise found under slug B.
+        let items = load_subagent_transcript_in(&base, session_id, "zzz");
+        assert_eq!(items.len(), 1, "workflow agent transcript found across slugs");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// The live journal reader counts `started` vs `result` entries (the mid-run "how far
+    /// along" signal, since the manifest only lands at the end), tolerates a trailing partial
+    /// line (the journal is appended live), and finds the journal across project slugs.
+    #[test]
+    fn workflow_journal_counts_started_and_done() {
+        let base = std::env::temp_dir().join(format!("tosse-sub-journal-{}", std::process::id()));
+        let session_id = "ssssssss-1111-2222-3333-444444444444";
+        // Slug A matches first but has no journal; the journal lives under slug B.
+        std::fs::create_dir_all(base.join("projects").join("-repo").join(session_id)).unwrap();
+        let run_dir = base
+            .join("projects")
+            .join("-repo--claude-worktrees-feat")
+            .join(session_id)
+            .join("subagents/workflows/wf_j");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        // 3 started, 2 result, a blank line, and a TRAILING PARTIAL line (live append).
+        std::fs::write(
+            run_dir.join("journal.jsonl"),
+            "{\"type\":\"started\",\"agentId\":\"a\"}\n\
+             {\"type\":\"started\",\"agentId\":\"b\"}\n\
+             {\"type\":\"result\",\"agentId\":\"a\"}\n\
+             \n\
+             {\"type\":\"started\",\"agentId\":\"c\"}\n\
+             {\"type\":\"result\",\"agentId\":\"b\"}\n\
+             {\"type\":\"resu",
+        )
+        .unwrap();
+
+        let j = load_workflow_journal_in(&base, session_id, "wf_j").unwrap().expect("journal found");
+        assert_eq!(j.started, 3);
+        assert_eq!(j.done, 2);
+
+        // Absent journal (no run dir) → Ok(None), not an error.
+        assert!(load_workflow_journal_in(&base, session_id, "wf_absent").unwrap().is_none());
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Reality check against the developer's REAL `~/.claude` artifacts (ignored by default;
+    /// no CI dependency). Set `TOSSE_RW_SESSION` + `TOSSE_RW_RUN` and run with
+    /// `cargo test --lib realworld_load_workflow_run -- --ignored --nocapture` to confirm the
+    /// PUBLIC reader resolves a real manifest end to end (the cwd-split case the unit test
+    /// fakes). Prints what it found so a None is diagnosable.
+    #[test]
+    #[ignore]
+    fn realworld_load_workflow_run() {
+        let session = std::env::var("TOSSE_RW_SESSION").expect("set TOSSE_RW_SESSION");
+        let run = std::env::var("TOSSE_RW_RUN").expect("set TOSSE_RW_RUN");
+        let got = super::load_workflow_run(&session, &run);
+        match &got {
+            Ok(Some(r)) => eprintln!(
+                "[realworld] OK run_id={} status={:?} phases={} progress_is_array={}",
+                r.run_id,
+                r.status,
+                r.phases.len(),
+                r.workflow_progress.is_array(),
+            ),
+            Ok(None) => eprintln!("[realworld] None — manifest NOT resolved for session={session} run={run}"),
+            Err(e) => eprintln!("[realworld] Err — {e}"),
+        }
+        assert!(matches!(got, Ok(Some(_))), "expected to resolve the real manifest");
     }
 
     #[test]
     fn missing_artifacts_are_empty_or_none_not_errors() {
         let base = std::env::temp_dir().join("tosse-sub-missing-dir");
         assert!(load_subagent_transcript_in(&base, "nope", "x").is_empty());
-        assert!(load_workflow_run_in(&base, "nope", "wf_x").is_none());
+        assert!(load_workflow_run_in(&base, "nope", "wf_x").unwrap().is_none());
+    }
+
+    #[test]
+    fn extract_meta_phases_parses_titles_and_details() {
+        // Mirrors a real script's meta (escaped quote + brackets inside a detail).
+        let script = r#"
+export const meta = {
+  name: 'explore',
+  description: 'desc with the word phases: tricky',
+  phases: [
+    { title: 'Explore', detail: '12 explorers [parallel] : a, b, c' },
+    { title: 'Synthèse', detail: 'Fusion en une carte d\'architecture { unifiée }' },
+    { title: 'Critique' },
+  ],
+}
+phase('Explore')
+"#;
+        let phases = extract_meta_phases(script);
+        assert_eq!(phases.len(), 3, "got {phases:?}");
+        assert_eq!(phases[0].title, "Explore");
+        assert_eq!(phases[0].detail.as_deref(), Some("12 explorers [parallel] : a, b, c"));
+        assert_eq!(phases[1].title, "Synthèse");
+        assert_eq!(phases[1].detail.as_deref(), Some("Fusion en une carte d'architecture { unifiée }"));
+        assert_eq!(phases[2].title, "Critique");
+        assert_eq!(phases[2].detail, None);
+    }
+
+    #[test]
+    fn extract_meta_phases_handles_double_quotes_and_missing_phases() {
+        let dq = r#"export const meta = { name: "x", phases: [ { title: "A" }, { title: "B" } ] }"#;
+        let p = extract_meta_phases(dq);
+        assert_eq!(p.iter().map(|x| x.title.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        // No phases key → empty (a workflow may declare none).
+        assert!(extract_meta_phases("export const meta = { name: 'x', description: 'y' }").is_empty());
+        // A "phases" word inside a STRING must not be mistaken for the key.
+        assert!(extract_meta_phases("export const meta = { description: 'see phases: none' }").is_empty());
+    }
+
+    #[test]
+    fn corrupt_manifest_surfaces_error_not_silent_none() {
+        let base = std::env::temp_dir().join(format!("tosse-sub-corrupt-{}", std::process::id()));
+        let session_id = "ssssssss-1111-2222-3333-444444444444";
+        let dir = base.join("projects").join("-repo").join(session_id).join("workflows");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("wf_bad.json"), "{ this is : not json,,, ").unwrap();
+        // Present-but-corrupt → Err (must SURFACE), never Ok(None) (which the UI reads as "absent").
+        assert!(load_workflow_run_in(&base, session_id, "wf_bad").is_err());
+        // Truly absent → Ok(None) (normal).
+        assert!(load_workflow_run_in(&base, session_id, "wf_missing").unwrap().is_none());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn read_js_string_decodes_escapes_via_meta() {
+        // é → é, \x41 → A, \t → tab, all inside a phase title.
+        let script = "export const meta = { phases: [ { title: 'A\\u00e9B\\x41\\tC' } ] }";
+        let p = extract_meta_phases(script);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].title, "AéBA\tC");
+        // \u{1F680} (rocket) and an UNKNOWN escape \d (backslash preserved).
+        let s2 = "export const meta = { phases: [ { title: 'x\\u{1F680}y\\dz' } ] }";
+        let p2 = extract_meta_phases(s2);
+        assert_eq!(p2[0].title, "x🚀y\\dz");
+    }
+
+    #[test]
+    fn load_workflow_phases_reads_script_meta_across_slugs() {
+        let base = std::env::temp_dir().join(format!("tosse-sub-phases-{}", std::process::id()));
+        let session_id = "ssssssss-1111-2222-3333-444444444444";
+        std::fs::create_dir_all(base.join("projects").join("-repo").join(session_id)).unwrap();
+        let scripts = base
+            .join("projects")
+            .join("-repo--claude-worktrees-feat")
+            .join(session_id)
+            .join("workflows/scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(
+            scripts.join("review-changes-wf_ph.js"),
+            "export const meta = { name: 'r', phases: [ { title: 'Find' }, { title: 'Verify' } ] }\n",
+        )
+        .unwrap();
+        let phases = load_workflow_phases_in(&base, session_id, "wf_ph").unwrap();
+        assert_eq!(phases.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Find", "Verify"]);
+        // No matching script → empty.
+        assert!(load_workflow_phases_in(&base, session_id, "wf_other").unwrap().is_empty());
+        std::fs::remove_dir_all(&base).ok();
     }
 
     /// Reading by the CLI-reported ABSOLUTE path (the reliable reader: the CLI writes
@@ -367,6 +951,6 @@ mod tests {
         assert!(is_safe_id("tk_bash"));
         let base = std::env::temp_dir().join("tosse-sub-unsafe");
         assert!(load_subagent_transcript_in(&base, "..", "x").is_empty());
-        assert!(load_workflow_run_in(&base, "ok", "../escape").is_none());
+        assert!(load_workflow_run_in(&base, "ok", "../escape").unwrap().is_none());
     }
 }

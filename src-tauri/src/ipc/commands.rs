@@ -10,7 +10,10 @@ use tauri::Manager;
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
 use crate::supervisor::control::{self, PermissionDecision, PermissionMode};
-use crate::supervisor::model::{ContextFill, ConversationItem, SlashCommand, WorkflowRun};
+use crate::supervisor::history::{self, DiskConversation, IndexedConversation, SearchHit};
+use crate::supervisor::model::{
+    ContextFill, ConversationItem, SlashCommand, WorkflowJournal, WorkflowPhase, WorkflowRun,
+};
 use crate::supervisor::session::{self, InitialControls, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
 use crate::usage::{PlanUsage, UsageError};
@@ -221,6 +224,87 @@ pub async fn load_subagent_transcript(
     .map_err(|e| e.to_string())
 }
 
+/// Tauri managed state: the cached full-text search index over on-disk conversations.
+/// Built lazily and reused, so search is instant and the heavy full-read happens once,
+/// off the panel-open path (Option A). The build is SINGLE-FLIGHT — the async mutex is
+/// held across the (blocking) build, so concurrent callers (the panel's background
+/// `prime` racing an early `search`, or two quick searches) share ONE disk scan instead
+/// of each launching their own. Same encapsulation pattern as [`Sessions`].
+#[derive(Default)]
+pub struct HistoryIndex {
+    cell: tokio::sync::Mutex<Option<Arc<Vec<IndexedConversation>>>>,
+}
+
+impl HistoryIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Force a fresh build and cache it (the panel calls this on open). Holding the
+    /// async lock across the build is what makes the whole thing single-flight.
+    async fn rebuild(&self) -> Result<Arc<Vec<IndexedConversation>>, String> {
+        let mut guard = self.cell.lock().await;
+        let built = tokio::task::spawn_blocking(history::build_search_index)
+            .await
+            .map_err(|e| e.to_string())?;
+        let arc = Arc::new(built);
+        *guard = Some(arc.clone());
+        Ok(arc)
+    }
+
+    /// Return the cached index, building it once if absent. A concurrent build (a
+    /// still-running `rebuild`, or another `ensure`) is awaited, never duplicated.
+    async fn ensure(&self) -> Result<Arc<Vec<IndexedConversation>>, String> {
+        let mut guard = self.cell.lock().await;
+        if let Some(idx) = guard.as_ref() {
+            return Ok(idx.clone());
+        }
+        let built = tokio::task::spawn_blocking(history::build_search_index)
+            .await
+            .map_err(|e| e.to_string())?;
+        let arc = Arc::new(built);
+        *guard = Some(arc.clone());
+        Ok(arc)
+    }
+}
+
+/// List every conversation found on disk (incl. orphans the app has forgotten),
+/// most-recent-first — the rows the history panel shows. Cheap head-read; the full
+/// transcript is loaded only when a row is previewed (`load_session_history`).
+#[tauri::command]
+#[specta::specta]
+pub async fn list_disk_conversations() -> Result<Vec<DiskConversation>, String> {
+    tokio::task::spawn_blocking(history::list_disk_conversations)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Build (or rebuild) the search index in the background and cache it — called when
+/// the history panel opens so search is armed a beat later (Option A). Returns the
+/// number of conversations indexed.
+#[tauri::command]
+#[specta::specta]
+pub async fn prime_history_index(index: tauri::State<'_, HistoryIndex>) -> Result<u32, String> {
+    let idx = index.rebuild().await?;
+    Ok(idx.len() as u32)
+}
+
+/// Search the on-disk conversations by `query` (accent/case-insensitive, multi-term
+/// AND, light typo tolerance), best-first. Lazily builds + caches the index on the
+/// first call so search works even before `prime_history_index` ran.
+#[tauri::command]
+#[specta::specta]
+pub async fn search_conversations(
+    index: tauri::State<'_, HistoryIndex>,
+    query: String,
+) -> Result<Vec<SearchHit>, String> {
+    let cached = index.ensure().await?;
+    let hits = tokio::task::spawn_blocking(move || history::score_index(cached.as_slice(), &query))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(hits)
+}
+
 /// Load a workflow run's manifest (`workflows/<run_id>.json`). `null` if absent.
 #[tauri::command]
 #[specta::specta]
@@ -232,7 +316,39 @@ pub async fn load_workflow_run(
         crate::supervisor::subagents::load_workflow_run(&session_id, &run_id)
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
+}
+
+/// Live progress of a RUNNING workflow from its journal (`subagents/workflows/<run_id>/
+/// journal.jsonl`): agents started vs done. The rich manifest is written only at the end, so
+/// this is the mid-run "how far along" source. `null` if no journal yet.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_workflow_journal(
+    session_id: String,
+    run_id: String,
+) -> Result<Option<WorkflowJournal>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::supervisor::subagents::load_workflow_journal(&session_id, &run_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The workflow's declared phases (title + detail), parsed from its script's `meta.phases` —
+/// the only source of the FULL phase list (incl. not-yet-reached phases) available DURING the
+/// run. Empty if no script/phases. Lets the live overview show upcoming steps.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_workflow_phases(
+    session_id: String,
+    run_id: String,
+) -> Result<Vec<WorkflowPhase>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::supervisor::subagents::load_workflow_phases(&session_id, &run_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read a background task's output from the ABSOLUTE path the CLI reported
@@ -318,8 +434,10 @@ pub async fn set_model(
 
 /// Set the session's reasoning effort level at runtime (`apply_flag_settings`).
 /// Rejects an invalid level BEFORE sending: the CLI silently swallows anything
-/// outside low/medium/high/xhigh, so an unvalidated value would no-op without any
-/// error — exactly the silent failure we must avoid.
+/// outside low/medium/high/xhigh/max, so an unvalidated value would no-op without
+/// any error — exactly the silent failure we must avoid. (Per-model gating — e.g.
+/// `max`/`xhigh` not on every model — is the front-end gauge's job; this guard only
+/// rejects values the wire never accepts.)
 #[tauri::command]
 #[specta::specta]
 pub async fn set_effort_level(
@@ -329,7 +447,7 @@ pub async fn set_effort_level(
 ) -> Result<(), String> {
     if !control::is_valid_effort_level(&level) {
         return Err(format!(
-            "niveau d'effort invalide « {level} » (attendu : low, medium, high, xhigh)"
+            "niveau d'effort invalide « {level} » (attendu : low, medium, high, xhigh, max)"
         ));
     }
     let handle = sessions.get(&session).ok_or_else(unknown_session)?;
@@ -863,6 +981,77 @@ pub fn watch_dir(
 pub fn unwatch_dir(watcher: tauri::State<'_, crate::fs::FsWatcher>) -> Result<(), String> {
     watcher.unwatch();
     Ok(())
+}
+
+// ---- Editor filesystem: mutating tree ops (the explorer's context menu) -----
+//
+// New file / new folder / rename / copy / delete, all forwarding to [`crate::fs`]
+// (the one filesystem service) off the async runtime. The live watcher echoes the
+// change back as an `FsChangeEvent`, so the tree refreshes itself — these commands
+// just perform the mutation. Create/rename/copy refuse to clobber; delete is the
+// safe kind (moves to the OS trash, recoverable).
+
+/// Create an empty file at `path` (explorer "New File"). Errors if the name exists.
+#[tauri::command]
+#[specta::specta]
+pub async fn create_file(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::create_file(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Create a new directory at `path` (explorer "New Folder"). Errors if it exists.
+#[tauri::command]
+#[specta::specta]
+pub async fn create_dir(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::create_dir(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Rename / move `from` to `to` (explorer "Rename", and the move half of cut +
+/// paste). Refuses to overwrite an existing destination.
+#[tauri::command]
+#[specta::specta]
+pub async fn rename_entry(from: String, to: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::rename(&from, &to))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Recursively copy `from` to `to` (the copy half of copy + paste). Refuses to
+/// overwrite an existing destination; the front resolves a non-colliding name.
+#[tauri::command]
+#[specta::specta]
+pub async fn copy_entry(from: String, to: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::copy_path(&from, &to))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Move `path` to the OS trash (explorer "Delete" — recoverable from the Finder),
+/// never an irreversible unlink.
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_to_trash(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::delete_to_trash(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Reveal `path` in the OS file manager (macOS Finder), selecting the item — the
+/// explorer's "Reveal in Finder". Forwards to the opener plugin's native reveal.
+#[tauri::command]
+#[specta::specta]
+pub async fn reveal_in_finder(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || tauri_plugin_opener::reveal_item_in_dir(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 // ---- Integrated terminal (PTY) --------------------------------------------

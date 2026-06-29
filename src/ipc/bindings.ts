@@ -98,6 +98,71 @@ async loadWorkflowRun(sessionId: string, runId: string) : Promise<Result<Workflo
 }
 },
 /**
+ * Live progress of a RUNNING workflow from its journal (`subagents/workflows/<run_id>/
+ * journal.jsonl`): agents started vs done. The rich manifest is written only at the end, so
+ * this is the mid-run "how far along" source. `null` if no journal yet.
+ */
+async loadWorkflowJournal(sessionId: string, runId: string) : Promise<Result<WorkflowJournal | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_journal", { sessionId, runId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The workflow's declared phases (title + detail), parsed from its script's `meta.phases` —
+ * the only source of the FULL phase list (incl. not-yet-reached phases) available DURING the
+ * run. Empty if no script/phases. Lets the live overview show upcoming steps.
+ */
+async loadWorkflowPhases(sessionId: string, runId: string) : Promise<Result<WorkflowPhase[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_phases", { sessionId, runId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List every conversation found on disk (incl. orphans the app has forgotten),
+ * most-recent-first — the rows the history panel shows. Cheap head-read; the full
+ * transcript is loaded only when a row is previewed (`load_session_history`).
+ */
+async listDiskConversations() : Promise<Result<DiskConversation[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_disk_conversations") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Build (or rebuild) the search index in the background and cache it — called when
+ * the history panel opens so search is armed a beat later (Option A). Returns the
+ * number of conversations indexed.
+ */
+async primeHistoryIndex() : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("prime_history_index") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Search the on-disk conversations by `query` (accent/case-insensitive, multi-term
+ * AND, light typo tolerance), best-first. Lazily builds + caches the index on the
+ * first call so search works even before `prime_history_index` ran.
+ */
+async searchConversations(query: string) : Promise<Result<SearchHit[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("search_conversations", { query }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Read a background task's output from the ABSOLUTE path the CLI reported
  * (`BackgroundTask.output_file`). The CLI writes Bash-bg / Monitor output to a temp dir
  * the app can't reconstruct, so the live tail reads this path directly. `null` if
@@ -176,8 +241,10 @@ async setModel(session: string, model: string) : Promise<Result<null, string>> {
 /**
  * Set the session's reasoning effort level at runtime (`apply_flag_settings`).
  * Rejects an invalid level BEFORE sending: the CLI silently swallows anything
- * outside low/medium/high/xhigh, so an unvalidated value would no-op without any
- * error — exactly the silent failure we must avoid.
+ * outside low/medium/high/xhigh/max, so an unvalidated value would no-op without
+ * any error — exactly the silent failure we must avoid. (Per-model gating — e.g.
+ * `max`/`xhigh` not on every model — is the front-end gauge's job; this guard only
+ * rejects values the wire never accepts.)
  */
 async setEffortLevel(session: string, level: string) : Promise<Result<null, string>> {
     try {
@@ -622,6 +689,76 @@ async watchDir(path: string) : Promise<Result<null, string>> {
 async unwatchDir() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("unwatch_dir") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Create an empty file at `path` (explorer "New File"). Errors if the name exists.
+ */
+async createFile(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_file", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Create a new directory at `path` (explorer "New Folder"). Errors if it exists.
+ */
+async createDir(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_dir", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Rename / move `from` to `to` (explorer "Rename", and the move half of cut +
+ * paste). Refuses to overwrite an existing destination.
+ */
+async renameEntry(from: string, to: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("rename_entry", { from, to }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Recursively copy `from` to `to` (the copy half of copy + paste). Refuses to
+ * overwrite an existing destination; the front resolves a non-colliding name.
+ */
+async copyEntry(from: string, to: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("copy_entry", { from, to }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Move `path` to the OS trash (explorer "Delete" — recoverable from the Finder),
+ * never an irreversible unlink.
+ */
+async deleteToTrash(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_to_trash", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Reveal `path` in the OS file manager (macOS Finder), selecting the item — the
+ * explorer's "Reveal in Finder". Forwards to the opener plugin's native reveal.
+ */
+async revealInFinder(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reveal_in_finder", { path }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1109,6 +1246,45 @@ model: string | null; effort: string | null; ultracode: boolean; permission_mode
  */
 pending_reminder: string | null }
 /**
+ * One conversation discovered on disk — the cheap "head-read" row the history panel
+ * lists. NO full parse here (that's [`load_history`], used by the preview). Field
+ * names are snake_case to match the other IPC payloads; the front consumes this
+ * shape directly (it is a transient view, not a persisted domain record).
+ */
+export type DiskConversation = { 
+/**
+ * Claude's session UUID (= transcript file stem). Join key to a SQLite row and
+ * the `--resume` target.
+ */
+session_id: string; 
+/**
+ * Real absolute cwd the session ran in (read from the transcript itself — the
+ * dir slug is lossy and can't be inverted back to a path).
+ */
+cwd: string; 
+/**
+ * Repo root derived from `cwd` (an app worktree segment stripped). Drives the
+ * panel's repo grouping and the repo to (re)create on reactivation.
+ */
+repo_root: string; 
+/**
+ * Git branch captured in the transcript, if any (a label hint).
+ */
+git_branch: string | null; 
+/**
+ * Auto-generated title (`ai-title` line), if the CLI wrote one — the nicest
+ * label for an orphan that has no SQLite name.
+ */
+title: string | null; 
+/**
+ * First human message, flattened + capped — the row's identifying line.
+ */
+excerpt: string; 
+/**
+ * Transcript mtime (Unix ms) ≈ time of the last message. Recency sort key.
+ */
+mtime_ms: number }
+/**
  * Where a configuration entry originates. Drives the "by scope" grouping in the
  * UI. Serialized snake_case so the TS union is `"user" | "project" | …`.
  */
@@ -1467,6 +1643,11 @@ export type RepoRecord = { id: string; path: string;
  */
 added_at: number }
 /**
+ * A search result: which conversation matched, its relevance score, and a short
+ * snippet around the first body hit (empty when only title/excerpt matched).
+ */
+export type SearchHit = { session_id: string; score: number; snippet: string }
+/**
  * The session's available slash commands (one-shot, at `initialize`). Drives the
  * composer's `/` autocomplete menu.
  */
@@ -1655,6 +1836,23 @@ export type UsageError =
  * the frontend converts it with the JS `Date` parser.
  */
 export type UsageWindow = { used_percentage: number; resets_at: string | null }
+/**
+ * Live progress counts for a RUNNING workflow, derived from its append-only
+ * `subagents/workflows/<run_id>/journal.jsonl`. The rich manifest (`wf_<id>.json`) is
+ * only written when the run FINISHES, so during the run the journal is the sole on-disk
+ * source of "how far along are we": one `{"type":"started",...}` per agent spawn and one
+ * `{"type":"result",...}` per agent completion. This gives the overview the UI shows mid-run
+ * — agents launched / done / still running — without needing the (absent) manifest.
+ */
+export type WorkflowJournal = { 
+/**
+ * Agents spawned so far (count of `started` entries).
+ */
+started: number; 
+/**
+ * Agents finished so far (count of `result` entries).
+ */
+done: number }
 /**
  * One phase of a workflow run, from a `workflows/wf_<id>.json` manifest.
  */

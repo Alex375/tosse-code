@@ -9,6 +9,7 @@ import { GitToggle } from "./features/git/GitToggle";
 import { EditorToggle } from "./features/editor/EditorToggle";
 import { FlightDeck } from "./features/flightdeck/FlightDeck";
 import { ExtensionsManager } from "./features/extensions/ExtensionsManager";
+import { HistoryPanel } from "./features/history/HistoryPanel";
 import { UltraCodeBlast } from "./features/conversation/UltraCodeBlast";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { AppErrorBanner } from "./ui/AppErrorBanner";
@@ -119,6 +120,8 @@ export default function App() {
       <WorktreeManager />
       {/* Idem: the extensions manager, opened per repo (sidebar) or per conversation (composer). */}
       <ExtensionsManager />
+      {/* Idem: the conversation-history search panel, opened from the sidebar search bar. */}
+      <HistoryPanel />
       {/* Mounted once, globally: the full-screen "Ultra code" activation blast. */}
       <UltraCodeBlast />
     </Win>
