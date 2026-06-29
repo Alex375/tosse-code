@@ -23,3 +23,51 @@ export function viewForShortcut(e: ViewShortcutEvent): View | null {
   if (e.code === "Digit2") return "flightdeck";
   return null;
 }
+
+/** The minimal shape we decide the undo chord on. Unlike the view chords we read the
+ *  PRODUCED character `e.key`, not the physical `e.code` — see [isUndoChord]. */
+export interface UndoChordEvent {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+/**
+ * Whether `e` is the "undo" chord: ⌘/Ctrl+Z, with neither Shift (⌘⇧Z is redo) nor Alt.
+ *
+ * We match the produced letter `e.key === "z"`, NOT the physical `e.code === "KeyZ"`
+ * — the OPPOSITE of the view chords above, on purpose. For a DIGIT, AZERTY puts it on
+ * a Shift position so its unshifted `e.key` is a symbol ("&"…) and only `e.code` is
+ * stable. For a LETTER it is reversed: `e.key` is the same letter on every layout,
+ * while `e.code` names the QWERTY POSITION — and AZERTY's "z" sits where QWERTY has
+ * "w" (`code === "KeyW"`). So keying off `e.code === "KeyZ"` would fire undo on the
+ * AZERTY user's "w" key and never on the key they read as Z. `e.key` is the
+ * layout-robust choice for the undo letter.
+ */
+export function isUndoChord(e: UndoChordEvent): boolean {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return false;
+  return e.key.toLowerCase() === "z";
+}
+
+/**
+ * Whether focus sits in a control that owns its OWN undo, so a global ⌘Z must not be
+ * hijacked from it: a text input/textarea/select, any contenteditable, the Monaco
+ * editor (`.monaco-editor`), the sidebar rename input, or the xterm terminal
+ * (`.xterm`). Pure (takes the element) so it unit-tests under jsdom.
+ */
+export function isEditableTarget(el: Element | null): boolean {
+  if (!el) return false;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  // A contenteditable host, or a node inside Monaco / the xterm terminal, owns its own
+  // undo. `closest` catches both the focused element AND an editable ancestor; matching
+  // the contenteditable ATTRIBUTE (rather than the `isContentEditable` IDL prop) keeps
+  // this representable under jsdom — and covers the real-browser case just as well.
+  return (
+    el.closest(
+      '.monaco-editor, .xterm, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]',
+    ) != null
+  );
+}

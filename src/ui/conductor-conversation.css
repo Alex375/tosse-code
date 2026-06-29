@@ -36,16 +36,18 @@
 .cv-sess { flex:1; min-width:0; display:flex; align-items:center; gap:9px; padding:7px 8px; border:0; background:transparent; font:inherit; color:inherit; text-align:left; cursor:pointer; }
 .cv-sess-n { font-size:12.5px; color:var(--wf-tx-hi); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
 .cv-sess .wf-badge { margin-left:auto; }
-/* Kebab: hidden until the row is hovered or its menu is open. */
-.cv-sess-menu { flex:0 0 auto; width:22px; height:22px; margin-right:5px; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease; }
-.cv-sess-row:hover .cv-sess-menu, .cv-sess-menu[data-open] { opacity:1; }
-.cv-sess-menu:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
 /* "Vu": acknowledge a non-blocking reminder (review / error / open-question) to
    clear it back to idle. Always visible while the row needs attention so it can
    be dismissed without hovering; also revealed on plain hover. */
 .cv-sess-seen { flex:0 0 auto; width:22px; height:22px; margin-right:2px; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease; }
 .cv-sess-row:hover .cv-sess-seen, .cv-sess-row[data-attn] .cv-sess-seen { opacity:1; }
 .cv-sess-seen:hover { background:var(--wf-panel-3); color:var(--wf-run); }
+/* Friction-free delete (×): the row's sole delete affordance — one click removes the
+   conversation, no confirm (⌘Z undoes it). Mirrors .cv-sess-seen: hidden until the row
+   is hovered, danger-tinted on its own hover. */
+.cv-sess-del { flex:0 0 auto; width:22px; height:22px; margin-right:5px; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease; }
+.cv-sess-row:hover .cv-sess-del { opacity:1; }
+.cv-sess-del:hover { background:var(--wf-err-bg); color:var(--wf-err); }
 /* Worktree badge: shown (always) when a conversation runs in a linked worktree. */
 .cv-wt-badge { flex:0 0 auto; width:20px; height:20px; margin-right:2px; border:0; background:transparent; color:var(--wf-accent); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:.8; transition:opacity .12s ease, background .12s ease; }
 .cv-wt-badge:hover { opacity:1; background:var(--wf-panel-3); }

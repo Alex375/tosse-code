@@ -26,7 +26,7 @@ import {
   useConversationsStore,
 } from "./store/conversationsStore";
 import { NavBtn, Tag, Win } from "./ui/kit";
-import { viewForShortcut, type View } from "./ui/shortcuts";
+import { isEditableTarget, isUndoChord, viewForShortcut, type View } from "./ui/shortcuts";
 
 export default function App() {
   useGlobalSessionEvents();
@@ -62,12 +62,22 @@ export default function App() {
   // ⌘/Ctrl+1 → Conversation, ⌘/Ctrl+2 → Flight Deck. Works from anywhere (even the
   // composer): ⌘+digit never types a character, so it won't clash with editing. The
   // physical-key / modifier logic lives in `viewForShortcut` (pure + unit-tested).
+  // ⌘/Ctrl+Z restores the last conversation deleted via its × (the no-confirm delete's
+  // undo) — but ONLY when focus isn't in a control with its own undo (composer, Monaco,
+  // rename input, terminal), so we never steal their Z. Both decisions are pure helpers.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const target = viewForShortcut(e);
-      if (!target) return;
-      e.preventDefault();
-      setView(target);
+      if (target) {
+        e.preventDefault();
+        setView(target);
+        return;
+      }
+      if (isUndoChord(e) && !isEditableTarget(document.activeElement)) {
+        // Only consume the key if something was actually restored, so an empty undo
+        // stack leaves any other ⌘Z handling untouched.
+        if (useConversationsStore.getState().undoRemoveConversation()) e.preventDefault();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
