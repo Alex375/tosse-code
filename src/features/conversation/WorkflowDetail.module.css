@@ -1,0 +1,426 @@
+/* The 3-panel workflow detail modal (the /workflows-style view): phases | agents |
+   transcript. Portal + scrim (same family as TranscriptPopover), but a WIDE panel laid
+   out as three independently-scrolling columns. */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-scrim);
+  padding: 32px;
+}
+
+.panel {
+  width: 1080px;
+  max-width: 94vw;
+  height: 80vh;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--wf-panel);
+  border: 1px solid var(--wf-line);
+  border-radius: var(--radius-lg, 14px);
+  box-shadow: var(--shadow-overlay, 0 12px 32px -10px #000);
+  overflow: hidden;
+}
+
+/* The live-overview face is small and content-sized (no 3 columns yet). */
+.panelLive {
+  width: 460px;
+  height: auto;
+  max-height: 70vh;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--wf-line-2, var(--wf-line));
+  flex: 0 0 auto;
+}
+.headIco {
+  flex: 0 0 auto;
+  color: var(--wf-accent);
+}
+.titles {
+  min-width: 0;
+  flex: 1;
+}
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, var(--wf-tx));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subtitle {
+  font-size: 11px;
+  color: var(--wf-tx-lo);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.headBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wf-tx-lo);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.headBtn:hover {
+  background: var(--bg-hover, #ffffff10);
+  color: var(--wf-tx);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* ---- live overview (mid-run) --------------------------------------------- */
+
+.bodyLive {
+  padding: 18px 18px 20px;
+  overflow-y: auto;
+}
+.live {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.liveCur {
+  text-align: center;
+}
+.liveCurLbl {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--wf-tx-xlo);
+  margin-bottom: 4px;
+}
+.liveCurPhase {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--wf-tx);
+}
+.liveCurAgent {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--wf-tx-lo);
+}
+/* The declared phase list: current highlighted, done muted, upcoming dimmed. */
+.livePhases {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--wf-line-2, var(--wf-line));
+  border-radius: 10px;
+  overflow: hidden;
+}
+.livePhaseRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--wf-line-2, var(--wf-line));
+}
+.livePhaseRow:last-child {
+  border-bottom: 0;
+}
+.livePhaseRow[data-state="cur"] {
+  background: color-mix(in srgb, var(--wf-accent) 10%, transparent);
+}
+.livePhaseRow[data-state="todo"] {
+  opacity: 0.55;
+}
+.livePhaseDot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 16px;
+  justify-content: center;
+}
+.livePhaseBody {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.livePhaseName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wf-tx);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.livePhaseDetail {
+  font-size: 11px;
+  color: var(--wf-tx-lo);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.livePhaseCur {
+  font-size: 11.5px;
+  color: var(--wf-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Per-phase "done/total" badge — green pill once the phase is complete, accent while active. */
+.livePhaseCount {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--wf-tx-lo);
+  background: color-mix(in srgb, var(--wf-tx-xlo) 16%, transparent);
+}
+.livePhaseCount[data-state="done"] {
+  color: var(--wf-run);
+  background: color-mix(in srgb, var(--wf-run) 16%, transparent);
+}
+.livePhaseCount[data-state="cur"] {
+  color: var(--wf-accent);
+  background: color-mix(in srgb, var(--wf-accent) 16%, transparent);
+}
+
+/* Three colour-coded count boxes: lancés (neutral) · en cours (accent) · terminés (green). */
+.statBoxes {
+  display: flex;
+  gap: 8px;
+}
+.statBox {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 10px 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+.sbN {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.sbL {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--wf-tx-lo);
+}
+.sbTotal {
+  background: color-mix(in srgb, var(--wf-tx-xlo) 12%, transparent);
+  border-color: color-mix(in srgb, var(--wf-tx-xlo) 22%, transparent);
+}
+.sbTotal .sbN {
+  color: var(--wf-tx);
+}
+.sbRun {
+  background: color-mix(in srgb, var(--wf-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--wf-accent) 30%, transparent);
+}
+.sbRun .sbN {
+  color: var(--wf-accent);
+}
+.sbDone {
+  background: color-mix(in srgb, var(--wf-run) 12%, transparent);
+  border-color: color-mix(in srgb, var(--wf-run) 30%, transparent);
+}
+.sbDone .sbN {
+  color: var(--wf-run);
+}
+.liveNote {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--wf-tx-lo);
+}
+
+/* ---- columns -------------------------------------------------------------- */
+
+.colPhases {
+  flex: 0 0 220px;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--wf-line-2, var(--wf-line));
+  padding: 8px;
+}
+.colAgents {
+  flex: 0 0 320px;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--wf-line-2, var(--wf-line));
+  padding: 8px;
+}
+.colTranscript {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px;
+}
+
+.colHdr {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--wf-tx-xlo);
+  padding: 4px 6px 8px;
+}
+
+/* ---- phase rows ----------------------------------------------------------- */
+
+.phaseRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wf-tx-lo);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.phaseRow:hover {
+  background: color-mix(in srgb, var(--wf-panel-3) 50%, transparent);
+  color: var(--wf-tx);
+}
+.phaseRow.sel {
+  background: color-mix(in srgb, var(--wf-accent) 12%, transparent);
+  color: var(--wf-tx);
+}
+.phaseName {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+.phaseCount {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--wf-tx-xlo);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- agent rows ----------------------------------------------------------- */
+
+.agentRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+.agentRow:hover {
+  background: color-mix(in srgb, var(--wf-panel-3) 50%, transparent);
+}
+.agentRow.sel {
+  background: color-mix(in srgb, var(--wf-accent) 12%, transparent);
+}
+.agentTop {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.agentLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+  color: var(--wf-tx);
+}
+.agentMeta {
+  font-size: 10.5px;
+  color: var(--wf-tx-xlo);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 21px;
+}
+.agentStats {
+  font-size: 10.5px;
+  color: var(--wf-tx-xlo);
+  font-variant-numeric: tabular-nums;
+  padding-left: 21px;
+}
+.agentChevron {
+  flex: 0 0 auto;
+  color: var(--wf-tx-xlo);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.agentRow:hover .agentChevron,
+.agentRow.sel .agentChevron {
+  opacity: 1;
+}
+
+/* ---- transcript pane ------------------------------------------------------ */
+
+.txHead {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--wf-line-2, var(--wf-line));
+}
+.txTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--wf-tx);
+}
+.txPreview {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--wf-tx-lo);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.txPreviewLbl {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--wf-tx-xlo);
+  display: block;
+  margin-bottom: 2px;
+}
+
+.note {
+  padding: 18px 6px;
+  font-size: 12.5px;
+  color: var(--wf-tx-lo);
+}

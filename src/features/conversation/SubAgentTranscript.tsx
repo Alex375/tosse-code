@@ -41,9 +41,9 @@ function TranscriptBlocks({
         if (seg.kind === "text") return <StreamMarkdown key={seg.key} text={seg.text} />;
         if (seg.kind === "thinking")
           return <ThinkingBlock key={seg.key} text={seg.text} finalized />;
-        // A nested sub-agent in a settled transcript: render it as a single step row
-        // (the disk view has no live <SubAgentCard> / sub-thread to drill into).
-        if (seg.kind === "agent")
+        // A nested sub-agent OR workflow in a settled transcript: render it as a single step
+        // row (the disk view has no live card to drill into).
+        if (seg.kind === "agent" || seg.kind === "workflow")
           return <StaticToolStep key={seg.key} step={seg.step} result={results.get(seg.step.id)} />;
         const errored = seg.steps.some((s) => results.get(s.id)?.isError ?? false);
         return (

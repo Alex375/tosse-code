@@ -49,6 +49,7 @@ import { useDisplay } from "../../store/display";
 import { LiveToolStep, ToolSection } from "./ToolSection";
 import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
+import { WorkflowCard } from "./WorkflowCard";
 import { resolveTranscriptSource } from "./transcriptSource";
 import type { StickToBottom } from "./useStickToBottom";
 import styles from "./ConductorThread.module.css";
@@ -457,6 +458,16 @@ function renderSegments(
       // never grouped nor hidden by the live-trailing suppression.
       return (
         <SubAgentCard
+          key={seg.key}
+          session={session}
+          toolUseId={seg.step.id}
+          input={seg.step.input}
+        />
+      );
+    if (seg.kind === "workflow")
+      // A Workflow renders as a persistent inline card (opens the live overview / report).
+      return (
+        <WorkflowCard
           key={seg.key}
           session={session}
           toolUseId={seg.step.id}

@@ -107,6 +107,25 @@ export function agentIdFromResult(content: JsonValue | undefined): string | null
 }
 
 /**
+ * Parse a dynamic-workflow run's id out of its `Workflow` tool_result. A workflow ALWAYS
+ * runs in the background — the tool returns an immediate ack whose text carries the run id
+ * verbatim ("Run ID: wf_cb719d53-406", plus a "Transcript dir: …/wf_<id>" path). That id
+ * is the key for [`super::subagents::load_workflow_run`] (which accepts the `wf_`-prefixed
+ * form). The wire's `task_*` lifecycle events do NOT carry it, so this ack is the only live
+ * source — exactly the role {@link agentIdFromResult} plays for sub-agents. Null when
+ * nothing matches (e.g. resumed conversation: the result lives only in the transcript).
+ */
+export function runIdFromResult(content: JsonValue | undefined): string | null {
+  const text = resultText(content);
+  if (!text) return null;
+  const byLabel = text.match(/run[_ ]?id["\s:]+(?:wf_)?([A-Za-z0-9-]+)/i);
+  if (byLabel) return byLabel[1].startsWith("wf_") ? byLabel[1] : `wf_${byLabel[1]}`;
+  // Fallback: any `wf_<id>` token (Transcript dir / Script file paths in the ack).
+  const byToken = text.match(/\bwf_[A-Za-z0-9-]+/);
+  return byToken ? byToken[0] : null;
+}
+
+/**
  * Best available `agent_id` for drilling into a sub-agent's transcript:
  *  1. the BackgroundTask's own `agent_id` (set at task_notification, foreground), else
  *  2. parsed from the immediate tool_result ack (background, available during the run), else

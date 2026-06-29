@@ -362,6 +362,21 @@ pub struct WorkflowRun {
     pub result: Value,
 }
 
+/// Live progress counts for a RUNNING workflow, derived from its append-only
+/// `subagents/workflows/<run_id>/journal.jsonl`. The rich manifest (`wf_<id>.json`) is
+/// only written when the run FINISHES, so during the run the journal is the sole on-disk
+/// source of "how far along are we": one `{"type":"started",...}` per agent spawn and one
+/// `{"type":"result",...}` per agent completion. This gives the overview the UI shows mid-run
+/// — agents launched / done / still running — without needing the (absent) manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowJournal {
+    /// Agents spawned so far (count of `started` entries).
+    pub started: u64,
+    /// Agents finished so far (count of `result` entries).
+    pub done: u64,
+}
+
 /// Deserialize that maps an explicit JSON `null` to `T::default()`. `#[serde(default)]`
 /// alone only substitutes the default for a MISSING key — an explicit `"field": null`
 /// still fails the whole struct. Pair the two (`#[serde(default, deserialize_with = …)]`)

@@ -40,10 +40,13 @@ import type {
   TerminalOutputEvent,
   TickEvent,
   UsageError,
+  WorkflowJournal,
+  WorkflowPhase,
+  WorkflowRun,
   WorktreeInfo,
   WorktreeStatus,
 } from "../bindings";
-import { DEMO_SUBAGENT_TRANSCRIPT, idleState, mockTaskOutput, MOCK_SESSION_ID, ScenarioDriver } from "./scenario";
+import { DEMO_SUBAGENT_TRANSCRIPT, DEMO_WORKFLOW_RUN, idleState, isDemoWorkflowDone, mockTaskOutput, MOCK_SESSION_ID, ScenarioDriver } from "./scenario";
 
 // A small slash-command catalogue so the browser/Playwright build exercises the
 // `/` autocomplete menu without a real `claude` process.
@@ -204,6 +207,7 @@ export const mockCommands = {
     else if (demo === "background") driver.startBackground();
     else if (demo === "shell") driver.startShell();
     else if (demo === "monitor") driver.startMonitor();
+    else if (demo === "workflow") driver.startWorkflow();
     else driver.start();
     return ok(null);
   },
@@ -320,6 +324,33 @@ export const mockCommands = {
     // No on-disk transcript in the browser mock — return a representative sample so
     // the transcript popover renders real-shaped content in dev/Playwright.
     return ok(DEMO_SUBAGENT_TRANSCRIPT);
+  },
+
+  async loadWorkflowRun(
+    _sessionId: string,
+    _runId: string,
+  ): Promise<Result<WorkflowRun | null, string>> {
+    // Mirror reality: the manifest exists only once the run is DONE. While running, null →
+    // the modal shows its live overview; after, the rich 3-panel view.
+    return ok(isDemoWorkflowDone() ? DEMO_WORKFLOW_RUN : null);
+  },
+
+  async loadWorkflowJournal(
+    _sessionId: string,
+    _runId: string,
+  ): Promise<Result<WorkflowJournal | null, string>> {
+    // Live progress counts (the mid-run signal), kept consistent with the demo's 2 wire ticks
+    // (r-correctness done, r-perf running). Grows to "all done" once the run finishes.
+    return ok(isDemoWorkflowDone() ? { started: 3, done: 3 } : { started: 2, done: 1 });
+  },
+
+  async loadWorkflowPhases(
+    _sessionId: string,
+    _runId: string,
+  ): Promise<Result<WorkflowPhase[], string>> {
+    // The declared phase list (from the script's meta) — available from t=0, so the live
+    // overview can show upcoming steps. Mirror the demo run's phases.
+    return ok(DEMO_WORKFLOW_RUN.phases ?? []);
   },
 
   async loadSessionContext(_sessionId: string): Promise<Result<ContextFill, string>> {

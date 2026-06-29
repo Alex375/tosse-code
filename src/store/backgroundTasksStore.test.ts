@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { BackgroundTask } from "../ipc/client";
-import { orderBashTasks, orderMonitorTasks, useBackgroundTasksStore } from "./backgroundTasksStore";
+import {
+  orderBashTasks,
+  orderMonitorTasks,
+  orderWorkflowTasks,
+  useBackgroundTasksStore,
+} from "./backgroundTasksStore";
 
 function task(over: Partial<BackgroundTask> = {}): BackgroundTask {
   return {
@@ -174,6 +179,49 @@ describe("orderMonitorTasks", () => {
         map(
           task({ task_id: "b", kind: "bash", status: "running" }),
           task({ task_id: "d", kind: "monitor", status: "completed" }),
+        ),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("orderWorkflowTasks", () => {
+  const map = (...ts: BackgroundTask[]): Record<string, BackgroundTask> =>
+    Object.fromEntries(ts.map((t) => [t.task_id, t]));
+
+  it("keeps only RUNNING workflow (drops other kinds AND finished workflow)", () => {
+    const got = orderWorkflowTasks(
+      map(
+        task({ task_id: "a", kind: "agent", status: "running" }),
+        task({ task_id: "b", kind: "bash", status: "running" }),
+        task({ task_id: "m", kind: "monitor", status: "running" }),
+        task({ task_id: "w", kind: "workflow", status: "running" }),
+        task({ task_id: "done", kind: "workflow", status: "completed" }),
+        task({ task_id: "stopped", kind: "workflow", status: "stopped" }),
+        task({ task_id: "failed", kind: "workflow", status: "failed" }),
+      ),
+    );
+    expect(got.map((t) => t.task_id)).toEqual(["w"]);
+  });
+
+  it("orders running workflows by task_id", () => {
+    const got = orderWorkflowTasks(
+      map(
+        task({ task_id: "tk_3", kind: "workflow", status: "running" }),
+        task({ task_id: "tk_1", kind: "workflow", status: "running" }),
+        task({ task_id: "tk_2", kind: "workflow", status: "running" }),
+      ),
+    );
+    expect(got.map((t) => t.task_id)).toEqual(["tk_1", "tk_2", "tk_3"]);
+  });
+
+  it("is empty when there is no RUNNING workflow (none, or only finished)", () => {
+    expect(orderWorkflowTasks({})).toEqual([]);
+    expect(
+      orderWorkflowTasks(
+        map(
+          task({ task_id: "a", kind: "agent", status: "running" }),
+          task({ task_id: "d", kind: "workflow", status: "completed" }),
         ),
       ),
     ).toEqual([]);

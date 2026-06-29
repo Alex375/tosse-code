@@ -150,6 +150,29 @@ export const useBackgroundMonitorTasks = (session: string): BackgroundTask[] =>
     useShallow((s) => orderMonitorTasks(s.sessions[session] ?? EMPTY_TASKS)),
   );
 
+/**
+ * A conversation's RUNNING dynamic-workflow runs (`kind: "workflow"`, status `running`),
+ * ordered by `task_id` (stable). The pinned <WorkflowBar> lists exactly these — like every
+ * other background-tools bar, a FINISHED run drops out (the bar shows only what is currently
+ * running). The post-run rich report is reached from the PERSISTENT inline <WorkflowCard> in
+ * the conversation thread, not from this transient bar. A Workflow is ALWAYS a background task
+ * (the tool returns immediately with a task id), so there is no foreground variant to exclude.
+ * Pure (no hook) so it is unit-testable; the hook below wraps it. */
+export function orderWorkflowTasks(
+  tasks: Record<string, BackgroundTask>,
+): BackgroundTask[] {
+  return Object.values(tasks)
+    .filter((t) => t.kind === "workflow" && t.status === "running")
+    .sort((a, b) => a.task_id.localeCompare(b.task_id));
+}
+
+/** A conversation's RUNNING workflow runs, ordered for the pinned WorkflowBar. Same
+ *  referential-stability guarantee as {@link useBackgroundBashTasks}. */
+export const useBackgroundWorkflowTasks = (session: string): BackgroundTask[] =>
+  useBackgroundTasksStore(
+    useShallow((s) => orderWorkflowTasks(s.sessions[session] ?? EMPTY_TASKS)),
+  );
+
 /** How many background tasks are currently RUNNING for a conversation. Drives the
  *  "backgrounding" agent status (idle main loop + live background work). A plain
  *  number → referentially stable, re-renders only when the count changes. */

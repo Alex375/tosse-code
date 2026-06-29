@@ -13,10 +13,12 @@ import { createPortal } from "react-dom";
 import { Dot, Ico } from "../../ui/kit";
 import { useSessionTasks } from "../../store/backgroundTasksStore";
 import { useConversationsStore } from "../../store/conversationsStore";
+import { useWorkflowLive } from "../../store/workflowLive";
 import { useToolResult } from "../../store/conversationStore";
 import type { BackgroundTask, BackgroundTaskKind } from "../../ipc/client";
-import { resolveAgentId, shortModel, taskStatusDot } from "../../agent/subagentMeta";
+import { resolveAgentId, runIdFromResult, shortModel, taskStatusDot } from "../../agent/subagentMeta";
 import { TranscriptPopover } from "../conversation/TranscriptPopover";
+import { WorkflowDetail } from "../conversation/WorkflowDetail";
 
 const KIND_ICON: Record<BackgroundTaskKind, string> = {
   agent: "spark",
@@ -56,6 +58,13 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
 
   const openedResult = useToolResult(convId, openTask?.tool_use_id ?? "");
   const openedAgentId = openTask ? resolveAgentId(openTask, openedResult?.content) : null;
+  // A workflow drills into the 3-panel detail (not a transcript); its run id lives in the
+  // Workflow tool_result ack.
+  const openedRunId =
+    openTask?.kind === "workflow" ? runIdFromResult(openedResult?.content) : null;
+  // Per-phase live activity for the opened workflow (else the detail's live overview shows
+  // every phase as "à venir"). The hook is unconditional, so an empty task_id is safe.
+  const openedLiveActivity = useWorkflowLive(convId, openTask?.task_id ?? "");
 
   // Close the popover on Escape while it's open.
   useEffect(() => {
@@ -136,7 +145,7 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
                       <span className="wf-mono ag-bgpop-n">{g.items.length}</span>
                     </div>
                     {g.items.map((t) => {
-                      const drill = t.kind === "agent";
+                      const drill = t.kind === "agent" || t.kind === "workflow";
                       const meta = [t.subagent_type, t.model ? shortModel(t.model) : null]
                         .filter(Boolean)
                         .join(" · ");
@@ -169,7 +178,7 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
         : null}
 
       <TranscriptPopover
-        open={!!openTask}
+        open={!!openTask && openTask.kind !== "workflow"}
         sessionId={claudeSessionId}
         agentId={openedAgentId}
         liveSession={convId}
@@ -183,6 +192,17 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
                 .join(" · ") || undefined
             : undefined
         }
+        onClose={() => setOpenTask(null)}
+      />
+
+      <WorkflowDetail
+        open={!!openTask && openTask.kind === "workflow"}
+        sessionId={claudeSessionId}
+        runId={openedRunId}
+        running={openTask?.status === "running"}
+        workflowName={openTask?.label ?? null}
+        currentProgress={openTask?.progress ?? null}
+        liveActivity={openedLiveActivity}
         onClose={() => setOpenTask(null)}
       />
     </>
