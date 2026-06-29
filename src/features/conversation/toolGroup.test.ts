@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { NormalizedBlock } from "../../ipc/client";
 import {
   atomsToSegments,
+  atomStillRunning,
   countWorkSteps,
   flattenWork,
   groupBlocks,
@@ -380,5 +381,45 @@ describe("liveVisibleStart", () => {
   it("keeps everything visible when there are fewer than `window` steps", () => {
     const atoms = flattenWork(segs([tool("a", "Read"), tool("b", "Read")]));
     expect(liveVisibleStart(atoms, none, 3)).toBe(0);
+  });
+});
+
+describe("atomStillRunning", () => {
+  it("treats a missing tool_result as running when there is no task", () => {
+    expect(atomStillRunning({ hasResult: false, taskStatus: null })).toBe(true);
+    expect(atomStillRunning({ hasResult: true, taskStatus: null })).toBe(false);
+  });
+
+  it("lets the background task status win over the tool_result", () => {
+    // The bug case: a sub-agent's Agent tool_result already arrived, but its terminal
+    // task_notification hasn't — the task is still `running`, so it must stay visible.
+    expect(atomStillRunning({ hasResult: true, taskStatus: "running" })).toBe(true);
+    // Task reached a terminal status → done, foldable, even if the result map lags.
+    expect(atomStillRunning({ hasResult: false, taskStatus: "completed" })).toBe(false);
+    expect(atomStillRunning({ hasResult: false, taskStatus: "failed" })).toBe(false);
+    expect(atomStillRunning({ hasResult: false, taskStatus: "stopped" })).toBe(false);
+  });
+
+  it("keeps a sub-agent visible while its task runs, then folds it once the task settles", () => {
+    // [sub-agent, a, b, c, d] with window 3. windowStart alone would fold the sub-agent.
+    const atoms = flattenWork(
+      segs([
+        tool("ag", "Agent"),
+        tool("a", "Read"),
+        tool("b", "Read"),
+        tool("c", "Read"),
+        tool("d", "Read"),
+      ]),
+    );
+    // Every tool already has its result; the sub-agent's task is still `running` though, so it
+    // stays pinned visible at index 0 despite the 3-step window that would otherwise fold it.
+    const stillRunning = (id: string) =>
+      atomStillRunning({ hasResult: true, taskStatus: id === "ag" ? "running" : null });
+    expect(liveVisibleStart(atoms, stillRunning, 3)).toBe(0);
+    // Once the task settles, the sub-agent is just ordinary work the window can fold: the
+    // window keeps the last 3 steps (b, c, d) visible, folding the sub-agent and step a.
+    const done = (id: string) =>
+      atomStillRunning({ hasResult: true, taskStatus: id === "ag" ? "completed" : null });
+    expect(liveVisibleStart(atoms, done, 3)).toBe(2);
   });
 });

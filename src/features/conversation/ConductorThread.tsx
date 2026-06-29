@@ -25,7 +25,7 @@ import {
   useTurnResult,
 } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
-import { useTaskByToolUse } from "../../store/backgroundTasksStore";
+import { useBackgroundTasksStore, useTaskByToolUse } from "../../store/backgroundTasksStore";
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
@@ -35,6 +35,7 @@ import { SubAgentTranscript } from "./SubAgentTranscript";
 import { ThinkingBlock } from "./ThinkingBlock";
 import {
   atomsToSegments,
+  atomStillRunning,
   countWorkSteps,
   flattenWork,
   groupBlocks,
@@ -545,17 +546,33 @@ function CleanBlocks({
   live: boolean;
 }) {
   const ids = workStepIds(work);
-  // Per-id "still running?" of THIS response's tools (no result yet). Shallow-compared so the
-  // component re-renders only when one of ITS ids settles — a past response never re-renders
-  // while a later turn streams.
-  const running = useConversationStore(
+  // Per-id "has a tool_result?" for THIS response's tools. Shallow-compared so the component
+  // re-renders only when one of ITS ids settles — a past response never re-renders while a
+  // later turn streams.
+  const hasResult = useConversationStore(
     useShallow((s) => {
       const tr = s.sessions[session]?.toolResults;
-      return ids.map((id) => !tr?.[id]);
+      return ids.map((id) => !!tr?.[id]);
+    }),
+  );
+  // Per-id background-task status (or null when none). A sub-agent's tool_result can land
+  // before its terminal task_notification, so the result alone would fold a card that still
+  // shows the running dot — see atomStillRunning. Shallow-compared, same scoping as above.
+  const taskStatus = useBackgroundTasksStore(
+    useShallow((s) => {
+      const tasks = s.sessions[session];
+      return ids.map((id) => {
+        if (tasks) {
+          for (const t of Object.values(tasks)) if (t.tool_use_id === id) return t.status;
+        }
+        return null;
+      });
     }),
   );
   const runningById = new Map<string, boolean>();
-  ids.forEach((id, i) => runningById.set(id, running[i] ?? false));
+  ids.forEach((id, i) =>
+    runningById.set(id, atomStillRunning({ hasResult: hasResult[i] ?? false, taskStatus: taskStatus[i] ?? null })),
+  );
   const isRunning = (id: string) => runningById.get(id) ?? false;
 
   // Settled response ending on tools (no closing prose): render unfolded — folding everything

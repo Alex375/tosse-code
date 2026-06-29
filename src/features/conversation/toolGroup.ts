@@ -7,7 +7,7 @@
 // shared verbatim by the live thread (ConductorThread) and the off-thread
 // transcript (SubAgentTranscript).
 
-import type { JsonValue, NormalizedBlock } from "../../ipc/client";
+import type { BackgroundTaskStatus, JsonValue, NormalizedBlock } from "../../ipc/client";
 import { field } from "../../agent/ask";
 import { toolActivityLabel } from "../../store/activity";
 import { isRunInBackground } from "../../agent/subagentMeta";
@@ -244,6 +244,34 @@ export function liveVisibleStart(
     }
   }
   return Math.min(runningStart, windowStart);
+}
+
+/**
+ * Is a work atom (tool step / sub-agent) STILL RUNNING for the live fold? This is the
+ * `isRunning` predicate fed to {@link liveVisibleStart}, and it must agree with what the
+ * rest of the UI shows as "working" (the SubAgentCard dot, the pinned bars) — otherwise the
+ * fold can hide a tool that is still visibly spinning.
+ *
+ * The subtlety the bare tool_result misses: a sub-agent's `Agent` tool_result can land
+ * BEFORE its terminal `task_notification` flips the background task to a settled status.
+ * Keying "done" on the result alone (`hasResult`) would then fold the sub-agent while its
+ * card still shows the running dot — exactly the bug this guards against. So when a
+ * background task exists for the atom, ITS status is authoritative; the result presence only
+ * decides when there is no task (foreground tools — Bash/Read/… spawn none — or a sub-agent
+ * whose task lifecycle we never saw, e.g. a resumed conversation).
+ *
+ * Mirrors SubAgentCard's `running = status === "running" || (status == null && !result)`
+ * (the live fold only runs while the session is busy, so the card's extra `&& busy` is
+ * implied here).
+ */
+export function atomStillRunning(opts: {
+  hasResult: boolean;
+  /** The atom's background task status, or null when no task was reported for it. */
+  taskStatus: BackgroundTaskStatus | null;
+}): boolean {
+  if (opts.taskStatus === "running") return true; // task says working → still running
+  if (opts.taskStatus != null) return false; // task reached a terminal status → done
+  return !opts.hasResult; // no task: a missing tool_result means it is still running
 }
 
 /** How many "étapes" a stretch of work represents, for the "Travail de Claude — N
