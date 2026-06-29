@@ -47,7 +47,8 @@ import {
   type ToolStep,
 } from "./toolGroup";
 import { useDisplay } from "../../store/display";
-import { LiveToolStep, ToolSection } from "./ToolSection";
+import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
+import { UserText } from "./userText";
 import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
 import { resolveTranscriptSource } from "./transcriptSource";
@@ -66,7 +67,7 @@ export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
             en attente
           </span>
         ) : null}
-        {text}
+        <UserText text={text} />
       </div>
     </div>
   );
@@ -478,39 +479,6 @@ function renderSegments(
       />
     );
   });
-}
-
-/**
- * The "clean output" fold: one collapsible block holding a response's intermediate work (tool
- * runs, thinking, in-between prose, sub-agents), so only the response's concluding message
- * stays in clear. Collapsed by default and expandable any time — including mid-stream.
- *
- * The fold header carries NO error indicator: a failed tool inside is folded like the rest,
- * flagged only by the small alert glyph on its command section / step row (visible once the
- * block is open). A conversation-stopping error is a separate timeline item (Notice /
- * turn_result) rendered outside the block, always visible.
- */
-function ClaudeWorkBlock({ count, children }: { count: number; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const label =
-    count > 0 ? `Travail de Claude · ${count} étape${count > 1 ? "s" : ""}` : "Travail de Claude";
-  return (
-    <div className="cv-work">
-      <button
-        type="button"
-        className="cv-work-h"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-      >
-        <Ico name="spark" className="sm cv-work-ico" />
-        <span className="cv-work-t">{label}</span>
-        <span className="cv-work-chev" data-open={open ? "1" : undefined}>
-          <Ico name="chev" className="sm" />
-        </span>
-      </button>
-      {open ? <div className="cv-work-b">{children}</div> : null}
-    </div>
-  );
 }
 
 /** The live sliding window: how many trailing steps stay visible (current activity) before

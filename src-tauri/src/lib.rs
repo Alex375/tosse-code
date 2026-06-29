@@ -11,15 +11,15 @@ use ipc::commands::{
     answer_permission, create_worktree, delete_conversation, delete_repo, fetch_slash_commands,
     generate_conversation_title, get_plan_usage, git_branches, git_commit, git_commit_file_diff,
     git_commit_files, git_diff, git_fetch, git_log, git_pull, git_push, git_status,
-    interrupt_session, list_extensions, list_plugin_contents, list_worktrees, load_persisted_state,
-    load_session_context, load_session_history, load_subagent_transcript, load_workflow_run,
-    mcp_authenticate, mcp_clear_auth, mcp_reconnect, mcp_status, mcp_toggle, open_in_terminal,
-    path_exists, ping, read_dir, read_file, read_image, read_task_output_file,
-    remove_worktree,
-    request_user_attention, send_message, set_active_conversation, set_effort_level, set_model,
+    interrupt_session, list_disk_conversations, list_extensions, list_plugin_contents,
+    list_worktrees, load_persisted_state, load_session_context, load_session_history,
+    load_subagent_transcript, load_workflow_run, mcp_authenticate, mcp_clear_auth, mcp_reconnect,
+    mcp_status, mcp_toggle, open_in_terminal, path_exists, ping, prime_history_index, read_dir,
+    read_file, read_image, read_task_output_file, remove_worktree, request_user_attention,
+    search_conversations, send_message, set_active_conversation, set_effort_level, set_model,
     set_permission_mode, set_plugin_enabled, set_ultracode, spawn_session, stop_session, stop_task,
     terminal_close, terminal_open, terminal_resize, terminal_write, unwatch_dir, upsert_conversation,
-    upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file, Sessions,
+    upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file, HistoryIndex, Sessions,
 };
 use ipc::events::{
     FsChangeEvent, FsWatchErrorEvent, SessionCommandsEvent, SessionMessageEvent,
@@ -40,6 +40,9 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             load_session_context,
             load_subagent_transcript,
             load_workflow_run,
+            list_disk_conversations,
+            prime_history_index,
+            search_conversations,
             read_task_output_file,
             get_plan_usage,
             send_message,
@@ -250,6 +253,8 @@ pub fn run() {
         .invoke_handler(specta_builder.invoke_handler())
         // The live session registry, reachable from every command.
         .manage(Sessions::new())
+        // The cached full-text search index over on-disk conversations (history panel).
+        .manage(HistoryIndex::new())
         // The editor's single active filesystem watch (live file/tree refresh).
         .manage(fs::FsWatcher::new())
         // The live integrated terminals (one PTY-backed shell per conversation).

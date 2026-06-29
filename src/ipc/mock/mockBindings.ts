@@ -9,6 +9,7 @@ import type {
   ContextFill,
   ConversationItem,
   ConversationRecord,
+  DiskConversation,
   ExtensionsSnapshot,
   FileContent,
   FsChangeEvent,
@@ -28,6 +29,7 @@ import type {
   Pong,
   RepoRecord,
   Result,
+  SearchHit,
   SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
@@ -306,10 +308,12 @@ export const mockCommands = {
     return ok(null);
   },
 
-  async loadSessionHistory(_sessionId: string): Promise<Result<ConversationItem[], string>> {
-    // No on-disk transcript in the browser mock — history lives only in the live
-    // scenario stream. Empty means "nothing to replay", so reload is a no-op and
-    // keeps whatever the scenario already rendered.
+  async loadSessionHistory(sessionId: string): Promise<Result<ConversationItem[], string>> {
+    // No real on-disk transcript in the browser mock. For the history panel's demo rows
+    // return a representative transcript so the PREVIEW pane renders real-shaped content
+    // in dev/Playwright; otherwise empty ("nothing to replay" → reload stays a no-op and
+    // keeps whatever the live scenario already rendered).
+    if (HISTORY_DEMO_SESSION_IDS.has(sessionId)) return ok(DEMO_SUBAGENT_TRANSCRIPT);
     return ok([]);
   },
 
@@ -326,6 +330,26 @@ export const mockCommands = {
     // No transcript in the browser mock; the scenario's baseState already carries a
     // context fill, so nothing to seed here.
     return ok({ context_tokens: null, context_window: null });
+  },
+
+  async listDiskConversations(): Promise<Result<DiskConversation[], string>> {
+    // A representative set so the history panel renders real-shaped rows in
+    // dev/Playwright (two repos, one orphan-style worktree conversation).
+    return ok(MOCK_DISK_CONVERSATIONS);
+  },
+
+  async primeHistoryIndex(): Promise<Result<number, string>> {
+    return ok(MOCK_DISK_CONVERSATIONS.length);
+  },
+
+  async searchConversations(query: string): Promise<Result<SearchHit[], string>> {
+    const q = query.trim().toLowerCase();
+    if (!q) return ok([]);
+    const hits: SearchHit[] = MOCK_DISK_CONVERSATIONS.filter(
+      (c) =>
+        (c.title ?? "").toLowerCase().includes(q) || c.excerpt.toLowerCase().includes(q),
+    ).map((c, i) => ({ session_id: c.session_id, score: 100 - i, snippet: c.excerpt }));
+    return ok(hits);
   },
 
   async getPlanUsage(): Promise<Result<PlanUsage, UsageError>> {
@@ -745,3 +769,37 @@ function mockWorktreeList(repoPath: string): WorktreeInfo[] {
   }
   return list;
 }
+
+// Demo on-disk conversations for the history panel (dev/Playwright only).
+const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
+  {
+    session_id: MOCK_SESSION_ID,
+    cwd: "/Users/dev/demo-repo",
+    repo_root: "/Users/dev/demo-repo",
+    git_branch: "main",
+    title: "Refonte de l'authentification",
+    excerpt: "Le déploiement casse au login, il faut revoir l'auth du serveur",
+    mtime_ms: Date.now() - 3_600_000,
+  },
+  {
+    session_id: "demo-orphan-2222",
+    cwd: "/Users/dev/demo-repo/.claude/worktrees/feat-dark-mode",
+    repo_root: "/Users/dev/demo-repo",
+    git_branch: "feat/dark-mode",
+    title: null,
+    excerpt: "Ajoute un toggle de dark mode dans les réglages",
+    mtime_ms: Date.now() - 4 * 86_400_000,
+  },
+  {
+    session_id: "demo-other-3333",
+    cwd: "/Users/dev/other-project",
+    repo_root: "/Users/dev/other-project",
+    git_branch: null,
+    title: "Script d'import CSV",
+    excerpt: "Parser le CSV et insérer les lignes en base",
+    mtime_ms: Date.now() - 20 * 86_400_000,
+  },
+];
+
+// Session ids of the history-panel demo rows — their preview renders a sample transcript.
+const HISTORY_DEMO_SESSION_IDS = new Set(MOCK_DISK_CONVERSATIONS.map((c) => c.session_id));
