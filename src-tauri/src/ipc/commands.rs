@@ -867,6 +867,77 @@ pub fn unwatch_dir(watcher: tauri::State<'_, crate::fs::FsWatcher>) -> Result<()
     Ok(())
 }
 
+// ---- Editor filesystem: mutating tree ops (the explorer's context menu) -----
+//
+// New file / new folder / rename / copy / delete, all forwarding to [`crate::fs`]
+// (the one filesystem service) off the async runtime. The live watcher echoes the
+// change back as an `FsChangeEvent`, so the tree refreshes itself — these commands
+// just perform the mutation. Create/rename/copy refuse to clobber; delete is the
+// safe kind (moves to the OS trash, recoverable).
+
+/// Create an empty file at `path` (explorer "New File"). Errors if the name exists.
+#[tauri::command]
+#[specta::specta]
+pub async fn create_file(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::create_file(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Create a new directory at `path` (explorer "New Folder"). Errors if it exists.
+#[tauri::command]
+#[specta::specta]
+pub async fn create_dir(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::create_dir(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Rename / move `from` to `to` (explorer "Rename", and the move half of cut +
+/// paste). Refuses to overwrite an existing destination.
+#[tauri::command]
+#[specta::specta]
+pub async fn rename_entry(from: String, to: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::rename(&from, &to))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Recursively copy `from` to `to` (the copy half of copy + paste). Refuses to
+/// overwrite an existing destination; the front resolves a non-colliding name.
+#[tauri::command]
+#[specta::specta]
+pub async fn copy_entry(from: String, to: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::copy_path(&from, &to))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Move `path` to the OS trash (explorer "Delete" — recoverable from the Finder),
+/// never an irreversible unlink.
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_to_trash(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::fs::delete_to_trash(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Reveal `path` in the OS file manager (macOS Finder), selecting the item — the
+/// explorer's "Reveal in Finder". Forwards to the opener plugin's native reveal.
+#[tauri::command]
+#[specta::specta]
+pub async fn reveal_in_finder(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || tauri_plugin_opener::reveal_item_in_dir(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 // ---- Integrated terminal (PTY) --------------------------------------------
 //
 // The front's boundary to `terminal::Terminals` (the single PTY-speaking service).

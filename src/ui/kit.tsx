@@ -60,6 +60,13 @@ const WF_PATHS: Record<string, string> = {
   wand: "M4 18 13 9M15 3l.9 2.1L18 6l-2.1.9L15 9l-.9-2.1L12 6l2.1-.9z",
   // A plug — an MCP server tool call.
   plug: "M7 3v4M13 3v4M5 7h10v2a5 5 0 0 1-10 0V7ZM10 14v5",
+  // File-explorer context-menu glyphs (rename / copy / cut / paste / copy-path / reveal).
+  pencil: "M5 17l.7-3.3L14 5l3 3-8.3 8.3L5 17ZM12.5 6.5l3 3",
+  copy: "M9 9h7v7H9zM6 13H5V5h8v1",
+  scissors: "M7 7l8 8M7 15l8-8M6 5.4a1.7 1.7 0 1 0 0 3.3 1.7 1.7 0 0 0 0-3.3M6 13.3a1.7 1.7 0 1 0 0 3.3 1.7 1.7 0 0 0 0-3.3",
+  clipboard: "M9 6H6v11h10V6h-3M9 5h4v2H9z",
+  link: "M9 12a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-1 1M12 9a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l1-1",
+  external: "M8 5H5v12h12v-3M12 5h5v5M17 5l-7 7",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {

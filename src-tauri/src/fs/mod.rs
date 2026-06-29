@@ -183,6 +183,133 @@ pub fn write_file(path: &str, content: &str) -> std::io::Result<()> {
     fs::write(path, content)
 }
 
+// ---- Mutating tree operations (the explorer's context menu) ----------------
+//
+// New file / new folder / rename / copy / delete, driven by right-click actions
+// in the file tree. Every one that lands new content REFUSES to clobber an
+// existing path (`create_new` / an explicit `exists()` guard): a typo or a name
+// collision surfaces an error instead of silently destroying data — the caller
+// (paste) is the one that resolves a fresh, non-colliding name. Delete is the
+// lone exception and is deliberately the SAFE kind: it moves to the OS trash
+// (recoverable), never an irreversible unlink.
+
+/// French "already exists" error, shared by the create/rename/copy guards.
+fn already_exists() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "un élément de ce nom existe déjà",
+    )
+}
+
+/// Create an empty file at `path`. Errors if anything already exists there (we
+/// never silently overwrite — the action is "new file"). `create_new` makes the
+/// existence check atomic, so two quick creates can't race into a clobber.
+pub fn create_file(path: &str) -> std::io::Result<()> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map(|_| ())
+}
+
+/// Create a new directory at `path` (a single level). Errors if it already exists.
+pub fn create_dir(path: &str) -> std::io::Result<()> {
+    if Path::new(path).exists() {
+        return Err(already_exists());
+    }
+    fs::create_dir(path)
+}
+
+/// Rename / move `from` to `to`. Refuses to clobber a DIFFERENT existing entry: a
+/// plain `fs::rename` on Unix would silently replace the destination, so we guard
+/// first. The guard explicitly allows the case where `to` resolves to `from`
+/// itself — on a case-insensitive volume (default APFS/HFS+) a case-only rename
+/// (`Readme.md` → `readme.md`) has `to` "exist" as the same file; that's a
+/// legitimate rename, not a clobber, so it must go through.
+pub fn rename(from: &str, to: &str) -> std::io::Result<()> {
+    let (from_p, to_p) = (Path::new(from), Path::new(to));
+    if to_p.exists() && !same_entry(from_p, to_p) {
+        return Err(already_exists());
+    }
+    fs::rename(from_p, to_p)
+}
+
+/// Whether two existing paths denote the SAME filesystem entry — so a case-only or
+/// no-op rename isn't mistaken for a clobber. Compares canonical paths (which
+/// resolve symlinks and the on-disk case). Returns false if either can't be
+/// canonicalized (treated as distinct → the clobber guard stays in force).
+fn same_entry(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
+}
+
+/// Recursively copy `from` (a file or a whole directory tree) to `to`. Refuses an
+/// existing `to`; the caller (paste) resolves a non-colliding destination name. On
+/// failure mid-tree, the partially-written `to` is rolled back so a retry isn't
+/// blocked by a half-copied destination (and `copy 2` / `copy 3` don't pile up).
+pub fn copy_path(from: &str, to: &str) -> std::io::Result<()> {
+    let to_p = Path::new(to);
+    if to_p.exists() {
+        return Err(already_exists());
+    }
+    let res = copy_recursive(Path::new(from), to_p);
+    if res.is_err() {
+        // Best-effort rollback of the destination WE just started creating.
+        if to_p.is_dir() {
+            let _ = fs::remove_dir_all(to_p);
+        } else if to_p.exists() {
+            let _ = fs::remove_file(to_p);
+        }
+    }
+    res
+}
+
+/// Copy one tree node. A symlink is recreated as a symlink (its target is copied
+/// verbatim, like VS Code — and it is NEVER followed into recursion, so a link to
+/// a directory, e.g. a pnpm `node_modules` entry, copies cleanly and a cyclic link
+/// can't loop). A directory is created then recursed; everything else is a byte
+/// copy. `symlink_metadata` (not `metadata`) is what keeps a symlink off the
+/// recursion path.
+fn copy_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
+    let ft = fs::symlink_metadata(from)?.file_type();
+    if ft.is_symlink() {
+        copy_symlink(from, to)
+    } else if ft.is_dir() {
+        fs::create_dir(to)?;
+        for dent in fs::read_dir(from)? {
+            let dent = dent?;
+            copy_recursive(&dent.path(), &to.join(dent.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::copy(from, to).map(|_| ())
+    }
+}
+
+/// Recreate `from` (a symlink) at `to`, preserving the link target.
+#[cfg(unix)]
+fn copy_symlink(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(fs::read_link(from)?, to)
+}
+
+/// No portable symlink primitive on non-Unix: fall back to copying the link's
+/// resolved bytes (best effort).
+#[cfg(not(unix))]
+fn copy_symlink(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::copy(from, to).map(|_| ())
+}
+
+/// Move `path` to the OS trash/recycle bin — the VS Code "Delete" default. This is
+/// recoverable (restore from the Finder), unlike an irreversible `remove_file` /
+/// `remove_dir_all`, so a misclick on the wrong node never destroys work. The
+/// `trash` crate uses the native NSFileManager API on macOS (no Finder-automation
+/// permission). Its error type isn't `io::Error`, so this returns a `String`.
+pub fn delete_to_trash(path: &str) -> Result<(), String> {
+    trash::delete(path).map_err(|e| e.to_string())
+}
+
 /// Whether any path segment is an ignored build/VCS directory.
 fn is_ignored(path: &Path) -> bool {
     path.components().any(|c| match c {
@@ -379,5 +506,111 @@ mod tests {
         assert!(is_ignored(Path::new("/repo/node_modules/x/y.js")));
         assert!(is_ignored(Path::new("/repo/.git/HEAD")));
         assert!(!is_ignored(Path::new("/repo/src/main.rs")));
+    }
+
+    #[test]
+    fn create_file_makes_an_empty_file_and_refuses_to_clobber() {
+        let d = fresh_dir();
+        let f = d.join("new.txt");
+        create_file(f.to_str().unwrap()).unwrap();
+        assert!(f.is_file());
+        assert_eq!(fs::read_to_string(&f).unwrap(), "");
+        // A second create on the same name must fail, not overwrite.
+        assert!(create_file(f.to_str().unwrap()).is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn create_dir_makes_a_dir_and_refuses_to_clobber() {
+        let d = fresh_dir();
+        let sub = d.join("pkg");
+        create_dir(sub.to_str().unwrap()).unwrap();
+        assert!(sub.is_dir());
+        assert!(create_dir(sub.to_str().unwrap()).is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn rename_moves_and_refuses_to_clobber() {
+        let d = fresh_dir();
+        let a = d.join("a.txt");
+        let b = d.join("b.txt");
+        write_file(a.to_str().unwrap(), "x").unwrap();
+        rename(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
+        assert!(!a.exists() && b.is_file());
+        // Renaming onto an existing name must fail (no silent replace).
+        let c = d.join("c.txt");
+        write_file(c.to_str().unwrap(), "y").unwrap();
+        assert!(rename(c.to_str().unwrap(), b.to_str().unwrap()).is_err());
+        assert_eq!(fs::read_to_string(&b).unwrap(), "x"); // b untouched
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn copy_path_copies_file_and_tree() {
+        let d = fresh_dir();
+        // File copy.
+        let a = d.join("a.txt");
+        write_file(a.to_str().unwrap(), "hello").unwrap();
+        let a2 = d.join("a copy.txt");
+        copy_path(a.to_str().unwrap(), a2.to_str().unwrap()).unwrap();
+        assert_eq!(fs::read_to_string(&a2).unwrap(), "hello");
+        assert!(a.is_file()); // source kept (copy, not move)
+
+        // Recursive directory copy.
+        let src = d.join("src");
+        fs::create_dir(&src).unwrap();
+        write_file(src.join("inner.txt").to_str().unwrap(), "deep").unwrap();
+        fs::create_dir(src.join("nested")).unwrap();
+        write_file(src.join("nested/leaf.txt").to_str().unwrap(), "leaf").unwrap();
+        let dst = d.join("src copy");
+        copy_path(src.to_str().unwrap(), dst.to_str().unwrap()).unwrap();
+        assert_eq!(fs::read_to_string(dst.join("inner.txt")).unwrap(), "deep");
+        assert_eq!(fs::read_to_string(dst.join("nested/leaf.txt")).unwrap(), "leaf");
+
+        // Refuses to clobber an existing destination.
+        assert!(copy_path(a.to_str().unwrap(), a2.to_str().unwrap()).is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_path_preserves_symlinks_without_following_them() {
+        let d = fresh_dir();
+        // A directory containing a symlink to ANOTHER directory — the case a naive
+        // copy (follow + recurse) would error on or loop over.
+        let target = d.join("target");
+        fs::create_dir(&target).unwrap();
+        write_file(target.join("t.txt").to_str().unwrap(), "t").unwrap();
+        let src = d.join("src");
+        fs::create_dir(&src).unwrap();
+        std::os::unix::fs::symlink(&target, src.join("link")).unwrap();
+        write_file(src.join("real.txt").to_str().unwrap(), "r").unwrap();
+
+        let dst = d.join("src copy");
+        copy_path(src.to_str().unwrap(), dst.to_str().unwrap()).unwrap();
+
+        // Regular file copied; the link is recreated AS a link (not its contents).
+        assert_eq!(fs::read_to_string(dst.join("real.txt")).unwrap(), "r");
+        let link_meta = fs::symlink_metadata(dst.join("link")).unwrap();
+        assert!(link_meta.file_type().is_symlink());
+        assert_eq!(fs::read_link(dst.join("link")).unwrap(), target);
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn rename_allows_same_entry_but_still_blocks_a_real_clobber() {
+        let d = fresh_dir();
+        let a = d.join("a.txt");
+        write_file(a.to_str().unwrap(), "x").unwrap();
+        // Renaming a path onto itself (same entry) is allowed — this is the shape
+        // of a case-only rename on a case-insensitive volume.
+        rename(a.to_str().unwrap(), a.to_str().unwrap()).unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(), "x");
+        // A real clobber of a DIFFERENT existing file is still refused.
+        let b = d.join("b.txt");
+        write_file(b.to_str().unwrap(), "y").unwrap();
+        assert!(rename(a.to_str().unwrap(), b.to_str().unwrap()).is_err());
+        fs::remove_dir_all(&d).unwrap();
     }
 }

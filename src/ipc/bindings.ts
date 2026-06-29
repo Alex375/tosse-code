@@ -630,6 +630,76 @@ async unwatchDir() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Create an empty file at `path` (explorer "New File"). Errors if the name exists.
+ */
+async createFile(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_file", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Create a new directory at `path` (explorer "New Folder"). Errors if it exists.
+ */
+async createDir(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_dir", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Rename / move `from` to `to` (explorer "Rename", and the move half of cut +
+ * paste). Refuses to overwrite an existing destination.
+ */
+async renameEntry(from: string, to: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("rename_entry", { from, to }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Recursively copy `from` to `to` (the copy half of copy + paste). Refuses to
+ * overwrite an existing destination; the front resolves a non-colliding name.
+ */
+async copyEntry(from: string, to: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("copy_entry", { from, to }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Move `path` to the OS trash (explorer "Delete" — recoverable from the Finder),
+ * never an irreversible unlink.
+ */
+async deleteToTrash(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_to_trash", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Reveal `path` in the OS file manager (macOS Finder), selecting the item — the
+ * explorer's "Reveal in Finder". Forwards to the opener plugin's native reveal.
+ */
+async revealInFinder(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reveal_in_finder", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Open (or replace) the integrated terminal `id`: spawn the user's login shell
  * under a PTY rooted at `cwd`, sized `cols`×`rows`. Output streams as
  * `TerminalOutputEvent`; the shell exiting fires `TerminalExitEvent`.

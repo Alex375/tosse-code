@@ -3,6 +3,7 @@
 // readFile returns deterministic synthetic content, so "external change" is real.
 
 import { beforeEach, describe, expect, it } from "vitest";
+import { useAppErrors } from "../../store/appErrors";
 import { useEditorStore, type FileBuffer } from "./editorStore";
 
 const CONV = "conv-1";
@@ -357,5 +358,109 @@ describe("reveal (clickable file mentions)", () => {
     s.revealInEditor(CONV, ROOT, FILE);
     await tick();
     expect(buffer().pendingReveal).toBeNull();
+  });
+});
+
+// The explorer's mutating actions must NEVER fail silently: any rejected disk op
+// (or a thrown transport probe) has to land on the app-level error banner. These
+// lock that contract via the mock's `__fail__`/`__throw__` path sentinels.
+describe("explorer mutations — error surfacing (zero silent failures)", () => {
+  beforeEach(() => {
+    useEditorStore.setState({ byConv: {}, clipboard: null });
+    useAppErrors.setState({ errors: [] });
+  });
+
+  function setEditing(target: { kind: "rename" | "newFile" | "newDir"; parentPath: string; targetPath?: string; initial: string }) {
+    useEditorStore.setState((st) => ({
+      byConv: { ...st.byConv, [CONV]: { ...st.byConv[CONV], editing: target } },
+    }));
+  }
+
+  it("surfaces a failed delete (trash) on the app banner", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.deletePath(CONV, "/repo/__fail__/doomed.txt");
+    expect(useAppErrors.getState().errors.length).toBe(1);
+  });
+
+  it("surfaces a failed rename", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    setEditing({ kind: "rename", parentPath: ROOT, targetPath: "/repo/__fail__.txt", initial: "__fail__.txt" });
+    await s.commitEdit(CONV, "renamed.txt");
+    expect(useAppErrors.getState().errors.length).toBe(1);
+  });
+
+  it("surfaces a failed create", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    setEditing({ kind: "newFile", parentPath: ROOT, initial: "" });
+    await s.commitEdit(CONV, "broken__fail__.txt");
+    expect(useAppErrors.getState().errors.length).toBe(1);
+  });
+
+  it("surfaces an invalid name instead of swallowing it", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    setEditing({ kind: "newFile", parentPath: ROOT, initial: "" });
+    await s.commitEdit(CONV, "a/b"); // a separator → invalid, must be reported
+    expect(useAppErrors.getState().errors.length).toBe(1);
+  });
+
+  it("surfaces a thrown collision probe during paste (the one un-safeCmd'd call)", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    s.setClipboard(["/repo/a.txt"], "copy");
+    await s.pasteInto(CONV, "/repo/__throw__dir");
+    expect(useAppErrors.getState().errors.length).toBe(1);
+  });
+
+  it("surfaces a failed live refresh (a stale tree is never silent)", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    // Pretend a directory whose RE-READ will fail is already loaded, then signal a
+    // change under it: the refresh re-reads it, fails, and must surface (not just
+    // console.error and leave the tree stale).
+    useEditorStore.setState((st) => ({
+      byConv: {
+        ...st.byConv,
+        [CONV]: { ...st.byConv[CONV], dirs: { ...st.byConv[CONV].dirs, "/repo/__fail__d": [] } },
+      },
+    }));
+    await s.onExternalChange(CONV, ["/repo/__fail__d/changed.txt"]);
+    expect(useAppErrors.getState().errors.length).toBe(1);
+  });
+});
+
+// Renaming/moving a DIRECTORY must rebase its open child buffers (keep the tabs),
+// not silently drop them.
+describe("explorer mutations — folder rename rebases open buffers", () => {
+  beforeEach(() => {
+    useEditorStore.setState({ byConv: {}, clipboard: null });
+    useAppErrors.setState({ errors: [] });
+  });
+
+  const settle = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it("moves a child buffer with the folder instead of closing it", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/dir/child.txt", { preview: false });
+    await settle();
+    expect(useEditorStore.getState().byConv[CONV].buffers["/repo/dir/child.txt"]).toBeTruthy();
+
+    // Rename the folder /repo/dir -> /repo/renamed (renameEntry mock → ok).
+    useEditorStore.setState((st) => ({
+      byConv: {
+        ...st.byConv,
+        [CONV]: { ...st.byConv[CONV], editing: { kind: "rename", parentPath: ROOT, targetPath: "/repo/dir", initial: "dir" } },
+      },
+    }));
+    await s.commitEdit(CONV, "renamed");
+
+    const c = useEditorStore.getState().byConv[CONV];
+    expect(c.buffers["/repo/dir/child.txt"]).toBeUndefined(); // old path gone
+    expect(c.buffers["/repo/renamed/child.txt"]).toBeTruthy(); // rebased, not closed
+    expect(c.tabs).toContain("/repo/renamed/child.txt");
   });
 });
