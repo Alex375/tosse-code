@@ -438,6 +438,18 @@ fn list_disk_conversations_in(config_dir: &Path) -> Vec<DiskConversation> {
     out
 }
 
+/// Milliseconds since the Unix epoch of a file's mtime, `0` when unavailable. The
+/// recency key shared by the disk listing ([`scan_disk_conversation`]) and the search
+/// index ([`index_one`]) — kept in one place so the two always order conversations the
+/// same way.
+fn file_mtime_ms(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Bounded head-read of one transcript → its listing row, or `None` for an
 /// empty/aborted session (no human message) which is filtered out as noise.
 fn scan_disk_conversation(path: &Path) -> Option<DiskConversation> {
@@ -446,12 +458,7 @@ fn scan_disk_conversation(path: &Path) -> Option<DiskConversation> {
     if !meta.is_file() {
         return None;
     }
-    let mtime_ms = meta
-        .modified()
-        .ok()
-        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+    let mtime_ms = file_mtime_ms(&meta);
 
     let file = std::fs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
@@ -659,9 +666,7 @@ fn index_one(path: &Path) -> Option<IndexedConversation> {
     let session_id = path.file_stem()?.to_str()?.to_string();
     let mtime_ms = std::fs::metadata(path)
         .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
+        .map(|m| file_mtime_ms(&m))
         .unwrap_or(0);
     let file = std::fs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
@@ -837,15 +842,33 @@ fn snippet_around(body: &str, body_fold: &str, terms: &[String]) -> String {
     let Some(pos) = pos else {
         return String::new();
     };
-    let chars: Vec<char> = body.chars().collect();
-    let start = pos.saturating_sub(40);
-    let end = (pos + 80).min(chars.len());
-    let core: String = chars[start..end].iter().collect();
+    // Map the char window [pos-40, pos+80) to byte offsets in a single pass, instead of
+    // collecting the whole body into a `Vec<char>` just to slice it (the body is capped at
+    // INDEX_BODY_CAP, so that Vec was up to ~200K elements allocated per hit). We stop as
+    // soon as the window's end is reached — reaching it proves there is more body after the
+    // snippet, which is exactly the trailing-"…" condition.
+    let start_char = pos.saturating_sub(40);
+    let end_char = pos + 80;
+    let mut byte_start = 0usize;
+    let mut byte_end: Option<usize> = None;
+    for (ci, (bi, _)) in body.char_indices().enumerate() {
+        if ci == start_char {
+            byte_start = bi;
+        }
+        if ci == end_char {
+            byte_end = Some(bi);
+            break;
+        }
+    }
+    let core = match byte_end {
+        Some(b) => &body[byte_start..b],
+        None => &body[byte_start..],
+    };
     let mut s = core.split_whitespace().collect::<Vec<_>>().join(" ");
-    if start > 0 {
+    if start_char > 0 {
         s = format!("…{s}");
     }
-    if end < chars.len() {
+    if byte_end.is_some() {
         s.push('…');
     }
     s
@@ -1202,5 +1225,33 @@ mod tests {
 
         // Empty query → no hits (the front shows the full unfiltered list instead).
         assert!(score_index(&index, "   ").is_empty());
+    }
+
+    #[test]
+    fn snippet_around_windows_on_char_boundaries_with_ellipses() {
+        // Helper: fold the body the way the index does, so the term position aligns.
+        let snip = |body: &str, term: &str| snippet_around(body, &fold(body), &[term.to_string()]);
+
+        // Hit deep inside a long body → trimmed on BOTH sides (leading + trailing "…").
+        // The window straddles multi-byte accents ("é"), exercising the char→byte mapping.
+        let long = format!("{}café déployé serveur {}", "mot ".repeat(40), "fin ".repeat(40));
+        let mid = snip(&long, "deploye");
+        assert!(mid.starts_with('…'), "leading ellipsis: {mid:?}");
+        assert!(mid.ends_with('…'), "trailing ellipsis: {mid:?}");
+        assert!(mid.contains("café déployé serveur"), "window content: {mid:?}");
+
+        // Hit near the START → no leading "…", but trailing "…" (more body after).
+        let head = snip(&format!("déployé {}", "mot ".repeat(60)), "deploye");
+        assert!(!head.starts_with('…'), "no leading ellipsis at start: {head:?}");
+        assert!(head.ends_with('…'), "trailing ellipsis: {head:?}");
+
+        // Hit near the END → leading "…", but no trailing "…" (body ends here).
+        let tail = snip(&format!("{}déployé", "mot ".repeat(60)), "deploye");
+        assert!(tail.starts_with('…'), "leading ellipsis: {tail:?}");
+        assert!(!tail.ends_with('…'), "no trailing ellipsis at end: {tail:?}");
+        assert!(tail.contains("déployé"), "keeps the accented hit: {tail:?}");
+
+        // Title/excerpt-only match (no body hit) → empty snippet.
+        assert_eq!(snip("rien ici", "absent"), "");
     }
 }
