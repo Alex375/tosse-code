@@ -211,6 +211,31 @@ export function useStickToBottom(convId: string, preserveKey?: unknown): StickTo
     };
   }, [applyRestore]);
 
+  // Keep the bottom pinned when the SCROLL VIEWPORT shrinks/grows on its own — a
+  // background-task bar (AgentBar / BashBar / MonitorBar) appearing or disappearing
+  // below the thread, the composer growing to several lines, the window resizing. These
+  // shrink `.cv-thread` (flex:1) without re-rendering it: the bars are sibling components
+  // fed by a different store, so `StreamFollow` never fires `onRender`. Without this,
+  // the now-shorter viewport clips the tail of the last message behind the bar instead
+  // of riding up above it. Only acts while following + done restoring, so it never fights
+  // a user reading mid-thread nor the initial-position restore. (Guarded for jsdom, which
+  // has no ResizeObserver.)
+  useEffect(() => {
+    const el = scrollEl.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let lastH = el.clientHeight;
+    const ro = new ResizeObserver(() => {
+      const node = scrollEl.current;
+      if (!node) return;
+      const h = node.clientHeight;
+      if (h === lastH) return; // width-only change (RO also fires on those) → ignore
+      lastH = h;
+      if (following.current && !restoring.current) node.scrollTop = node.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Re-anchor when `preserveKey` flips (a toggle that changes the thread height a lot).
   // Runs as a layout effect AFTER the new layout is committed but before paint, so the
   // jump is never visible. Skips the initial mount (no toggle yet).
