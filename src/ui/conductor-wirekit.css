@@ -296,6 +296,13 @@
 .wf-mi-t { font-size:12px; flex:1; white-space:nowrap; }
 .wf-mi-h { font-size:10px; color:var(--wf-tx-xlo); margin-left:12px; }
 .wf-mi-lbl { font-size:9.5px; letter-spacing:.7px; text-transform:uppercase; color:var(--wf-tx-xlo); padding:6px 8px 4px; }
+/* Cursor-anchored file-explorer context menu (positioned inline via the portal).
+   Reuses .wf-pop / .wf-mi; adds a destructive ("Delete") variant + an icon-width
+   spacer so label-only items stay aligned. */
+.cv-ctxmenu { min-width:212px; max-height:calc(100vh - 12px); overflow-y:auto; }
+.wf-mi.danger { color:var(--wf-err); }
+.wf-mi.danger:hover { background:color-mix(in srgb, var(--wf-err) 14%, transparent); }
+.cv-ctxmenu-noicon { width:16px; flex:0 0 auto; }
 
 /* ---- jauge d'effort : slider à crans (footer composer) ----- */
 .wf-eff { min-width:236px; padding:11px 13px 13px; display:flex; flex-direction:column; gap:11px; }

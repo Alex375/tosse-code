@@ -443,10 +443,13 @@ export const mockCommands = {
     return ok(null);
   },
 
-  async pathExists(_path: string): Promise<boolean> {
-    // No real filesystem in the browser mock — everything "exists" so the normal
-    // spawn flow runs (the deleted-worktree recovery is exercised in the real app).
-    return true;
+  async pathExists(path: string): Promise<boolean> {
+    // A `__throw__` path simulates a transport rejection (exercises the paste
+    // collision-probe error path). Otherwise everything "exists" by default so the
+    // worktree spawn flow runs unchanged — except a `__free__` path, which reports
+    // missing so a paste's collision probe resolves to the bare name at once.
+    if (path.includes("__throw__")) throw new Error("mock pathExists transport failure");
+    return !path.includes("__free__");
   },
 
   // ---- Git history / source control: synthetic data so the Git panel renders in
@@ -536,6 +539,49 @@ export const mockCommands = {
   },
 
   async writeFile(_path: string, _content: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
+  // Mutating tree ops (explorer context menu). Same `__fail__`/`__throw__`
+  // sentinels so unit tests can drive both the success and the error-surfacing
+  // paths deterministically without a real filesystem.
+  async createFile(path: string): Promise<Result<null, string>> {
+    if (path.includes("__throw__")) throw new Error("mock createFile transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock createFile failed" };
+    return ok(null);
+  },
+
+  async createDir(path: string): Promise<Result<null, string>> {
+    if (path.includes("__throw__")) throw new Error("mock createDir transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock createDir failed" };
+    return ok(null);
+  },
+
+  async renameEntry(from: string, to: string): Promise<Result<null, string>> {
+    if (from.includes("__throw__") || to.includes("__throw__"))
+      throw new Error("mock renameEntry transport failure");
+    if (from.includes("__fail__") || to.includes("__fail__"))
+      return { status: "error", error: "mock renameEntry failed" };
+    return ok(null);
+  },
+
+  async copyEntry(from: string, to: string): Promise<Result<null, string>> {
+    if (from.includes("__throw__") || to.includes("__throw__"))
+      throw new Error("mock copyEntry transport failure");
+    if (from.includes("__fail__") || to.includes("__fail__"))
+      return { status: "error", error: "mock copyEntry failed" };
+    return ok(null);
+  },
+
+  async deleteToTrash(path: string): Promise<Result<null, string>> {
+    if (path.includes("__throw__")) throw new Error("mock deleteToTrash transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock deleteToTrash failed" };
+    return ok(null);
+  },
+
+  async revealInFinder(path: string): Promise<Result<null, string>> {
+    if (path.includes("__throw__")) throw new Error("mock revealInFinder transport failure");
+    if (path.includes("__fail__")) return { status: "error", error: "mock revealInFinder failed" };
     return ok(null);
   },
 
