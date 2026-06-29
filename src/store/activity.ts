@@ -8,6 +8,7 @@ import type { JsonValue, SessionEntry } from "./types";
 import { todoSummary } from "./todos";
 import { field } from "../agent/ask";
 import { mcpStepLabel } from "../agent/toolNames";
+import { hostOf } from "../features/conversation/webResults";
 import { useConversationStore } from "./conversationStore";
 
 function basename(p: string): string {
@@ -61,8 +62,12 @@ export function toolActivityLabel(name: string, input: JsonValue): string {
       const d = field(input, "description");
       return d ? `Sub-agent: ${truncate(d, 28)}` : "Delegate to a sub-agent";
     }
-    case "WebFetch":
-      return "Fetch a web page";
+    case "WebFetch": {
+      const u = field(input, "url");
+      // hostOf returns the raw input verbatim on a parse failure (scheme-less url),
+      // so truncate like every other arg-bearing label to avoid a long leak.
+      return u ? `Fetch ${truncate(hostOf(u), 28)}` : "Fetch a web page";
+    }
     case "WebSearch": {
       const q = field(input, "query");
       return q ? `Search "${truncate(q, 26)}"` : "Search the web";

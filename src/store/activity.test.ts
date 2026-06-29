@@ -67,7 +67,10 @@ describe("toolActivityLabel", () => {
     expect(toolActivityLabel("Task", { description: "Audit auth" })).toBe("Sub-agent: Audit auth");
     // `Agent` is the current wire name of the sub-agent tool (alias of `Task`).
     expect(toolActivityLabel("Agent", { description: "Audit auth" })).toBe("Sub-agent: Audit auth");
-    expect(toolActivityLabel("WebFetch", { url: "https://x" })).toBe("Fetch a web page");
+    expect(toolActivityLabel("WebFetch", { url: "https://www.example.com/page" })).toBe(
+      "Fetch example.com",
+    );
+    expect(toolActivityLabel("WebFetch", {})).toBe("Fetch a web page");
     expect(toolActivityLabel("WebSearch", { query: "tauri updater" })).toBe('Search "tauri updater"');
     expect(toolActivityLabel("TodoWrite", { todos: [] })).toBe("Update the plan");
     expect(toolActivityLabel("AskUserQuestion", { questions: [1, 2] })).toBe("Ask 2 questions");

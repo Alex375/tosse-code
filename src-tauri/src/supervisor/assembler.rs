@@ -1186,6 +1186,60 @@ mod tests {
         assert_eq!(result.as_deref(), Some("toolu_1"));
     }
 
+    const WEBSEARCH_CAPTURE: &str = include_str!("fixtures/capture_websearch.jsonl");
+
+    /// Non-regression: the web-research tools (WebSearch / WebFetch) carry their
+    /// structure (the `Links: [...]` JSON array, the fetched markdown) INSIDE a
+    /// string tool_result. The assembler must keep that content verbatim — the front
+    /// parser (webResults.ts) recovers the sources from it — and never flatten or
+    /// drop it. Guards the "preserve metadata to the front" contract.
+    #[test]
+    fn preserves_web_tool_result_content_verbatim() {
+        let mut asm = Assembler::new();
+        let mut results: Vec<(String, String)> = Vec::new();
+        for line in WEBSEARCH_CAPTURE.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let msg: CliMessage = serde_json::from_str(line).unwrap();
+            for ev in asm.ingest(&msg) {
+                if let SessionEvent::Item(ConversationItem::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                    ..
+                }) = ev
+                {
+                    assert!(!is_error, "fixture tool_results are successful");
+                    // Content stays a raw string — not parsed, not flattened to text blocks.
+                    let s = content.as_str().expect("web tool_result content is a string");
+                    results.push((tool_use_id, s.to_string()));
+                }
+            }
+        }
+        assert_eq!(results.len(), 2, "one WebSearch + one WebFetch result");
+
+        let websearch = &results
+            .iter()
+            .find(|(id, _)| id == "toolu_ws")
+            .expect("WebSearch result present")
+            .1;
+        // The Links JSON array survives intact, with its title/url fields.
+        assert!(websearch.contains("Links: ["));
+        assert!(websearch.contains("\"url\":\"https://dev.to/serada/pandas-30-is-here\""));
+        assert!(websearch.contains("\"url\":\"https://pandas.pydata.org/docs/whatsnew/v3.0.0.html\""));
+
+        let webfetch = &results
+            .iter()
+            .find(|(id, _)| id == "toolu_wf")
+            .expect("WebFetch result present")
+            .1;
+        // The fetched markdown survives intact.
+        assert!(webfetch.contains("# Major Changes in pandas 3.0.0"));
+        assert!(webfetch.contains("Copy-on-Write enforced by default"));
+    }
+
     #[test]
     fn captures_context_fill_and_window_from_fixture() {
         let mut asm = Assembler::new();
