@@ -17,6 +17,7 @@ import { MentionPathChip } from "./FileMention";
 import { QuestionnaireSummary } from "./QuestionnaireAsk";
 import { ToolResultBody } from "./ToolResultBody";
 import { toolMeta } from "./toolMeta";
+import { WebToolDetail } from "./WebSources";
 import {
   basename,
   multiEdits,
@@ -88,6 +89,13 @@ export function ToolDetail({
 
   if (meta.kind === "write")
     return <DiffView path={field(input, "file_path")} newText={field(input, "content") ?? ""} />;
+
+  // Web research: render sources as clickable chips + the summary/page markdown,
+  // instead of the raw <pre> dump. Only on a SUCCESSFUL result — an errored fetch
+  // (404/timeout/blocked) falls through to ToolResultBody, which renders the error
+  // body with its error styling (a source chip would falsely imply success).
+  if ((name === "WebSearch" || name === "WebFetch") && result && !result.isError)
+    return <WebToolDetail name={name} input={input} text={resultContentText(result.content) ?? ""} />;
 
   if (meta.kind === "bash")
     return (

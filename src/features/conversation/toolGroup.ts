@@ -25,7 +25,9 @@ export const TOOL_ICON: Record<string, string> = {
   Bash: "term",
   Grep: "search",
   Glob: "search",
-  WebFetch: "layers",
+  // `globe` matches toolMeta's WebFetch icon and stays distinct from the run
+  // section's own `layers` glyph (a WebFetch step shouldn't echo its container).
+  WebFetch: "globe",
   WebSearch: "search",
   // The sub-agent tool is `Agent` on the wire (was `Task`); keep `Task` as an alias.
   Agent: "spark",
