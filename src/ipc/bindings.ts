@@ -176,8 +176,10 @@ async setModel(session: string, model: string) : Promise<Result<null, string>> {
 /**
  * Set the session's reasoning effort level at runtime (`apply_flag_settings`).
  * Rejects an invalid level BEFORE sending: the CLI silently swallows anything
- * outside low/medium/high/xhigh, so an unvalidated value would no-op without any
- * error — exactly the silent failure we must avoid.
+ * outside low/medium/high/xhigh/max, so an unvalidated value would no-op without
+ * any error — exactly the silent failure we must avoid. (Per-model gating — e.g.
+ * `max`/`xhigh` not on every model — is the front-end gauge's job; this guard only
+ * rejects values the wire never accepts.)
  */
 async setEffortLevel(session: string, level: string) : Promise<Result<null, string>> {
     try {

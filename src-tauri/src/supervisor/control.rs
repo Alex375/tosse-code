@@ -239,14 +239,20 @@ pub fn set_model_request(request_id: &str, model: &str) -> Value {
 }
 
 /// The reasoning-effort levels the CLI's `apply_flag_settings{effortLevel}` runtime
-/// control accepts. Verified against the binary (2.1.185) and the extension settings
-/// schema (`effortLevel: enum["low","medium","high","xhigh"]`): anything else is
-/// silently coerced away (`.catch(void 0)`) — an ack of `success` does NOT prove a
-/// value was applied. NOTE: `"max"` is a `--effort` SPAWN-flag alias only, NOT a
-/// runtime settings value; `"ultracode"` is a SEPARATE boolean flag (see
-/// [`set_ultracode_request`]), never an effort value. So the app must validate
-/// before sending and read the result back via [`get_settings_request`].
-pub const VALID_EFFORT_LEVELS: [&str; 4] = ["low", "medium", "high", "xhigh"];
+/// control accepts. Verified against the binary (2.1.187, `gD =
+/// ["low","medium","high","xhigh","max"]`) AND live: spawning Opus 4.8 / Sonnet 4.6,
+/// sending `apply_flag_settings{effortLevel:"max"}`, then `get_settings`, reads back
+/// `effort:"max"` — while a bogus value (`"banana"`) is silently swallowed. So a
+/// `success` ack still does NOT prove a value was applied; this list is the coarse
+/// "known wire value" guard and the read-back via [`get_settings_request`] is the
+/// authority. HISTORY: up to 2.1.186 `"max"` was a `--effort` SPAWN-flag alias only
+/// and the runtime control swallowed it; 2.1.187 promoted it to a real runtime level
+/// (top tier, above `xhigh` — xhigh is "just below maximum"). WHICH levels a model
+/// accepts is per-model (e.g. Sonnet 4.6 takes `max` but NOT `xhigh`); that gating is
+/// the front-end gauge's job ([`effortLevelsForModel`] in `EffortGauge.tsx`), not
+/// this list. `"ultracode"` is still a SEPARATE boolean flag (see
+/// [`set_ultracode_request`]), never an effort value.
+pub const VALID_EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// Whether `level` is a valid runtime `effortLevel` (see [`VALID_EFFORT_LEVELS`]).
 pub fn is_valid_effort_level(level: &str) -> bool {
@@ -601,12 +607,12 @@ mod tests {
 
     #[test]
     fn effort_level_validation_matches_the_cli_enum() {
-        // The four the runtime control accepts — and the two the gauge once offered
-        // that the CLI silently swallows.
-        for ok in ["low", "medium", "high", "xhigh"] {
+        // The five the runtime control accepts in 2.1.187 (`gD`). `"max"` became a
+        // real runtime level here — verified live (set it on Opus 4.8 / Sonnet 4.6,
+        // read it back via get_settings); up to 2.1.186 it was swallowed.
+        for ok in ["low", "medium", "high", "xhigh", "max"] {
             assert!(is_valid_effort_level(ok), "{ok} should be valid");
         }
-        assert!(!is_valid_effort_level("max"), "'max' is a --effort alias, not a wire value");
         assert!(!is_valid_effort_level("ultracode"), "'ultracode' is a separate flag, not an effort");
         assert!(!is_valid_effort_level("banana"));
     }

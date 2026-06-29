@@ -15,14 +15,16 @@ export function shortModel(m: string): string {
 }
 
 /** Canonical display labels for the reasoning-effort levels, folding the
- *  ultracode tier in. The CLI's effort enum is EXACTLY low/medium/high/xhigh;
- *  "Ultra code" is xhigh + a separate `ultracode` flag (see EffortGauge, which
- *  reuses this map so the gauge and every read-only surface never drift). */
+ *  ultracode tier in. The CLI's effort enum is low/medium/high/xhigh/max (2.1.187),
+ *  `max` being the deepest pure-effort level above `xhigh` ("Extra"); "Ultra code"
+ *  is xhigh + a separate `ultracode` flag (see EffortGauge, which reuses this map so
+ *  the gauge and every read-only surface never drift). */
 export const EFFORT_LABELS = {
   low: "Low",
   medium: "Medium",
   high: "High",
   xhigh: "Extra",
+  max: "Max",
   ultracode: "Ultra code",
 } as const;
 

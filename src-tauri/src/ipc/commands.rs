@@ -318,8 +318,10 @@ pub async fn set_model(
 
 /// Set the session's reasoning effort level at runtime (`apply_flag_settings`).
 /// Rejects an invalid level BEFORE sending: the CLI silently swallows anything
-/// outside low/medium/high/xhigh, so an unvalidated value would no-op without any
-/// error — exactly the silent failure we must avoid.
+/// outside low/medium/high/xhigh/max, so an unvalidated value would no-op without
+/// any error — exactly the silent failure we must avoid. (Per-model gating — e.g.
+/// `max`/`xhigh` not on every model — is the front-end gauge's job; this guard only
+/// rejects values the wire never accepts.)
 #[tauri::command]
 #[specta::specta]
 pub async fn set_effort_level(
@@ -329,7 +331,7 @@ pub async fn set_effort_level(
 ) -> Result<(), String> {
     if !control::is_valid_effort_level(&level) {
         return Err(format!(
-            "niveau d'effort invalide « {level} » (attendu : low, medium, high, xhigh)"
+            "niveau d'effort invalide « {level} » (attendu : low, medium, high, xhigh, max)"
         ));
     }
     let handle = sessions.get(&session).ok_or_else(unknown_session)?;

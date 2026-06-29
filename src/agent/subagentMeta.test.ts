@@ -22,13 +22,17 @@ describe("effortLabel", () => {
     expect(effortLabel(null, true)).toBe("Ultra code");
   });
 
+  it("labels the max tier", () => {
+    expect(effortLabel("max")).toBe("Max");
+  });
+
   it("falls through unrecognised effort strings (forward-compat)", () => {
-    expect(effortLabel("max")).toBe("max");
+    expect(effortLabel("banana")).toBe("banana");
   });
 
   it("EFFORT_LABELS covers exactly the gauge's levels", () => {
     expect(Object.keys(EFFORT_LABELS).sort()).toEqual(
-      ["high", "low", "medium", "ultracode", "xhigh"],
+      ["high", "low", "max", "medium", "ultracode", "xhigh"],
     );
   });
 });
