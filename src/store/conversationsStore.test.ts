@@ -17,6 +17,8 @@ vi.mock("../ipc/client", () => {
       createWorktree: vi.fn(() => ok({ path: "/tmp/wt" })),
       loadSessionHistory: vi.fn(() => ok([])),
       loadSessionContext: vi.fn(() => ok({ context_tokens: 0 })),
+      deleteConversation: vi.fn(() => ok()),
+      stopSession: vi.fn(() => ok()),
     },
   };
 });
@@ -236,6 +238,94 @@ describe("conversationsStore — persisted reminder", () => {
     expect(markSeen).toHaveBeenCalledWith("c1");
     expect(conv0().pendingReminder).toBeNull();
     expect(commands.upsertConversation).toHaveBeenCalled();
+    markSeen.mockRestore();
+  });
+});
+
+describe("conversationsStore — friction-free delete + undo", () => {
+  const store = () => useConversationsStore.getState();
+  const find = (id: string) => store().conversations.find((c) => c.id === id);
+
+  beforeEach(() => {
+    // The undo stack is module-level (not reset by the store reseed); drain leftovers
+    // from earlier tests so each starts with an empty stack, then clear the spies the
+    // drain's re-adds tripped.
+    while (store().undoRemoveConversation()) {
+      /* pop until empty */
+    }
+    vi.clearAllMocks();
+  });
+
+  it("removeConversation pushes a snapshot that undo restores (handle cleared, resume info kept)", () => {
+    seed(baseConv({ id: "u1", sessionId: "sess-u1", handle: "session-9" }));
+    store().removeConversation("u1");
+    expect(find("u1")).toBeUndefined(); // gone from the list
+    expect(commands.stopSession).toHaveBeenCalledWith("session-9"); // live process killed
+    expect(commands.deleteConversation).toHaveBeenCalledWith("u1"); // row deleted
+
+    expect(store().undoRemoveConversation()).toBe(true);
+    const restored = find("u1");
+    expect(restored).toBeDefined();
+    expect(restored!.handle).toBeNull(); // the dead session's handle is dropped
+    expect(restored!.sessionId).toBe("sess-u1"); // --resume info preserved
+    expect(store().activeId).toBe("u1"); // re-selected
+    expect(commands.upsertConversation).toHaveBeenCalled(); // re-persisted
+  });
+
+  it("undo with an empty stack is a no-op returning false", () => {
+    seed(baseConv({ id: "u2" }));
+    expect(store().undoRemoveConversation()).toBe(false);
+    expect(find("u2")).toBeDefined(); // untouched
+  });
+
+  it("is LIFO across several deletes", () => {
+    seed(baseConv({ id: "a" }));
+    store().addConversation(baseConv({ id: "b" }));
+    store().removeConversation("a");
+    store().removeConversation("b");
+    // Last deleted comes back first.
+    store().undoRemoveConversation();
+    expect(find("b")).toBeDefined();
+    expect(find("a")).toBeUndefined();
+    store().undoRemoveConversation();
+    expect(find("a")).toBeDefined();
+  });
+
+  it("does not restore into a repo that no longer exists", () => {
+    seed(baseConv({ id: "u4" }));
+    store().removeConversation("u4");
+    // The repo is dropped after the delete — there's nowhere to put the row back.
+    useConversationsStore.setState({ repos: [] });
+    expect(store().undoRemoveConversation()).toBe(false);
+    expect(find("u4")).toBeUndefined();
+  });
+
+  it("undo clears the once-per-run history guard so the transcript reloads", async () => {
+    seed(baseConv({ id: "u5", sessionId: "sess-u5" }));
+    const cs = useConversationStore.getState();
+    const ensureSession = vi.spyOn(cs, "ensureSession").mockImplementation(() => {});
+    const applyItem = vi.spyOn(cs, "applyItem").mockImplementation(() => {});
+    const applyContextFill = vi.spyOn(cs, "applyContextFill").mockImplementation(() => {});
+    const markSeen = vi.spyOn(cs, "markSeen").mockImplementation(() => {});
+    // Non-empty history so the loader runs past its early return and records the guard.
+    vi.mocked(commands.loadSessionHistory).mockResolvedValue({ status: "ok", data: [{}] } as never);
+
+    await loadConversationHistory("u5");
+    expect(commands.loadSessionHistory).toHaveBeenCalledTimes(1);
+    // A second load this run is a no-op — the guard suppresses it.
+    await loadConversationHistory("u5");
+    expect(commands.loadSessionHistory).toHaveBeenCalledTimes(1);
+
+    // Delete + undo must clear the guard so the restored conversation re-reads its
+    // on-disk transcript (otherwise it would come back blank).
+    store().removeConversation("u5");
+    store().undoRemoveConversation();
+    await loadConversationHistory("u5");
+    expect(commands.loadSessionHistory).toHaveBeenCalledTimes(2);
+
+    ensureSession.mockRestore();
+    applyItem.mockRestore();
+    applyContextFill.mockRestore();
     markSeen.mockRestore();
   });
 });

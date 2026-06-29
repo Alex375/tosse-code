@@ -14,7 +14,6 @@ import { agentStatusToDot, isDismissable, rowAttention } from "../../agent/statu
 import { useSettingsUi } from "../../store/settingsUi";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
-import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { WorktreeBadge } from "../git/WorktreeBadge";
 import { useWorktreeUi } from "../git/worktreeUiStore";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
@@ -31,7 +30,6 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   const remove = useConversationsStore((s) => s.removeConversation);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(conv.name);
-  const [confirming, setConfirming] = useState(false);
   // Both Enter/blur commit and Escape cancel unmount the input, which fires a
   // trailing `onBlur`. This latch makes the commit run exactly once and lets
   // Escape suppress it entirely (so a cancel never writes the edited draft).
@@ -101,40 +99,23 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
           <Ico name="check" className="sm" />
         </button>
       ) : null}
-      <Menu
-        align="right"
-        trigger={
-          <button
-            type="button"
-            className="cv-sess-menu"
-            title="Options de la conversation"
-            aria-label="Options de la conversation"
-          >
-            <Ico name="dots" className="sm" />
-          </button>
-        }
-      >
-        <MenuItem icon="form" onClick={startEdit}>
-          Renommer
-        </MenuItem>
-        <MenuItem icon="trash" onClick={() => setConfirming(true)}>
-          Supprimer
-        </MenuItem>
-      </Menu>
-      <ConfirmDialog
-        open={confirming}
-        danger
-        title="Supprimer la conversation ?"
-        confirmLabel="Supprimer"
-        onCancel={() => setConfirming(false)}
-        onConfirm={() => {
-          setConfirming(false);
+      {/* Friction-free delete: one click removes the conversation immediately, no
+          confirm dialog. It's reversible with ⌘Z (undoRemoveConversation) — the on-disk
+          transcript is never touched, so nothing is truly lost. Mirrors the "Vu" button
+          (cv-sess-seen) — revealed on row hover, danger-tinted. The × is the row's only
+          inline affordance: rename is double-click on the name (startEdit). */}
+      <button
+        type="button"
+        className="cv-sess-del"
+        title="Supprimer la conversation (⌘Z pour annuler)"
+        aria-label="Supprimer la conversation"
+        onClick={(e) => {
+          e.stopPropagation();
           remove(conv.id);
         }}
       >
-        « {conv.name} » sera retirée de la liste et son process arrêté. Le transcript de
-        Claude sur le disque n'est pas touché.
-      </ConfirmDialog>
+        <Ico name="x" className="sm" />
+      </button>
     </div>
   );
 }
