@@ -18,6 +18,7 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { WorktreeBadge } from "../git/WorktreeBadge";
 import { useWorktreeUi } from "../git/worktreeUiStore";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
+import { useHistoryUi } from "../history/historyUiStore";
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   // Rich status keyed by the conversation's stable id (the message store routes
@@ -151,6 +152,7 @@ export function ConductorSidebar() {
   const activeId = useActiveConversationId();
   const openManager = useWorktreeUi((s) => s.openManager);
   const openExtensions = useExtensionsUi((s) => s.openManager);
+  const openHistory = useHistoryUi((s) => s.openPanel);
   const settingsOpen = useSettingsUi((s) => s.open);
   const openSettings = useSettingsUi((s) => s.openSettings);
   const closeSettings = useSettingsUi((s) => s.closeSettings);
@@ -187,12 +189,17 @@ export function ConductorSidebar() {
         </Menu>
       </div>
 
-      <div className="cv-search">
+      <button
+        type="button"
+        className="cv-search"
+        title="Rechercher dans l'historique des conversations (tout le disque)"
+        onClick={() => openHistory()}
+      >
         <Ico name="search" className="sm" />
         <span className="wf-xmuted" style={{ fontSize: 12 }}>
           Rechercher
         </span>
-      </div>
+      </button>
 
       <div className="cv-sess-scroll wf-fade-b">
         {groups.length === 0 ? (

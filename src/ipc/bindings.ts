@@ -124,6 +124,45 @@ async loadWorkflowPhases(sessionId: string, runId: string) : Promise<Result<Work
 }
 },
 /**
+ * List every conversation found on disk (incl. orphans the app has forgotten),
+ * most-recent-first — the rows the history panel shows. Cheap head-read; the full
+ * transcript is loaded only when a row is previewed (`load_session_history`).
+ */
+async listDiskConversations() : Promise<Result<DiskConversation[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_disk_conversations") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Build (or rebuild) the search index in the background and cache it — called when
+ * the history panel opens so search is armed a beat later (Option A). Returns the
+ * number of conversations indexed.
+ */
+async primeHistoryIndex() : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("prime_history_index") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Search the on-disk conversations by `query` (accent/case-insensitive, multi-term
+ * AND, light typo tolerance), best-first. Lazily builds + caches the index on the
+ * first call so search works even before `prime_history_index` ran.
+ */
+async searchConversations(query: string) : Promise<Result<SearchHit[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("search_conversations", { query }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Read a background task's output from the ABSOLUTE path the CLI reported
  * (`BackgroundTask.output_file`). The CLI writes Bash-bg / Monitor output to a temp dir
  * the app can't reconstruct, so the live tail reads this path directly. `null` if
@@ -1207,6 +1246,45 @@ model: string | null; effort: string | null; ultracode: boolean; permission_mode
  */
 pending_reminder: string | null }
 /**
+ * One conversation discovered on disk — the cheap "head-read" row the history panel
+ * lists. NO full parse here (that's [`load_history`], used by the preview). Field
+ * names are snake_case to match the other IPC payloads; the front consumes this
+ * shape directly (it is a transient view, not a persisted domain record).
+ */
+export type DiskConversation = { 
+/**
+ * Claude's session UUID (= transcript file stem). Join key to a SQLite row and
+ * the `--resume` target.
+ */
+session_id: string; 
+/**
+ * Real absolute cwd the session ran in (read from the transcript itself — the
+ * dir slug is lossy and can't be inverted back to a path).
+ */
+cwd: string; 
+/**
+ * Repo root derived from `cwd` (an app worktree segment stripped). Drives the
+ * panel's repo grouping and the repo to (re)create on reactivation.
+ */
+repo_root: string; 
+/**
+ * Git branch captured in the transcript, if any (a label hint).
+ */
+git_branch: string | null; 
+/**
+ * Auto-generated title (`ai-title` line), if the CLI wrote one — the nicest
+ * label for an orphan that has no SQLite name.
+ */
+title: string | null; 
+/**
+ * First human message, flattened + capped — the row's identifying line.
+ */
+excerpt: string; 
+/**
+ * Transcript mtime (Unix ms) ≈ time of the last message. Recency sort key.
+ */
+mtime_ms: number }
+/**
  * Where a configuration entry originates. Drives the "by scope" grouping in the
  * UI. Serialized snake_case so the TS union is `"user" | "project" | …`.
  */
@@ -1564,6 +1642,11 @@ export type RepoRecord = { id: string; path: string;
  * Unix ms timestamp the repo was first added.
  */
 added_at: number }
+/**
+ * A search result: which conversation matched, its relevance score, and a short
+ * snippet around the first body hit (empty when only title/excerpt matched).
+ */
+export type SearchHit = { session_id: string; score: number; snippet: string }
 /**
  * The session's available slash commands (one-shot, at `initialize`). Drives the
  * composer's `/` autocomplete menu.

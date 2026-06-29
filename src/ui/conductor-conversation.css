@@ -1,6 +1,7 @@
 /* view-conversation.css */
 .cv-side-h { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 10px; }
-.cv-search { display:flex; align-items:center; gap:8px; margin:0 10px; padding:7px 9px; background:var(--wf-panel); border:1px solid var(--wf-line); border-radius:var(--wf-r); color:var(--wf-tx-lo); }
+.cv-search { display:flex; align-items:center; gap:8px; margin:0 10px; padding:7px 9px; background:var(--wf-panel); border:1px solid var(--wf-line); border-radius:var(--wf-r); color:var(--wf-tx-lo); font:inherit; text-align:left; cursor:pointer; transition:background 0.12s ease, border-color 0.12s ease; }
+.cv-search:hover { background:var(--wf-panel-2); border-color:var(--wf-line-2); color:var(--wf-tx); }
 .cv-sess-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior-y:contain; padding:6px 6px 4px; display:flex; flex-direction:column; gap:6px; }
 .cv-repo { display:flex; flex-direction:column; }
 .cv-repo-h { display:flex; align-items:center; gap:7px; padding:9px 9px 6px; font-size:10px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--wf-tx-xlo); }
@@ -69,12 +70,21 @@
 /* Sub-agent transcript (inline expand + popover): the same generous breathing room
    between messages as the main thread — without it the prompt sits glued to the first
    reply. Used by <SubAgentTranscript> and the inline live sub-thread. */
-.cv-subtranscript { display:flex; flex-direction:column; gap:18px; }
+/* min-width:0 lets the shared transcript renderer shrink inside ANY flex/grid parent
+   (history preview, sub-agent popover, inline drill-in) so wide content (tables, code
+   fences, long paths) wraps/scrolls internally instead of widening — and overflowing —
+   its container. */
+.cv-subtranscript { display:flex; flex-direction:column; gap:18px; min-width:0; }
 /* The user's own messages keep their full-width bubble (as before), but the avatar
    moves to the RIGHT: row-reverse puts the avatar at the far right and the bubble
    (flex:1) fills the rest to its left. */
 .cv-user { flex-direction:row-reverse; }
 .cv-user .cv-bubble { background:var(--wf-panel-2); border:1px solid var(--wf-line); border-radius:10px; padding:12px 14px; flex:1; min-width:0; overflow-wrap:anywhere; }
+/* A slash-command user message rendered as a clean chip (the raw <command-*> wrapper is dropped). */
+.cv-cmd { display:inline-flex; align-items:center; gap:6px; font-family:var(--wf-mono); font-size:12.5px; }
+.cv-cmd .wf-ico { color:var(--wf-accent); flex:none; }
+.cv-cmd-name { color:var(--wf-tx-hi); font-weight:600; }
+.cv-cmd-args { color:var(--wf-tx-lo); overflow-wrap:anywhere; }
 /* Queued user message (sent while the agent was busy): dashed wait-coloured border
    + an "en attente" tag, so it reads clearly as not-yet-processed. The tag clears
    once the agent picks the message up (next message_started; see conversationStore). */

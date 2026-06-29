@@ -10,6 +10,7 @@ use tauri::Manager;
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
 use crate::supervisor::control::{self, PermissionDecision, PermissionMode};
+use crate::supervisor::history::{self, DiskConversation, IndexedConversation, SearchHit};
 use crate::supervisor::model::{
     ContextFill, ConversationItem, SlashCommand, WorkflowJournal, WorkflowPhase, WorkflowRun,
 };
@@ -221,6 +222,87 @@ pub async fn load_subagent_transcript(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Tauri managed state: the cached full-text search index over on-disk conversations.
+/// Built lazily and reused, so search is instant and the heavy full-read happens once,
+/// off the panel-open path (Option A). The build is SINGLE-FLIGHT — the async mutex is
+/// held across the (blocking) build, so concurrent callers (the panel's background
+/// `prime` racing an early `search`, or two quick searches) share ONE disk scan instead
+/// of each launching their own. Same encapsulation pattern as [`Sessions`].
+#[derive(Default)]
+pub struct HistoryIndex {
+    cell: tokio::sync::Mutex<Option<Arc<Vec<IndexedConversation>>>>,
+}
+
+impl HistoryIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Force a fresh build and cache it (the panel calls this on open). Holding the
+    /// async lock across the build is what makes the whole thing single-flight.
+    async fn rebuild(&self) -> Result<Arc<Vec<IndexedConversation>>, String> {
+        let mut guard = self.cell.lock().await;
+        let built = tokio::task::spawn_blocking(history::build_search_index)
+            .await
+            .map_err(|e| e.to_string())?;
+        let arc = Arc::new(built);
+        *guard = Some(arc.clone());
+        Ok(arc)
+    }
+
+    /// Return the cached index, building it once if absent. A concurrent build (a
+    /// still-running `rebuild`, or another `ensure`) is awaited, never duplicated.
+    async fn ensure(&self) -> Result<Arc<Vec<IndexedConversation>>, String> {
+        let mut guard = self.cell.lock().await;
+        if let Some(idx) = guard.as_ref() {
+            return Ok(idx.clone());
+        }
+        let built = tokio::task::spawn_blocking(history::build_search_index)
+            .await
+            .map_err(|e| e.to_string())?;
+        let arc = Arc::new(built);
+        *guard = Some(arc.clone());
+        Ok(arc)
+    }
+}
+
+/// List every conversation found on disk (incl. orphans the app has forgotten),
+/// most-recent-first — the rows the history panel shows. Cheap head-read; the full
+/// transcript is loaded only when a row is previewed (`load_session_history`).
+#[tauri::command]
+#[specta::specta]
+pub async fn list_disk_conversations() -> Result<Vec<DiskConversation>, String> {
+    tokio::task::spawn_blocking(history::list_disk_conversations)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Build (or rebuild) the search index in the background and cache it — called when
+/// the history panel opens so search is armed a beat later (Option A). Returns the
+/// number of conversations indexed.
+#[tauri::command]
+#[specta::specta]
+pub async fn prime_history_index(index: tauri::State<'_, HistoryIndex>) -> Result<u32, String> {
+    let idx = index.rebuild().await?;
+    Ok(idx.len() as u32)
+}
+
+/// Search the on-disk conversations by `query` (accent/case-insensitive, multi-term
+/// AND, light typo tolerance), best-first. Lazily builds + caches the index on the
+/// first call so search works even before `prime_history_index` ran.
+#[tauri::command]
+#[specta::specta]
+pub async fn search_conversations(
+    index: tauri::State<'_, HistoryIndex>,
+    query: String,
+) -> Result<Vec<SearchHit>, String> {
+    let cached = index.ensure().await?;
+    let hits = tokio::task::spawn_blocking(move || history::score_index(cached.as_slice(), &query))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(hits)
 }
 
 /// Load a workflow run's manifest (`workflows/<run_id>.json`). `null` if absent.
