@@ -24,6 +24,7 @@ import type {
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
 import { useBackgroundTasksStore } from "../store/backgroundTasksStore";
+import { useWorkflowLiveStore } from "../store/workflowLive";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
 import { useCommandsStore } from "../store/commandsStore";
 import { setCachedWindow } from "../store/contextWindowCache";
@@ -330,6 +331,9 @@ export function useGlobalSessionEvents(): void {
       const task = payload.task;
       // (1) registry: the core emits a full cumulative snapshot per task (replace by id).
       useBackgroundTasksStore.getState().applyTask(session, task);
+      // (1b) workflow: accumulate the per-phase agent activity from the wire's progress ticks
+      // (the snapshot keeps only the latest; the live overview needs the running totals).
+      useWorkflowLiveStore.getState().record(session, task);
       // (2) failure surfacing (de-duped per task — re-emitted on each transition).
       if (task.status !== "failed") return;
       if (seenFailedTasks.has(task.task_id)) return; // re-emitted per transition

@@ -61,7 +61,10 @@ export type Segment =
   // A sub-agent (Agent/Task) renders as its OWN inline card (rich live lifecycle +
   // drill-in transcript), NEVER grouped into a run nor hidden by the live-trailing
   // suppression — so it gets a dedicated segment that breaks the surrounding run.
-  | { kind: "agent"; key: string; step: ToolStep };
+  | { kind: "agent"; key: string; step: ToolStep }
+  // A `Workflow` renders as its OWN persistent inline card (live overview → post-run report),
+  // like a sub-agent: dedicated segment, breaks the run, never hidden.
+  | { kind: "workflow"; key: string; step: ToolStep };
 
 /**
  * A tool_use that is NEVER shown inline in the thread — it lives in a pinned bar or
@@ -69,6 +72,9 @@ export type Segment =
  *  - any detached `run_in_background` tool (Bash → BashBar, Agent → AgentBar),
  *  - `Monitor` (always a background watch → MonitorBar),
  *  - anything `toolMeta` marks suppressed (TodoWrite → TodoBar, ide_ RPC).
+ *
+ * `Workflow` is NOT hidden: it renders as a persistent inline <WorkflowCard> (its own segment),
+ * so the post-run report stays reachable from the thread.
  */
 export function isHiddenInline(name: string, input: JsonValue): boolean {
   if (name === "Monitor") return true;
@@ -110,6 +116,12 @@ export function groupBlocks(
       if (b.name === "Agent" || b.name === "Task") {
         run = null;
         out.push({ kind: "agent", key: `a-${i}`, step: { id: b.id, name: b.name, input: b.input } });
+        return;
+      }
+      // A Workflow is its own persistent inline card — also breaks the run.
+      if (b.name === "Workflow") {
+        run = null;
+        out.push({ kind: "workflow", key: `w-${i}`, step: { id: b.id, name: b.name, input: b.input } });
         return;
       }
       if (!run) {
@@ -167,6 +179,7 @@ export function splitFinalMessage(segments: Segment[]): {
 export type WorkAtom =
   | { kind: "step"; key: string; step: ToolStep }
   | { kind: "agent"; key: string; step: ToolStep }
+  | { kind: "workflow"; key: string; step: ToolStep }
   | { kind: "thinking"; key: string; text: string }
   | { kind: "text"; key: string; text: string };
 
@@ -178,6 +191,8 @@ export function flattenWork(segs: Segment[]): WorkAtom[] {
       for (const step of seg.steps) out.push({ kind: "step", key: `${seg.key}-${step.id}`, step });
     } else if (seg.kind === "agent") {
       out.push({ kind: "agent", key: seg.key, step: seg.step });
+    } else if (seg.kind === "workflow") {
+      out.push({ kind: "workflow", key: seg.key, step: seg.step });
     } else if (seg.kind === "thinking") {
       out.push({ kind: "thinking", key: seg.key, text: seg.text });
     } else {
@@ -205,6 +220,7 @@ export function atomsToSegments(atoms: WorkAtom[], keyPrefix: string): Segment[]
     }
     run = null;
     if (a.kind === "agent") out.push({ kind: "agent", key: a.key, step: a.step });
+    else if (a.kind === "workflow") out.push({ kind: "workflow", key: a.key, step: a.step });
     else if (a.kind === "thinking") out.push({ kind: "thinking", key: a.key, text: a.text });
     else out.push({ kind: "text", key: a.key, text: a.text });
   }
@@ -231,7 +247,7 @@ export function liveVisibleStart(
   let runningStart = atoms.length;
   for (let i = 0; i < atoms.length; i++) {
     const a = atoms[i];
-    if ((a.kind === "step" || a.kind === "agent") && isRunning(a.step.id)) {
+    if ((a.kind === "step" || a.kind === "agent" || a.kind === "workflow") && isRunning(a.step.id)) {
       runningStart = i;
       break;
     }
@@ -284,7 +300,7 @@ export function countWorkSteps(segments: Segment[]): number {
   let n = 0;
   for (const s of segments) {
     if (s.kind === "run") n += s.steps.length;
-    else if (s.kind === "agent") n += 1;
+    else if (s.kind === "agent" || s.kind === "workflow") n += 1;
   }
   return n;
 }
@@ -296,7 +312,7 @@ export function workStepIds(segments: Segment[]): string[] {
   const ids: string[] = [];
   for (const s of segments) {
     if (s.kind === "run") for (const st of s.steps) ids.push(st.id);
-    else if (s.kind === "agent") ids.push(s.step.id);
+    else if (s.kind === "agent" || s.kind === "workflow") ids.push(s.step.id);
   }
   return ids;
 }

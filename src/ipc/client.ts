@@ -52,6 +52,9 @@ export type {
   TickEvent,
   UsageError,
   UsageWindow,
+  WorkflowJournal,
+  WorkflowPhase,
+  WorkflowRun,
   WorktreeInfo,
   WorktreeStatus,
 } from "./bindings";

@@ -110,12 +110,27 @@ describe("groupBlocks", () => {
 });
 
 describe("isHiddenInline", () => {
-  it("hides Monitor, detached tools and suppressed tools; keeps foreground tools", () => {
+  it("hides Monitor, detached tools and suppressed tools; keeps foreground tools + Workflow", () => {
     expect(isHiddenInline("Monitor", {})).toBe(true);
     expect(isHiddenInline("Bash", { run_in_background: true })).toBe(true);
     expect(isHiddenInline("TodoWrite", {})).toBe(true);
     expect(isHiddenInline("Bash", { command: "ls" })).toBe(false);
     expect(isHiddenInline("Read", { file_path: "/a.ts" })).toBe(false);
+    // Workflow is NOT hidden — it renders as a persistent inline card.
+    expect(isHiddenInline("Workflow", { script: "export const meta = {}" })).toBe(false);
+  });
+});
+
+describe("groupBlocks — Workflow", () => {
+  it("emits a dedicated `workflow` segment that breaks the surrounding run", () => {
+    const segs = groupBlocks([
+      tool("r", "Read", { file_path: "a.ts" }),
+      tool("w", "Workflow", { description: "review", script: "x" }),
+      tool("g", "Grep", { pattern: "x" }),
+    ]);
+    expect(segs.map((s) => s.kind)).toEqual(["run", "workflow", "run"]);
+    const wf = segs[1];
+    if (wf.kind === "workflow") expect(wf.step.id).toBe("w");
   });
 });
 

@@ -24,6 +24,7 @@ import type { ConversationItem, ConversationRecord, PermissionMode, RepoRecord }
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
+import { useWorkflowLiveStore } from "./workflowLive";
 import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
@@ -384,6 +385,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // persisted context-window so the localStorage cache doesn't keep orphans.
     useConversationStore.getState().dropSession(id);
     useBackgroundTasksStore.getState().dropSession(id);
+    useWorkflowLiveStore.getState().drop(id);
     clearCachedWindow(id);
     clearTodoBarOpen(id);
     clearComposerDraft(id);
@@ -1000,6 +1002,7 @@ export async function wipeAllData(): Promise<void> {
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });
   useBackgroundTasksStore.getState().clear();
+  useWorkflowLiveStore.getState().clear();
   useGitViewStore.getState().clearAll();
 }
 

@@ -16,6 +16,7 @@ import type {
   PermissionDecision,
   PermissionRequestPayload,
   SessionStatePayload,
+  WorkflowRun,
 } from "../client";
 
 export interface ScenarioEmit {
@@ -85,6 +86,88 @@ export const DEMO_SUBAGENT_TRANSCRIPT: ConversationItem[] = [
     ],
   },
 ];
+
+/** A canned workflow-run manifest — what `load_workflow_run` returns — so the
+ *  <WorkflowDetail> 3-panel view (phases → agents → transcript) renders real-shaped content
+ *  in dev. Mirrors the on-disk `workflows/wf_<id>.json` shape (camelCase, raw
+ *  workflowProgress entries). Two phases: Research (one agent done, one running) and Verify
+ *  (one queued). */
+export const DEMO_WORKFLOW_RUN: WorkflowRun = {
+  runId: "wf_demo123",
+  taskId: "tk_wf",
+  // The mock returns this only once the run is DONE (the manifest is end-only), so completed.
+  status: "completed",
+  workflowName: "review-changes",
+  defaultModel: "claude-opus-4-8",
+  durationMs: 18420,
+  agentCount: 3,
+  totalTokens: 64210,
+  totalToolCalls: 27,
+  summary: null,
+  phases: [
+    { title: "Research", detail: "explore the diff across dimensions" },
+    { title: "Verify", detail: "adversarially confirm each finding" },
+  ],
+  workflowProgress: [
+    { type: "workflow_phase", index: 1, title: "Research" },
+    {
+      type: "workflow_agent",
+      index: 1,
+      label: "r-correctness",
+      phaseTitle: "Research",
+      phaseIndex: 1,
+      agentId: "demoagent_fg",
+      agentType: "general-purpose",
+      model: "claude-opus-4-8",
+      state: "done",
+      tokens: 31840,
+      toolCalls: 14,
+      durationMs: 9120,
+      promptPreview:
+        "Review the changed files for correctness bugs: off-by-one, null handling, race conditions. Return structured findings.",
+      resultPreview:
+        "2 findings: (1) unguarded array access in parseWorkflow when workflowProgress is null; (2) poll interval not cleared on unmount.",
+    },
+    {
+      type: "workflow_agent",
+      index: 2,
+      label: "r-perf",
+      phaseTitle: "Research",
+      phaseIndex: 1,
+      agentId: "demoagent_bg",
+      agentType: "general-purpose",
+      model: "claude-opus-4-8",
+      state: "running",
+      tokens: 12480,
+      toolCalls: 6,
+      promptPreview: "Review the changed files for performance regressions and needless re-renders.",
+      lastToolName: "Grep",
+    },
+    { type: "workflow_phase", index: 2, title: "Verify" },
+    {
+      type: "workflow_agent",
+      index: 3,
+      label: "v-correctness",
+      phaseTitle: "Verify",
+      phaseIndex: 2,
+      agentId: "demoagent_v",
+      agentType: "general-purpose",
+      model: "claude-haiku-4-5",
+      state: "queued",
+      promptPreview: "Adversarially verify each correctness finding — try to refute it.",
+    },
+  ],
+  result: null,
+};
+
+// Demo-only flag: the dynamic workflow's manifest exists ONLY once the run is done (mirrors
+// reality — the CLI writes it at the end). While false, the mock's `load_workflow_run` returns
+// null so the modal shows its LIVE overview; once true it returns the rich manifest. Flipped
+// by the workflow demo's completion step.
+let demoWorkflowDone = false;
+export function isDemoWorkflowDone(): boolean {
+  return demoWorkflowDone;
+}
 
 /** Canned output for the background-shell demo, returned by the mock's
  *  `read_task_output` so the <BashOutputPopover> renders real-shaped logs in dev. */
@@ -709,6 +792,78 @@ export class ScenarioDriver {
         }),
       ),
     );
+  }
+
+  /**
+   * Dynamic-workflow demo (`?demo=workflow`): the agent launches the `Workflow` tool — a
+   * fleet of sub-agents orchestrated across phases. A Workflow is ALWAYS a background task
+   * (it returns immediately with a run id), so it lives in the pinned <WorkflowBar>, NOT
+   * inline in the thread. The run keeps going past the turn → its row stays in the bar with
+   * live phase progress; clicking it opens the <WorkflowDetail> 3-panel view (its manifest
+   * comes from the mocked `load_workflow_run`). Exercises the bar, the modal and stop_task.
+   */
+  startWorkflow() {
+    this.reset();
+    this.bgTasks.clear();
+    demoWorkflowDone = false; // run starts → manifest absent → modal shows the LIVE overview
+    this.emit.state({ ...this.busyState });
+
+    this.step(220, () =>
+      this.emit.item({ kind: "message_started", id: "m1", role: "assistant", parent_tool_use_id: null }),
+    );
+    const t1 = "Je lance une revue multi-agents du diff via un workflow — tu peux continuer à me parler pendant ce temps.\n\n";
+    this.streamText("m1", t1);
+    this.step(150, () =>
+      this.emit.item({
+        kind: "assistant_message",
+        id: "m1",
+        parent_tool_use_id: null,
+        blocks: [
+          { type: "text", text: t1 },
+          { type: "tool_use", id: "toolu_wf", name: "Workflow", input: { description: "review-changes", script: "export const meta = { name: 'review-changes' }" } },
+        ],
+      }),
+    );
+    this.step(120, () =>
+      this.emit.item({
+        kind: "tool_result",
+        tool_use_id: "toolu_wf",
+        content:
+          "Workflow launched in background. Task ID: tk_wf\nSummary: Review the changed files across dimensions, verify each finding\nTranscript dir: /Users/dev/.claude/projects/x/subagents/workflows/wf_demo123\nRun ID: wf_demo123",
+        is_error: false,
+        parent_tool_use_id: null,
+      }),
+    );
+    this.step(60, () =>
+      this.emitTask(taskOf({ task_id: "tk_wf", kind: "workflow", tool_use_id: "toolu_wf", label: "review-changes", status: "running", progress: "Research: r-correctness" })),
+    );
+    // Live phase progress ticks (coarse "<phase>: <label>" from the wire).
+    this.step(2600, () =>
+      this.emitTask(taskOf({ task_id: "tk_wf", kind: "workflow", tool_use_id: "toolu_wf", label: "review-changes", status: "running", progress: "Research: r-perf" })),
+    );
+
+    this.step(220, () =>
+      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.052, num_turns: 1, duration_ms: 6200 }),
+    );
+    // Idle main loop, but the workflow keeps running → conversation "backgrounding".
+    this.step(40, () => this.emit.state(idleState()));
+    // …later the workflow FINISHES: the manifest "lands" (mock flag flips → the modal upgrades
+    // its live overview to the rich report) and the row drops out of the bar. (A long window so
+    // the live overview is easy to inspect in dev.)
+    this.step(20000, () => {
+      demoWorkflowDone = true;
+      this.emitTask(
+        taskOf({
+          task_id: "tk_wf",
+          kind: "workflow",
+          tool_use_id: "toolu_wf",
+          label: "review-changes",
+          status: "completed",
+          duration_ms: 18420,
+          summary: 'Workflow "review-changes" completed',
+        }),
+      );
+    });
   }
 
   /** Mock the `stop_task` command: re-emit a known background task as stopped, exactly

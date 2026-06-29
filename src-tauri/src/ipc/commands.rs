@@ -10,7 +10,9 @@ use tauri::Manager;
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
 use crate::supervisor::control::{self, PermissionDecision, PermissionMode};
-use crate::supervisor::model::{ContextFill, ConversationItem, SlashCommand, WorkflowRun};
+use crate::supervisor::model::{
+    ContextFill, ConversationItem, SlashCommand, WorkflowJournal, WorkflowPhase, WorkflowRun,
+};
 use crate::supervisor::session::{self, InitialControls, SessionHandle};
 use crate::supervisor::transport::SpawnConfig;
 use crate::usage::{PlanUsage, UsageError};
@@ -232,7 +234,39 @@ pub async fn load_workflow_run(
         crate::supervisor::subagents::load_workflow_run(&session_id, &run_id)
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
+}
+
+/// Live progress of a RUNNING workflow from its journal (`subagents/workflows/<run_id>/
+/// journal.jsonl`): agents started vs done. The rich manifest is written only at the end, so
+/// this is the mid-run "how far along" source. `null` if no journal yet.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_workflow_journal(
+    session_id: String,
+    run_id: String,
+) -> Result<Option<WorkflowJournal>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::supervisor::subagents::load_workflow_journal(&session_id, &run_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The workflow's declared phases (title + detail), parsed from its script's `meta.phases` —
+/// the only source of the FULL phase list (incl. not-yet-reached phases) available DURING the
+/// run. Empty if no script/phases. Lets the live overview show upcoming steps.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_workflow_phases(
+    session_id: String,
+    run_id: String,
+) -> Result<Vec<WorkflowPhase>, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::supervisor::subagents::load_workflow_phases(&session_id, &run_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read a background task's output from the ABSOLUTE path the CLI reported

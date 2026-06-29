@@ -98,6 +98,32 @@ async loadWorkflowRun(sessionId: string, runId: string) : Promise<Result<Workflo
 }
 },
 /**
+ * Live progress of a RUNNING workflow from its journal (`subagents/workflows/<run_id>/
+ * journal.jsonl`): agents started vs done. The rich manifest is written only at the end, so
+ * this is the mid-run "how far along" source. `null` if no journal yet.
+ */
+async loadWorkflowJournal(sessionId: string, runId: string) : Promise<Result<WorkflowJournal | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_journal", { sessionId, runId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The workflow's declared phases (title + detail), parsed from its script's `meta.phases` —
+ * the only source of the FULL phase list (incl. not-yet-reached phases) available DURING the
+ * run. Empty if no script/phases. Lets the live overview show upcoming steps.
+ */
+async loadWorkflowPhases(sessionId: string, runId: string) : Promise<Result<WorkflowPhase[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_phases", { sessionId, runId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Read a background task's output from the ABSOLUTE path the CLI reported
  * (`BackgroundTask.output_file`). The CLI writes Bash-bg / Monitor output to a temp dir
  * the app can't reconstruct, so the live tail reads this path directly. `null` if
@@ -1727,6 +1753,23 @@ export type UsageError =
  * the frontend converts it with the JS `Date` parser.
  */
 export type UsageWindow = { used_percentage: number; resets_at: string | null }
+/**
+ * Live progress counts for a RUNNING workflow, derived from its append-only
+ * `subagents/workflows/<run_id>/journal.jsonl`. The rich manifest (`wf_<id>.json`) is
+ * only written when the run FINISHES, so during the run the journal is the sole on-disk
+ * source of "how far along are we": one `{"type":"started",...}` per agent spawn and one
+ * `{"type":"result",...}` per agent completion. This gives the overview the UI shows mid-run
+ * — agents launched / done / still running — without needing the (absent) manifest.
+ */
+export type WorkflowJournal = { 
+/**
+ * Agents spawned so far (count of `started` entries).
+ */
+started: number; 
+/**
+ * Agents finished so far (count of `result` entries).
+ */
+done: number }
 /**
  * One phase of a workflow run, from a `workflows/wf_<id>.json` manifest.
  */
