@@ -97,10 +97,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG="v${{ steps.version.outputs.version }}"
+          # `gh release view` voit AUSSI les brouillons. Distinction cruciale :
+          #  - release PUBLIÉE de cette version → stop (force à bumper) ;
+          #  - BROUILLON résiduel (run précédent dont la vérif de signature a échoué →
+          #    release laissée en brouillon, cf. étape « Vérifier la signature ») → ne
+          #    doit PAS bloquer un re-run. On le supprime pour repartir propre (un
+          #    brouillon ne crée pas de tag git → rien à nettoyer côté refs).
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::La release $TAG existe déjà. Bumpe la version (voir CLAUDE.md « Versioning & releases », \`pnpm bump\`) avant de relancer."
-            exit 1
+            IS_DRAFT="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+            if [ "$IS_DRAFT" = "true" ]; then
+              echo "⚠️ Brouillon résiduel $TAG (run précédent échoué) → suppression avant re-build."
+              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+            else
+              echo "::error::La release $TAG existe déjà (publiée). Bumpe la version (voir CLAUDE.md « Versioning & releases », \`pnpm bump\`) avant de relancer."
+              exit 1
+            fi
           fi
           echo "✓ $TAG est libre."
 
@@ -186,14 +199,24 @@ jobs:
 
       # Anti-régression SILENCIEUSE : le fix TCC ne tient que si l'app PUBLIÉE porte la DR
       # attendue. La release vient d'être créée en BROUILLON ; on vérifie la signature, puis
-      # on publie seulement si c'est conforme. Un secret absent/mal nommé/tourné, une app
-      # retombée en ad-hoc, ou un cert changé (DR différente) → la release RESTE un brouillon
-      # + CI rouge, au lieu de publier une app non signée avec une CI verte (ce qui
+      # on publie seulement si c'est conforme. Un secret présent mais mal nommé/tourné, une
+      # app retombée en ad-hoc, ou un cert changé (DR différente) → la release RESTE un
+      # brouillon + CI rouge, au lieu de publier une app non signée avec une CI verte (ce qui
       # réintroduirait le bug pour tous). Le hash de leaf épinglé garantit AUSSI que c'est
       # toujours le MÊME certificat (DR stable). Échec = brouillon non publié (mode sûr).
+      # ⚠️ MÊME garde-fou que l'étape de signature : APPLE_CERTIFICATE absent ⇒ app NON signée
+      # VOULUE (comportement historique) → on saute la vérif DR et on publie quand même. Sans
+      # ce court-circuit, un repo/fork sans les secrets APPLE_* verrait CHAQUE release bloquée
+      # en brouillon + CI rouge (l'app non signée n'a jamais la DR épinglée).
       - name: Vérifier la signature de l'app (DR attendue) avant publication
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         run: |
           set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "Aucun certificat (secret absent) → app NON signée (comportement historique) : vérif DR ignorée, publication du brouillon quand même."
+            exit 0
+          fi
           APP="$(find src-tauri/target -type d -path '*/release/bundle/macos/*.app' | head -1)"
           if [ -z "$APP" ]; then echo "::error::.app introuvable — build cassé ?"; exit 1; fi
           echo "Vérification de : $APP"
