@@ -17,7 +17,11 @@ import {
   DEFAULT_PERMISSION_MODE,
   useConversationsStore,
 } from "../../store/conversationsStore";
-import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
+import {
+  prefetchSlashCommands,
+  refetchSlashCommands,
+  useSlashCommands,
+} from "../../store/commandsStore";
 import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts";
 import { useEffectiveCleanOutput } from "../../store/display";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
@@ -29,6 +33,7 @@ import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
 import {
   SlashCommandMenu,
   filterSlashCommands,
+  isReloadSkillsCommand,
   slashTokenAt,
   type SlashToken,
 } from "./SlashCommandMenu";
@@ -349,6 +354,10 @@ export const ConductorComposer = forwardRef<
     // `queued`: busy at send time → the CLI will inject this mid-turn, so the
     // bubble shows an "en attente" badge until the turn ends.
     send.mutate({ text: t, worktree: useWorktree && isFresh, queued: busy });
+    // `/reload-skills` makes the CLI re-scan on-disk skills; mirror that in the
+    // `/` menu by re-fetching this cwd's catalogue (a fresh spawn reads disk
+    // afresh), overwriting the once-per-session cache. Fire-and-forget.
+    if (isReloadSkillsCommand(t)) void refetchSlashCommands(cwd);
     setText("");
     histNav.current = IDLE_NAV;
     setSlashToken(null);

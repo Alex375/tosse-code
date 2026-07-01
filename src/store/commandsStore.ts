@@ -106,3 +106,25 @@ export async function prefetchSlashCommands(cwd: string | null | undefined): Pro
     fetchAttempted.delete(cwd);
   }
 }
+
+/**
+ * Force a re-fetch of a cwd's catalogue, OVERWRITING the cache. Unlike
+ * `prefetchSlashCommands` this ignores the "already cached / already attempted"
+ * guards — it is what `/reload-skills` triggers so the `/` menu reflects skills
+ * the user just added, removed, or edited on disk. A fresh short-lived `claude`
+ * re-reads the current on-disk skills at `initialize`, independently of the live
+ * session's own reload. A failed/empty fetch leaves the existing cache intact
+ * (a transient spawn failure must never blank the menu).
+ */
+export async function refetchSlashCommands(cwd: string | null | undefined): Promise<void> {
+  if (!cwd) return;
+  try {
+    const res = await commands.fetchSlashCommands(cwd);
+    if (res.status === "ok" && res.data.length > 0) {
+      fetchAttempted.add(cwd); // now known — keep prefetch deduped
+      useCommandsStore.getState().setCommands(cwd, res.data);
+    }
+  } catch {
+    /* keep the old cache */
+  }
+}
