@@ -104,6 +104,50 @@ jobs:
           fi
           echo "✓ $TAG est libre."
 
+      # Signature de CODE macOS avec un certificat AUTO-SIGNÉ stable → Designated
+      # Requirement fixe (`certificate leaf = H"…"`, épinglée au HASH DU CERT, PAS au
+      # cdhash) → macOS TCC garde les autorisations de dossier (Bureau/Documents/…) d'une
+      # version à l'autre au lieu de tout redemander à chaque auto-update. On installe
+      # l'identité dans un keychain dédié PUIS on la TRUST : un cert self-signed est sinon
+      # « invalide » pour `find-identity -v` → Tauri échoue (« failed to resolve signing
+      # identity »). sudo est non-interactif sur les runners GitHub → trust en domaine
+      # système. La notarisation est skippée (pas de APPLE_ID/APPLE_API_KEY) → Gatekeeper
+      # reste (clic droit → Ouvrir), problème SÉPARÉ (Developer ID payant).
+      # ⚠️ DR-CRITIQUE : toujours le MÊME certificat (réémettre = nouvelle DR = re-grant TCC
+      # global pour tous). Cert (~20 ans) + mdp sauvegardés hors repo, comme la clé updater.
+      # Secrets absents ⇒ étape no-op ⇒ build NON signé (comportement historique).
+      - name: Configurer la signature macOS (certificat auto-signé trusté)
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "Aucun certificat (secret absent) → build NON signé (comportement historique)."
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/tosse-signing.keychain-db"
+          KCPW="$(openssl rand -hex 20)"
+          CERT_P12="$RUNNER_TEMP/cert.p12"
+          CERT_CRT="$RUNNER_TEMP/cert.crt"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_P12"
+          # Keychain dédié, déverrouillé, sans auto-lock pendant le build.
+          security create-keychain -p "$KCPW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KCPW" "$KEYCHAIN"
+          # Import + autorise codesign à utiliser la clé sans prompt (partition list).
+          security import "$CERT_P12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KEYCHAIN" >/dev/null
+          # Le keychain doit être dans la search list (le bundler résout l'identité par là).
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+          # TRUST du cert self-signed pour la signature de code (sinon find-identity -v = 0).
+          security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$KEYCHAIN" > "$CERT_CRT"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$CERT_CRT"
+          rm -f "$CERT_P12" "$CERT_CRT"
+          echo "Identité de signature disponible :"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       - name: Build + publication de la release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -114,6 +158,13 @@ jobs:
           # Clé générée SANS mot de passe → password vide (évite tout prompt en CI).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Signature de CODE macOS : l'identité (cert auto-signé stable) a été installée
+          # dans un keychain TRUSTÉ par l'étape « Configurer la signature macOS » ci-dessus.
+          # Ici on ne passe QUE le nom d'identité, que le bundler Tauri résout dans la
+          # search list. ⚠️ NE PAS remettre APPLE_CERTIFICATE ici : Tauri referait alors son
+          # propre keychain NON trusté et échouerait (« failed to resolve signing identity »).
+          # Secret absent ⇒ identité vide ⇒ build non signé (comportement historique).
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
           tagName: v${{ steps.version.outputs.version }}
           releaseName: "Tosse Code v${{ steps.version.outputs.version }}"

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Custom Info.plist entries MERGED into the Tauri-generated plist at build time
+  (Tauri v2 merges src-tauri/Info.plist; only put the ADDED keys here, not the
+  whole plist). See https://v2.tauri.app/distribute/macos-application-bundle/
+
+  These are the macOS privacy (TCC) usage-description strings shown when the app
+  first accesses a protected folder. They make the system prompt explicit; the
+  grant only PERSISTS across app updates because the app now carries a stable
+  code-signing identity (see bundle.macOS + the release workflow's APPLE_* env).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Tosse Code a besoin d'accéder à votre Bureau pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Tosse Code a besoin d'accéder à vos Documents pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Tosse Code a besoin d'accéder à vos Téléchargements pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
+</dict>
+</plist>
