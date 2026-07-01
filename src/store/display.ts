@@ -7,6 +7,14 @@ import { useConversationsStore } from "./conversationsStore";
 
 const STORAGE_KEY = "tosse:display";
 
+/** How Markdown is rendered everywhere it appears (conversation thread, sub-agent
+ *  transcripts, and the `.md` file preview — all go through {@link StreamMarkdown}).
+ *  - `classic`: the historical GitHub-flavoured look (boxed, full-grid tables).
+ *  - `warm`   : soft/on-brand — coral accents, card code blocks, salient filenames.
+ *  - `minimal`: neutral/typographic — airy, hairline chrome, uppercase section heads.
+ *  A single GLOBAL setting (not per-conversation): one look across the whole app. */
+export type MarkdownMode = "classic" | "warm" | "minimal";
+
 export interface DisplayPrefs {
   /** The GLOBAL DEFAULT for "clean output" — folding an assistant response's intermediate
    *  work (tool runs, thinking, in-between narration, sub-agents) into ONE collapsible
@@ -21,12 +29,19 @@ export interface DisplayPrefs {
    *  default; the composer chip writes the current conversation's explicit override. The
    *  effective value for a conversation is resolved by {@link useEffectiveCleanOutput}. */
   cleanOutput: boolean;
+
+  /** The Markdown rendering look, applied globally to every surface that renders
+   *  Markdown. See {@link MarkdownMode}. Set from Settings → Conversation. */
+  markdownMode: MarkdownMode;
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
 // (Settings → Général, or the composer chip) when they want the condensed reading view.
+// markdownMode defaults to `warm` — the on-brand, cleaner look (the whole point of the
+// feature); users can switch to `minimal` or back to `classic` in Settings → Conversation.
 const DEFAULTS: DisplayPrefs = {
   cleanOutput: false,
+  markdownMode: "warm",
 };
 
 function load(): DisplayPrefs {
@@ -60,11 +75,18 @@ export const useDisplay = create<DisplayState>((set) => ({
     set((s) => {
       const next: DisplayPrefs = {
         cleanOutput: patch.cleanOutput ?? s.cleanOutput,
+        markdownMode: patch.markdownMode ?? s.markdownMode,
       };
       save(next);
       return next;
     }),
 }));
+
+/** The global Markdown rendering mode. Read by {@link StreamMarkdown} (which stamps it
+ *  as `data-md-mode` on its root and provides it via context to CodeBlock). */
+export function useMarkdownMode(): MarkdownMode {
+  return useDisplay((s) => s.markdownMode);
+}
 
 /**
  * Collapse the per-conversation clean-output tristate onto a concrete boolean: an

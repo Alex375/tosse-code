@@ -7,6 +7,7 @@ import "./ui/conductor-wirekit.css";
 import "./ui/conductor-conversation.css";
 import "./ui/conductor-flightdeck.css";
 import "./ui/conductor-aliases.css";
+import "./ui/conductor-markdown-modes.css";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

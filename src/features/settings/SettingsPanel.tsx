@@ -12,10 +12,12 @@ import { Ico } from "../../ui/kit";
 import { Toggle } from "../../ui/Toggle";
 import { UpdateSection } from "./UpdateSection";
 import { NotificationsSection } from "./NotificationsSection";
+import { ConversationSection } from "./ConversationSection";
 import styles from "./SettingsPanel.module.css";
 
 const TABS: Array<{ id: SettingsSection; label: string; icon: string }> = [
   { id: "general", label: "Général", icon: "cog" },
+  { id: "conversation", label: "Conversation", icon: "chat" },
   { id: "notifications", label: "Notifications", icon: "bell" },
   { id: "updates", label: "Mises à jour", icon: "refresh" },
   { id: "data", label: "Données", icon: "trash" },
@@ -112,6 +114,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 <DisplayPrefs />
               </div>
             )}
+
+            {section === "conversation" && <ConversationSection />}
 
             {section === "notifications" && <NotificationsSection />}
 

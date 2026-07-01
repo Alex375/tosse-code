@@ -12,6 +12,7 @@
 
 import {
   createContext,
+  Fragment,
   useCallback,
   useContext,
   useEffect,
@@ -24,6 +25,8 @@ import {
 import { useEditorStore } from "../editor/editorStore";
 import { parseFileMention, resolveMentionAbs, SCHEME, type FileMention } from "./fileMentions";
 import { cachedStatus, ensureMentionChecked, subscribeMention } from "./mentionCache";
+import { useMarkdownDemo } from "./markdownMode";
+import { looksLikeFile, looksLikePath, segmentPath, type PathParts } from "./pathSegments";
 
 // ---- Provider: which conversation/cwd a rendered mention belongs to ----------
 
@@ -173,8 +176,48 @@ function ClickableFile({
 
 // ---- Public components -------------------------------------------------------
 
+/** A leading path glyph, shown only in warm/minimal modes (CSS gates `.fico`). A document
+ *  for a file (last segment has an extension), a folder for a directory-shaped path. */
+function PathGlyph({ isFile }: { isFile: boolean }) {
+  return isFile ? (
+    <svg className="fico" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden="true">
+      <path d="M4 1.6h5L13 5v9.4H4z" />
+      <path d="M9 1.6V5h4" />
+    </svg>
+  ) : (
+    <svg className="fico" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden="true">
+      <path d="M1.6 4.2h4L7 5.8h7.4v7.6H1.6z" />
+    </svg>
+  );
+}
+
+/**
+ * Render a path token as segmented spans so the CSS modes can theme it: an icon,
+ * dimmed directory segments each followed by a break-friendly `/`, the salient
+ * filename, and the coloured `:line` suffix. `<wbr/>` after each separator makes the
+ * chip wrap at slashes (never mid-segment). The Classic mode keeps it uniform; Warm and
+ * Minimal make the filename pop and colour the line number. See pathSegments.ts.
+ */
+function PathDisplay({ parts }: { parts: PathParts }) {
+  return (
+    <>
+      <PathGlyph isFile={looksLikeFile(parts.file)} />
+      {parts.dirs.map((d, i) => (
+        <Fragment key={i}>
+          <span className="fdir">{d}</span>
+          <span className="fsep">/</span>
+          <wbr />
+        </Fragment>
+      ))}
+      <span className="ffile">{parts.file}</span>
+      {parts.line ? <span className="fline">{parts.line}</span> : null}
+    </>
+  );
+}
+
 /** Inline-code path in prose: clickable only when it resolves to a real file
- *  (heuristic detection ⇒ existence-gated to avoid dead links). */
+ *  (heuristic detection ⇒ existence-gated to avoid dead links). Path-shaped tokens
+ *  (containing a slash) render as a segmented chip; everything else stays plain. */
 export function MentionInlineCode({
   className,
   children,
@@ -182,8 +225,16 @@ export function MentionInlineCode({
   className?: string;
   children: ReactNode;
 }) {
-  const target = useMentionTarget(childrenText(children));
-  return <ClickableFile element="code" className={className} display={children} target={target} />;
+  const raw = childrenText(children);
+  const target = useMentionTarget(raw);
+  const demo = useMarkdownDemo();
+  // Only treat a token as a file PATH (segmented chip + icon) when it looks like one AND
+  // it is a REAL file (resolves), or in the Settings preview (demo). A slash-bearing
+  // non-file — e.g. a skill name like `foo/bar` — stays plain: no chip, no file icon.
+  const isPath = looksLikePath(raw) && (target != null || demo);
+  const display = isPath ? <PathDisplay parts={segmentPath(raw)} /> : children;
+  const cn = isPath ? `${className ?? ""} fpath`.trim() : className;
+  return <ClickableFile element="code" className={cn} display={display} target={target} />;
 }
 
 /**

@@ -5,7 +5,7 @@
 import { create } from "zustand";
 
 /** The settings sections, mirrored by the panel's left-rail tabs. */
-export type SettingsSection = "general" | "notifications" | "updates" | "data";
+export type SettingsSection = "general" | "conversation" | "notifications" | "updates" | "data";
 
 interface SettingsUiState {
   open: boolean;
