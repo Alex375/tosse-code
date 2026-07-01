@@ -1,0 +1,73 @@
+// The clean render for an injected "special message" — today a `<task-notification>`
+// emitted when a background task/agent finishes. Shown in PLACE of a raw user bubble
+// (the CLI injects these AS user turns, but the human didn't type them, so no user
+// avatar). Pure: renders only its parsed props, no store reads — reused VERBATIM by
+// the live thread (MsgUser) and the disk transcript (SubAgentTranscript / history
+// preview) so both surfaces stay identical.
+import { Expandable } from "../../ui/Expandable";
+import { Ico } from "../../ui/kit";
+import { fmtDuration } from "../../agent/subagentMeta";
+import { fmtTokens } from "../../store/contextData";
+import { StreamMarkdown } from "./StreamMarkdown";
+import { taskNotificationStyle, type SpecialMessage, type TaskNotification } from "./specialMessage";
+
+/** Shorten a task/tool id for the discreet mono chip; the full value is the title. */
+function shortId(id: string): string {
+  return id.length > 12 ? id.slice(0, 8) + "…" : id;
+}
+
+function TaskNotificationCard({ n }: { n: TaskNotification }) {
+  const st = taskNotificationStyle(n.status);
+  const headline = n.summary || "Tâche de fond terminée";
+
+  const metrics: string[] = [];
+  if (n.usage?.tokens != null) metrics.push(`${fmtTokens(n.usage.tokens)} tokens`);
+  if (n.usage?.toolUses != null)
+    metrics.push(`${n.usage.toolUses} outil${n.usage.toolUses > 1 ? "s" : ""}`);
+  if (n.usage?.durationMs != null) metrics.push(fmtDuration(n.usage.durationMs));
+  const metricLine = metrics.join("  ·  ");
+
+  const rawId = n.taskId || n.toolUseId;
+  const idChip = rawId ? shortId(rawId) : null;
+
+  return (
+    <div className={`cv-tasknote is-${st.tone}`} role="note">
+      <div className="cv-tasknote-h">
+        <span className="cv-tasknote-ico">
+          <Ico name={st.icon} className="sm" />
+        </span>
+        <span className="cv-tasknote-title">{headline}</span>
+        <span className="cv-tasknote-status">{st.label}</span>
+      </div>
+      {metricLine || idChip ? (
+        <div className="cv-tasknote-meta">
+          {metricLine ? <span>{metricLine}</span> : null}
+          {idChip ? (
+            <span className="cv-tasknote-id" title={rawId ?? undefined}>
+              {idChip}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {n.result ? (
+        <div className="cv-tasknote-result">
+          <Expandable maxHeight={200} fadeColor="var(--wf-panel)">
+            <StreamMarkdown text={n.result} />
+          </Expandable>
+        </div>
+      ) : null}
+      {n.note ? <p className="cv-tasknote-note">{n.note}</p> : null}
+    </div>
+  );
+}
+
+/** Render an injected special message. One kind today; the switch keeps future
+ *  injected markers (system reminders, other injections) tidy to add. */
+export function SpecialMessageCard({ data }: { data: SpecialMessage }) {
+  switch (data.type) {
+    case "task-notification":
+      return <TaskNotificationCard n={data} />;
+    default:
+      return null;
+  }
+}
