@@ -160,6 +160,15 @@ const titleContext = new Map<string, string[]>();
 const titleGenCount = new Map<string, number>();
 const lastAppliedSeq = new Map<string, number>();
 
+// Undo stack for the friction-free conversation delete (the × on a row removes a
+// conversation with no confirmation). `removeConversation` captures the full
+// `Conversation` snapshot anyway, so undo is cheap: re-insert the row (and let the
+// transcript reload from disk — the on-disk .jsonl is never touched by a delete).
+// LIFO, in-memory ONLY (no SQLite/localStorage — same policy as the auto-title state):
+// an accidental delete is undoable within the session, not across restarts. Cleared
+// on wipe. Drained by ⌘Z via [undoRemoveConversation].
+const removedConversations: Conversation[] = [];
+
 // ---- Persistence adapter ----------------------------------------------------
 // The ONE place that knows the SQL-facing DTO shape (snake_case `*Record`).
 // Maps to/from the camelCase domain model and forwards to the core. If the
@@ -248,6 +257,16 @@ interface ConversationsState {
   addConversation: (c: Conversation) => void;
   selectConversation: (id: string) => void;
   removeConversation: (id: string) => void;
+  /**
+   * Restore the most recently `removeConversation`-d conversation (LIFO) — the ⌘Z
+   * undo of the no-confirmation × delete. Re-inserts the snapshot (with a cleared
+   * live handle, the old process is gone) and re-selects it; the timeline reloads
+   * from the on-disk transcript and the next message re-spawns via --resume. Returns
+   * true if something was restored, false if the undo stack was empty (or the
+   * snapshot's repo is gone) — the caller uses that to decide whether to consume the
+   * key event.
+   */
+  undoRemoveConversation: () => boolean;
   /** Rename a conversation to a user-chosen title. Blank or unchanged names are ignored. */
   renameConversation: (id: string, name: string) => void;
   /**
@@ -369,6 +388,10 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
 
   removeConversation: (id) => {
     const conv = get().conversations.find((c) => c.id === id);
+    // Push the pre-teardown snapshot onto the undo stack BEFORE we mutate anything,
+    // so ⌘Z (undoRemoveConversation) can restore the row exactly as it was. The delete
+    // is friction-free (no confirm dialog), so this is the safety net.
+    if (conv) removedConversations.push(conv);
     set((s) => {
       const rest = s.conversations.filter((c) => c.id !== id);
       return {
@@ -399,6 +422,28 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     useGitViewStore.getState().clear(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
+  },
+
+  undoRemoveConversation: () => {
+    const snapshot = removedConversations.pop();
+    if (!snapshot) return false;
+    // Already back (an out-of-band re-add): just focus it, don't duplicate the row.
+    if (get().conversations.some((c) => c.id === snapshot.id)) {
+      get().selectConversation(snapshot.id);
+      return true;
+    }
+    // Its repo may have been removed since the delete (e.g. the whole repo was
+    // dropped): a conversation under a missing repo would group nowhere and silently
+    // vanish from the sidebar, so there is nothing useful to restore — discard it.
+    if (!get().repos.some((r) => r.id === snapshot.repoId)) return false;
+    // The live process was killed and the message timeline dropped on removal. Clear
+    // the once-per-run history guard so the select-time loader actually re-reads the
+    // on-disk transcript (otherwise the restored row would stay blank); re-insert a
+    // CLEAN record (no stale handle — the old session is dead, the next message
+    // re-spawns it via --resume). addConversation re-selects + re-persists the row.
+    historyLoaded.delete(snapshot.id);
+    get().addConversation({ ...snapshot, handle: null });
+    return true;
   },
 
   renameConversation: (id, name) => {
@@ -1060,6 +1105,7 @@ export async function wipeAllData(): Promise<void> {
   titleContext.clear();
   titleGenCount.clear();
   lastAppliedSeq.clear();
+  removedConversations.length = 0; // nothing to "undo" back into a wiped slate
   clearMentionCache();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });

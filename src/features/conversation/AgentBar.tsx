@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { useBackgroundAgentIds, useSessionState, useToolResult } from "../../store/conversationStore";
 import { useSessionTasks } from "../../store/backgroundTasksStore";
 import { useConversationsStore } from "../../store/conversationsStore";
+import { useStopTask } from "../../ipc/useCommands";
 import { fmtDuration, resolveAgentId, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
 import type { BackgroundTask } from "../../ipc/client";
@@ -27,6 +28,7 @@ export function AgentBar({ session }: { session: string }) {
   const claudeSessionId = useConversationsStore(
     (s) => s.conversations.find((c) => c.id === session)?.sessionId ?? null,
   );
+  const stopTask = useStopTask(session);
   const [opened, setOpened] = useState<BackgroundTask | null>(null);
 
   // Only sub-agents still RUNNING in the background — a finished one drops out (its
@@ -72,19 +74,29 @@ export function AgentBar({ session }: { session: string }) {
           .filter(Boolean)
           .join(" · ");
         return (
-          <button
-            key={t.task_id}
-            type="button"
-            className="cv-bgagent"
-            onClick={() => setOpened(t)}
-            title="Ouvrir le transcript du sous-agent"
-          >
-            <RunDots />
-            <span className="cv-bgagent-label">{t.label ?? "Sous-agent"}</span>
-            {meta ? <span className="cv-bgagent-meta wf-mono">{meta}</span> : null}
-            {stats ? <span className="cv-bgagent-stats wf-mono">{stats}</span> : null}
-            <Ico name="arrow" className="sm cv-bgagent-go" />
-          </button>
+          <div key={t.task_id} className="cv-bashrow">
+            <button
+              type="button"
+              className="cv-bgagent"
+              onClick={() => setOpened(t)}
+              title="Ouvrir le transcript du sous-agent"
+            >
+              <RunDots />
+              <span className="cv-bgagent-label">{t.label ?? "Sous-agent"}</span>
+              {meta ? <span className="cv-bgagent-meta wf-mono">{meta}</span> : null}
+              {stats ? <span className="cv-bgagent-stats wf-mono">{stats}</span> : null}
+              <Ico name="arrow" className="sm cv-bgagent-go" />
+            </button>
+            <button
+              type="button"
+              className="cv-bgstop"
+              title="Arrêter le sous-agent"
+              aria-label="Arrêter le sous-agent"
+              onClick={() => stopTask.mutate(t.task_id)}
+            >
+              <Ico name="stopc" className="sm" />
+            </button>
+          </div>
         );
       })}
 

@@ -21,6 +21,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type {
   ConversationItem,
+  JsonValue,
   PermissionRequestPayload,
   SessionStatePayload,
 } from "../ipc/client";
@@ -36,7 +37,7 @@ import type {
   Turn,
   TurnResultMeta,
 } from "./types";
-import { isBackgroundAgentInput } from "../agent/subagentMeta";
+import { isBackgroundAgentInput, isDetachedAgentAck } from "../agent/subagentMeta";
 import { latestTodosInBlocks, todoSummary } from "./todos";
 
 const connectingState: SessionStatePayload = {
@@ -88,6 +89,26 @@ function backgroundAgentIdsIn(blocks: NormalizedBlock[]): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Is `toolUseId` a DETACHED sub-agent that should join `bgAgentIds` because of its launch
+ * ACK, even though its live `tool_use` block lacked `run_in_background`? Gated on the cheap
+ * ack check first; only then confirms the spawning block is an `Agent`/`Task` (bgAgentIds is
+ * Agent-only — Bash-bg/Monitor/Workflow have their own bars/cards). Folding an id here HIDES
+ * its inline card, so we FAIL SAFE: if the block isn't found (result before its
+ * assistant_message — which the stream-json ordering makes essentially impossible), we do
+ * NOT fold — never hide a tool_use we can't positively confirm is a detached Agent. */
+function isDetachedAgentByAck(entry: SessionEntry, toolUseId: string, content: JsonValue): boolean {
+  if (!isDetachedAgentAck(content)) return false;
+  for (const tid in entry.turns) {
+    for (const b of entry.turns[tid].blocks) {
+      if (b.type === "tool_use" && b.id === toolUseId) {
+        return b.name === "Agent" || b.name === "Task";
+      }
+    }
+  }
+  return false; // block not found → don't fold (fail safe: never hide an unconfirmed tool_use)
 }
 
 function hasTimelineId(timeline: TimelineEntry[], id: string): boolean {
@@ -442,10 +463,22 @@ export const useConversationStore = create<ConversationState>((set) => {
               isError: item.is_error,
               parentToolUseId: item.parent_tool_use_id,
             };
-            return {
+            const next: SessionEntry = {
               ...entry,
               toolResults: { ...entry.toolResults, [item.tool_use_id]: result },
             };
+            // Robustness: a DETACHED sub-agent whose live `Agent` block arrived WITHOUT
+            // `run_in_background` (a transient wire drop) would otherwise render inline as a
+            // foreground card and never reach the AgentBar. Its launch ack is an independent,
+            // reliable "detached" signal — fold the id into bgAgentIds so the AgentBar lists
+            // it AND the inline hiding drops it, exactly as if the input flag had been present.
+            if (
+              isDetachedAgentByAck(entry, item.tool_use_id, item.content) &&
+              !next.bgAgentIds.includes(item.tool_use_id)
+            ) {
+              next.bgAgentIds = [...next.bgAgentIds, item.tool_use_id];
+            }
+            return next;
           }
 
           case "turn_result": {
