@@ -295,6 +295,8 @@ fn push_user_text(uuid: &str, text: &str, items: &mut Vec<ConversationItem>) {
         id: uuid.to_string(),
         text: text.to_string(),
         parent_tool_use_id: None,
+        // A transcript restore is already chronological → appended, never spliced.
+        replay: false,
     });
 }
 

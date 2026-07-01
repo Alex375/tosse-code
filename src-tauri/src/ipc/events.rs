@@ -3,7 +3,7 @@ use specta::Type;
 use tauri_specta::Event;
 
 use crate::supervisor::model::{
-    BackgroundTask, ConversationItem, PermissionRequestPayload, SessionEmitter,
+    BackgroundTask, ConversationItem, PermissionRequestPayload, RemoteControlState, SessionEmitter,
     SessionStatePayload, SlashCommand,
 };
 
@@ -64,6 +64,16 @@ pub struct SessionTitleEvent {
     pub session: String,
     pub title: String,
     pub seq: u32,
+}
+
+/// This session's Remote Control ("bridge") state changed — the ack of a
+/// `remote_control` request, or an async `system/bridge_state` health downgrade. The
+/// UI maps `session` (handle) → conversation and updates its Remote Control chip
+/// (connected + `session_url`, connecting, disconnected, or error).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionRemoteControlEvent {
+    pub session: String,
+    pub state: RemoteControlState,
 }
 
 /// Coalesced filesystem change notification for the editor panel: the (de-noised,
@@ -157,6 +167,13 @@ impl SessionEmitter for TauriEmitter {
             session: session.to_string(),
             title: title.to_string(),
             seq,
+        });
+    }
+
+    fn emit_remote_control(&self, session: &str, state: &RemoteControlState) {
+        emit_logged(&self.app, "session_remote_control", SessionRemoteControlEvent {
+            session: session.to_string(),
+            state: state.clone(),
         });
     }
 }

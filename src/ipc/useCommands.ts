@@ -13,6 +13,7 @@ import {
 } from "../store/conversationsStore";
 import { noteInterrupt } from "../notifications/notify";
 import { worktreesKey } from "./useWorktrees";
+import { useRemoteControlStore } from "../store/remoteControl";
 
 // These hooks are keyed by a conversation's STABLE id, not its live session
 // handle. Reads (the message store) key by the stable id; commands target the
@@ -143,6 +144,59 @@ export function useStop(convId: string) {
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
       addErrorTurn(convId, `Arrêt de la session échoué : ${message}`);
+    },
+  });
+}
+
+/** Enable/disable this conversation's Remote Control bridge (native `/remote-control`).
+ *  Enabling needs a LIVE `claude` process (the bridge rides the running session), so we
+ *  spawn one lazily if needed — clicking the chip on an idle conversation both starts it
+ *  and bridges it. Disabling only matters if something is live. The result (connected +
+ *  claude.ai/code URL / disconnected / error) is written to the live remote-control store;
+ *  async health downgrades then arrive via `SessionRemoteControlEvent`. */
+export function useSetRemoteControl(convId: string) {
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
+  return useMutation({
+    mutationFn: async ({
+      enabled,
+      name,
+      worktree,
+    }: {
+      enabled: boolean;
+      name?: string;
+      /** On a not-yet-spawned conversation, enabling spawns the session lazily; honor a
+       *  pending "start in a fresh worktree" choice so activating remote control first
+       *  doesn't silently foreclose it. */
+      worktree?: boolean;
+    }) => {
+      const rc = useRemoteControlStore.getState();
+      // Disabling with nothing live: the bridge is already gone with the process.
+      const handle = enabled ? await ensureConversationSession(convId, { worktree }) : liveHandle(convId);
+      if (!handle) {
+        rc.set(convId, { status: "disconnected", session_url: null, error: null });
+        return;
+      }
+      // Optimistic "connecting" so the chip reacts instantly during the handshake.
+      if (enabled) rc.set(convId, { status: "connecting", session_url: null, error: null });
+      const state = await unwrap(commands.setRemoteControl(handle, enabled, name ?? null));
+      rc.set(convId, state);
+      // An IN-BAND rejection (e.g. the binary answers success-with-status:"error" — a
+      // policy-disabled bridge, or a wire success that returned no session_url) does NOT
+      // throw, so `onError` never runs. Surface it in the thread too (not only the chip
+      // dot) — every error stays visible, per the project's no-silent-failure rule.
+      if (state.status === "error") {
+        addErrorTurn(convId, `Remote control échoué : ${state.error ?? "erreur inconnue"}`);
+      }
+      return state;
+    },
+    // A failed bridge toggle is otherwise invisible — reflect it on the chip AND
+    // surface it in the thread so the user knows remote control didn't take.
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      useRemoteControlStore
+        .getState()
+        .set(convId, { status: "error", session_url: null, error: message });
+      addErrorTurn(convId, `Remote control échoué : ${message}`);
     },
   });
 }

@@ -75,6 +75,7 @@ function emptyEntry(session: string): SessionEntry {
     // as idle/off, not "ready for review").
     turnSeen: true,
     seq: 0,
+    replayAnchor: 0,
   };
 }
 
@@ -160,6 +161,13 @@ interface ConversationState {
    *  conversation drops from review / open-question back to idle. */
   markSeen: (session: string) => void;
   resetSession: (session: string) => void;
+  /**
+   * Re-arm the remote-replay insert anchor to the END of the timeline. Called after a
+   * history hydration (which appends chronologically but never fires a `turn_result`,
+   * so the anchor would otherwise stay at 0) so the FIRST live remote turn splices at
+   * the end of the restored history, not above it. See `SessionEntry.replayAnchor`.
+   */
+  reanchorReplay: (session: string) => void;
   /** Forget a session's timeline entirely (e.g. its conversation was deleted). */
   dropSession: (session: string) => void;
 }
@@ -303,6 +311,10 @@ export const useConversationStore = create<ConversationState>((set) => {
           seq: entry.seq + 1,
           turns: { ...entry.turns, [id]: turn },
           timeline: [...entry.timeline, { kind: "turn", id }],
+          // A locally-sent turn is committed content at the current boundary: move the
+          // replay anchor past it so a concurrent remote echo (multi-device: desktop +
+          // phone in the same window) splices AFTER our own message, not before it.
+          replayAnchor: entry.timeline.length + 1,
           // Sending the next message consumes any pending review/question: the
           // user has clearly moved on from the previous result.
           turnSeen: true,
@@ -320,6 +332,10 @@ export const useConversationStore = create<ConversationState>((set) => {
           seq: entry.seq + 1,
           errors: { ...entry.errors, [id]: { id, message, detail: detail ?? null } },
           timeline: [...entry.timeline, { kind: "error", id }],
+          // Committed content at the boundary → advance the replay anchor past it so a
+          // later remote echo doesn't render above this error (e.g. a failed
+          // remote-control toggle's own error bubble).
+          replayAnchor: entry.timeline.length + 1,
         });
       }),
 
@@ -349,6 +365,9 @@ export const useConversationStore = create<ConversationState>((set) => {
 
     resetSession: (session) =>
       set((s) => ({ sessions: { ...s.sessions, [session]: emptyEntry(session) } })),
+
+    reanchorReplay: (session) =>
+      withEntry(session, (entry) => ({ ...entry, replayAnchor: entry.timeline.length })),
 
     dropSession: (session) =>
       set((s) => {
@@ -393,9 +412,10 @@ export const useConversationStore = create<ConversationState>((set) => {
           }
 
           case "user_message": {
-            // A past user turn replayed from the transcript on resume. Mirrors
-            // addUserTurn (role "user", text in streamingText), but keyed by the
-            // transcript id so re-delivery dedupes.
+            // A user turn from the stream. Our OWN turns are suppressed in the core (by
+            // the uuid we stamped), so only REMOTE (phone/web) turns and history replays
+            // reach here; both are keyed by their transcript uuid, so a re-delivery
+            // dedupes. Mirrors addUserTurn (role "user", text in streamingText).
             if (entry.turns[item.id]) return entry;
             const turn: Turn = {
               id: item.id,
@@ -407,12 +427,30 @@ export const useConversationStore = create<ConversationState>((set) => {
               parentToolUseId: item.parent_tool_use_id,
               hasThinking: false,
             };
+            const line = { kind: "turn", id: item.id } as const;
+            // A HISTORY restore (`replay:false`) is already chronological → APPEND. It
+            // must NOT go through the splice: the anchor isn't re-armed during a resume
+            // (the transcript carries no `turn_result`), so splicing would bunch every
+            // user turn above the replies. Only a LIVE remote echo (`replay:true`) —
+            // which can arrive out-of-order, after its own answer already streamed — is
+            // spliced at the frozen anchor (the current turn boundary), landing right
+            // before this turn's whole response; the anchor advances so several queued
+            // replays keep their order. See `SessionEntry.replayAnchor`.
+            if (!item.replay) {
+              return {
+                ...entry,
+                turns: { ...entry.turns, [item.id]: turn },
+                timeline: hasTimelineId(entry.timeline, item.id)
+                  ? entry.timeline
+                  : [...entry.timeline, line],
+              };
+            }
+            const at = Math.min(entry.replayAnchor, entry.timeline.length);
             return {
               ...entry,
               turns: { ...entry.turns, [item.id]: turn },
-              timeline: hasTimelineId(entry.timeline, item.id)
-                ? entry.timeline
-                : [...entry.timeline, { kind: "turn", id: item.id }],
+              timeline: [...entry.timeline.slice(0, at), line, ...entry.timeline.slice(at)],
+              replayAnchor: at + 1,
             };
           }
 
@@ -515,6 +553,11 @@ export const useConversationStore = create<ConversationState>((set) => {
               timeline: [...entry.timeline, { kind: "turn_result", id }],
               openBubble: {},
               pendingPermissions: [],
+              // Re-anchor the replay insert point to the (new) end of the timeline at
+              // this turn boundary, so the NEXT remote turn's echo splices right after
+              // this turn — never inside the response that just finished. (+1 = the
+              // turn_result footer we just appended.) See `SessionEntry.replayAnchor`.
+              replayAnchor: entry.timeline.length + 1,
               // A turn just finished → it's now "to review", UNLESS it was
               // interrupted (the user did that, so they're already aware).
               turnSeen: item.subtype === "interrupted",

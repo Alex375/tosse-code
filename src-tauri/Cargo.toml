@@ -67,6 +67,11 @@ trash = "5"
 # webview as a `data:` URL — see `fs::read_image`).
 portable-pty = "0.8"
 base64 = "0.22"
+# Stable v4 uuids stamped on each user message we write to `claude`'s stdin, so the
+# `--replay-user-messages` echo of our OWN turns can be recognised (by uuid) and
+# suppressed — remote (phone/web) turns carry a uuid we never sent, so they surface.
+# Already in the tree transitively; enabling `v4` (getrandom) is near-free.
+uuid = { version = "1", features = ["v4"] }
 
 # Async runtime for the supervisor: spawn `claude`, pipe stdio, drive tasks.
 # Tauri 2 already runs on tokio; we depend on it directly for the features we use.

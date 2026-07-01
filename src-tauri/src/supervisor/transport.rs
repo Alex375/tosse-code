@@ -141,10 +141,15 @@ fn known_claude_locations() -> Vec<PathBuf> {
     out
 }
 
-/// Build a `user` turn message in the Anthropic message shape (spec §2.3).
-pub fn user_message(text: impl Into<String>) -> Value {
+/// Build a `user` turn message in the Anthropic message shape (spec §2.3), stamped
+/// with `uuid`. The uuid is echoed back verbatim by `--replay-user-messages`
+/// (`isReplay:true`), which is how the core recognises — and suppresses — the echo of
+/// a turn WE sent (vs a remote turn, whose uuid we never sent). Mirrors the official
+/// extension, which sends its own `crypto.randomUUID()` and dedupes the replay by it.
+pub fn user_message(text: impl Into<String>, uuid: &str) -> Value {
     json!({
         "type": "user",
+        "uuid": uuid,
         "message": {
             "role": "user",
             "content": [{ "type": "text", "text": text.into() }],
@@ -235,7 +240,24 @@ impl Transport {
             // Route permission decisions back over the stdio control channel as
             // `control_request{can_use_tool}` (answered in subtask 2).
             .arg("--permission-prompt-tool")
-            .arg("stdio");
+            .arg("stdio")
+            // Re-emit user messages on stdout (`isReplay:true`). Without this the CLI
+            // NEVER echoes a `user` turn — not ours (we render them optimistically) NOR
+            // one injected by Remote Control (a message typed on the phone/web). It is
+            // the ONLY way those remote turns reach us live; otherwise they'd surface
+            // only on reload (from the on-disk transcript). Unconditional, exactly like
+            // the official VS Code extension. Requires stream-json in+out (satisfied
+            // above). We stamp each user message we write with a uuid and suppress the
+            // echo of our OWN turns by it (see `user_message` + the assembler).
+            //
+            // ASSUMPTION (verified, re-check on every `claude` upgrade — like every wire
+            // pin here): the CLI re-emits our turn with the SAME top-level uuid we
+            // stamped, so the uuid dedup matches and our own message isn't rendered
+            // twice. Confirmed two ways: (1) the VS Code extension relies on the exact
+            // same round-trip; (2) dogfooded against 2.1.187 — locally-typed messages
+            // did NOT double. If a future build reassigns the uuid, the symptom is
+            // loud & immediate (every local message doubles), not silent.
+            .arg("--replay-user-messages");
 
         if let Some(resume) = &cfg.resume {
             cmd.arg("--resume").arg(resume);
@@ -354,9 +376,12 @@ impl Transport {
     }
 
     /// Queue a user turn as a `user` message in the Anthropic message shape
-    /// (spec §2.3). Non-blocking: the writer task serializes it onto stdin.
+    /// (spec §2.3). Non-blocking: the writer task serializes it onto stdin. Stamps a
+    /// fresh uuid (the session actor's own send path stamps + records it for
+    /// echo-suppression; this convenience is used by the live tests, which don't
+    /// exercise the replay dedup).
     pub fn send_user_text(&self, text: impl Into<String>) -> Result<(), TransportError> {
-        self.send_line(user_message(text))
+        self.send_line(user_message(text, &uuid::Uuid::new_v4().to_string()))
     }
 
     /// A clone of the outbound line sender, feeding the same stdin writer task.

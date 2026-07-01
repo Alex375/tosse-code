@@ -18,6 +18,7 @@ import type {
   SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
+  SessionRemoteControlEvent,
   SessionStateEvent,
   SessionTaskEvent,
   SessionTitleEvent,
@@ -27,6 +28,7 @@ import { useBackgroundTasksStore } from "../store/backgroundTasksStore";
 import { useWorkflowLiveStore } from "../store/workflowLive";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
 import { useCommandsStore } from "../store/commandsStore";
+import { useRemoteControlStore } from "../store/remoteControl";
 import { setCachedWindow } from "../store/contextWindowCache";
 import { dispatchAgentNotification } from "../notifications/notify";
 import { agentEventFor } from "../notifications/transition";
@@ -290,6 +292,9 @@ export function useGlobalSessionEvents(): void {
         // …and reconcile any background task still flagged running: the whole session
         // exited, so it can't be live anymore (the terminal task event may be missed).
         useBackgroundTasksStore.getState().endSession(session);
+        // …and drop the Remote Control state: the bridge lived on that process, so it
+        // is gone too. A re-spawn starts disconnected (the chip resets accordingly).
+        useRemoteControlStore.getState().clear(session);
       }
     }
 
@@ -306,6 +311,24 @@ export function useGlobalSessionEvents(): void {
       // Applied only if still auto-title-eligible (not renamed since) and the seq is
       // newer than the last applied (drops out-of-order/stale title responses).
       useConversationsStore.getState().applyAutoTitle(convId, payload.title, payload.seq);
+    }
+
+    // A Remote Control ("bridge") state change: the ack of a toggle, or an async
+    // health downgrade (`system/bridge_state`). Routed by stable conversation id like
+    // every other session event; the toggle's own optimistic write is reconciled here.
+    function onRemote(payload: SessionRemoteControlEvent) {
+      const convId = convIdForHandle(payload.session);
+      if (!convId) return;
+      const prev = useRemoteControlStore.getState().byConv[convId]?.status;
+      useRemoteControlStore.getState().set(convId, payload.state);
+      // An async bridge FAILURE (the remote surface errored out) must be visible in the
+      // thread, not only as the chip's red dot — same no-silent-failure rule. Guarded to
+      // the transition INTO "error" so a re-delivery of the same state doesn't spam.
+      if (payload.state.status === "error" && prev !== "error") {
+        useConversationStore
+          .getState()
+          .addErrorTurn(convId, `Remote control : ${payload.state.error ?? "le bridge a échoué"}`);
+      }
     }
 
     function onCommands(payload: SessionCommandsEvent) {
@@ -376,6 +399,10 @@ export function useGlobalSessionEvents(): void {
       .listen((e) => { if (!disposed) onTask(e.payload); })
       .then((un) => unlisteners.push(un))
       .catch((e) => onAttachError("tâches", e));
+    events.sessionRemoteControlEvent
+      .listen((e) => { if (!disposed) onRemote(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("remote control", e));
 
     return () => {
       disposed = true;

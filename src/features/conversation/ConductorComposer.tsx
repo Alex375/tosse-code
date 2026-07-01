@@ -30,6 +30,7 @@ import { useContextData } from "../../store/contextData";
 import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
 import { useUltraBlast } from "../../store/ultraBlast";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
+import { RemoteControlChip } from "./RemoteControlChip";
 import {
   SlashCommandMenu,
   filterSlashCommands,
@@ -603,9 +604,9 @@ export const ConductorComposer = forwardRef<
             })
           }
           title="Extensions de cette conversation — MCP (statut live), plugins, skills, sous-agents"
+          aria-label="Extensions"
         >
           <Ico name="layers" className="sm" />
-          <span className="wf-chip-t">Extensions</span>
         </button>
         {/* Clean-output toggle — fold each round's work behind a "Travail de Claude"
             block so only the final message stays in clear. PER-CONVERSATION: the toggle
@@ -620,6 +621,7 @@ export const ConductorComposer = forwardRef<
             useConversationsStore.getState().setConvCleanOutput(session, !cleanOutput)
           }
           title="Clean output (cette conversation) — n'afficher que le message final de chaque réponse ; replier le travail de Claude (outils, réflexion, étapes)"
+          aria-label="Clean output"
           style={
             cleanOutput
               ? { borderColor: "var(--wf-accent)", color: "var(--wf-accent)" }
@@ -627,8 +629,13 @@ export const ConductorComposer = forwardRef<
           }
         >
           <Ico name="list" className="sm" />
-          <span className="wf-chip-t">Clean output</span>
         </button>
+        {/* Remote control — bridge this conversation to claude.ai/code + the Claude
+            mobile app (native /remote-control). Messages sent from the phone/web arrive
+            live in this thread. Shows the active state + the session link when on.
+            Pass the pending worktree choice so enabling it on a brand-new conversation
+            still spawns in the chosen worktree. */}
+        <RemoteControlChip session={session} worktreeOnSpawn={useWorktree && isFresh} />
         {/* Worktree checkbox — only before the session spawns (first message).
             Explicit empty/checked box so the on/off state is unambiguous. */}
         {isFresh ? (

@@ -19,14 +19,15 @@ use ipc::commands::{
     path_exists, ping, prime_history_index, read_dir, read_file, read_image, read_task_output_file,
     remove_worktree, rename_entry, reveal_in_finder, request_user_attention, search_conversations,
     send_message, set_active_conversation, set_effort_level, set_model,
-    set_permission_mode, set_plugin_enabled, set_ultracode, spawn_session, stop_session, stop_task,
+    set_permission_mode, set_plugin_enabled, set_remote_control, set_ultracode, spawn_session,
+    stop_session, stop_task,
     terminal_close, terminal_open, terminal_resize, terminal_write, unwatch_dir, upsert_conversation,
     upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file, HistoryIndex, Sessions,
 };
 use ipc::events::{
     FsChangeEvent, FsWatchErrorEvent, SessionCommandsEvent, SessionMessageEvent,
-    SessionPermissionEvent, SessionStateEvent, SessionTaskEvent, SessionTitleEvent,
-    TerminalExitEvent, TerminalOutputEvent, TickEvent,
+    SessionPermissionEvent, SessionRemoteControlEvent, SessionStateEvent, SessionTaskEvent,
+    SessionTitleEvent, TerminalExitEvent, TerminalOutputEvent, TickEvent,
 };
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
@@ -55,6 +56,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             set_model,
             set_effort_level,
             set_ultracode,
+            set_remote_control,
             generate_conversation_title,
             interrupt_session,
             mcp_status,
@@ -116,6 +118,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionCommandsEvent,
             SessionTaskEvent,
             SessionTitleEvent,
+            SessionRemoteControlEvent,
             FsChangeEvent,
             FsWatchErrorEvent,
             TerminalOutputEvent,

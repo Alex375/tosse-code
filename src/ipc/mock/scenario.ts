@@ -56,6 +56,7 @@ export const DEMO_SUBAGENT_TRANSCRIPT: ConversationItem[] = [
     id: "su1",
     parent_tool_use_id: null,
     text: "Explore the supervisor module and map its structure: the protocol types, the assembler, and how background tasks flow through it. Return a concise structured map.",
+    replay: false,
   },
   {
     kind: "assistant_message",
