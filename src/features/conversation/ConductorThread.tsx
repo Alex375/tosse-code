@@ -47,7 +47,7 @@ import {
   type Segment,
   type ToolStep,
 } from "./toolGroup";
-import { useDisplay } from "../../store/display";
+import { useEffectiveCleanOutput } from "../../store/display";
 import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
 import { UserText } from "./userText";
 import { useShallow } from "zustand/react/shallow";
@@ -607,7 +607,9 @@ function AssistantBlocks({
   blocks: NormalizedBlock[];
   live: boolean;
 }) {
-  const cleanOutput = useDisplay((s) => s.cleanOutput);
+  // Clean output is per-conversation now: the effective value is this conversation's
+  // explicit choice, else the global default. `session` is the stable conversation id.
+  const cleanOutput = useEffectiveCleanOutput(session);
   // Detached sub-agents live in the pinned AgentBar, never inline. Normally detected from
   // the tool_use input flag; `bgAgentIds` ALSO carries any recovered from a launch ack (when
   // the live block lacked `run_in_background`), so a transient wire drop can't leak a

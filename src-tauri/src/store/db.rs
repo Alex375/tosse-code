@@ -26,7 +26,7 @@ use super::model::{ConversationRecord, PersistedState, RepoRecord};
 /// database is brought up to this version by applying every migration in
 /// [`MIGRATIONS`] whose target exceeds its stored `user_version`. Always equal to
 /// `MIGRATIONS.len()` (checked at compile time below).
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const ACTIVE_ID_KEY: &str = "active_id";
 
 /// A single schema migration: a forward, data-preserving step. It receives the
@@ -47,7 +47,7 @@ type Migration = fn(&Connection) -> rusqlite::Result<()>;
 /// OFF — and that pragma is a NO-OP inside a transaction. Since the runner wraps
 /// each migration in one, such a migration must toggle foreign-key enforcement
 /// outside it; do not assume you can flip it from inside a `migrate_vN` body.
-const MIGRATIONS: &[Migration] = &[migrate_v1, migrate_v2, migrate_v3];
+const MIGRATIONS: &[Migration] = &[migrate_v1, migrate_v2, migrate_v3, migrate_v4];
 
 // SCHEMA_VERSION and the migration list must agree, or version bookkeeping drifts.
 const _: () = assert!(MIGRATIONS.len() == SCHEMA_VERSION as usize);
@@ -164,6 +164,20 @@ fn migrate_v3(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+/// v4 — the per-conversation "clean output" display preference. NULLABLE with no
+/// default (NULL, not 0): a NULL means "inherit the global default", so every
+/// pre-existing conversation keeps following the app-level pref exactly as it did
+/// when the flag was global — no behaviour change, no re-grant. `Some(true)` /
+/// `Some(false)` is an explicit override the user sets per conversation.
+fn migrate_v4(conn: &Connection) -> rusqlite::Result<()> {
+    add_column_if_absent(
+        conn,
+        "conversations",
+        "clean_output",
+        "ALTER TABLE conversations ADD COLUMN clean_output INTEGER",
+    )
+}
+
 /// Bridge databases created before the versioned runner. They tracked the schema
 /// in `meta.schema_version` and left `user_version` at 0; seed `user_version` from
 /// that marker ONCE so already-applied migrations are not re-run. A brand-new
@@ -274,7 +288,7 @@ impl Store {
 
         let mut conv_stmt = conn.prepare(
             "SELECT id, name, repo_id, cwd, created_at, last_activity_at, session_id,
-                    model, effort, ultracode, permission_mode, pending_reminder
+                    model, effort, ultracode, permission_mode, pending_reminder, clean_output
              FROM conversations ORDER BY created_at ASC",
         )?;
         let conversations = conv_stmt
@@ -292,6 +306,7 @@ impl Store {
                     ultracode: row.get(9)?,
                     permission_mode: row.get(10)?,
                     pending_reminder: row.get(11)?,
+                    clean_output: row.get(12)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -335,8 +350,8 @@ impl Store {
         self.conn.lock().unwrap().execute(
             "INSERT INTO conversations
                  (id, name, repo_id, cwd, created_at, last_activity_at, session_id,
-                  model, effort, ultracode, permission_mode, pending_reminder)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                  model, effort, ultracode, permission_mode, pending_reminder, clean_output)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                  name             = excluded.name,
                  repo_id          = excluded.repo_id,
@@ -348,7 +363,8 @@ impl Store {
                  effort           = excluded.effort,
                  ultracode        = excluded.ultracode,
                  permission_mode  = excluded.permission_mode,
-                 pending_reminder = excluded.pending_reminder",
+                 pending_reminder = excluded.pending_reminder,
+                 clean_output     = excluded.clean_output",
             params![
                 c.id,
                 c.name,
@@ -361,7 +377,8 @@ impl Store {
                 c.effort,
                 c.ultracode,
                 c.permission_mode,
-                c.pending_reminder
+                c.pending_reminder,
+                c.clean_output
             ],
         )?;
         Ok(())
@@ -503,6 +520,7 @@ mod tests {
             ultracode: false,
             permission_mode: None,
             pending_reminder: None,
+            clean_output: None,
         }
     }
 
@@ -613,6 +631,33 @@ mod tests {
         assert_eq!(got.effort, None);
         assert!(!got.ultracode);
         assert_eq!(got.permission_mode, None);
+        assert_eq!(got.clean_output, None, "unset clean_output means 'inherit global default'");
+    }
+
+    #[test]
+    fn clean_output_round_trips_tristate() {
+        // clean_output is a genuine tristate: None (inherit global default) is
+        // distinct from Some(false) (explicit off) and Some(true) (explicit on). All
+        // three must survive the SQLite round-trip so a per-conversation choice is
+        // never silently coerced back to "inherit".
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        let mut c = conv("c1", "r1", None);
+        // Default: inherit.
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(store.load_state().unwrap().conversations[0].clean_output, None);
+        // Explicit ON.
+        c.clean_output = Some(true);
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(store.load_state().unwrap().conversations[0].clean_output, Some(true));
+        // Explicit OFF — must NOT be conflated with None.
+        c.clean_output = Some(false);
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(store.load_state().unwrap().conversations[0].clean_output, Some(false));
+        // Back to inherit.
+        c.clean_output = None;
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(store.load_state().unwrap().conversations[0].clean_output, None);
     }
 
     #[test]
@@ -953,7 +998,7 @@ mod tests {
         tmp.seed_raw(LEGACY_V1_BASE);
 
         let store = tmp.open();
-        assert_eq!(store.schema_version(), SCHEMA_VERSION, "bridged then migrated to v3");
+        assert_eq!(store.schema_version(), SCHEMA_VERSION, "bridged then migrated to current");
 
         let convs = store.load_state().unwrap().conversations;
         assert_eq!(convs.len(), 1, "the pre-versioned row must survive");
@@ -1014,9 +1059,10 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v2_db_gains_pending_reminder_only() {
-        // Commit d921d8f (v2): controls present, no `pending_reminder`. Only the v3
-        // migration should run; controls and rows must be preserved untouched.
+    fn legacy_v2_db_gains_reminder_and_clean_output() {
+        // Commit d921d8f (v2): controls present, no `pending_reminder` and no
+        // `clean_output`. The v3 AND v4 migrations should run; controls and rows must
+        // be preserved untouched, and the two newly added columns default to NULL.
         let tmp = TempDb::new("legacy-v2");
         tmp.seed_raw(
             "
@@ -1053,14 +1099,16 @@ mod tests {
         assert!(c.ultracode);
         assert_eq!(c.permission_mode.as_deref(), Some("plan"));
         assert_eq!(c.last_activity_at, 42);
-        assert_eq!(c.pending_reminder, None, "the only newly added column");
+        assert_eq!(c.pending_reminder, None, "newly added by v3");
+        assert_eq!(c.clean_output, None, "newly added by v4");
     }
 
     #[test]
-    fn legacy_v3_db_runs_no_migration() {
-        // A db left by the current shipped code (full schema, marker '3', but
-        // user_version still 0): the bridge seeds user_version=3, no migration runs,
-        // and every value — including pending_reminder — survives untouched.
+    fn legacy_v3_db_gains_clean_output_only() {
+        // A db left by the v3-era shipped code (full v3 schema, marker '3', but
+        // user_version still 0): the bridge seeds user_version=3, then ONLY the v4
+        // migration runs (adding a NULL `clean_output`). Every prior value — including
+        // pending_reminder — survives untouched.
         let tmp = TempDb::new("legacy-v3");
         tmp.seed_raw(
             "
@@ -1094,6 +1142,7 @@ mod tests {
         assert_eq!(c.name, "Legacy v3");
         assert_eq!(c.pending_reminder.as_deref(), Some("review"), "untouched");
         assert_eq!(c.last_activity_at, 9);
+        assert_eq!(c.clean_output, None, "newly added by v4, defaults to inherit");
     }
 
     #[test]
@@ -1104,8 +1153,9 @@ mod tests {
         // adding columns to the on-disk schema. So a database can sit at marker '1'
         // while already carrying the FULL v3 schema WITH real user values. The
         // bridge seeds user_version=1 and the runner re-runs the guarded v2/v3
-        // migrations — which must be exact no-ops that DO NOT reset those values,
-        // and must not disturb the active selection.
+        // migrations — which must be exact no-ops that DO NOT reset those values —
+        // then runs v4 (adding a NULL `clean_output`), all without disturbing the
+        // active selection.
         let tmp = TempDb::new("frozen-marker-full");
         tmp.seed_raw(
             "
@@ -1137,7 +1187,7 @@ mod tests {
         );
 
         let store = tmp.open();
-        assert_eq!(store.schema_version(), SCHEMA_VERSION, "marker '1' bridged, runner advanced to v3");
+        assert_eq!(store.schema_version(), SCHEMA_VERSION, "marker '1' bridged, runner advanced to current");
         let state = store.load_state().unwrap();
         assert_eq!(state.active_id.as_deref(), Some("c1"), "active selection survives migration");
         let c = &state.conversations[0];
@@ -1148,5 +1198,6 @@ mod tests {
         assert!(c.ultracode);
         assert_eq!(c.permission_mode.as_deref(), Some("plan"));
         assert_eq!(c.pending_reminder.as_deref(), Some("review"), "guarded ADD must not reset to NULL");
+        assert_eq!(c.clean_output, None, "v4 adds clean_output as NULL (inherit)");
     }
 }

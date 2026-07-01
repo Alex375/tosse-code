@@ -3,17 +3,23 @@
 // than the Rust core — they are not domain data, so they don't belong in the SQLite
 // metadata store.
 import { create } from "zustand";
+import { useConversationsStore } from "./conversationsStore";
 
 const STORAGE_KEY = "tosse:display";
 
 export interface DisplayPrefs {
-  /** "Clean output": fold an assistant response's intermediate work (tool runs, thinking,
-   *  in-between narration, sub-agents) into ONE collapsible "Travail de Claude — N étapes"
-   *  block, so only the response's CONCLUDING message stays in clear. Per response, not
-   *  globally — each response keeps its own block + concluding message. When a response spans
-   *  several turns (the agent narrates between tool batches), only its LAST message stays in
-   *  clear; the in-between narration folds with the work — that's the point of the condensed
-   *  view. See ConductorThread/CleanBlocks. */
+  /** The GLOBAL DEFAULT for "clean output" — folding an assistant response's intermediate
+   *  work (tool runs, thinking, in-between narration, sub-agents) into ONE collapsible
+   *  "Travail de Claude — N étapes" block, so only the response's CONCLUDING message stays
+   *  in clear. Per response, not per app: each response keeps its own block + concluding
+   *  message. When a response spans several turns, only its LAST message stays in clear.
+   *  See ConductorThread/CleanBlocks.
+   *
+   *  This is the DEFAULT applied to any conversation that has not set its OWN preference:
+   *  clean output is a per-conversation setting (persisted in SQLite as `Conversation.cleanOutput`,
+   *  a tristate where null = "inherit this default"). The Settings → Général toggle writes THIS
+   *  default; the composer chip writes the current conversation's explicit override. The
+   *  effective value for a conversation is resolved by {@link useEffectiveCleanOutput}. */
   cleanOutput: boolean;
 }
 
@@ -59,3 +65,34 @@ export const useDisplay = create<DisplayState>((set) => ({
       return next;
     }),
 }));
+
+/**
+ * Collapse the per-conversation clean-output tristate onto a concrete boolean: an
+ * explicit override (`true`/`false`) wins; `null` inherits the global default. Pure
+ * so the semantics are locked in a test — crucially, an explicit `false` override
+ * MUST beat a `true` global default (that is the whole point of per-conversation:
+ * one conversation can opt OUT even when the default is on).
+ */
+export function resolveCleanOutput(override: boolean | null, globalDefault: boolean): boolean {
+  return override ?? globalDefault;
+}
+
+/**
+ * The EFFECTIVE "clean output" for a conversation: its own explicit choice when it
+ * has one, else the global default. This is the single resolver every renderer reads
+ * — the thread ({@link AssistantBlocks}), the composer chip, and the scroll-preserve
+ * key ({@link ConversationPane}) — so a per-conversation override and the global
+ * default never disagree.
+ *
+ * `Conversation.cleanOutput` is a tristate: `true`/`false` is an explicit override,
+ * `null` means "inherit the global default" (the state every conversation starts in,
+ * and the state pre-existing rows migrate to — so behaviour is unchanged until the
+ * user flips the chip on a specific conversation).
+ */
+export function useEffectiveCleanOutput(convId: string): boolean {
+  const globalDefault = useDisplay((s) => s.cleanOutput);
+  const override = useConversationsStore(
+    (s) => s.conversations.find((c) => c.id === convId)?.cleanOutput ?? null,
+  );
+  return resolveCleanOutput(override, globalDefault);
+}

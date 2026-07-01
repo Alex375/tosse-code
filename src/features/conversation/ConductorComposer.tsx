@@ -19,7 +19,7 @@ import {
 } from "../../store/conversationsStore";
 import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
 import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts";
-import { useDisplay } from "../../store/display";
+import { useEffectiveCleanOutput } from "../../store/display";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
 import { ChipBtn, ClaudeMark, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { useContextData } from "../../store/contextData";
@@ -234,10 +234,10 @@ export const ConductorComposer = forwardRef<
     DEFAULT_PERMISSION_MODE) as PermissionMode;
   const permLabel = PERM_LABEL[permMode] ?? PERM_LABEL[DEFAULT_PERMISSION_MODE];
 
-  // "Clean output" display pref (global) — folds each round's work behind a block, so
-  // only the final message stays in clear. Mirrored by Settings → Général.
-  const cleanOutput = useDisplay((s) => s.cleanOutput);
-  const setDisplay = useDisplay((s) => s.set);
+  // "Clean output" is PER-CONVERSATION: the chip shows this conversation's EFFECTIVE
+  // value (its own explicit choice, else the global default from Settings → Général)
+  // and, on toggle, writes an explicit override for THIS conversation only.
+  const cleanOutput = useEffectiveCleanOutput(session);
 
   // Context fill (ring) — shared derivation keyed by stable id, reused by the
   // FlightDeck card's context bar (see useContextData).
@@ -564,15 +564,18 @@ export const ConductorComposer = forwardRef<
           <span className="wf-chip-t">Extensions</span>
         </button>
         {/* Clean-output toggle — fold each round's work behind a "Travail de Claude"
-            block so only the final message stays in clear (global pref, mirrors Settings
-            → Général). On-state borrows the accent like the worktree checkbox. */}
+            block so only the final message stays in clear. PER-CONVERSATION: the toggle
+            writes THIS conversation's explicit override (the global default lives in
+            Settings → Général). On-state borrows the accent like the worktree checkbox. */}
         <button
           type="button"
           role="switch"
           aria-checked={cleanOutput}
           className="wf-chip"
-          onClick={() => setDisplay({ cleanOutput: !cleanOutput })}
-          title="Clean output — n'afficher que le message final de chaque réponse ; replier le travail de Claude (outils, réflexion, étapes)"
+          onClick={() =>
+            useConversationsStore.getState().setConvCleanOutput(session, !cleanOutput)
+          }
+          title="Clean output (cette conversation) — n'afficher que le message final de chaque réponse ; replier le travail de Claude (outils, réflexion, étapes)"
           style={
             cleanOutput
               ? { borderColor: "var(--wf-accent)", color: "var(--wf-accent)" }

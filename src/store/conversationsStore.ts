@@ -96,6 +96,17 @@ export interface Conversation {
   /** Permission mode (default/plan/acceptEdits/auto/…); null → product default. */
   permissionMode: string | null;
   /**
+   * Per-conversation "clean output" display preference — a TRISTATE:
+   *  - `null`  → inherit the GLOBAL default (the app-level `useDisplay().cleanOutput`);
+   *  - `true`  → explicitly folded for THIS conversation;
+   *  - `false` → explicitly verbose for THIS conversation.
+   * The one display pref that is per-conversation, not global. New conversations
+   * start `null` (follow the global default); the composer chip writes an explicit
+   * boolean. Persisted, so each conversation keeps its own reading mode across a
+   * restart. The effective value is resolved by `useEffectiveCleanOutput`.
+   */
+  cleanOutput: boolean | null;
+  /**
    * An unacknowledged, non-blocking status reminder that must survive a restart:
    * `"review"` / `"error"` / `"openQuestion"`, or null when nothing is pending.
    * Persisted because a settled state is otherwise live-only — when the process is
@@ -193,6 +204,7 @@ const convToRecord = (c: Conversation): ConversationRecord => ({
   ultracode: c.ultracode,
   permission_mode: c.permissionMode,
   pending_reminder: c.pendingReminder,
+  clean_output: c.cleanOutput,
 });
 
 const recordToRepo = (r: RepoRecord): Repo => ({
@@ -216,6 +228,7 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   ultracode: c.ultracode,
   permissionMode: c.permission_mode,
   pendingReminder: asReminderKind(c.pending_reminder),
+  cleanOutput: c.clean_output,
 });
 
 // The one user-facing message for any persistence failure (deduped in the banner),
@@ -323,6 +336,13 @@ interface ConversationsState {
   setConvUltracode: (id: string) => void;
   /** Set the permission mode. */
   setConvPermission: (id: string, mode: PermissionMode) => void;
+  /**
+   * Set this conversation's explicit "clean output" override (persisted). Writes a
+   * boolean — the chip only ever sets an explicit choice — so the conversation stops
+   * inheriting the global default. Idempotent when unchanged. Purely a display pref,
+   * so (unlike model/effort/permission) there is NOTHING to push to the live stream.
+   */
+  setConvCleanOutput: (id: string, enabled: boolean) => void;
   /**
    * Set (or clear with null) the conversation's persisted status reminder and
    * mirror it to the core. Idempotent: a no-op when the value is unchanged, so the
@@ -621,6 +641,18 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       syncToCore("setPermissionMode(live)", () => commands.setPermissionMode(conv.handle!, mode));
   },
 
+  setConvCleanOutput: (id, enabled) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv || conv.cleanOutput === enabled) return; // idempotent
+    const updated = { ...conv, cleanOutput: enabled };
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
+    // Display-only: persist the per-conversation choice, but nothing to push to the
+    // live stream (the renderer reads the record directly).
+    syncToCore("upsertConversation(cleanOutput)", () =>
+      commands.upsertConversation(convToRecord(updated)),
+    );
+  },
+
   setReminder: (id, reminder) => {
     const conv = get().conversations.find((c) => c.id === id);
     if (!conv || conv.pendingReminder === reminder) return; // idempotent: no churn
@@ -658,6 +690,9 @@ export function createConversationInRepo(repoPath: string): string {
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
+    // null = inherit the global "clean output" default; the composer chip sets an
+    // explicit per-conversation override.
+    cleanOutput: null,
   });
   return id;
 }
@@ -690,6 +725,9 @@ export function createConversationInWorktree(repoId: string, cwd: string): strin
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
+    // null = inherit the global "clean output" default; the composer chip sets an
+    // explicit per-conversation override.
+    cleanOutput: null,
   });
   return id;
 }
@@ -757,6 +795,9 @@ export function reactivateDiskConversation(d: DiskConversation): string {
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
+    // null = inherit the global "clean output" default; the composer chip sets an
+    // explicit per-conversation override.
+    cleanOutput: null,
   });
   return id;
 }
