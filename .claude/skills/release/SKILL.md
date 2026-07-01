@@ -1,7 +1,7 @@
 ---
 name: release
 description: |
-  Coupe une release de Tosse Code : bump de version → push `dev` → PR `dev`→`main` → CI → PAUSE pour review → merge → déclenche le workflow de release GitHub. Utilise ce skill quand :
+  Coupe une release de Tosse Code : bump de version → sync `CLAUDE.md` → push `dev` → PR `dev`→`main` → CI → PAUSE pour review → merge → déclenche le workflow de release GitHub. Utilise ce skill quand :
   - L'utilisateur tape `/release` ou `/release <patch|minor|major>`
   - L'utilisateur dit « fais une release », « publie une version », « sors une release », « on release »
   Le skill est automatique de bout en bout, avec UNE SEULE pause : après CI verte, il attend l'approbation de la review avant de merger dans `main`. À lancer par Alexandre (`Alex375`, admin) — le merge sur `main` et le job `authorize` de la release exigent ses droits.
@@ -37,7 +37,17 @@ pnpm bump <patch|minor|major|X.Y.Z>
 
 Le script met à jour les 4 emplacements d'un coup (`tauri.conf.json`, `package.json`, `Cargo.toml`, `Cargo.lock`). **N'édite jamais ces versions à la main.**
 
-## Étape 4 — Commiter et pousser `dev`
+## Étape 4 — Synchroniser `CLAUDE.md` avec TOSSE
+
+Avant de pousser, régénère `CLAUDE.md` depuis les contextes TOSSE pour que la release parte avec la doc projet à jour.
+
+Appelle l'outil MCP **`sync_claude_md`** avec le `repository_id` de ce repo (`8c509e62-30cb-4f58-9074-086bac72528d`, cf. le bloc « MCP entity IDs » de `CLAUDE.md`). Il **retourne** le contenu compilé (préambule global + règles + contexte repo + contextes projet/mission/client) mais **ne l'écrit pas** : c'est à toi d'**écrire ce contenu dans le `CLAUDE.md` local** (outil Write).
+
+Le fichier régénéré sera embarqué par le `git add -A` de l'étape suivante. Si rien n'a changé côté contextes, le contenu est identique et il n'y aura simplement pas de diff — c'est bénin.
+
+## Étape 5 — Commiter et pousser `dev`
+
+Le `git add -A` inclut à la fois le bump de version et le `CLAUDE.md` régénéré.
 
 ```bash
 git add -A
@@ -45,7 +55,7 @@ git commit -m "chore(release): vX.Y.Z"
 git push origin dev
 ```
 
-## Étape 5 — Ouvrir la PR `dev` → `main`
+## Étape 6 — Ouvrir la PR `dev` → `main`
 
 ```bash
 gh pr create --base main --head dev \
@@ -55,7 +65,7 @@ gh pr create --base main --head dev \
 
 Récupère le numéro/URL de la PR pour la suite.
 
-## Étape 6 — Attendre la CI verte
+## Étape 7 — Attendre la CI verte
 
 Le check requis est `test` (`.github/workflows/ci.yml`, ne tourne qu'à la PR vers `main`). **Surveille-le en ré-interrogeant périodiquement** :
 
@@ -65,16 +75,16 @@ gh pr checks <pr-number>
 
 N'utilise **pas** un `gh pr checks --watch` bloquant : la CI peut dépasser le timeout des commandes. Ré-interroge jusqu'à ce que `test` soit `pass`. Si la CI échoue → arrête-toi et rapporte l'échec (ne merge pas).
 
-## Étape 7 — ⏸️ PAUSE : attendre la review
+## Étape 8 — ⏸️ PAUSE : attendre la review
 
 C'est l'unique gate humain. **Arrête-toi ici.** Annonce :
 - l'URL de la PR,
 - que la CI est verte,
 - que tu attends l'**approbation de la review** avant de merger.
 
-**Ne merge pas sans le feu vert explicite de l'utilisateur.** Reprends à l'étape 8 seulement quand il confirme que la review est approuvée.
+**Ne merge pas sans le feu vert explicite de l'utilisateur.** Reprends à l'étape 9 seulement quand il confirme que la review est approuvée.
 
-## Étape 8 — Fusionner dans `main`
+## Étape 9 — Fusionner dans `main`
 
 Une fois CI verte **et** review approuvée :
 
@@ -84,7 +94,7 @@ gh pr merge <pr-number> --merge
 
 (En tant qu'admin avec `enforce_admins=false`, Alexandre peut finaliser le merge même si une protection résiste.)
 
-## Étape 9 — Déclencher la release
+## Étape 10 — Déclencher la release
 
 ```bash
 gh workflow run release.yml --ref main
@@ -92,7 +102,7 @@ gh workflow run release.yml --ref main
 
 Le workflow compile un bundle macOS universel et **publie directement** la release GitHub (`.dmg`, artefact updater signé `.app.tar.gz` + `.sig`, `latest.json`). Garde-fou intégré : il refuse si la version courante a déjà une release — d'où l'importance du bump à l'étape 3.
 
-## Étape 10 — Suivre et rapporter
+## Étape 11 — Suivre et rapporter
 
 Suis le run (`gh run watch` ou `gh run list --workflow=release.yml`) jusqu'à la publication, puis donne à l'utilisateur l'**URL de la release**.
 
