@@ -265,7 +265,21 @@ Workflow `.github/workflows/release.yml`, **100 % manuel** (`workflow_dispatch`,
 ### Sécurité (« un peu sécurisé »)
 - Déclenchement : `workflow_dispatch` est lançable par tout compte en write, MAIS le job `authorize` fait que **seuls les comptes de `ALLOWED` (aujourd'hui `Alex375`) produisent une release** — tout autre déclencheur échoue AVANT le build. Ajouter Armand à `ALLOWED` au besoin.
 - Garde-fou anti-doublon : refus si la version courante a déjà une release → force à bumper.
-- macOS **non signé Apple** (pas de compte Developer) : 1er lancement = clic droit → Ouvrir (`xattr -cr "/Applications/Tosse Code.app"`). Signature/notarisation Apple = chantier ultérieure.
+- macOS **signé self-signed** (code signing via certificat auto-signé « Tosse Code Self-Signed ») ; **PAS notarisé** (Developer ID payant écarté) → friction Gatekeeper au 1er lancement (clic droit → Ouvrir) demeure. Notarisation = chantier ultérieure.
+
+### Signature de code macOS (self-signed → TCC)
+
+**But** : donner à l'app une **Designated Requirement (DR) stable** (`identifier "com.tosse.desktop" and certificate leaf = H"…"`, épinglée au hash du certificat, pas au cdhash) → macOS **TCC** conserve les autorisations de dossier (Bureau/Documents/…) d'une version à l'autre sans les redemander à chaque auto-update. C'est le fix du bug « avalanche de demandes d'autorisation de dossiers ».
+
+**Certificat** : auto-signé « Tosse Code Self-Signed » (validité ~20 ans), sauvegardé dans `~/TosseCodeSigning.p12`. ⚠️ **DR-CRITIQUE** : ne JAMAIS le réémettre (expiration, CN différent, nouvelle clé) — un nouveau cert = nouvelle DR = **re-grant TCC global pour tous les utilisateurs**. À sauvegarder hors repo avec la même discipline que la clé updater.
+
+**Secrets repo** : `APPLE_CERTIFICATE` (base64 du .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (= CN « Tosse Code Self-Signed »). Si absents → build **non signé** (comportement historique, aucune erreur).
+
+**`release.yml`** — étape « Configurer la signature macOS » : création d'un keychain dédié + import du .p12 + `set-key-partition-list` + **`sudo security add-trusted-cert -d … System.keychain`** (trust OBLIGATOIRE : Tauri refuse un cert self-signed non trusté — `find-identity -v` renvoie 0 identité → « failed to resolve signing identity »). L'étape build ne reçoit que `APPLE_SIGNING_IDENTITY` — **PAS `APPLE_CERTIFICATE`** (sinon Tauri refait un keychain non-trusté et échoue). tauri-action signe l'app AVANT de fabriquer l'artefact updater → la DR stable est présente dans l'artefact updater.
+
+**`tauri.conf.json`** : `bundle.macOS.hardenedRuntime: false` — le défaut Tauri (`true`) casse le WebView sans entitlements JIT ; on ne notarise pas donc aucune raison de l'activer. **`src-tauri/Info.plist`** (mergé par Tauri au build) : `NSDesktopFolderUsageDescription`, `NSDocumentsFolderUsageDescription`, `NSDownloadsFolderUsageDescription`.
+
+**Limites** : 1ʳᵉ MAJ signée = **1 re-grant de transition unique** (ancien bundle non-signé → signé, TCC voit une DR différente), puis stable. Builds contributeurs = non signés (identité TCC locale propre, sans impact utilisateurs).
 
 ### Auto-update in-app (implémenté — `tauri-plugin-updater` + `tauri-plugin-process`)
 L'app vérifie/installe les MAJ signées depuis les releases GitHub (repo public → `latest.json` accessible sans token). Côté front : `src/store/updater.ts` (auto-check au lancement + toutes les 2h, check silencieux qui **enregistre** quand même les échecs dans `lastCheckError` → pas d'erreur silencieuse non détectable ; install = download → vérif signature → `relaunch()`), section « Mise à jour » des Réglages + `UpdateBanner`. Clé : publique dans `tauri.conf.json` (`plugins.updater.pubkey`) ; privée en secret repo `TAURI_SIGNING_PRIVATE_KEY` + backup local hors repo `~/.tauri/tosse-code-updater.key` (sans mot de passe → workflow passe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""`). NE PAS perdre la privée (sinon plus aucune MAJ signable). `bundle.createUpdaterArtifacts: true`. NB : la MAJ ne touche QUE le bundle `.app` ; les données (base SQLite + transcripts) sont hors bundle et préservées.
