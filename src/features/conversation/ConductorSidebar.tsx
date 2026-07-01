@@ -1,5 +1,8 @@
 import { useRef, useState } from "react";
 import { pickFolder } from "../../ipc/pickFolder";
+import { Splitter } from "../editor/Splitter";
+import { useSidebar } from "../../store/sidebar";
+import { TosseMark } from "../../ui/TosseMark";
 import {
   acknowledgeConversation,
   createConversationInRepo,
@@ -138,16 +141,35 @@ export function ConductorSidebar() {
   const openSettings = useSettingsUi((s) => s.openSettings);
   const closeSettings = useSettingsUi((s) => s.closeSettings);
 
+  // Resizable width, persisted (localStorage). The grip is an absolute handle on the
+  // right edge (reusing the editor's Splitter for pointer-capture + hover accent), so
+  // resizing stays self-contained here — the parent flex row is untouched.
+  const width = useSidebar((s) => s.width);
+  const setWidth = useSidebar((s) => s.setWidth);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const onResize = (clientX: number) => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setWidth(clientX - rect.left);
+  };
+
   return (
     <div
+      ref={rootRef}
       className="wf-col cv-side"
-      style={{ width: 224, flex: "0 0 224px", borderRight: "1px solid var(--wf-line)", background: "var(--wf-bg-2)" }}
+      style={{
+        width,
+        flex: `0 0 ${width}px`,
+        position: "relative",
+        borderRight: "1px solid var(--wf-line)",
+        background: "var(--wf-bg-2)",
+      }}
     >
       <div className="cv-side-h">
-        <span className="wf-row" style={{ gap: 7 }}>
-          <span className="wf-avatar ai">✦</span>
+        <span className="wf-row" style={{ gap: 8 }}>
+          <TosseMark className="cv-brand-mark" />
           <span className="wf-hi" style={{ fontWeight: 600 }}>
-            Conductor
+            Tosse Code
           </span>
         </span>
         <Menu
@@ -178,11 +200,11 @@ export function ConductorSidebar() {
       >
         <Ico name="search" className="sm" />
         <span className="wf-xmuted" style={{ fontSize: 12 }}>
-          Rechercher
+          Historique
         </span>
       </button>
 
-      <div className="cv-sess-scroll wf-fade-b">
+      <div className="cv-sess-scroll">
         {groups.length === 0 ? (
           <div style={{ padding: "20px 12px", color: "var(--wf-tx-lo)", fontSize: 12, lineHeight: 1.6 }}>
             Aucun dépôt. Clique sur <span className="wf-hi">＋</span> pour ouvrir un dossier.
@@ -258,6 +280,11 @@ export function ConductorSidebar() {
       </button>
 
       <SettingsPanel open={settingsOpen} onClose={closeSettings} />
+
+      {/* Drag handle on the right edge — resizes the sidebar, width persisted. */}
+      <div className="cv-side-grip">
+        <Splitter axis="x" onMove={onResize} />
+      </div>
     </div>
   );
 }

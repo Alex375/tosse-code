@@ -1,5 +1,12 @@
 /* view-conversation.css */
 .cv-side-h { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 10px; }
+/* Brand mark (the "Prompt T" app logo) — standalone, no tile: it carries its own
+   coral/cyan identity. Sized to sit level with the "Tosse Code" wordmark. */
+.cv-brand-mark { width:19px; height:19px; flex:0 0 auto; display:block; }
+/* Resize grip: a thin handle straddling the sidebar's right border. Absolute so the
+   parent flex row is untouched; a flex box so the reused Splitter stretches full
+   height. Sits just past the border, above the list (its own z-index). */
+.cv-side-grip { position:absolute; top:0; right:-3px; bottom:0; width:6px; display:flex; z-index:6; }
 .cv-search { display:flex; align-items:center; gap:8px; margin:0 10px; padding:7px 9px; background:var(--wf-panel); border:1px solid var(--wf-line); border-radius:var(--wf-r); color:var(--wf-tx-lo); font:inherit; text-align:left; cursor:pointer; transition:background 0.12s ease, border-color 0.12s ease; }
 .cv-search:hover { background:var(--wf-panel-2); border-color:var(--wf-line-2); color:var(--wf-tx); }
 .cv-sess-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior-y:contain; padding:6px 6px 4px; display:flex; flex-direction:column; gap:6px; }
