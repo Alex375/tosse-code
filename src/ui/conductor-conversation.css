@@ -568,3 +568,20 @@
   .cv-todo-i.just-done .cv-check.done,
   .cv-todo-i.just-done .cv-check.done .wf-ico { animation:none !important; transition:none !important; transform:none !important; }
 }
+
+/* Remote control chip — icon-only, with a status dot (reusing the shared `.wf-dot`
+   tokens: green `.run` = connected, red `.err`, pulsing = connecting). The dot sits
+   just after the globe glyph inside the chip. */
+.cv-rc-chip .wf-dot { margin-left:1px; }
+/* Connected = green-themed (matches the live dot), NOT the neutral panel fill that
+   reads as an ugly light box. Green icon/chevron always; a subtle green tint only on
+   hover / when the menu is open — never the grey `--wf-panel`. Mirrors the per-mode
+   `.wf-chip[data-perm]` treatment. */
+.cv-rc-chip[data-rc="connected"] { color:var(--wf-run); border-color:transparent; }
+.cv-rc-chip[data-rc="connected"] .wf-ico:first-child { color:var(--wf-run); opacity:1; }
+.cv-rc-chip[data-rc="connected"] .wf-chip-chev { color:var(--wf-run); opacity:.55; }
+.cv-rc-chip[data-rc="connected"]:hover,
+.cv-rc-chip[data-rc="connected"][data-open] {
+  background:var(--wf-run-bg);
+  border-color:#27513f;
+}

@@ -432,6 +432,28 @@ pub async fn set_model(
     handle.set_model(model).await.map_err(|e| e.to_string())
 }
 
+/// Enable or disable this session's Remote Control bridge — the native Claude Code
+/// `/remote-control` — via a `remote_control` control request. On enable the binary
+/// mirrors the session to claude.ai/code + the Claude mobile app and returns the
+/// `session_url` (surfaced in the returned state so the UI can offer "open in
+/// browser"); messages sent from those surfaces then arrive inline on this session's
+/// normal stream. `name` optionally labels the session. Errors "unknown session" when
+/// the conversation has no live `claude` process (the front spawns one first).
+#[tauri::command]
+#[specta::specta]
+pub async fn set_remote_control(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    enabled: bool,
+    name: Option<String>,
+) -> Result<crate::supervisor::model::RemoteControlState, String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle
+        .set_remote_control(enabled, name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Set the session's reasoning effort level at runtime (`apply_flag_settings`).
 /// Rejects an invalid level BEFORE sending: the CLI silently swallows anything
 /// outside low/medium/high/xhigh/max, so an unvalidated value would no-op without

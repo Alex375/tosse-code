@@ -116,6 +116,16 @@ pub enum SystemMsg {
     /// A task finished, with the summary and (for sub-agents) the usage roll-up and
     /// the `output_file` to read its full result from on disk.
     TaskNotification(TaskNotificationMsg),
+    /// `system/bridge_state` — Remote Control ("bridge") health, emitted while a
+    /// session is bridged to claude.ai/code. The core consumes it to DOWNGRADE an
+    /// active bridge: `state:"disconnected"` (the remote surface went away) or
+    /// `state:"error"` (with a `detail`). It never drives "connected" (that comes
+    /// from the `remote_control` control response) — so it is intercepted here, not
+    /// rendered as a normal message. Both fields are optional for forward-compat.
+    BridgeState {
+        state: Option<String>,
+        detail: Option<String>,
+    },
     /// Other system subtypes (`compact_boundary`, `thinking_tokens`, …) are tolerated
     /// here so they never drop to [`CliMessage::Unknown`].
     #[serde(other)]
@@ -237,6 +247,17 @@ pub struct UserMsg {
     pub session_id: Option<String>,
     pub uuid: Option<String>,
     pub parent_tool_use_id: Option<String>,
+    /// Injected/meta user lines (command output, system reminders, the queued-message
+    /// "while you were working" wrapper) carry `isMeta:true` and are NOT real turns —
+    /// the assembler drops them exactly as the transcript restore does.
+    #[serde(rename = "isMeta")]
+    pub is_meta: Option<bool>,
+    /// `true` on a user turn RE-EMITTED by `--replay-user-messages` (a live echo). The
+    /// UI splices these into the right spot (they can arrive out-of-order vs the
+    /// streaming reply); a transcript restore, by contrast, is already chronological and
+    /// is appended. Absent (→ `None`) on transcript lines.
+    #[serde(rename = "isReplay")]
+    pub is_replay: Option<bool>,
 }
 
 /// `result` — emitted at the end of every turn (NOT end of session; the session

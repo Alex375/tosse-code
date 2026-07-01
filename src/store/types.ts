@@ -182,4 +182,17 @@ export interface SessionEntry {
   turnSeen: boolean;
   /** Monotonic counter for generated ids (user turns, notices, turn footers). */
   seq: number;
+  /**
+   * Insert position (into `timeline`) for an OUT-OF-ORDER replayed user turn — a
+   * message typed on the phone/web while Remote Control is on. With
+   * `--replay-user-messages` the CLI echoes that turn on the stream, but it can arrive
+   * AFTER the assistant response it triggered has already begun streaming (or even
+   * finished). Appending it would render it after the answer; instead we splice it at
+   * this anchor. The anchor freezes at each turn boundary (`turn_result` → end of
+   * timeline) and does NOT move while assistant/tool messages stream, so a replay lands
+   * right BEFORE the whole current-turn response. Replicates the official extension's
+   * `replayInsertIndex`. (Our OWN turns never reach here — the core suppresses their
+   * echo by uuid — so this only orders remote turns and history replays.)
+   */
+  replayAnchor: number;
 }

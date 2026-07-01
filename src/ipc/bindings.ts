@@ -268,6 +268,23 @@ async setUltracode(session: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Enable or disable this session's Remote Control bridge — the native Claude Code
+ * `/remote-control` — via a `remote_control` control request. On enable the binary
+ * mirrors the session to claude.ai/code + the Claude mobile app and returns the
+ * `session_url` (surfaced in the returned state so the UI can offer "open in
+ * browser"); messages sent from those surfaces then arrive inline on this session's
+ * normal stream. `name` optionally labels the session. Errors "unknown session" when
+ * the conversation has no live `claude` process (the front spawns one first).
+ */
+async setRemoteControl(session: string, enabled: boolean, name: string | null) : Promise<Result<RemoteControlState, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_remote_control", { session, enabled, name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Ask the binary to generate a short conversation title from `description` (the
  * user's accumulated messages so far), like the official VS Code extension. `seq` is
  * a monotonic per-conversation tag echoed back in the `SessionTitleEvent` so the
@@ -899,6 +916,7 @@ fsWatchErrorEvent: FsWatchErrorEvent,
 sessionCommandsEvent: SessionCommandsEvent,
 sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
+sessionRemoteControlEvent: SessionRemoteControlEvent,
 sessionStateEvent: SessionStateEvent,
 sessionTaskEvent: SessionTaskEvent,
 sessionTitleEvent: SessionTitleEvent,
@@ -911,6 +929,7 @@ fsWatchErrorEvent: "fs-watch-error-event",
 sessionCommandsEvent: "session-commands-event",
 sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
+sessionRemoteControlEvent: "session-remote-control-event",
 sessionStateEvent: "session-state-event",
 sessionTaskEvent: "session-task-event",
 sessionTitleEvent: "session-title-event",
@@ -1163,7 +1182,7 @@ export type ConversationItem =
  * resumed. The live path never emits this — the UI adds user turns
  * optimistically on send — so it only appears during history restore.
  */
-{ kind: "user_message"; id: string; text: string; parent_tool_use_id: string | null } | 
+{ kind: "user_message"; id: string; text: string; parent_tool_use_id: string | null; replay: boolean } | 
 /**
  * The authoritative assembled assistant message (text + tool_use blocks).
  * Carries the same `id` as the streamed `message_start` — the UI reconciles.
@@ -1647,6 +1666,30 @@ limit_type: string | null;
  */
 using_overage: boolean }
 /**
+ * Live state of a session's Remote Control ("bridge") — the native Claude Code
+ * feature (`/remote-control`) that mirrors this local session onto claude.ai/code
+ * and the Claude mobile app so it can be viewed/driven from another device. Toggled
+ * via a `remote_control` control request; enabling returns `session_url` (the
+ * claude.ai/code link to open). A `connected` bridge can later be DOWNGRADED by a
+ * `system/bridge_state` health message (the phone/web dropped, or the bridge
+ * errored) — "connected" is only ever reached from the control response, never from
+ * `bridge_state`.
+ */
+export type RemoteControlState = { 
+/**
+ * `"disconnected"` | `"connecting"` | `"connected"` | `"error"`.
+ */
+status: string; 
+/**
+ * The claude.ai/code URL to view & control this session — present when
+ * `status == "connected"`.
+ */
+session_url: string | null; 
+/**
+ * A rejection / bridge-error message — present when `status == "error"`.
+ */
+error: string | null }
+/**
  * A working folder a conversation can be opened in.
  */
 export type RepoRecord = { id: string; path: string; 
@@ -1673,6 +1716,13 @@ export type SessionMessageEvent = { session: string; item: ConversationItem }
  * A `can_use_tool` permission prompt awaiting a decision.
  */
 export type SessionPermissionEvent = { session: string; request: PermissionRequestPayload }
+/**
+ * This session's Remote Control ("bridge") state changed — the ack of a
+ * `remote_control` request, or an async `system/bridge_state` health downgrade. The
+ * UI maps `session` (handle) → conversation and updates its Remote Control chip
+ * (connected + `session_url`, connecting, disconnected, or error).
+ */
+export type SessionRemoteControlEvent = { session: string; state: RemoteControlState }
 /**
  * A session's lifecycle / identity changed.
  */
