@@ -97,12 +97,69 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG="v${{ steps.version.outputs.version }}"
+          # `gh release view` voit AUSSI les brouillons. Distinction cruciale :
+          #  - release PUBLIÉE de cette version → stop (force à bumper) ;
+          #  - BROUILLON résiduel (run précédent dont la vérif de signature a échoué →
+          #    release laissée en brouillon, cf. étape « Vérifier la signature ») → ne
+          #    doit PAS bloquer un re-run. On le supprime pour repartir propre (un
+          #    brouillon ne crée pas de tag git → rien à nettoyer côté refs).
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::La release $TAG existe déjà. Bumpe la version (voir CLAUDE.md « Versioning & releases », \`pnpm bump\`) avant de relancer."
-            exit 1
+            IS_DRAFT="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+            if [ "$IS_DRAFT" = "true" ]; then
+              echo "⚠️ Brouillon résiduel $TAG (run précédent échoué) → suppression avant re-build."
+              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+            else
+              echo "::error::La release $TAG existe déjà (publiée). Bumpe la version (voir CLAUDE.md « Versioning & releases », \`pnpm bump\`) avant de relancer."
+              exit 1
+            fi
           fi
           echo "✓ $TAG est libre."
+
+      # Signature de CODE macOS avec un certificat AUTO-SIGNÉ stable → Designated
+      # Requirement fixe (`certificate leaf = H"…"`, épinglée au HASH DU CERT, PAS au
+      # cdhash) → macOS TCC garde les autorisations de dossier (Bureau/Documents/…) d'une
+      # version à l'autre au lieu de tout redemander à chaque auto-update. On installe
+      # l'identité dans un keychain dédié PUIS on la TRUST : un cert self-signed est sinon
+      # « invalide » pour `find-identity -v` → Tauri échoue (« failed to resolve signing
+      # identity »). sudo est non-interactif sur les runners GitHub → trust en domaine
+      # système. La notarisation est skippée (pas de APPLE_ID/APPLE_API_KEY) → Gatekeeper
+      # reste (clic droit → Ouvrir), problème SÉPARÉ (Developer ID payant).
+      # ⚠️ DR-CRITIQUE : toujours le MÊME certificat (réémettre = nouvelle DR = re-grant TCC
+      # global pour tous). Cert (~20 ans) + mdp sauvegardés hors repo, comme la clé updater.
+      # Secrets absents ⇒ étape no-op ⇒ build NON signé (comportement historique).
+      - name: Configurer la signature macOS (certificat auto-signé trusté)
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "Aucun certificat (secret absent) → build NON signé (comportement historique)."
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/tosse-signing.keychain-db"
+          KCPW="$(openssl rand -hex 20)"
+          CERT_P12="$RUNNER_TEMP/cert.p12"
+          CERT_CRT="$RUNNER_TEMP/cert.crt"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_P12"
+          # Keychain dédié, déverrouillé ; -lut 21600 = timeout de lock à 6h (> durée de build).
+          security create-keychain -p "$KCPW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KCPW" "$KEYCHAIN"
+          # Import + autorise codesign à utiliser la clé sans prompt (partition list).
+          security import "$CERT_P12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KEYCHAIN" >/dev/null
+          # Le keychain doit être dans la search list (le bundler résout l'identité par là).
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+          # TRUST du cert self-signed pour la signature de code (sinon find-identity -v = 0).
+          security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$KEYCHAIN" > "$CERT_CRT"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$CERT_CRT"
+          rm -f "$CERT_P12" "$CERT_CRT"
+          echo "Identité de signature disponible :"
+          security find-identity -v -p codesigning "$KEYCHAIN"
 
       - name: Build + publication de la release
         uses: tauri-apps/tauri-action@v0
@@ -114,14 +171,66 @@ jobs:
           # Clé générée SANS mot de passe → password vide (évite tout prompt en CI).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Signature de CODE macOS : l'identité (cert auto-signé stable) a été installée
+          # dans un keychain TRUSTÉ par l'étape « Configurer la signature macOS » ci-dessus.
+          # Ici on ne passe QUE le nom d'identité, que le bundler Tauri résout dans la
+          # search list. ⚠️ NE PAS remettre APPLE_CERTIFICATE ici : Tauri referait alors son
+          # propre keychain NON trusté et échouerait (« failed to resolve signing identity »).
+          # Secret absent ⇒ identité vide ⇒ build non signé (comportement historique).
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
           tagName: v${{ steps.version.outputs.version }}
           releaseName: "Tosse Code v${{ steps.version.outputs.version }}"
           releaseBody: |
             Build automatique depuis `main` — macOS universel (Apple Silicon + Intel).
 
-            ⚠️ App non signée Apple : au premier lancement, faire **clic droit → Ouvrir**
-            (ou `xattr -cr /Applications/Tosse\ Code.app`) pour passer Gatekeeper.
-          releaseDraft: false
+            ⚠️ App signée (certificat auto-signé) mais **non notarisée** : au premier lancement,
+            faire **clic droit → Ouvrir** (ou `xattr -cr /Applications/Tosse\ Code.app`) pour
+            passer Gatekeeper.
+
+            ℹ️ Sur cette mise à jour, macOS peut redemander **une dernière fois** l'accès à vos
+            dossiers (Bureau/Documents/…) — c'est la transition vers la signature stable ;
+            ensuite les autorisations persistent d'une version à l'autre.
+          # Brouillon d'abord : la signature est VÉRIFIÉE (étape suivante) AVANT publication,
+          # pour qu'une release mal signée reste un brouillon plutôt que d'être publiée.
+          releaseDraft: true
           prerelease: ${{ inputs.prerelease }}
           args: --target universal-apple-darwin
+
+      # Anti-régression SILENCIEUSE : le fix TCC ne tient que si l'app PUBLIÉE porte la DR
+      # attendue. La release vient d'être créée en BROUILLON ; on vérifie la signature, puis
+      # on publie seulement si c'est conforme. Un secret présent mais mal nommé/tourné, une
+      # app retombée en ad-hoc, ou un cert changé (DR différente) → la release RESTE un
+      # brouillon + CI rouge, au lieu de publier une app non signée avec une CI verte (ce qui
+      # réintroduirait le bug pour tous). Le hash de leaf épinglé garantit AUSSI que c'est
+      # toujours le MÊME certificat (DR stable). Échec = brouillon non publié (mode sûr).
+      # ⚠️ MÊME garde-fou que l'étape de signature : APPLE_CERTIFICATE absent ⇒ app NON signée
+      # VOULUE (comportement historique) → on saute la vérif DR et on publie quand même. Sans
+      # ce court-circuit, un repo/fork sans les secrets APPLE_* verrait CHAQUE release bloquée
+      # en brouillon + CI rouge (l'app non signée n'a jamais la DR épinglée).
+      - name: Vérifier la signature de l'app (DR attendue) avant publication
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "Aucun certificat (secret absent) → app NON signée (comportement historique) : vérif DR ignorée, publication du brouillon quand même."
+            exit 0
+          fi
+          APP="$(find src-tauri/target -type d -path '*/release/bundle/macos/*.app' | head -1)"
+          if [ -z "$APP" ]; then echo "::error::.app introuvable — build cassé ?"; exit 1; fi
+          echo "Vérification de : $APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          EXPECTED_LEAF="2eb75c984971ac7f083775efa6f3c41bb6bd86f2"
+          DR="$(codesign -d -r- "$APP" 2>&1 | grep 'designated =>' || true)"
+          echo "DR : $DR"
+          if ! echo "$DR" | grep -q "certificate leaf = H\"$EXPECTED_LEAF\""; then
+            echo "::error::L'app ne porte PAS la DR attendue (leaf $EXPECTED_LEAF) → release laissée en BROUILLON. Vérifie les secrets APPLE_*."
+            exit 1
+          fi
+          echo "✓ Signature conforme (DR stable) — TCC persistera d'une version à l'autre."
+
+      - name: Publier la release (retirer le brouillon) après vérification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "v${{ steps.version.outputs.version }}" --draft=false --repo "$GITHUB_REPOSITORY"
