@@ -243,10 +243,15 @@
 .cv-web-empty { font-size:11.5px; color:var(--wf-tx-lo); font-style:italic; }
 /* StreamMarkdown's .root sets its own font-size, so a parent rule can't win; only
    the headings need taming so a fetched page's #/## don't render at document size
-   inside the compact step detail. Two-class selector beats `.root h1`. */
-.cv-web .cv-web-summary h1 { font-size:14px; }
-.cv-web .cv-web-summary h2 { font-size:13px; }
-.cv-web .cv-web-summary h3, .cv-web .cv-web-summary h4 { font-size:12.5px; }
+   inside the compact step detail. The `.md-body` in the chain lifts specificity above
+   the markdown-mode heading rules (.md-body[data-md-mode] h2, same base specificity),
+   which otherwise leak here (oversized headings + a coral underline) in warm/minimal. */
+.cv-web .cv-web-summary .md-body h1 { font-size:14px; }
+.cv-web .cv-web-summary .md-body h2 { font-size:13px; }
+.cv-web .cv-web-summary .md-body h3, .cv-web .cv-web-summary .md-body h4 { font-size:12.5px; }
+/* And drop the warm h1/h2 coral underline inside a compact fetched-page summary. */
+.cv-web .cv-web-summary .md-body h1::after,
+.cv-web .cv-web-summary .md-body h2::after { content:none; }
 
 .cv-approve { display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; padding:13px 14px; border:1px solid #5a4527; background:var(--wf-att-bg); border-radius:10px; }
 .cv-ask-turn { display:flex; flex-direction:column; gap:10px; }

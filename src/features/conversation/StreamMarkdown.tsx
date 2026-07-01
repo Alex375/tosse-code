@@ -3,6 +3,8 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeBlock } from "./CodeBlock";
 import { MentionInlineCode } from "./FileMention";
+import { MarkdownModeContext, MarkdownDemoContext } from "./markdownMode";
+import { useMarkdownMode, type MarkdownMode } from "../../store/display";
 import styles from "./Markdown.module.css";
 
 /**
@@ -35,6 +37,13 @@ const components: Components = {
       {children}
     </a>
   ),
+  // Wrap tables so the rounded/framed table variants (warm/minimal) can clip their
+  // corners and so a wide table scrolls horizontally instead of widening the bubble.
+  table: ({ children }) => (
+    <div className="md-tablewrap">
+      <table>{children}</table>
+    </div>
+  ),
   // Images are Phase 2; render alt text rather than a broken element.
   img: ({ alt }) => <em>{alt || "image"}</em>,
 };
@@ -42,21 +51,37 @@ const components: Components = {
 interface StreamMarkdownProps {
   text: string;
   streaming?: boolean;
+  /** Force a mode instead of the global setting — used by the Settings preview to
+   *  render all three looks at once. Defaults to the global {@link useMarkdownMode}. */
+  mode?: MarkdownMode;
+  /** Settings-preview only: render the file-path chip for path-shaped tokens even though
+   *  they can't resolve (no cwd here), so the treatment is visible. See MarkdownDemoContext. */
+  demoFilePaths?: boolean;
 }
 
 export const StreamMarkdown = memo(function StreamMarkdown({
   text,
   streaming = false,
+  mode: modeProp,
+  demoFilePaths = false,
 }: StreamMarkdownProps) {
+  const globalMode = useMarkdownMode();
+  const mode = modeProp ?? globalMode;
   const content = useMemo(
     () => (streaming ? trimPartial(text) : text),
     [text, streaming],
   );
+  // `data-md-mode` drives the CSS variants (conductor-markdown-modes.css); the context
+  // carries the same value to CodeBlock, which needs it in JS for its header chrome.
   return (
-    <div className={styles.root}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {content}
-      </ReactMarkdown>
-    </div>
+    <MarkdownModeContext.Provider value={mode}>
+      <MarkdownDemoContext.Provider value={demoFilePaths}>
+        <div className={`${styles.root} md-body`} data-md-mode={mode}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+            {content}
+          </ReactMarkdown>
+        </div>
+      </MarkdownDemoContext.Provider>
+    </MarkdownModeContext.Provider>
   );
 });

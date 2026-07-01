@@ -1,0 +1,454 @@
+/*
+ * Markdown render MODES. The base look (Classic — the historical GitHub-flavoured
+ * style) lives in features/conversation/Markdown.module.css and is unchanged. This
+ * file adds the Warm and Minimal variants, keyed on `data-md-mode` stamped by
+ * StreamMarkdown on its `.md-body` root, plus the shared file-path chip. Because the
+ * variants are attribute+class selectors they out-specify the module's `.root` rules.
+ *
+ * Body PROSE colour stays --text-primary in ALL modes (the app's real Markdown colour);
+ * modes only vary typography, code chrome, tables, blockquotes, inline code, links and
+ * the file-path chip. Applies everywhere StreamMarkdown renders: thread, sub-agent
+ * transcripts, and the `.md` file preview.
+ */
+
+/* ============================================================
+   Shared file-path chip (all modes)
+   ============================================================ */
+.md-body .fpath {
+  /* Prefer wrapping at the `<wbr/>` after each slash rather than mid-segment (the
+     .root default is overflow-wrap:anywhere, which would split filenames). */
+  overflow-wrap: break-word;
+  word-break: normal;
+  white-space: normal;
+}
+/* Separators dimmed only in warm/minimal; classic keeps them the prose colour (uniform,
+   faithful to the historical inline-code look). */
+.md-body[data-md-mode="warm"] .fpath .fsep,
+.md-body[data-md-mode="minimal"] .fpath .fsep {
+  color: var(--text-muted);
+}
+.md-body .fpath .fico {
+  display: none; /* shown only in warm/minimal */
+  width: 0.92em;
+  height: 0.92em;
+  vertical-align: -0.13em;
+  margin-right: 4px;
+  opacity: 0.6;
+}
+/* Classic keeps the filename/dir the same colour as the prose (uniform), the inline-code
+   box from Markdown.module.css, and no icon / no coloured line number. */
+
+/* ============================================================
+   Table wrapper (all modes) — the `table` element is wrapped by StreamMarkdown so a
+   wide table scrolls instead of widening the bubble, and so the framed variants can clip
+   their rounded corners.
+   ============================================================ */
+.md-body .md-tablewrap {
+  margin: 0.6em 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.md-body .md-tablewrap > table {
+  margin: 0;
+}
+
+/* ---- Refined framed table (Warm + Minimal) ----------------------------------
+   Drop the base per-cell GitHub grid; the WRAPPER is the rounded outer frame and the
+   cells carry only inner separators (bottom + right), last of each dropped. This is the
+   look validated in the mockups — not the plain GitHub table. */
+.md-body[data-md-mode="warm"] .md-tablewrap,
+.md-body[data-md-mode="minimal"] .md-tablewrap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  /* `auto` (not `hidden`): still clips the rounded corners, but KEEPS the horizontal
+     scroll so a table wider than the bubble is never truncated (no data loss). */
+  overflow: auto;
+}
+.md-body[data-md-mode="warm"] table,
+.md-body[data-md-mode="minimal"] table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+}
+.md-body[data-md-mode="warm"] :is(th, td),
+.md-body[data-md-mode="minimal"] :is(th, td) {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.md-body[data-md-mode="warm"] :is(th, td):last-child,
+.md-body[data-md-mode="minimal"] :is(th, td):last-child {
+  border-right: 0;
+}
+.md-body[data-md-mode="warm"] tr:last-child td,
+.md-body[data-md-mode="minimal"] tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ============================================================
+   WARM — soft / on-brand
+   ============================================================ */
+.md-body[data-md-mode="warm"] {
+  font-size: 13.5px;
+  line-height: 1.62;
+}
+.md-body[data-md-mode="warm"] h2 {
+  font-size: 15.5px;
+}
+/* Coral accent rule under the two top heading levels (not just h2). */
+.md-body[data-md-mode="warm"] h1::after,
+.md-body[data-md-mode="warm"] h2::after {
+  content: "";
+  display: block;
+  height: 2px;
+  width: 30px;
+  margin-top: 0.4em;
+  border-radius: 2px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 60%, transparent), transparent);
+}
+.md-body[data-md-mode="warm"] a {
+  color: var(--accent);
+}
+
+/* Code block: soft card with a coral-tinted header (language + copy). */
+.md-body[data-md-mode="warm"] .md-cb {
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+}
+.md-body[data-md-mode="warm"] .md-cb-head {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.md-body[data-md-mode="warm"] .md-cb-lang {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Citation: light-warm background, muted (not flashy) coral bar. */
+.md-body[data-md-mode="warm"] blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: 0 10px 10px 0;
+  padding: 0.5em 0.9em;
+  color: var(--text-primary);
+}
+/* Nested quotes: don't stack the tinted background / rounding / padding. */
+.md-body[data-md-mode="warm"] blockquote blockquote {
+  background: transparent;
+  border-radius: 0;
+  padding-block: 0;
+}
+
+/* Table: warm-tinted header + a whisper of zebra (frame/separators are shared above). */
+.md-body[data-md-mode="warm"] th {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+}
+.md-body[data-md-mode="warm"] tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* File-path chip: salient filename + coral line number. */
+.md-body[data-md-mode="warm"] .fpath .fico {
+  display: inline-block;
+}
+.md-body[data-md-mode="warm"] .fpath .fdir {
+  color: var(--text-secondary);
+}
+.md-body[data-md-mode="warm"] .fpath .ffile {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.md-body[data-md-mode="warm"] .fpath .fline {
+  color: var(--accent);
+}
+
+/* ============================================================
+   MINIMAL — neutral / typographic
+   ============================================================ */
+.md-body[data-md-mode="minimal"] {
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.md-body[data-md-mode="minimal"] h2 {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.md-body[data-md-mode="minimal"] h3,
+.md-body[data-md-mode="minimal"] h4,
+.md-body[data-md-mode="minimal"] h5,
+.md-body[data-md-mode="minimal"] h6 {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.md-body[data-md-mode="minimal"] a {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.md-body[data-md-mode="minimal"] a:hover {
+  text-decoration-color: var(--text-muted);
+}
+.md-body[data-md-mode="minimal"] :not(pre) > code {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+/* Code block: borderless, discreet header. */
+.md-body[data-md-mode="minimal"] .md-cb {
+  border: 0;
+}
+.md-body[data-md-mode="minimal"] .md-cb-head {
+  border-bottom: 1px solid var(--border);
+}
+.md-body[data-md-mode="minimal"] .md-cb-lang {
+  color: var(--text-muted);
+}
+
+/* Citation: sober indent, thin grey rule. */
+.md-body[data-md-mode="minimal"] blockquote {
+  border-left: 2px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0.15em 0 0.15em 1em;
+}
+
+/* Table: transparent header muted into small caps (frame/separators shared above). */
+.md-body[data-md-mode="minimal"] th {
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.md-body[data-md-mode="minimal"] hr {
+  margin: 1.4em 0;
+}
+
+/* File-path chip: hairline box, salient filename + coral line number. */
+.md-body[data-md-mode="minimal"] .fpath {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.md-body[data-md-mode="minimal"] .fpath .fico {
+  display: inline-block;
+}
+.md-body[data-md-mode="minimal"] .fpath .fdir {
+  color: var(--text-secondary);
+}
+.md-body[data-md-mode="minimal"] .fpath .ffile {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.md-body[data-md-mode="minimal"] .fpath .fline {
+  color: var(--accent);
+}
+
+/* ============================================================
+   Syntax highlighting (highlight.js token classes). Only warm + minimal colour code;
+   classic ships plain text. We import NO hljs theme — these are the only token rules.
+   ============================================================ */
+.md-body .hljs {
+  background: transparent;
+  color: inherit;
+}
+
+/* WARM — soft two-tone: coral keywords, sage strings, muted comments, warm literals. */
+.md-body[data-md-mode="warm"] .hljs-keyword,
+.md-body[data-md-mode="warm"] .hljs-selector-tag,
+.md-body[data-md-mode="warm"] .hljs-meta,
+.md-body[data-md-mode="warm"] .hljs-doctag,
+.md-body[data-md-mode="warm"] .hljs-name {
+  color: var(--accent);
+}
+.md-body[data-md-mode="warm"] .hljs-string,
+.md-body[data-md-mode="warm"] .hljs-regexp,
+.md-body[data-md-mode="warm"] .hljs-symbol,
+.md-body[data-md-mode="warm"] .hljs-bullet,
+.md-body[data-md-mode="warm"] .hljs-addition {
+  color: #b7c99a;
+}
+.md-body[data-md-mode="warm"] .hljs-number,
+.md-body[data-md-mode="warm"] .hljs-literal,
+.md-body[data-md-mode="warm"] .hljs-type,
+.md-body[data-md-mode="warm"] .hljs-built_in,
+.md-body[data-md-mode="warm"] .hljs-attr,
+.md-body[data-md-mode="warm"] .hljs-attribute {
+  color: #dab88f;
+}
+/* Function / class names (hljs v11 emits compound `hljs-title function_`/`class_`). */
+.md-body[data-md-mode="warm"] .hljs-title,
+.md-body[data-md-mode="warm"] .hljs-title.function_,
+.md-body[data-md-mode="warm"] .hljs-title.class_ {
+  color: var(--text-primary);
+}
+.md-body[data-md-mode="warm"] .hljs-comment,
+.md-body[data-md-mode="warm"] .hljs-quote {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* MINIMAL — restrained monochrome: light keywords, muted comments/strings, no rainbow. */
+.md-body[data-md-mode="minimal"] .hljs-keyword,
+.md-body[data-md-mode="minimal"] .hljs-selector-tag,
+.md-body[data-md-mode="minimal"] .hljs-type,
+.md-body[data-md-mode="minimal"] .hljs-built_in,
+.md-body[data-md-mode="minimal"] .hljs-meta {
+  color: #cfcfd8;
+  font-weight: 600;
+}
+.md-body[data-md-mode="minimal"] .hljs-title,
+.md-body[data-md-mode="minimal"] .hljs-title.function_,
+.md-body[data-md-mode="minimal"] .hljs-name {
+  color: #e6e6ec;
+}
+.md-body[data-md-mode="minimal"] .hljs-string,
+.md-body[data-md-mode="minimal"] .hljs-regexp,
+.md-body[data-md-mode="minimal"] .hljs-number,
+.md-body[data-md-mode="minimal"] .hljs-literal {
+  color: #9aa6b2;
+}
+.md-body[data-md-mode="minimal"] .hljs-comment,
+.md-body[data-md-mode="minimal"] .hljs-quote {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ============================================================
+   Code-block header chrome (shared skeleton; themed above)
+   ============================================================ */
+.md-body .md-cb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.md-body .md-cb-copy {
+  position: static;
+  opacity: 1;
+  background: transparent;
+}
+
+/* ============================================================
+   Settings → Conversation : mode rail + large live conversation preview
+   (global classnames, ConversationSection.tsx).
+   ============================================================ */
+.mdset-intro {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+.mdset-body {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+/* Left rail: the three selectable modes. Sticks to the top so it stays visible while
+   the (taller) preview scrolls the settings content. */
+.mdset-rail {
+  flex: none;
+  width: 210px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+}
+.mdset-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition-hover), background var(--transition-hover);
+}
+.mdset-opt:hover {
+  border-color: var(--border-strong);
+}
+.mdset-opt[data-on] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.mdset-opt-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mdset-opt-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.mdset-opt-check {
+  margin-left: auto;
+  color: var(--accent);
+}
+.mdset-opt-desc {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+/* Right stage: the big conversation preview. */
+.mdset-stage {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  overflow: auto;
+}
+.mdset-conv {
+  /* Non-interactive illustration — clicks belong to the rail, not the preview. */
+  pointer-events: none;
+}
+.mdset-umsg {
+  max-width: 80%;
+  margin: 0 0 18px auto;
+  width: fit-content;
+  background: var(--bg-user);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 9px 13px;
+  font-size: var(--fs-base);
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+.mdset-airow {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+}
+.mdset-avatar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--accent);
+  margin-top: 2px;
+}
+.mdset-aibody {
+  min-width: 0;
+  flex: 1;
+}

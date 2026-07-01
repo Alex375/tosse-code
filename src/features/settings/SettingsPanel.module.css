@@ -11,9 +11,11 @@
 .panel {
   display: flex;
   flex-direction: column;
-  width: 760px;
+  /* Sized for the Conversation tab's large live preview; the simpler tabs just get
+     a bit more room. One fixed size for every section — no per-tab resize. */
+  width: 1040px;
   max-width: 92vw;
-  height: 560px;
+  height: 700px;
   max-height: 86vh;
   background: var(--wf-panel);
   border: 1px solid var(--wf-line);
