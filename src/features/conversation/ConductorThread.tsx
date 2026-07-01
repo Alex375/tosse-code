@@ -50,6 +50,8 @@ import {
 import { useEffectiveCleanOutput } from "../../store/display";
 import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
 import { UserText } from "./userText";
+import { parseSpecialMessage } from "./specialMessage";
+import { SpecialMessageCard } from "./SpecialMessageCard";
 import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
 import { WorkflowCard } from "./WorkflowCard";
@@ -59,6 +61,10 @@ import styles from "./ConductorThread.module.css";
 
 
 export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
+  // A `<task-notification>` (and other CLI-injected markers) reaches us AS a user turn,
+  // but the human didn't type it — render the clean card instead of a raw user bubble.
+  const special = parseSpecialMessage(text);
+  if (special) return <SpecialMessageCard data={special} />;
   return (
     <div className={"cv-msg cv-user" + (queued ? " is-queued" : "")}>
       <Avatar user><UserMark /></Avatar>

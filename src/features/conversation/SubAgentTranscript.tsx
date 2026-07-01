@@ -24,6 +24,8 @@ import {
 } from "./toolGroup";
 import { ClaudeWorkBlock, StaticToolStep, ToolSection } from "./ToolSection";
 import { UserText } from "./userText";
+import { parseSpecialMessage } from "./specialMessage";
+import { SpecialMessageCard } from "./SpecialMessageCard";
 
 interface JoinedResult {
   content: JsonValue;
@@ -132,8 +134,14 @@ export function SubAgentTranscript({ items }: { items: ConversationItem[] }) {
 
   return (
     <div className="cv-subtranscript">
-      {rows.map((r) =>
-        r.kind === "user" ? (
+      {rows.map((r) => {
+        if (r.kind !== "user")
+          return <ClaudeResponse key={r.key} blocks={r.blocks} results={results} />;
+        // Same routing as the live thread: an injected `<task-notification>` renders as
+        // the clean card, not a raw user bubble — so history matches the conversation.
+        const special = parseSpecialMessage(r.text);
+        if (special) return <SpecialMessageCard key={r.key} data={special} />;
+        return (
           <div className="cv-msg cv-user" key={r.key}>
             <Avatar user>
               <UserMark />
@@ -142,10 +150,8 @@ export function SubAgentTranscript({ items }: { items: ConversationItem[] }) {
               <UserText text={r.text} />
             </div>
           </div>
-        ) : (
-          <ClaudeResponse key={r.key} blocks={r.blocks} results={results} />
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }
