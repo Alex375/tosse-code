@@ -81,6 +81,23 @@ describe("groupBlocks", () => {
     expect(segs).toEqual([]);
   });
 
+  it("hides an Agent flagged detached-by-ack even when its input lacks run_in_background", () => {
+    // The bug: a detached agent whose live block arrived WITHOUT run_in_background. Without
+    // the id set it renders inline (foreground card); with it, it's hidden like any background.
+    const blocks = [tool("a", "Read"), tool("ag", "Agent"), tool("b", "Read")];
+    expect(groupBlocks(blocks).map((s) => s.kind)).toEqual(["run", "agent", "run"]);
+    const withSet = groupBlocks(blocks, false, new Set(["ag"]));
+    // The Agent is invisible → the surrounding reads coalesce into one run, no break.
+    expect(withSet).toHaveLength(1);
+    if (withSet[0].kind === "run") expect(withSet[0].steps.map((s) => s.id)).toEqual(["a", "b"]);
+  });
+
+  it("backgroundToolUseIds is ignored under includeBackground (disk view keeps the record)", () => {
+    const blocks = [tool("ag", "Agent")];
+    const segs = groupBlocks(blocks, true, new Set(["ag"]));
+    expect(segs.map((s) => s.kind)).toEqual(["agent"]);
+  });
+
   it("drops empty text/thinking placeholders", () => {
     const segs = groupBlocks([text(""), tool("a", "Read"), thinking("")]);
     expect(segs).toHaveLength(1);

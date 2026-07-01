@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import type {
   BackgroundTaskStatus,
   ConversationItem,
@@ -13,6 +13,7 @@ import { useLiveActivity, useLiveBashCommand } from "../../store/activity";
 import {
   useConversationStore,
   useError,
+  useBackgroundAgentIds,
   useGroupBlocks,
   useNotice,
   usePendingPermissions,
@@ -267,6 +268,10 @@ function SubAgentCard({
   const result = useToolResult(session, toolUseId);
   const state = useSessionState(session);
   const liveIds = useSubThread(session, toolUseId);
+  // Detached even if this block's input lacked `run_in_background`: the store recovers it
+  // from the launch ack into bgAgentIds. Belt-and-suspenders with groupBlocks (which already
+  // hides the same id) so the inline card can never resurface for a detached agent.
+  const detachedByAck = useBackgroundAgentIds(session).includes(toolUseId);
   const claudeSessionId = useConversationsStore(
     (s) => s.conversations.find((c) => c.id === session)?.sessionId ?? null,
   );
@@ -320,8 +325,9 @@ function SubAgentCard({
   }, [open, status, fetchTranscript]);
 
   // A detached (run_in_background) sub-agent lives in the pinned AgentBar, not inline —
-  // keep the thread clean. All hooks above have run, so this conditional render is safe.
-  if (isBackgroundAgentInput(input)) return null;
+  // keep the thread clean. `detachedByAck` covers the case where the live block lacked the
+  // input flag. All hooks above have run, so this conditional render is safe.
+  if (isBackgroundAgentInput(input) || detachedByAck) return null;
 
   // The prompt sent to the sub-agent (the Agent tool's `prompt` input) — prepended to
   // the live view since the live sub-thread streams only the sub-agent's REPLIES. (The
@@ -602,7 +608,13 @@ function AssistantBlocks({
   live: boolean;
 }) {
   const cleanOutput = useDisplay((s) => s.cleanOutput);
-  const segments = groupBlocks(blocks);
+  // Detached sub-agents live in the pinned AgentBar, never inline. Normally detected from
+  // the tool_use input flag; `bgAgentIds` ALSO carries any recovered from a launch ack (when
+  // the live block lacked `run_in_background`), so a transient wire drop can't leak a
+  // background agent into the thread. Shallow-compared → stable ref unless a new one appears.
+  const bgAgentIds = useBackgroundAgentIds(session);
+  const bgSet = useMemo(() => new Set(bgAgentIds), [bgAgentIds]);
+  const segments = groupBlocks(blocks, false, bgSet);
 
   if (!cleanOutput) {
     const lastIdx = segments.length - 1;

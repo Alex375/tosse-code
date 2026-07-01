@@ -93,10 +93,15 @@ export function isHiddenInline(name: string, input: JsonValue): boolean {
  * those tools live in pinned bars (MonitorBar / BashBar). The off-thread disk
  * transcript (SubAgentTranscript) sets it true: it has NO live bar to compensate, so
  * hiding them there would silently drop the only record of those calls.
+ *
+ * `backgroundToolUseIds` are extra tool_use ids to hide as background even when their
+ * `input` doesn't say so — a detached sub-agent recovered from its launch ack (see
+ * `bgAgentIds` in the store). Ignored under `includeBackground` (the disk view shows them).
  */
 export function groupBlocks(
   blocks: NormalizedBlock[],
   includeBackground = false,
+  backgroundToolUseIds?: ReadonlySet<string>,
 ): Segment[] {
   const out: Segment[] = [];
   let run: ToolStep[] | null = null;
@@ -104,12 +109,13 @@ export function groupBlocks(
   blocks.forEach((b, i) => {
     if (b.type === "tool_use") {
       // Live thread: hide everything `isHiddenInline` covers (a pinned bar shows the
-      // background ones). Disk transcript (includeBackground): keep background tools as
-      // steps — no bar compensates there — but `toolMeta`-suppressed tools (TodoWrite,
-      // ide_ RPC) are noise everywhere and stay hidden.
+      // background ones), PLUS any id the store flagged detached-by-ack. Disk transcript
+      // (includeBackground): keep background tools as steps — no bar compensates there —
+      // but `toolMeta`-suppressed tools (TodoWrite, ide_ RPC) are noise everywhere and stay
+      // hidden.
       if (includeBackground) {
         if (toolMeta(b.name, b.input).suppressed) return;
-      } else if (isHiddenInline(b.name, b.input)) {
+      } else if (isHiddenInline(b.name, b.input) || backgroundToolUseIds?.has(b.id)) {
         return; // invisible: no step, no break
       }
       // A sub-agent is its own inline card, not a grouped step — it breaks the run.

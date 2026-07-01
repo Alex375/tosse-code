@@ -109,6 +109,36 @@ export function agentIdFromResult(content: JsonValue | undefined): string | null
 }
 
 /**
+ * True when an `Agent` tool_result is the immediate ACK a DETACHED (background) sub-agent
+ * returns at launch — "Async agent launched successfully … The agent is working in the
+ * background. You will be notified automatically when it completes … output_file:
+ * …/tasks/<id>.output". A FOREGROUND sub-agent never returns this (its tool_result is the
+ * agent's final output), so it is an INDEPENDENT background signal.
+ *
+ * Why it exists: background-vs-foreground is otherwise told APART only by
+ * `input.run_in_background === true` on the live `tool_use` block (the `task_*` lifecycle is
+ * emitted by BOTH kinds). If that flag is missing from the live block — a transient wire
+ * drop — a detached agent would render inline as a foreground card instead of going to the
+ * AgentBar. This ack recovers the "detached" truth from the result.
+ *
+ * MUST be specific: a false positive folds a FOREGROUND sub-agent's id into `bgAgentIds`,
+ * which HIDES its card + transcript from the thread with no compensating surface (silent
+ * content loss). A foreground agent's free-prose output can easily mention "agent id" and
+ * "working in the background" — especially when summarizing this very codebase. So we DON'T
+ * trust any single loose phrase: we require ≥2 of the launch ACK's machine-generated,
+ * near-unique markers to co-occur (a real ack carries all three; an ordinary summary carries
+ * none). This also stays robust to the binary rewording ONE phrase (the other two still hit). */
+export function isDetachedAgentAck(content: JsonValue | undefined): boolean {
+  const text = resultText(content);
+  if (!text) return false;
+  let markers = 0;
+  if (/async agent launched successfully/i.test(text)) markers++;
+  if (/\boutput_file\b["\s:]+\S*\/tasks\/\S+\.output/i.test(text)) markers++;
+  if (/notified automatically when it completes/i.test(text)) markers++;
+  return markers >= 2;
+}
+
+/**
  * Parse a dynamic-workflow run's id out of its `Workflow` tool_result. A workflow ALWAYS
  * runs in the background — the tool returns an immediate ack whose text carries the run id
  * verbatim ("Run ID: wf_cb719d53-406", plus a "Transcript dir: …/wf_<id>" path). That id
