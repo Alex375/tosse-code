@@ -146,7 +146,10 @@
 .cv-work-t { font-size:12px; color:var(--wf-tx-lo); flex:1; min-width:0; }
 .cv-work-chev { margin-left:auto; display:inline-flex; color:var(--wf-tx-xlo); transform:rotate(90deg); transition:transform .15s ease; }
 .cv-work-chev[data-open] { transform:rotate(0deg); }
-.cv-work-b { padding:2px 0 2px 6px; margin:2px 0 2px 9px; border-left:1px solid var(--wf-line); display:flex; flex-direction:column; gap:2px; }
+/* Expanded, the work reads EXACTLY like the normal thread — same 13px inter-section
+   breathing room as .cv-aibody — the ONLY intended difference being the left rail
+   (border-left + padding/margin-left) that marks the block as indented. */
+.cv-work-b { padding:2px 0 2px 6px; margin:2px 0 2px 9px; border-left:1px solid var(--wf-line); display:flex; flex-direction:column; gap:13px; }
 /* The fold header carries NO error indicator: a failed tool inside is folded like the rest,
    flagged only by the small alert glyph on the command section / step row inside. */
 
