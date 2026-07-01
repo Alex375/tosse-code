@@ -29,6 +29,7 @@ import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
+import { clearWorkFold, clearAllWorkFold } from "./workFold";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useGitViewStore } from "../features/git/gitViewStore";
 import { clearMentionCache } from "../features/conversation/mentionCache";
@@ -356,6 +357,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
         disposeTerminal(c.id);
         clearTodoBarOpen(c.id);
         clearComposerDraft(c.id);
+        clearWorkFold(c.id);
         useGitViewStore.getState().clear(c.id);
       }
     }
@@ -412,6 +414,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     clearCachedWindow(id);
     clearTodoBarOpen(id);
     clearComposerDraft(id);
+    clearWorkFold(id);
     autoTitlePending.delete(id);
     titleContext.delete(id);
     titleGenCount.delete(id);
@@ -1101,6 +1104,7 @@ export async function wipeAllData(): Promise<void> {
   clearAllCachedWindows();
   clearAllTodoBarOpen();
   clearAllComposerDrafts();
+  clearAllWorkFold();
   autoTitlePending.clear();
   titleContext.clear();
   titleGenCount.clear();
