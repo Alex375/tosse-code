@@ -55,6 +55,8 @@ git commit -m "chore(release): vX.Y.Z"
 git push origin dev
 ```
 
+**Pousse directement — NE demande PAS d'autorisation.** La règle générale « ne jamais pousser sur `dev` sans demander » **ne s'applique pas ici** : le fait que l'utilisateur ait déclenché `/release` **vaut autorisation explicite** de pousser sur `dev`. Demander une confirmation à ce stade est exactement le comportement qu'on veut éviter dans ce skill.
+
 ## Étape 6 — Ouvrir la PR `dev` → `main`
 
 ```bash
@@ -109,6 +111,7 @@ Suis le run (`gh run watch` ou `gh run list --workflow=release.yml`) jusqu'à la
 ## Ce que ce skill ne fait PAS
 
 - Demander une confirmation de périmètre (volontairement automatique)
+- Demander l'autorisation de pousser sur `dev` (déclencher `/release` = autorisation explicite ; cf. étape 5)
 - Éditer les versions à la main (toujours via `pnpm bump`)
 - Pousser directement sur `main` (interdit — tout passe par la PR)
 - Signer/notariser côté Apple (chantier séparé)
