@@ -160,9 +160,10 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
   );
 }
 
-/** Display prefs in the Général tab. Today: "Clean output" — fold each round's work behind
- *  a "Travail de Claude" block so only the final message stays in clear (same pref the
- *  composer chip toggles). */
+/** Display prefs in the Général tab. Today: the GLOBAL DEFAULT for "clean output" — fold
+ *  each round's work behind a "Travail de Claude" block so only the final message stays in
+ *  clear. This is the default applied to conversations that haven't set their own choice;
+ *  each conversation's composer chip can override it (per-conversation, persisted). */
 function DisplayPrefs() {
   const cleanOutput = useDisplay((s) => s.cleanOutput);
   const set = useDisplay((s) => s.set);
@@ -174,17 +175,18 @@ function DisplayPrefs() {
       <div className={styles.toggleList}>
         <div className={styles.toggleRow}>
           <div className={styles.toggleText}>
-            <div className={styles.toggleTitle}>Clean output</div>
+            <div className={styles.toggleTitle}>Clean output (par défaut)</div>
             <div className={styles.toggleHint}>
               N'affiche que le message final de chaque réponse ; les outils, la réflexion et les
               étapes intermédiaires sont repliés derrière un bloc « Travail de Claude », dépliable
-              à la demande.
+              à la demande. Réglage <strong>par défaut</strong> : chaque conversation peut le
+              surcharger via son bouton « Clean output ».
             </div>
           </div>
           <Toggle
             checked={cleanOutput}
             onChange={(v) => set({ cleanOutput: v })}
-            label="Clean output"
+            label="Clean output par défaut"
           />
         </div>
       </div>

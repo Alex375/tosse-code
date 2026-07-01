@@ -9,7 +9,7 @@ import { BashBar } from "./BashBar";
 import { MonitorBar } from "./MonitorBar";
 import { WorkflowBar } from "./WorkflowBar";
 import { useStickToBottom } from "./useStickToBottom";
-import { useDisplay } from "../../store/display";
+import { useEffectiveCleanOutput } from "../../store/display";
 
 /**
  * The active conversation's column: thread + bars + composer, sharing one
@@ -33,9 +33,10 @@ export function ConversationPane({
   composerRef: RefObject<ComposerHandle>;
   onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
-  // Toggling "clean output" folds/unfolds every round → big height change. Pass it as the
-  // preserve key so the thread re-anchors instead of jumping when the user flips it.
-  const cleanOutput = useDisplay((s) => s.cleanOutput);
+  // Toggling "clean output" folds/unfolds every round → big height change. Pass the
+  // EFFECTIVE per-conversation value as the preserve key so the thread re-anchors instead
+  // of jumping when the user flips it (via the chip or the global default).
+  const cleanOutput = useEffectiveCleanOutput(session);
   const { scrollRef, onRender, scrollToBottom } = useStickToBottom(session, cleanOutput);
   return (
     <div className="wf-col cv-pane" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>

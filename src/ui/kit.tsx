@@ -67,6 +67,10 @@ const WF_PATHS: Record<string, string> = {
   clipboard: "M9 6H6v11h10V6h-3M9 5h4v2H9z",
   link: "M9 12a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-1 1M12 9a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l1-1",
   external: "M8 5H5v12h12v-3M12 5h5v5M17 5l-7 7",
+  // Notification-sound toggle: a speaker cone with two "sound" arcs (on) vs. an
+  // X where the arcs were (muted).
+  volume: "M4 8.5h3l4-3v11l-4-3H4zM14 8.5a4 4 0 0 1 0 5M16.5 6.5a7 7 0 0 1 0 9",
+  mute: "M4 8.5h3l4-3v11l-4-3H4zM14.5 9l4 4M18.5 9l-4 4",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {

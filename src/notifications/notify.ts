@@ -72,21 +72,23 @@ export interface AgentNotification {
 }
 
 /**
- * Fire the enabled notification channels for an agent event — unless the user is
+ * Fire the enabled notification channels for an agent event.
+ *
+ * The SOUND plays regardless of focus: the user wants to HEAR that the agent
+ * finished / needs attention even while looking at that very conversation. The
+ * OS banner and Dock bounce, on the other hand, are redundant when the user is
  * already watching this exact conversation (window focused AND it's the active
- * one), in which case there's nothing to notify them about.
+ * one) — those two are suppressed in that case, the chime is not.
  */
 export function dispatchAgentNotification(ev: AgentNotification): void {
   // A user-initiated interrupt ends the turn just like a normal completion;
-  // consume the flag and skip the "done" so a self-halted agent stays quiet.
+  // consume the flag and skip the whole event (chime included) so a self-halted
+  // agent stays fully quiet.
   if (ev.kind === "done" && consumeInterrupt(ev.convId)) return;
-
-  const watching =
-    ev.convId === ev.activeId && typeof document !== "undefined" && document.hasFocus();
-  if (watching) return;
 
   const prefs = useNotifications.getState();
 
+  // Sound is decoupled from focus (see doc-comment): play it whenever enabled.
   if (prefs.sound) {
     try {
       playChime(ev.kind);
@@ -94,6 +96,12 @@ export function dispatchAgentNotification(ev: AgentNotification): void {
       console.error("notification sound failed:", e);
     }
   }
+
+  // Banner + Dock only when the user isn't already watching this conversation —
+  // no point stacking an OS banner over the window they're staring at.
+  const watching =
+    ev.convId === ev.activeId && typeof document !== "undefined" && document.hasFocus();
+  if (watching) return;
 
   if (prefs.systemNotification) sendOsNotification(ev);
 

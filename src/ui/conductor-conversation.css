@@ -93,6 +93,39 @@
 .cv-user.is-queued .cv-bubble { border-color:var(--wf-wait); border-style:dashed; }
 .cv-queued-tag { display:flex; align-items:center; gap:5px; width:fit-content; margin-bottom:8px; padding:2px 8px; border-radius:6px; font-size:10px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--wf-wait); background:var(--wf-wait-bg); }
 .cv-queued-tag .wf-ico { width:11px; height:11px; color:var(--wf-wait); }
+
+/* Injected "special message" card — e.g. a <task-notification> emitted when a
+   background task/agent finishes. Rendered in PLACE of a user bubble (the CLI injects
+   these AS user turns, but the human didn't type them), so it reads as a system event,
+   not the user speaking. Shared VERBATIM by the live thread and the disk transcript. */
+.cv-tasknote {
+  display:flex; flex-direction:column; gap:8px; min-width:0;
+  padding:11px 13px; border-radius:10px;
+  background:var(--wf-panel); border:1px solid var(--wf-line);
+  border-left-width:2px;
+}
+.cv-tasknote.is-ok { border-left-color:color-mix(in srgb, var(--wf-run) 55%, var(--wf-line)); }
+.cv-tasknote.is-err { border-left-color:color-mix(in srgb, var(--wf-err) 55%, var(--wf-line)); }
+.cv-tasknote.is-warn { border-left-color:color-mix(in srgb, var(--wf-wait) 55%, var(--wf-line)); }
+.cv-tasknote.is-muted { border-left-color:var(--wf-line); }
+.cv-tasknote-h { display:flex; align-items:center; gap:9px; min-width:0; }
+.cv-tasknote-ico { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px; }
+.cv-tasknote-ico .wf-ico { width:13px; height:13px; }
+.cv-tasknote.is-ok .cv-tasknote-ico { background:var(--wf-run-bg); color:var(--wf-run); }
+.cv-tasknote.is-err .cv-tasknote-ico { background:var(--wf-err-bg); color:var(--wf-err); }
+.cv-tasknote.is-warn .cv-tasknote-ico { background:var(--wf-wait-bg); color:var(--wf-wait); }
+.cv-tasknote.is-muted .cv-tasknote-ico { background:var(--wf-panel-3); color:var(--wf-tx-lo); }
+.cv-tasknote-title { flex:1; min-width:0; color:var(--wf-tx-hi); font-size:12.5px; font-weight:600; overflow-wrap:anywhere; }
+.cv-tasknote-status { flex:0 0 auto; font-size:10px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; padding:2px 8px; border-radius:6px; }
+.cv-tasknote.is-ok .cv-tasknote-status { background:var(--wf-run-bg); color:var(--wf-run); }
+.cv-tasknote.is-err .cv-tasknote-status { background:var(--wf-err-bg); color:var(--wf-err); }
+.cv-tasknote.is-warn .cv-tasknote-status { background:var(--wf-wait-bg); color:var(--wf-wait); }
+.cv-tasknote.is-muted .cv-tasknote-status { background:var(--wf-panel-3); color:var(--wf-tx-lo); }
+.cv-tasknote-meta { display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; padding-left:31px; font-size:11px; color:var(--wf-tx-lo); }
+.cv-tasknote-id { margin-left:auto; font-family:var(--wf-mono); font-size:10px; color:var(--wf-tx-lo); background:var(--wf-panel-3); border-radius:5px; padding:1px 6px; }
+.cv-tasknote-result { padding-left:31px; min-width:0; font-size:12.5px; line-height:1.55; color:var(--wf-tx); }
+.cv-tasknote-note { margin:0; padding-left:31px; font-size:11px; line-height:1.5; color:var(--wf-tx-xlo); }
+
 .cv-aibody { flex:1; min-width:0; display:flex; flex-direction:column; gap:13px; padding-top:3px; }
 
 .cv-tool { border:1px solid var(--wf-line); border-radius:8px; background:var(--wf-panel); overflow:hidden; }
@@ -146,7 +179,10 @@
 .cv-work-t { font-size:12px; color:var(--wf-tx-lo); flex:1; min-width:0; }
 .cv-work-chev { margin-left:auto; display:inline-flex; color:var(--wf-tx-xlo); transform:rotate(90deg); transition:transform .15s ease; }
 .cv-work-chev[data-open] { transform:rotate(0deg); }
-.cv-work-b { padding:2px 0 2px 6px; margin:2px 0 2px 9px; border-left:1px solid var(--wf-line); display:flex; flex-direction:column; gap:2px; }
+/* Expanded, the work reads EXACTLY like the normal thread — same 13px inter-section
+   breathing room as .cv-aibody — the ONLY intended difference being the left rail
+   (border-left + padding/margin-left) that marks the block as indented. */
+.cv-work-b { padding:2px 0 2px 6px; margin:2px 0 2px 9px; border-left:1px solid var(--wf-line); display:flex; flex-direction:column; gap:13px; }
 /* The fold header carries NO error indicator: a failed tool inside is folded like the rest,
    flagged only by the small alert glyph on the command section / step row inside. */
 

@@ -29,6 +29,7 @@ const conv = (over: Partial<Conversation> = {}): Conversation => ({
   ultracode: false,
   permissionMode: "default",
   pendingReminder: null,
+  cleanOutput: null,
   ...over,
 });
 

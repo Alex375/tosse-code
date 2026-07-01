@@ -81,24 +81,37 @@ describe("dispatchAgentNotification — channels", () => {
 });
 
 describe("dispatchAgentNotification — focus suppression", () => {
-  it("suppresses every channel when watching (active conv + window focused)", () => {
+  it("plays the SOUND but suppresses banner + dock when watching (active conv + focused)", () => {
+    // The sound is decoupled from focus: the user asked to hear the chime even
+    // while looking at the very conversation. Banner + Dock stay suppressed.
     hasFocus.mockReturnValue(true);
     dispatchAgentNotification(ev({ convId: "c1", activeId: "c1" }));
-    expect(playChime).not.toHaveBeenCalled();
+    expect(playChime).toHaveBeenCalledOnce();
     expect(sendNotification).not.toHaveBeenCalled();
     expect(commands.requestUserAttention).not.toHaveBeenCalled();
   });
 
-  it("still notifies a background conversation while another is focused", () => {
+  it("honours the sound toggle even while watching (no chime when sound off)", () => {
+    hasFocus.mockReturnValue(true);
+    useNotifications.setState({ sound: false });
+    dispatchAgentNotification(ev({ convId: "c1", activeId: "c1" }));
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("fires every channel for a background conversation while another is focused", () => {
     hasFocus.mockReturnValue(true);
     dispatchAgentNotification(ev({ convId: "c2", activeId: "c1" }));
     expect(playChime).toHaveBeenCalledOnce();
+    expect(sendNotification).toHaveBeenCalledOnce();
+    expect(commands.requestUserAttention).toHaveBeenCalledOnce();
   });
 
-  it("notifies the active conversation when the window is not focused", () => {
+  it("fires every channel for the active conversation when the window is not focused", () => {
     hasFocus.mockReturnValue(false);
     dispatchAgentNotification(ev({ convId: "c1", activeId: "c1" }));
     expect(playChime).toHaveBeenCalledOnce();
+    expect(sendNotification).toHaveBeenCalledOnce();
+    expect(commands.requestUserAttention).toHaveBeenCalledOnce();
   });
 });
 

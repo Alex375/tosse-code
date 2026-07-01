@@ -1234,6 +1234,18 @@ session_id: string | null;
  */
 model: string | null; effort: string | null; ultracode: boolean; permission_mode: string | null; 
 /**
+ * Per-conversation "clean output" display preference (fold each response's
+ * intermediate work behind one "Travail de Claude" block, keep only the
+ * concluding message in clear). Deliberately a TRISTATE: `None` means "inherit
+ * the global default" (the app-level display pref), while `Some(true)`/
+ * `Some(false)` is an explicit per-conversation override the user set from the
+ * composer chip. This is the one display pref that is per-conversation rather
+ * than global, so it lives with the other persisted controls above. Pre-existing
+ * rows (created before this column) are NULL → they follow the global default,
+ * preserving the prior single-flag behaviour with no re-grant.
+ */
+clean_output: boolean | null; 
+/**
  * An unacknowledged, non-blocking status reminder to re-surface across
  * restarts: `"review"` (a turn finished and was never seen), `"error"` (the
  * last turn ended in error), or `"openQuestion"` (the heuristic flagged the

@@ -89,10 +89,45 @@ export function primeAudioUnlock(): void {
 
 export type ChimeKind = "done" | "attention";
 
-/** Play the notification chime for `kind`. No-op when Web Audio is unavailable. */
+/**
+ * Play the notification chime for `kind`. No-op when Web Audio is unavailable.
+ *
+ * Reliability: WKWebView (Tauri's macOS webview) can leave the AudioContext
+ * `suspended` — before the first user gesture, and again after the app has been
+ * backgrounded — and `resume()` is ASYNC. Scheduling oscillators on a context
+ * that isn't running yet silently drops the sound (its clock isn't advancing),
+ * which was the root cause of the "chime often doesn't fire" bug. So we resume
+ * FIRST and only lay down the notes once the context is actually running, on a
+ * fresh `currentTime`. If the context is already running we schedule inline.
+ */
 export function playChime(kind: ChimeKind): void {
   const ac = audio();
   if (!ac) return;
+  if (ac.state === "running") {
+    scheduleChime(ac, kind);
+    return;
+  }
+  // Suspended (or "interrupted" on iOS/Safari): wait for the resume to land, then
+  // schedule on the now-advancing clock. If resume rejects (e.g. no user gesture
+  // yet) we still attempt to schedule — worst case a no-op, never a throw.
+  ac.resume()
+    .then(() => scheduleChime(ac, kind))
+    .catch((e) => {
+      // resume() rejected (e.g. no user gesture yet) OR scheduling threw because the
+      // context became unusable (`closed` → createGain throws InvalidStateError).
+      // Retry best-effort, then swallow: a dropped chime must NEVER surface as an
+      // unhandled promise rejection (this runs in a microtask, past the caller's guard).
+      console.error("audio chime failed:", e);
+      try {
+        scheduleChime(ac, kind);
+      } catch {
+        /* context unusable — give up silently */
+      }
+    });
+}
+
+/** Lay down the two-note chime for `kind` on an (assumed running) context. */
+function scheduleChime(ac: AudioContext, kind: ChimeKind): void {
   // Soft master level + a lowpass filter that rolls off the highs, so the chime
   // is warm and gentle rather than sharp. A short fade-in on the cutoff keeps
   // even the attack from sounding edgy.

@@ -47,9 +47,11 @@ import {
   type Segment,
   type ToolStep,
 } from "./toolGroup";
-import { useDisplay } from "../../store/display";
+import { useEffectiveCleanOutput } from "../../store/display";
 import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
 import { UserText } from "./userText";
+import { parseSpecialMessage } from "./specialMessage";
+import { SpecialMessageCard } from "./SpecialMessageCard";
 import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
 import { WorkflowCard } from "./WorkflowCard";
@@ -59,6 +61,10 @@ import styles from "./ConductorThread.module.css";
 
 
 export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
+  // A `<task-notification>` (and other CLI-injected markers) reaches us AS a user turn,
+  // but the human didn't type it — render the clean card instead of a raw user bubble.
+  const special = parseSpecialMessage(text);
+  if (special) return <SpecialMessageCard data={special} />;
   return (
     <div className={"cv-msg cv-user" + (queued ? " is-queued" : "")}>
       <Avatar user><UserMark /></Avatar>
@@ -524,11 +530,15 @@ function CleanBlocks({
   work,
   final,
   live,
+  roundKey,
 }: {
   session: string;
   work: Segment[];
   final: Segment[];
   live: boolean;
+  /** Stable id of this assistant round (its first turn id) — with `session` (the stable
+   *  conversation id) it keys the fold's remembered open state so it survives a switch. */
+  roundKey: string;
 }) {
   const ids = workStepIds(work);
   // Per-id "has a tool_result?" for THIS response's tools. Shallow-compared so the component
@@ -579,7 +589,7 @@ function CleanBlocks({
   return (
     <>
       {folded.length > 0 ? (
-        <ClaudeWorkBlock count={countWorkSteps(folded)}>
+        <ClaudeWorkBlock count={countWorkSteps(folded)} foldConv={session} foldKey={roundKey}>
           {renderSegments(session, folded, false, -1)}
         </ClaudeWorkBlock>
       ) : null}
@@ -602,12 +612,18 @@ function AssistantBlocks({
   session,
   blocks,
   live,
+  roundKey,
 }: {
   session: string;
   blocks: NormalizedBlock[];
   live: boolean;
+  /** Stable id of this assistant round (first turn id), forwarded to the clean-output fold
+   *  so its open/collapsed state is remembered per conversation. */
+  roundKey: string;
 }) {
-  const cleanOutput = useDisplay((s) => s.cleanOutput);
+  // Clean output is per-conversation now: the effective value is this conversation's
+  // explicit choice, else the global default. `session` is the stable conversation id.
+  const cleanOutput = useEffectiveCleanOutput(session);
   // Detached sub-agents live in the pinned AgentBar, never inline. Normally detected from
   // the tool_use input flag; `bgAgentIds` ALSO carries any recovered from a launch ack (when
   // the live block lacked `run_in_background`), so a transient wire drop can't leak a
@@ -626,7 +642,7 @@ function AssistantBlocks({
   // across the live → settled transition; it handles the live / settled / ends-on-tools
   // cases internally.
   const { work, final } = splitFinalMessage(segments);
-  return <CleanBlocks session={session} work={work} final={final} live={live} />;
+  return <CleanBlocks session={session} work={work} final={final} live={live} roundKey={roundKey} />;
 }
 
 function MsgAI({
@@ -655,7 +671,7 @@ function MsgAI({
             typed as a live tail. Both render together so an already-shown block is
             never swapped out — the text between two tools stays put. */}
         {turn.blocks.length > 0 && (
-          <AssistantBlocks session={session} blocks={turn.blocks} live={live} />
+          <AssistantBlocks session={session} blocks={turn.blocks} live={live} roundKey={turnId} />
         )}
         {turn.streamingThinking && <ThinkingBlock text={turn.streamingThinking} finalized={false} />}
         {turn.streamingText && <StreamMarkdown text={turn.streamingText} streaming />}
@@ -693,7 +709,9 @@ function MsgAIGroup({
         <ClaudeMark />
       </Avatar>
       <div className="cv-aibody">
-        {blocks.length > 0 && <AssistantBlocks session={session} blocks={blocks} live={live} />}
+        {blocks.length > 0 && (
+          <AssistantBlocks session={session} blocks={blocks} live={live} roundKey={turnIds[0]} />
+        )}
         {lastTurn?.streamingThinking && (
           <ThinkingBlock text={lastTurn.streamingThinking} finalized={false} />
         )}

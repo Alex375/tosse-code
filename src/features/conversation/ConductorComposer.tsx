@@ -19,7 +19,7 @@ import {
 } from "../../store/conversationsStore";
 import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
 import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts";
-import { useDisplay } from "../../store/display";
+import { useEffectiveCleanOutput } from "../../store/display";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
 import { ChipBtn, ClaudeMark, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
 import { useContextData } from "../../store/contextData";
@@ -234,10 +234,10 @@ export const ConductorComposer = forwardRef<
     DEFAULT_PERMISSION_MODE) as PermissionMode;
   const permLabel = PERM_LABEL[permMode] ?? PERM_LABEL[DEFAULT_PERMISSION_MODE];
 
-  // "Clean output" display pref (global) — folds each round's work behind a block, so
-  // only the final message stays in clear. Mirrored by Settings → Général.
-  const cleanOutput = useDisplay((s) => s.cleanOutput);
-  const setDisplay = useDisplay((s) => s.set);
+  // "Clean output" is PER-CONVERSATION: the chip shows this conversation's EFFECTIVE
+  // value (its own explicit choice, else the global default from Settings → Général)
+  // and, on toggle, writes an explicit override for THIS conversation only.
+  const cleanOutput = useEffectiveCleanOutput(session);
 
   // Context fill (ring) — shared derivation keyed by stable id, reused by the
   // FlightDeck card's context bar (see useContextData).
@@ -269,16 +269,45 @@ export const ConductorComposer = forwardRef<
     choosePerm(PERM_CYCLE[(idx + 1) % PERM_CYCLE.length]);
   };
 
+  // The blast must play ONLY when Ultra code really turns on — never eagerly on the
+  // click. On a re-opened conversation the reset placeholder state (connectingState,
+  // ultracode:false) masks the optimistic pick, so the gauge can stay off "ultracode":
+  // firing on click there would animate a mode that never activated (blast plays while
+  // the slider can't even reach Ultra code). So we only record the INTENT here and let
+  // the effect below fire iff activation actually sticks.
+  const pendingUltraFireRef = useRef(false);
+
   const applyEffort = (lvl: EffortLevel) => {
     const store = useConversationsStore.getState();
     // "Ultra code" is not an effort value — it's xhigh + a separate flag.
     if (lvl === "ultracode") {
-      // Fire the full-screen blast only on the OFF→ON transition, not on a
-      // re-select while already ultra.
-      if (gaugeValue !== "ultracode") useUltraBlast.getState().fire();
+      if (gaugeValue !== "ultracode") pendingUltraFireRef.current = true;
       store.setConvUltracode(session);
-    } else store.setConvEffort(session, lvl);
+    } else {
+      pendingUltraFireRef.current = false; // picking a lower effort cancels the intent
+      store.setConvEffort(session, lvl);
+    }
   };
+
+  // Never let a pending intent leak across a conversation switch. Declared BEFORE the
+  // fire-check on purpose: effects in one commit run in declaration order, so if `session`
+  // ever changed under a live instance, the reset lands before the fire-check reads the
+  // ref — the blast can't fire for the conversation just switched INTO. (Today the pane is
+  // remounted per conversation via `key`, so this is defensive rather than load-bearing.)
+  useEffect(() => {
+    pendingUltraFireRef.current = false;
+  }, [session]);
+
+  // Fire the full-screen blast the moment Ultra code ACTUALLY becomes the active tier
+  // after the user asked for it — driven by the same `gaugeValue` the slider reads, so
+  // the animation and the slider landing on "ultracode" can never disagree. If the pick
+  // doesn't take (masked-placeholder case), the intent stays pending and nothing fires.
+  useEffect(() => {
+    if (gaugeValue === "ultracode" && pendingUltraFireRef.current) {
+      pendingUltraFireRef.current = false;
+      useUltraBlast.getState().fire();
+    }
+  }, [gaugeValue]);
 
   const chooseModel = (value: string) => {
     useConversationsStore.getState().setConvModel(session, value);
@@ -564,15 +593,18 @@ export const ConductorComposer = forwardRef<
           <span className="wf-chip-t">Extensions</span>
         </button>
         {/* Clean-output toggle — fold each round's work behind a "Travail de Claude"
-            block so only the final message stays in clear (global pref, mirrors Settings
-            → Général). On-state borrows the accent like the worktree checkbox. */}
+            block so only the final message stays in clear. PER-CONVERSATION: the toggle
+            writes THIS conversation's explicit override (the global default lives in
+            Settings → Général). On-state borrows the accent like the worktree checkbox. */}
         <button
           type="button"
           role="switch"
           aria-checked={cleanOutput}
           className="wf-chip"
-          onClick={() => setDisplay({ cleanOutput: !cleanOutput })}
-          title="Clean output — n'afficher que le message final de chaque réponse ; replier le travail de Claude (outils, réflexion, étapes)"
+          onClick={() =>
+            useConversationsStore.getState().setConvCleanOutput(session, !cleanOutput)
+          }
+          title="Clean output (cette conversation) — n'afficher que le message final de chaque réponse ; replier le travail de Claude (outils, réflexion, étapes)"
           style={
             cleanOutput
               ? { borderColor: "var(--wf-accent)", color: "var(--wf-accent)" }
