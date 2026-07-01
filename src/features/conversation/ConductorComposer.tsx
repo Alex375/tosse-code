@@ -289,6 +289,15 @@ export const ConductorComposer = forwardRef<
     }
   };
 
+  // Never let a pending intent leak across a conversation switch. Declared BEFORE the
+  // fire-check on purpose: effects in one commit run in declaration order, so if `session`
+  // ever changed under a live instance, the reset lands before the fire-check reads the
+  // ref — the blast can't fire for the conversation just switched INTO. (Today the pane is
+  // remounted per conversation via `key`, so this is defensive rather than load-bearing.)
+  useEffect(() => {
+    pendingUltraFireRef.current = false;
+  }, [session]);
+
   // Fire the full-screen blast the moment Ultra code ACTUALLY becomes the active tier
   // after the user asked for it — driven by the same `gaugeValue` the slider reads, so
   // the animation and the slider landing on "ultracode" can never disagree. If the pick
@@ -299,11 +308,6 @@ export const ConductorComposer = forwardRef<
       useUltraBlast.getState().fire();
     }
   }, [gaugeValue]);
-
-  // Never let a pending intent leak across a conversation switch.
-  useEffect(() => {
-    pendingUltraFireRef.current = false;
-  }, [session]);
 
   const chooseModel = (value: string) => {
     useConversationsStore.getState().setConvModel(session, value);

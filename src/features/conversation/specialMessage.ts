@@ -79,20 +79,37 @@ function usageField(body: string): TaskNotificationUsage | null {
  *  hand-written prompts referencing it in prose never do). */
 export function parseSpecialMessage(text: string): SpecialMessage | null {
   const t = text.trimStart();
+  // The `startsWith` gate is the decisive anti-false-positive: real injections always
+  // OPEN on the tag; prose that merely mentions it never does. Kept strict.
   if (!t.startsWith(TN_OPEN)) return null;
-  const close = t.lastIndexOf(TN_CLOSE);
-  if (close === -1) return null;
-  const body = t.slice(TN_OPEN.length, close);
+  // Having opened strictly on the tag, this IS an injection — never prose. If the close
+  // tag is missing (a truncated / mid-stream block) parse to the end anyway, rather than
+  // bailing and dumping raw XML into a user bubble (the exact output the card prevents).
+  const closeIdx = t.lastIndexOf(TN_CLOSE);
+  const body = t.slice(TN_OPEN.length, closeIdx === -1 ? t.length : closeIdx);
+
+  // The `<result>` report holds arbitrary, tag-looking text, so header scalars and the
+  // trailing `<usage>` block MUST be scanned OUTSIDE it — otherwise a report that itself
+  // contains e.g. `<usage>…` or `<note>…` (plausible when a sub-agent discusses this very
+  // format) contaminates those fields. Header fields sit before `<result>`; `<usage>`
+  // sits after `</result>`. With no result, both zones are the whole body (nothing to
+  // contaminate).
+  const rOpen = body.indexOf("<result>");
+  const rClose = body.lastIndexOf("</result>");
+  const hasResult = rOpen !== -1 && rClose !== -1 && rClose >= rOpen;
+  const header = hasResult ? body.slice(0, rOpen) : body;
+  const tail = hasResult ? body.slice(rClose + "</result>".length) : body;
+
   return {
     type: "task-notification",
-    taskId: scalar(body, "task-id"),
-    toolUseId: scalar(body, "tool-use-id"),
-    outputFile: scalar(body, "output-file"),
-    status: scalar(body, "status"),
-    summary: scalar(body, "summary"),
-    note: scalar(body, "note"),
+    taskId: scalar(header, "task-id"),
+    toolUseId: scalar(header, "tool-use-id"),
+    outputFile: scalar(header, "output-file"),
+    status: scalar(header, "status"),
+    summary: scalar(header, "summary"),
+    note: scalar(header, "note"),
     result: resultField(body),
-    usage: usageField(body),
+    usage: usageField(tail),
   };
 }
 

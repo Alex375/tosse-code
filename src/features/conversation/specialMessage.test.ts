@@ -94,10 +94,34 @@ The routes are **multi-user** (devis, qonto) with a \`currentUserId\` check.</re
     expect(parseSpecialMessage("")).toBeNull();
   });
 
-  it("returns null when the closing tag is missing (truncated block)", () => {
-    expect(
-      parseSpecialMessage("<task-notification>\n<task-id>t</task-id>\n<status>completed</status>"),
-    ).toBeNull();
+  it("still parses a truncated block whose closing tag is missing (opens on the tag)", () => {
+    // Having opened strictly on the tag, it IS an injection — parse to the end rather
+    // than dumping raw XML into a user bubble. (Prose can't reach here: it never opens
+    // on the tag, so the anti-false-positive gate is untouched.)
+    const parsed = parseSpecialMessage(
+      "<task-notification>\n<task-id>t</task-id>\n<status>completed</status>",
+    );
+    expect(parsed?.taskId).toBe("t");
+    expect(parsed?.status).toBe("completed");
+  });
+
+  it("scans header fields and <usage> OUTSIDE the result body (no contamination)", () => {
+    // A sub-agent report that literally discusses this very format must NOT leak into the
+    // parsed fields: the real <usage> sits AFTER </result>, and there is no top-level
+    // <note>, so the <note>/<usage> INSIDE the report must be ignored.
+    const text = `<task-notification>
+<task-id>t</task-id>
+<status>completed</status>
+<summary>real summary</summary>
+<result>Example body discussing the format:
+<note>fake note living inside the report</note>
+<usage><subagent_tokens>999</subagent_tokens><tool_uses>1</tool_uses></usage></result>
+<usage><subagent_tokens>500</subagent_tokens><tool_uses>7</tool_uses><duration_ms>1234</duration_ms></usage>
+</task-notification>`;
+    const parsed = parseSpecialMessage(text);
+    expect(parsed?.summary).toBe("real summary");
+    expect(parsed?.note).toBeNull(); // the <note> inside the report must not count
+    expect(parsed?.usage).toEqual({ tokens: 500, toolUses: 7, durationMs: 1234 });
   });
 });
 

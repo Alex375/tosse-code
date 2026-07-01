@@ -113,8 +113,16 @@ export function playChime(kind: ChimeKind): void {
   ac.resume()
     .then(() => scheduleChime(ac, kind))
     .catch((e) => {
-      console.error("audio resume failed:", e);
-      scheduleChime(ac, kind);
+      // resume() rejected (e.g. no user gesture yet) OR scheduling threw because the
+      // context became unusable (`closed` → createGain throws InvalidStateError).
+      // Retry best-effort, then swallow: a dropped chime must NEVER surface as an
+      // unhandled promise rejection (this runs in a microtask, past the caller's guard).
+      console.error("audio chime failed:", e);
+      try {
+        scheduleChime(ac, kind);
+      } catch {
+        /* context unusable — give up silently */
+      }
     });
 }
 
