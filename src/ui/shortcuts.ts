@@ -51,6 +51,32 @@ export function isUndoChord(e: UndoChordEvent): boolean {
   return e.key.toLowerCase() === "z";
 }
 
+/** The minimal shape we decide the sound-toggle chord on — a LETTER chord, so like
+ *  {@link UndoChordEvent} it reads the produced `e.key`, not the physical `e.code`. */
+export interface SoundToggleChordEvent {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+/**
+ * Whether `e` is the "toggle notification sound" chord: ⌘/Ctrl+⇧+M.
+ *
+ * Like {@link isUndoChord} — and for the same AZERTY reason — we match the PRODUCED
+ * letter `e.key === "m"` (case-insensitive), NOT the physical `e.code === "KeyM"`:
+ * on AZERTY the M key sits at QWERTY's `Semicolon` position, so keying off `e.code`
+ * would fire on the wrong physical key. Shift is REQUIRED because bare ⌘M minimises
+ * the window on macOS; Alt disqualifies. This chord is app-global (it never types a
+ * character), so App.tsx fires it without the `isEditableTarget` guard the undo
+ * chord needs.
+ */
+export function isSoundToggleChord(e: SoundToggleChordEvent): boolean {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || !e.shiftKey) return false;
+  return e.key.toLowerCase() === "m";
+}
+
 /**
  * Whether focus sits in a control that owns its OWN undo, so a global ⌘Z must not be
  * hijacked from it: a text input/textarea/select, any contenteditable, the Monaco

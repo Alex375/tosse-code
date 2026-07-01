@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   isEditableTarget,
+  isSoundToggleChord,
   isUndoChord,
   viewForShortcut,
+  type SoundToggleChordEvent,
   type UndoChordEvent,
   type ViewShortcutEvent,
 } from "./shortcuts";
@@ -13,6 +15,10 @@ function ev(p: Partial<ViewShortcutEvent>): ViewShortcutEvent {
 
 function uev(p: Partial<UndoChordEvent>): UndoChordEvent {
   return { key: "z", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...p };
+}
+
+function sev(p: Partial<SoundToggleChordEvent>): SoundToggleChordEvent {
+  return { key: "m", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...p };
 }
 
 describe("viewForShortcut", () => {
@@ -58,6 +64,27 @@ describe("isUndoChord", () => {
     expect(isUndoChord(uev({}))).toBe(false); // bare z, no modifier
     expect(isUndoChord(uev({ metaKey: true, shiftKey: true }))).toBe(false); // ⌘⇧Z = redo
     expect(isUndoChord(uev({ metaKey: true, altKey: true }))).toBe(false);
+  });
+});
+
+describe("isSoundToggleChord", () => {
+  it("⌘⇧M / Ctrl+⇧M is the sound-toggle chord", () => {
+    expect(isSoundToggleChord(sev({ metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isSoundToggleChord(sev({ ctrlKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it("keys off the PRODUCED letter e.key (case-insensitive), not the physical code", () => {
+    // Same AZERTY reasoning as undo: a letter's e.key is layout-stable, e.code is not
+    // (AZERTY 'm' sits at QWERTY's Semicolon position). Shift uppercases it to "M".
+    expect(isSoundToggleChord(sev({ metaKey: true, shiftKey: true, key: "M" }))).toBe(true);
+    expect(isSoundToggleChord(sev({ metaKey: true, shiftKey: true, key: "n" }))).toBe(false);
+  });
+
+  it("REQUIRES Shift (bare ⌘M minimises the window) and rejects Alt / no modifier", () => {
+    expect(isSoundToggleChord(sev({ metaKey: true }))).toBe(false); // ⌘M without Shift
+    expect(isSoundToggleChord(sev({ shiftKey: true }))).toBe(false); // ⇧M without ⌘/Ctrl
+    expect(isSoundToggleChord(sev({ metaKey: true, shiftKey: true, altKey: true }))).toBe(false);
+    expect(isSoundToggleChord(sev({ key: "m" }))).toBe(false); // bare m
   });
 });
 
