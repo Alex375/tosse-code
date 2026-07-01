@@ -269,16 +269,41 @@ export const ConductorComposer = forwardRef<
     choosePerm(PERM_CYCLE[(idx + 1) % PERM_CYCLE.length]);
   };
 
+  // The blast must play ONLY when Ultra code really turns on — never eagerly on the
+  // click. On a re-opened conversation the reset placeholder state (connectingState,
+  // ultracode:false) masks the optimistic pick, so the gauge can stay off "ultracode":
+  // firing on click there would animate a mode that never activated (blast plays while
+  // the slider can't even reach Ultra code). So we only record the INTENT here and let
+  // the effect below fire iff activation actually sticks.
+  const pendingUltraFireRef = useRef(false);
+
   const applyEffort = (lvl: EffortLevel) => {
     const store = useConversationsStore.getState();
     // "Ultra code" is not an effort value — it's xhigh + a separate flag.
     if (lvl === "ultracode") {
-      // Fire the full-screen blast only on the OFF→ON transition, not on a
-      // re-select while already ultra.
-      if (gaugeValue !== "ultracode") useUltraBlast.getState().fire();
+      if (gaugeValue !== "ultracode") pendingUltraFireRef.current = true;
       store.setConvUltracode(session);
-    } else store.setConvEffort(session, lvl);
+    } else {
+      pendingUltraFireRef.current = false; // picking a lower effort cancels the intent
+      store.setConvEffort(session, lvl);
+    }
   };
+
+  // Fire the full-screen blast the moment Ultra code ACTUALLY becomes the active tier
+  // after the user asked for it — driven by the same `gaugeValue` the slider reads, so
+  // the animation and the slider landing on "ultracode" can never disagree. If the pick
+  // doesn't take (masked-placeholder case), the intent stays pending and nothing fires.
+  useEffect(() => {
+    if (gaugeValue === "ultracode" && pendingUltraFireRef.current) {
+      pendingUltraFireRef.current = false;
+      useUltraBlast.getState().fire();
+    }
+  }, [gaugeValue]);
+
+  // Never let a pending intent leak across a conversation switch.
+  useEffect(() => {
+    pendingUltraFireRef.current = false;
+  }, [session]);
 
   const chooseModel = (value: string) => {
     useConversationsStore.getState().setConvModel(session, value);
