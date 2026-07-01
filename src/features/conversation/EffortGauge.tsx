@@ -33,6 +33,7 @@ export function effortLevelsForModel(model: string | null | undefined): EffortLe
   const m = (model || "").toLowerCase();
   if (m.includes("haiku")) return []; // Haiku 4.5 has no effort support → slider hidden
   if (m.includes("opus")) return ["low", "medium", "high", "xhigh", "max"]; // xhigh + max
+  if (m.includes("fable")) return ["low", "medium", "high", "xhigh", "max"]; // same tier as Opus
   if (m.includes("sonnet")) return ["low", "medium", "high", "max"]; // max, but no xhigh
   return ["low", "medium", "high"]; // safe fallback
 }
