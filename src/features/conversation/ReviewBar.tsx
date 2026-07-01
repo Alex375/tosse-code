@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { isDismissable, type AgentStatus } from "../../agent/status";
 import { acknowledgeConversation } from "../../store/conversationsStore";
@@ -36,7 +37,28 @@ function reviewTone(s: AgentStatus): "review" | "input" | "error" {
 export function ReviewBar({ session }: { session: string }) {
   const status = useAgentStatus(session);
   const send = useSendMessage(session);
-  if (!isDismissable(status)) return null;
+  const dismissable = isDismissable(status);
+
+  // ⌘/Ctrl+Enter = "Marquer comme vu" for the visible reminder bar (review / error /
+  // open question), whatever its tone (blue / yellow / red). Captured at the window
+  // level so it wins over the composer's Enter-to-send handler (same capture trick
+  // the composer uses for Escape — WKWebView can swallow keys inside the textarea).
+  // Only wired while a dismissable bar is actually shown; otherwise ⌘Enter is left
+  // untouched (falls through to the composer).
+  useEffect(() => {
+    if (!dismissable) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        acknowledgeConversation(session);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [dismissable, session]);
+
+  if (!dismissable) return null;
   // "Continue" only makes sense after an ERROR — send a "continue" message so Claude
   // retries from where it broke. NOT on `review` (a turn that finished cleanly has
   // nothing to resume), nor on `needInput` (needs a real answer, not a blind resume).
@@ -61,7 +83,7 @@ export function ReviewBar({ session }: { session: string }) {
         type="button"
         className="cv-reviewbar-btn"
         onClick={() => acknowledgeConversation(session)}
-        title="Repasser la conversation en gris (inactive)"
+        title="Repasser la conversation en gris (inactive) — ⌘↵"
       >
         <Ico name="check" className="sm" />
         Marquer comme vu
