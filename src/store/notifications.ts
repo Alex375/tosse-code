@@ -50,9 +50,12 @@ function save(prefs: NotificationPrefs): void {
 interface NotificationsState extends NotificationPrefs {
   /** Patch one or more prefs and persist. */
   set: (patch: Partial<NotificationPrefs>) => void;
+  /** Flip the sound pref and persist — shared by the header toggle and its ⌘⇧M
+   *  shortcut, neither of which has the current value handy. */
+  toggleSound: () => void;
 }
 
-export const useNotifications = create<NotificationsState>((set) => ({
+export const useNotifications = create<NotificationsState>((set, get) => ({
   ...load(),
   set: (patch) =>
     set((s) => {
@@ -64,4 +67,5 @@ export const useNotifications = create<NotificationsState>((set) => ({
       save(next);
       return next;
     }),
+  toggleSound: () => get().set({ sound: !get().sound }),
 }));

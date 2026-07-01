@@ -51,4 +51,15 @@ describe("notifications store", () => {
     expect(st.dockBounce).toBe(true);
     expect(typeof st.set).toBe("function");
   });
+
+  it("toggleSound() flips the sound pref, persists, and leaves others untouched", async () => {
+    const useNotifications = await freshStore();
+    expect(useNotifications.getState().sound).toBe(true); // default on
+    useNotifications.getState().toggleSound();
+    expect(useNotifications.getState().sound).toBe(false);
+    expect(JSON.parse(localStorage.getItem(KEY)!).sound).toBe(false);
+    expect(useNotifications.getState().systemNotification).toBe(true); // untouched
+    useNotifications.getState().toggleSound();
+    expect(useNotifications.getState().sound).toBe(true); // back on
+  });
 });

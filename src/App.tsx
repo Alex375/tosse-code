@@ -8,6 +8,7 @@ import { WorktreeManager } from "./features/git/WorktreeManager";
 import { GitToggle } from "./features/git/GitToggle";
 import { EditorToggle } from "./features/editor/EditorToggle";
 import { FlightDeck } from "./features/flightdeck/FlightDeck";
+import { SoundToggle } from "./features/notifications/SoundToggle";
 import { ExtensionsManager } from "./features/extensions/ExtensionsManager";
 import { HistoryPanel } from "./features/history/HistoryPanel";
 import { UltraCodeBlast } from "./features/conversation/UltraCodeBlast";
@@ -25,8 +26,15 @@ import {
   useConversations,
   useConversationsStore,
 } from "./store/conversationsStore";
+import { useNotifications } from "./store/notifications";
 import { NavBtn, Tag, Win } from "./ui/kit";
-import { isEditableTarget, isUndoChord, viewForShortcut, type View } from "./ui/shortcuts";
+import {
+  isEditableTarget,
+  isSoundToggleChord,
+  isUndoChord,
+  viewForShortcut,
+  type View,
+} from "./ui/shortcuts";
 
 export default function App() {
   useGlobalSessionEvents();
@@ -73,6 +81,14 @@ export default function App() {
         setView(target);
         return;
       }
+      // ⌘⇧M toggles the notification sound (mute/unmute the chime on the spot). A
+      // distinct chord that never types a character, so it fires app-wide without
+      // the editable-target guard — see `isSoundToggleChord`.
+      if (isSoundToggleChord(e)) {
+        e.preventDefault();
+        useNotifications.getState().toggleSound();
+        return;
+      }
       if (isUndoChord(e) && !isEditableTarget(document.activeElement)) {
         // Only consume the key if something was actually restored, so an empty undo
         // stack leaves any other ⌘Z handling untouched.
@@ -106,19 +122,26 @@ export default function App() {
         </>
       }
       right={
-        view === "conversation" && activeRepo ? (
-          <>
-            {active ? <WorktreeIndicator conv={active} repoPath={activeRepo.path} /> : null}
-            {active ? <StreamControl key={active.id} conv={active} /> : null}
-            {active ? <EditorToggle /> : null}
-            {active ? <TerminalToggle /> : null}
-            {active ? <GitToggle /> : null}
-            {active ? <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} /> : null}
-            <Tag icon="folder" title={activeRepo.path}>
-              {repoName(activeRepo.path)}
-            </Tag>
-          </>
-        ) : undefined
+        <>
+          {/* Always visible (both views): mute/unmute the notification chime on the
+              spot, without opening Settings. Also bound to ⌘⇧M. */}
+          <SoundToggle />
+          {view === "conversation" && activeRepo ? (
+            <>
+              {active ? <WorktreeIndicator conv={active} repoPath={activeRepo.path} /> : null}
+              {active ? <StreamControl key={active.id} conv={active} /> : null}
+              {active ? <EditorToggle /> : null}
+              {active ? <TerminalToggle /> : null}
+              {active ? <GitToggle /> : null}
+              {active ? (
+                <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} />
+              ) : null}
+              <Tag icon="folder" title={activeRepo.path}>
+                {repoName(activeRepo.path)}
+              </Tag>
+            </>
+          ) : null}
+        </>
       }
     >
       {view === "conversation" ? (
