@@ -132,7 +132,7 @@ jobs:
           CERT_P12="$RUNNER_TEMP/cert.p12"
           CERT_CRT="$RUNNER_TEMP/cert.crt"
           echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_P12"
-          # Keychain dédié, déverrouillé, sans auto-lock pendant le build.
+          # Keychain dédié, déverrouillé ; -lut 21600 = timeout de lock à 6h (> durée de build).
           security create-keychain -p "$KCPW" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KCPW" "$KEYCHAIN"
@@ -171,8 +171,43 @@ jobs:
           releaseBody: |
             Build automatique depuis `main` — macOS universel (Apple Silicon + Intel).
 
-            ⚠️ App non signée Apple : au premier lancement, faire **clic droit → Ouvrir**
-            (ou `xattr -cr /Applications/Tosse\ Code.app`) pour passer Gatekeeper.
-          releaseDraft: false
+            ⚠️ App signée (certificat auto-signé) mais **non notarisée** : au premier lancement,
+            faire **clic droit → Ouvrir** (ou `xattr -cr /Applications/Tosse\ Code.app`) pour
+            passer Gatekeeper.
+
+            ℹ️ Sur cette mise à jour, macOS peut redemander **une dernière fois** l'accès à vos
+            dossiers (Bureau/Documents/…) — c'est la transition vers la signature stable ;
+            ensuite les autorisations persistent d'une version à l'autre.
+          # Brouillon d'abord : la signature est VÉRIFIÉE (étape suivante) AVANT publication,
+          # pour qu'une release mal signée reste un brouillon plutôt que d'être publiée.
+          releaseDraft: true
           prerelease: ${{ inputs.prerelease }}
           args: --target universal-apple-darwin
+
+      # Anti-régression SILENCIEUSE : le fix TCC ne tient que si l'app PUBLIÉE porte la DR
+      # attendue. La release vient d'être créée en BROUILLON ; on vérifie la signature, puis
+      # on publie seulement si c'est conforme. Un secret absent/mal nommé/tourné, une app
+      # retombée en ad-hoc, ou un cert changé (DR différente) → la release RESTE un brouillon
+      # + CI rouge, au lieu de publier une app non signée avec une CI verte (ce qui
+      # réintroduirait le bug pour tous). Le hash de leaf épinglé garantit AUSSI que c'est
+      # toujours le MÊME certificat (DR stable). Échec = brouillon non publié (mode sûr).
+      - name: Vérifier la signature de l'app (DR attendue) avant publication
+        run: |
+          set -euo pipefail
+          APP="$(find src-tauri/target -type d -path '*/release/bundle/macos/*.app' | head -1)"
+          if [ -z "$APP" ]; then echo "::error::.app introuvable — build cassé ?"; exit 1; fi
+          echo "Vérification de : $APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          EXPECTED_LEAF="2eb75c984971ac7f083775efa6f3c41bb6bd86f2"
+          DR="$(codesign -d -r- "$APP" 2>&1 | grep 'designated =>' || true)"
+          echo "DR : $DR"
+          if ! echo "$DR" | grep -q "certificate leaf = H\"$EXPECTED_LEAF\""; then
+            echo "::error::L'app ne porte PAS la DR attendue (leaf $EXPECTED_LEAF) → release laissée en BROUILLON. Vérifie les secrets APPLE_*."
+            exit 1
+          fi
+          echo "✓ Signature conforme (DR stable) — TCC persistera d'une version à l'autre."
+
+      - name: Publier la release (retirer le brouillon) après vérification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "v${{ steps.version.outputs.version }}" --draft=false --repo "$GITHUB_REPOSITORY"
