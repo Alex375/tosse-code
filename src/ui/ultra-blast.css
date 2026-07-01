@@ -15,6 +15,10 @@
   overflow: hidden;
   display: grid;
   place-items: center;
+  /* isolate the blast on its own compositor layer so its heavy blending never
+     forces the app underneath to repaint */
+  will-change: opacity;
+  isolation: isolate;
   /* whole overlay fades out at the tail so nothing lingers */
   animation: ub-overlay 2s ease forwards;
 }
@@ -39,8 +43,11 @@
 /* ---- spinning rainbow rays ------------------------------------------------ */
 .ultra-blast-rays {
   position: absolute;
-  width: 220vmax;
-  height: 220vmax;
+  /* 160vmax still overflows the viewport from centre (needs ~142vmax to reach the
+     corners) but rasterises ~half the pixels of the old 220vmax disc — the single
+     biggest first-frame cost of the blast. */
+  width: 160vmax;
+  height: 160vmax;
   border-radius: 50%;
   background: conic-gradient(
     from 0deg,
@@ -51,7 +58,10 @@
   -webkit-mask: repeating-conic-gradient(from 0deg, #000 0deg 6deg, transparent 6deg 12deg);
   mask: repeating-conic-gradient(from 0deg, #000 0deg 6deg, transparent 6deg 12deg);
   mix-blend-mode: screen;
-  filter: blur(0.5px) saturate(1.4);
+  /* saturate kept for punch; the blur was dropped — a blur pass over a multi-megapixel
+     layer every frame was pure jank for a sub-pixel softening nobody sees mid-spin. */
+  filter: saturate(1.4);
+  will-change: transform, opacity;
   animation: ub-rays 1.9s cubic-bezier(0.16, 0.84, 0.3, 1) forwards;
 }
 @keyframes ub-rays {
@@ -68,6 +78,7 @@
   border-radius: 50%;
   border: 0.6vmin solid;
   mix-blend-mode: screen;
+  will-change: transform, opacity;
   animation: ub-ring 1.5s cubic-bezier(0.1, 0.7, 0.2, 1) forwards;
 }
 .ultra-blast-ring:nth-child(1) { border-color: #b483e0; animation-delay: 0s; }
@@ -92,8 +103,11 @@
   height: var(--sz);
   border-radius: var(--shape);
   background: var(--c);
-  box-shadow: 0 0 12px 2px var(--c);
-  mix-blend-mode: screen;
+  /* the glow stays (rasterised once, cheap), but mix-blend-mode:screen was dropped:
+     compositing 60+ screen-blended layers every frame was the dominant stutter, and
+     on the dark backdrop the bright dots + glow read almost identically without it. */
+  box-shadow: 0 0 8px 1px var(--c);
+  will-change: transform, opacity;
   animation: ub-particle 1.6s cubic-bezier(0.12, 0.8, 0.25, 1) var(--d) forwards;
 }
 @keyframes ub-particle {
@@ -123,6 +137,7 @@
   color: transparent;
   text-shadow: 0 0 36px rgba(180, 131, 224, 0.55);
   filter: drop-shadow(0 4px 18px rgba(0, 0, 0, 0.5));
+  will-change: transform, opacity;
   animation:
     ub-title 1.9s cubic-bezier(0.16, 0.7, 0.2, 1) forwards,
     ub-title-hue 1.9s linear forwards;
@@ -184,6 +199,10 @@
 
 /* ---- viewport shake (applied to <body>) ---------------------------------- */
 .ultra-blast-shake {
+  /* promote <body> to its own compositor layer for the shake so the transform is a
+     GPU-only reposition of already-painted layers, not a full-page repaint each
+     frame — the shake used to fight the blast for the same paint budget. */
+  will-change: transform;
   animation: ub-shake 0.6s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
 }
 @keyframes ub-shake {
