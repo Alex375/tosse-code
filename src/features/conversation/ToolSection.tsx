@@ -11,6 +11,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { JsonValue } from "../../ipc/client";
 import { field } from "../../agent/ask";
 import { useSessionState, useToolResult } from "../../store/conversationStore";
+import { useWorkFold } from "../../store/workFold";
 import { Ico } from "../../ui/kit";
 import { DiffView } from "./DiffView";
 import { MentionPathChip } from "./FileMention";
@@ -307,18 +308,37 @@ export function ToolSection({
  * CleanBlocks) and the disk transcript (SubAgentTranscript) so the fold looks identical in
  * both — the live side spans the live→settled transition, the disk side is always settled.
  */
-export function ClaudeWorkBlock({ count, children }: { count: number; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+export function ClaudeWorkBlock({
+  count,
+  children,
+  foldConv,
+  foldKey,
+}: {
+  count: number;
+  children: ReactNode;
+  /** When BOTH are set, the open/collapsed state is remembered per conversation across
+   *  switches (and app restarts) via the workFold store — the live thread passes them.
+   *  Omitted in the sub-agent disk transcript (drill-down), which keeps ephemeral local
+   *  state: the clean-output memory applies to the main thread only. */
+  foldConv?: string;
+  foldKey?: string;
+}) {
+  const persisted = Boolean(foldConv && foldKey);
+  // Hooks run unconditionally (persisted or not); we just pick which state drives the UI.
+  const storeOpen = useWorkFold((s) =>
+    persisted ? (s.open[foldConv!]?.[foldKey!] ?? false) : false,
+  );
+  const toggleStore = useWorkFold((s) => s.toggle);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = persisted ? storeOpen : localOpen;
+  const onToggle = persisted
+    ? () => toggleStore(foldConv!, foldKey!)
+    : () => setLocalOpen((o) => !o);
   const label =
     count > 0 ? `Travail de Claude · ${count} étape${count > 1 ? "s" : ""}` : "Travail de Claude";
   return (
     <div className="cv-work">
-      <button
-        type="button"
-        className="cv-work-h"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-      >
+      <button type="button" className="cv-work-h" onClick={onToggle} aria-expanded={open}>
         <Ico name="spark" className="sm cv-work-ico" />
         <span className="cv-work-t">{label}</span>
         <span className="cv-work-chev" data-open={open ? "1" : undefined}>
