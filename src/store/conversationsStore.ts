@@ -30,6 +30,7 @@ import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./con
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
 import { clearWorkFold, clearAllWorkFold } from "./workFold";
+import { clearSidebarFold, clearAllSidebarFold } from "./sidebarFold";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useGitViewStore } from "../features/git/gitViewStore";
 import { clearMentionCache } from "../features/conversation/mentionCache";
@@ -370,6 +371,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
   removeRepo: (path) => {
     const repo = get().repos.find((r) => r.path === path);
     if (!repo) return;
+    // Forget this repo's sidebar collapse state (the group is about to disappear).
+    clearSidebarFold(repo.id);
     // Kill the integrated terminal of every conversation under this repo (the rows
     // are about to be cascade-deleted) so no PTY shell is orphaned.
     for (const c of get().conversations) {
@@ -1146,6 +1149,7 @@ export async function wipeAllData(): Promise<void> {
   clearAllTodoBarOpen();
   clearAllComposerDrafts();
   clearAllWorkFold();
+  clearAllSidebarFold();
   autoTitlePending.clear();
   titleContext.clear();
   titleGenCount.clear();

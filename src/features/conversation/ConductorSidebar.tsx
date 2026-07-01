@@ -10,14 +10,22 @@ import {
   type Conversation,
 } from "../../store/conversationsStore";
 import { useAgentStatus } from "../../agent/useAgentStatus";
-import { agentStatusToDot, isDismissable, rowAttention } from "../../agent/status";
+import { agentStatusToDot, isDismissable, rowAttention, type AgentStatus } from "../../agent/status";
 import { useSettingsUi } from "../../store/settingsUi";
+import { useSidebarFold, useRepoCollapsed } from "../../store/sidebarFold";
 import { SettingsPanel } from "../settings/SettingsPanel";
-import { Dot, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
+import { Dot, Ico, Menu, MenuItem, MenuLabel, RunPulse } from "../../ui/kit";
 import { WorktreeBadge } from "../git/WorktreeBadge";
 import { useWorktreeUi } from "../git/worktreeUiStore";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
 import { useHistoryUi } from "../history/historyUiStore";
+
+/** The conversation's status glyph: the "sonar" running indicator while a turn is in
+ *  flight, otherwise the plain coloured status dot (review / attention / error / idle…). */
+function StatusDot({ status }: { status: AgentStatus }) {
+  if (status.kind === "running") return <RunPulse />;
+  return <Dot s={agentStatusToDot(status)} pulse />;
+}
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   // Rich status keyed by the conversation's stable id (the message store routes
@@ -55,7 +63,7 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
     return (
       <div className={"cv-sess-row" + (active ? " on" : "")} data-attn={attn ?? undefined}>
         <span className="cv-sess" style={{ cursor: "default" }}>
-          <Dot s={agentStatusToDot(status)} pulse />
+          <StatusDot status={status} />
           <input
             className="cv-sess-edit"
             value={draft}
@@ -81,7 +89,7 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
         onClick={() => select(conv.id)}
         onDoubleClick={startEdit}
       >
-        <Dot s={agentStatusToDot(status)} pulse />
+        <StatusDot status={status} />
         <span className="cv-sess-n">{conv.name}</span>
       </button>
       <WorktreeBadge conv={conv} />
@@ -126,13 +134,85 @@ async function newConversationInPickedFolder() {
   if (path) void createConversationInRepo(path);
 }
 
+/** One repo swimlane in the sidebar: a header (collapse chevron · name/worktree ·
+ *  extensions · new-conversation · count) and, unless collapsed, its conversation
+ *  rows. The collapsed state is per-repo and persisted (see sidebarFold). */
+function RepoGroup({
+  repo,
+  items,
+  activeId,
+}: {
+  repo: { id: string; path: string };
+  items: Conversation[];
+  activeId: string | null;
+}) {
+  const collapsed = useRepoCollapsed(repo.id);
+  const toggleFold = useSidebarFold((s) => s.toggle);
+  const openManager = useWorktreeUi((s) => s.openManager);
+  const openExtensions = useExtensionsUi((s) => s.openManager);
+
+  return (
+    <div className={"cv-repo" + (collapsed ? " collapsed" : "")}>
+      <div className="cv-repo-h">
+        <button
+          type="button"
+          className="cv-repo-fold"
+          title={collapsed ? "Déplier ce dépôt" : "Replier ce dépôt"}
+          aria-label={collapsed ? "Déplier ce dépôt" : "Replier ce dépôt"}
+          aria-expanded={!collapsed}
+          onClick={() => toggleFold(repo.id)}
+        >
+          <Ico name="chev" className="sm cv-repo-fold-chev" />
+        </button>
+        {/* The repo title is a button that opens this repo's worktree manager. The branch
+            glyph (the app's worktree icon, as on WorktreeBadge) is revealed to the RIGHT of
+            the name on hover and turns coral — advertising the click without cluttering the
+            header when idle. */}
+        <button
+          type="button"
+          className="cv-repo-wt"
+          title="Ouvrir les worktrees de ce dépôt"
+          onClick={() => openManager(repo.id)}
+        >
+          <span className="cv-repo-n">{repoName(repo.path)}</span>
+          <Ico name="branch" className="sm cv-repo-wt-hint" />
+        </button>
+        <button
+          className="cv-repo-ext"
+          title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
+          onClick={() =>
+            openExtensions({
+              kind: "project",
+              path: repo.path,
+              title: repoName(repo.path),
+              session: null,
+            })
+          }
+        >
+          <Ico name="layers" className="sm" />
+        </button>
+        <button
+          className="cv-repo-add"
+          title="Nouvelle conversation dans ce dépôt"
+          onClick={() => void createConversationInRepo(repo.path)}
+        >
+          <Ico name="plus" className="sm" />
+        </button>
+      </div>
+      {collapsed ? null : items.length === 0 ? (
+        <div className="cv-repo-empty">Aucune conversation</div>
+      ) : (
+        items.map((c) => <ConvRow key={c.id} conv={c} active={c.id === activeId} />)
+      )}
+    </div>
+  );
+}
+
 export function ConductorSidebar() {
   // Repo-grouped, recency-ordered conversations — the shared selector used by both
   // this sidebar and the FlightDeck grid (see useConversationsByRepo).
   const groups = useConversationsByRepo();
   const activeId = useActiveConversationId();
-  const openManager = useWorktreeUi((s) => s.openManager);
-  const openExtensions = useExtensionsUi((s) => s.openManager);
   const openHistory = useHistoryUi((s) => s.openPanel);
   const settingsOpen = useSettingsUi((s) => s.open);
   const openSettings = useSettingsUi((s) => s.openSettings);
@@ -188,51 +268,9 @@ export function ConductorSidebar() {
             Aucun dépôt. Clique sur <span className="wf-hi">＋</span> pour ouvrir un dossier.
           </div>
         ) : (
-          groups.map(({ repo, conversations: items }) => {
-            return (
-              <div key={repo.id} className="cv-repo">
-                <div className="cv-repo-h">
-                  <button
-                    type="button"
-                    className="cv-repo-wt"
-                    title="Gérer les worktrees de ce dépôt"
-                    onClick={() => openManager(repo.id)}
-                  >
-                    <Ico name="folder" className="sm" />
-                    <span className="cv-repo-n">{repoName(repo.path)}</span>
-                    <Ico name="branch" className="sm cv-repo-wt-hint" />
-                  </button>
-                  <button
-                    className="cv-repo-ext"
-                    title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
-                    onClick={() =>
-                      openExtensions({
-                        kind: "project",
-                        path: repo.path,
-                        title: repoName(repo.path),
-                        session: null,
-                      })
-                    }
-                  >
-                    <Ico name="layers" className="sm" />
-                  </button>
-                  <button
-                    className="cv-repo-add"
-                    title="Nouvelle conversation dans ce dépôt"
-                    onClick={() => void createConversationInRepo(repo.path)}
-                  >
-                    <Ico name="plus" className="sm" />
-                  </button>
-                  <span className="cv-repo-c">{items.length}</span>
-                </div>
-                {items.length === 0 ? (
-                  <div className="cv-repo-empty">Aucune conversation</div>
-                ) : (
-                  items.map((c) => <ConvRow key={c.id} conv={c} active={c.id === activeId} />)
-                )}
-              </div>
-            );
-          })
+          groups.map(({ repo, conversations: items }) => (
+            <RepoGroup key={repo.id} repo={repo} items={items} activeId={activeId} />
+          ))
         )}
       </div>
 
