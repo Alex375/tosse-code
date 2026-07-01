@@ -9,25 +9,35 @@
 .cv-side-grip { position:absolute; top:0; right:-3px; bottom:0; width:6px; display:flex; z-index:6; }
 .cv-search { display:flex; align-items:center; gap:8px; margin:0 10px; padding:7px 9px; background:var(--wf-panel); border:1px solid var(--wf-line); border-radius:var(--wf-r); color:var(--wf-tx-lo); font:inherit; text-align:left; cursor:pointer; transition:background 0.12s ease, border-color 0.12s ease; }
 .cv-search:hover { background:var(--wf-panel-2); border-color:var(--wf-line-2); color:var(--wf-tx); }
-.cv-sess-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior-y:contain; padding:6px 6px 4px; display:flex; flex-direction:column; gap:6px; }
-.cv-repo { display:flex; flex-direction:column; }
-.cv-repo-h { display:flex; align-items:center; gap:7px; padding:9px 9px 6px; font-size:10px; font-weight:600; letter-spacing:.6px; text-transform:uppercase; color:var(--wf-tx-xlo); }
+.cv-sess-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior-y:contain; padding:6px 6px 6px; display:flex; flex-direction:column; gap:12px; }
+.cv-repo { display:flex; flex-direction:column; gap:3px; }
+/* Repo header: collapse chevron · repo title (takes all the free width so it isn't
+   truncated) · extensions · new-conversation. Roomier than the old 10px label so the
+   section reads as a real group head; the title gets the space, the buttons stay clear. */
+.cv-repo-h { display:flex; align-items:center; gap:3px; padding:10px 6px 7px 2px; font-size:11.5px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; color:var(--wf-tx-lo); }
 .cv-repo-h .wf-ico { color:var(--wf-tx-lo); }
-.cv-repo-n { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-/* Repo header is a button: clicking it opens this repo's worktree manager. */
-.cv-repo-wt { flex:1; min-width:0; display:flex; align-items:center; gap:7px; border:0; background:transparent; font:inherit; color:inherit; text-transform:inherit; letter-spacing:inherit; padding:1px 4px; margin:-1px -4px; border-radius:5px; cursor:pointer; text-align:left; }
-.cv-repo-wt:hover { background:var(--wf-panel-2); color:var(--wf-tx-lo); }
-.cv-repo-wt-hint { flex:0 0 auto; opacity:0; transition:opacity .12s ease; }
+.cv-repo-n { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Collapse/expand chevron — the section's always-visible fold control (see sidebarFold).
+   The `chev` glyph points down when expanded and rotates to point right when collapsed. */
+.cv-repo-fold { width:22px; height:22px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; transition:background .12s ease, color .12s ease; }
+.cv-repo-fold:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+.cv-repo-fold-chev { transition:transform .16s ease; }
+.cv-repo.collapsed .cv-repo-fold-chev { transform:rotate(-90deg); }
+/* Title is a button: clicking it opens this repo's worktree manager. It owns all the
+   free width (flex:1) and only ellipsises as a last resort for a very long name. */
+.cv-repo-wt { flex:1; min-width:0; display:flex; align-items:center; gap:6px; border:0; background:transparent; font:inherit; color:inherit; text-transform:inherit; letter-spacing:inherit; padding:3px 6px; margin:-3px -2px; border-radius:6px; cursor:pointer; text-align:left; }
+.cv-repo-wt:hover { background:var(--wf-panel-2); color:var(--wf-tx); }
+/* Worktree hint: the branch glyph revealed to the right of the name on hover (coral),
+   so the "click to open worktrees" affordance shows only when relevant. */
+.cv-repo-wt-hint { flex:0 0 auto; opacity:0; transition:opacity .12s ease, color .12s ease; }
 .cv-repo-wt:hover .cv-repo-wt-hint { opacity:1; }
 .cv-repo-wt:hover .cv-repo-wt-hint.wf-ico { color:var(--wf-accent); }
-.cv-repo-add { width:18px; height:18px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease; }
-.cv-repo:hover .cv-repo-add { opacity:1; }
-.cv-repo-add:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
-.cv-repo-ext { width:18px; height:18px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease; }
-.cv-repo:hover .cv-repo-ext { opacity:1; }
-.cv-repo-ext:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
-.cv-repo-c { font-family:var(--wf-mono); font-size:10px; letter-spacing:0; color:var(--wf-tx-lo); background:var(--wf-panel-3); border-radius:5px; padding:1px 6px; }
-.cv-repo-empty { font-size:11px; color:var(--wf-tx-xlo); padding:2px 9px 5px 25px; font-style:italic; }
+/* Header action buttons — always visible (not hover-only) and a touch larger so they
+   read as real controls; they brighten fully on hover. */
+.cv-repo-add, .cv-repo-ext { width:24px; height:24px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; opacity:.7; transition:opacity .12s ease, background .12s ease, color .12s ease; }
+.cv-repo:hover .cv-repo-add, .cv-repo:hover .cv-repo-ext { opacity:.85; }
+.cv-repo-add:hover, .cv-repo-ext:hover { opacity:1; background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+.cv-repo-empty { font-size:11.5px; color:var(--wf-tx-xlo); padding:3px 9px 6px 30px; font-style:italic; }
 .cv-sess-list { display:flex; flex-direction:column; gap:1px; padding:2px 6px; }
 /* Row = the hover/active target; it holds the main button + the kebab menu. */
 .cv-sess-row { position:relative; display:flex; align-items:center; border-radius:var(--wf-r); }
@@ -40,8 +50,8 @@
 .cv-sess-row[data-attn="review"] { background:var(--wf-wait-bg); box-shadow:inset 3px 0 0 var(--wf-wait); }
 .cv-sess-row[data-attn="error"]  { background:var(--wf-err-bg);  box-shadow:inset 3px 0 0 var(--wf-err); }
 .cv-sess-row[data-attn]:hover { filter:brightness(1.12); }
-.cv-sess { flex:1; min-width:0; display:flex; align-items:center; gap:9px; padding:7px 8px; border:0; background:transparent; font:inherit; color:inherit; text-align:left; cursor:pointer; }
-.cv-sess-n { font-size:12.5px; color:var(--wf-tx-hi); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
+.cv-sess { flex:1; min-width:0; display:flex; align-items:center; gap:10px; padding:9px 10px; border:0; background:transparent; font:inherit; color:inherit; text-align:left; cursor:pointer; }
+.cv-sess-n { font-size:13px; color:var(--wf-tx-hi); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
 .cv-sess .wf-badge { margin-left:auto; }
 /* "Vu": acknowledge a non-blocking reminder (review / error / open-question) to
    clear it back to idle. Always visible while the row needs attention so it can
@@ -59,8 +69,30 @@
 .cv-wt-badge { flex:0 0 auto; width:20px; height:20px; margin-right:2px; border:0; background:transparent; color:var(--wf-accent); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:.8; transition:opacity .12s ease, background .12s ease; }
 .cv-wt-badge:hover { opacity:1; background:var(--wf-panel-3); }
 /* Inline rename field, swapped in for the name while editing. */
-.cv-sess-edit { flex:1; min-width:0; font:inherit; font-size:12.5px; color:var(--wf-tx-hi); background:var(--wf-bg); border:1px solid var(--wf-accent); border-radius:5px; padding:3px 6px; outline:none; }
+.cv-sess-edit { flex:1; min-width:0; font:inherit; font-size:13px; color:var(--wf-tx-hi); background:var(--wf-bg); border:1px solid var(--wf-accent); border-radius:5px; padding:4px 6px; outline:none; }
 .cv-side-foot { display:flex; align-items:center; gap:8px; padding:11px 14px; border-top:1px solid var(--wf-line); margin-top:0; }
+
+/* Running-conversation indicator ("indicateur de run plus travaillé"): a steady, softly
+   breathing green core emitting two staggered sonar rings. More presence than the plain
+   pulsing status dot, but still cheap — only transform/opacity animate (GPU-composited),
+   and it collapses to a static glowing dot under prefers-reduced-motion. Rendered by the
+   RunPulse component (kit.tsx) in place of the status Dot while a turn is in flight.
+   CONCENTRICITY: the core and both rings are all absolutely centred with the SAME formula
+   (top/left:50% + margin:-4px on an 8px box), and the rings are forced box-sizing:border-box
+   so their 1.5px border does NOT inflate the box past 8px — otherwise their transform-origin
+   drifts off the core's centre and the ping visibly scales off-centre. (The global reset's
+   `* {}` does not cover ::before/::after, which default to content-box.) */
+.cv-run-ind { position:relative; width:8px; height:8px; flex:0 0 auto; display:inline-block; }
+.cv-run-ind > i, .cv-run-ind::before, .cv-run-ind::after { content:""; position:absolute; top:50%; left:50%; width:8px; height:8px; margin:-4px 0 0 -4px; border-radius:50%; }
+.cv-run-ind > i { background:var(--wf-run); box-shadow:0 0 6px -1px var(--wf-run); animation:cv-run-core 1.9s ease-in-out infinite; }
+.cv-run-ind::before, .cv-run-ind::after { box-sizing:border-box; border:1.5px solid var(--wf-run); opacity:0; animation:cv-run-ping 1.9s ease-out infinite; }
+.cv-run-ind::after { animation-delay:.95s; }
+@keyframes cv-run-ping { 0% { transform:scale(1); opacity:.55; } 70% { opacity:0; } 100% { transform:scale(2.6); opacity:0; } }
+@keyframes cv-run-core { 0%,100% { transform:scale(1); } 50% { transform:scale(1.16); } }
+@media (prefers-reduced-motion: reduce) {
+  .cv-run-ind > i { animation:none; }
+  .cv-run-ind::before, .cv-run-ind::after { display:none; }
+}
 
 /* Single source of truth for the conversation's content width. The thread, the
    composer (input + footer controls) and the floating bars (todo / review) all
