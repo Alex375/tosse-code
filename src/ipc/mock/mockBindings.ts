@@ -425,6 +425,7 @@ export const mockCommands = {
           ultracode: false,
           permission_mode: "auto",
           pending_reminder: null,
+          clean_output: null,
         },
       ],
       active_id: "conv-demo",

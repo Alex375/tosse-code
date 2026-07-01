@@ -49,6 +49,7 @@ const baseConv = (over: Partial<Conversation> = {}): Conversation => ({
   ultracode: false,
   permissionMode: "default",
   pendingReminder: null,
+  cleanOutput: null,
   ...over,
 });
 
@@ -104,6 +105,32 @@ describe("conversationsStore — per-conversation controls", () => {
     expect(commands.setEffortLevel).toHaveBeenCalledWith("session-7", "high");
     useConversationsStore.getState().setConvPermission("c1", "acceptEdits");
     expect(commands.setPermissionMode).toHaveBeenCalledWith("session-7", "acceptEdits");
+  });
+
+  it("setConvCleanOutput writes an explicit override (from the inherited null) and persists", () => {
+    expect(conv0().cleanOutput).toBeNull(); // starts inheriting the global default
+    useConversationsStore.getState().setConvCleanOutput("c1", true);
+    expect(conv0().cleanOutput).toBe(true); // now an explicit per-conversation choice
+    expect(commands.upsertConversation).toHaveBeenCalled();
+    // Explicit OFF is distinct from the inherited null.
+    useConversationsStore.getState().setConvCleanOutput("c1", false);
+    expect(conv0().cleanOutput).toBe(false);
+  });
+
+  it("setConvCleanOutput is idempotent — no write when unchanged", () => {
+    useConversationsStore.getState().setConvCleanOutput("c1", true);
+    vi.clearAllMocks();
+    useConversationsStore.getState().setConvCleanOutput("c1", true);
+    expect(commands.upsertConversation).not.toHaveBeenCalled();
+  });
+
+  it("setConvCleanOutput is display-only — never pushes to the live session", () => {
+    seed(baseConv({ handle: "session-7" }));
+    useConversationsStore.getState().setConvCleanOutput("c1", true);
+    // Persisted, but there is no live-stream command for a pure display pref.
+    expect(commands.upsertConversation).toHaveBeenCalled();
+    expect(commands.setModel).not.toHaveBeenCalled();
+    expect(commands.setPermissionMode).not.toHaveBeenCalled();
   });
 });
 
