@@ -88,11 +88,12 @@ export function TranscriptPopover({
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      // Claim Escape (preventDefault) so an outer window-level listener — e.g. the
-      // Flight Deck reply modal — doesn't ALSO close on the same keypress; this
-      // popover is the topmost layer and owns the key while open.
+      // This popover is the topmost layer while open, so it OWNS Escape: stopPropagation
+      // keeps an outer window-level listener (e.g. the Flight Deck reply modal) from also
+      // closing on the same keypress. (Fullscreen is protected globally by App.tsx's
+      // capture-phase guard, which preventDefaults Escape.)
       if (e.key === "Escape") {
-        e.preventDefault();
+        e.stopPropagation();
         onClose();
       }
     }

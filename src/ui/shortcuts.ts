@@ -126,3 +126,160 @@ export function isEditableTarget(el: Element | null): boolean {
     ) != null
   );
 }
+
+// ---- Generic ⌘/Ctrl chord table (the app-action shortcuts) ------------------
+// On top of the four historical chords above (view switch / undo / sound / settings)
+// we drive a small TABLE of extra bindings from one place: the global App handler
+// matches an event against each spec and runs the mapped action, and the
+// Settings → Raccourcis page renders the same catalogue — one source of truth so a
+// wired shortcut and its documentation can never drift.
+
+/** The full keyboard-event shape the generic matcher inspects (a DOM
+ *  `KeyboardEvent` satisfies it structurally). */
+export interface ChordEvent {
+  key: string;
+  code: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+/**
+ * How to match one chord. ⌘/Ctrl is ALWAYS required. Match on `code` (the PHYSICAL
+ * key — for digits and arrows) or on `key` (the PRODUCED character — for letters):
+ * the same AZERTY reasoning as the dedicated helpers above (letters are layout-stable
+ * under `key`, whereas a letter's `code` names its QWERTY position). `shift`/`alt`
+ * default to false and must match EXACTLY, so ⌘L never fires on ⌘⇧L or ⌥⌘L.
+ */
+export interface ChordSpec {
+  key?: string;
+  code?: string;
+  shift?: boolean;
+  alt?: boolean;
+}
+
+/** Whether `e` matches `spec` — ⌘/Ctrl required, Shift/Alt matched exactly, and the
+ *  key compared via `code` (physical) or `key` (produced char, case-insensitive). */
+export function matchChord(e: ChordEvent, spec: ChordSpec): boolean {
+  if (!(e.metaKey || e.ctrlKey)) return false;
+  if (e.altKey !== (spec.alt ?? false)) return false;
+  if (e.shiftKey !== (spec.shift ?? false)) return false;
+  if (spec.code) return e.code === spec.code;
+  if (spec.key) return e.key.toLowerCase() === spec.key.toLowerCase();
+  return false;
+}
+
+/** The extra actions dispatched by the global handler (beyond the historical
+ *  view-switch / undo / sound / settings chords). */
+export type ShortcutAction =
+  | "toggle-editor"
+  | "toggle-terminal"
+  | "toggle-git"
+  | "toggle-clean-output"
+  | "open-extensions"
+  | "new-conversation"
+  | "prev-conversation"
+  | "next-conversation"
+  | "open-history";
+
+/** `global` fires anywhere; `conversation` only in the conversation view with an
+ *  active conversation (so ⌘B/⌘J/… are inert on the Flight Deck). */
+export type BindingScope = "global" | "conversation";
+
+export interface ActionBinding {
+  action: ShortcutAction;
+  spec: ChordSpec;
+  scope: BindingScope;
+}
+
+/**
+ * The chords added on top of the historical ones. Letters use `key` (AZERTY-robust);
+ * the conversation-navigation arrows use `code` (position-stable). These are GLOBAL
+ * (they never type a character under ⌘, so they win over the editor's same chord —
+ * the VS Code convention). The App handler matches each `spec`; Settings → Raccourcis
+ * documents them via {@link SHORTCUT_GROUPS}.
+ */
+export const ACTION_BINDINGS: ActionBinding[] = [
+  { action: "toggle-editor", spec: { key: "b" }, scope: "conversation" },
+  { action: "toggle-terminal", spec: { key: "j" }, scope: "conversation" },
+  { action: "toggle-git", spec: { key: "g", shift: true }, scope: "conversation" },
+  { action: "toggle-clean-output", spec: { key: "l" }, scope: "conversation" },
+  { action: "open-extensions", spec: { key: "e" }, scope: "conversation" },
+  { action: "new-conversation", spec: { key: "n" }, scope: "global" },
+  { action: "prev-conversation", spec: { code: "ArrowUp", alt: true }, scope: "global" },
+  { action: "next-conversation", spec: { code: "ArrowDown", alt: true }, scope: "global" },
+  { action: "open-history", spec: { key: "o", shift: true }, scope: "global" },
+];
+
+// ---- Display catalogue (Settings → Raccourcis) ------------------------------
+
+export interface ShortcutDoc {
+  /** Human-readable chord, e.g. "⌘ L" or "⌘⌥ ↑ / ⌘⌥ ↓". */
+  keys: string;
+  label: string;
+}
+
+export interface ShortcutGroup {
+  title: string;
+  items: ShortcutDoc[];
+}
+
+/** Every shortcut the app answers to, grouped by scope, for the Settings recap page.
+ *  Kept alongside the dispatch tables above so documentation and behaviour live in one
+ *  file. (The historical chords are listed here by hand; the new ones mirror
+ *  {@link ACTION_BINDINGS}.) */
+export const SHORTCUT_GROUPS: ShortcutGroup[] = [
+  {
+    title: "Global",
+    items: [
+      { keys: "⌘ 1", label: "Vue Conversation" },
+      { keys: "⌘ 2", label: "Vue Flight Deck" },
+      { keys: "⌘ N", label: "Nouvelle conversation" },
+      { keys: "⌘⌥ ↑ / ⌘⌥ ↓", label: "Conversation précédente / suivante" },
+      { keys: "⌘⇧ O", label: "Ouvrir l'historique des conversations" },
+      { keys: "⌘⇧ M", label: "Couper / rétablir le son des notifications" },
+      { keys: "⌘ ,", label: "Ouvrir les Réglages" },
+      { keys: "⌘ Z", label: "Restaurer la dernière conversation supprimée" },
+    ],
+  },
+  {
+    title: "Vue Conversation",
+    items: [
+      { keys: "⌘ B", label: "Ouvrir / fermer l'éditeur de fichiers" },
+      { keys: "⌘ J", label: "Ouvrir / fermer le terminal intégré" },
+      { keys: "⌘⇧ G", label: "Ouvrir / fermer le panneau Git" },
+      { keys: "⌘ L", label: "Basculer le « clean output » de la conversation" },
+      { keys: "⌘ E", label: "Ouvrir les Extensions (MCP, plugins, skills, sous-agents)" },
+    ],
+  },
+  {
+    title: "Compositeur",
+    items: [
+      { keys: "↵", label: "Envoyer le message" },
+      { keys: "⇧ ↵", label: "Retour à la ligne" },
+      { keys: "⇧ ⇥", label: "Changer le mode de permission" },
+      { keys: "↑ / ↓", label: "Rappeler le message précédent / suivant (en bord de texte)" },
+      { keys: "/", label: "Menu des commandes — ↑↓ naviguer, ↵/⇥ choisir, Échap fermer" },
+    ],
+  },
+  {
+    title: "Éditeur",
+    items: [
+      { keys: "⌘ S", label: "Enregistrer le fichier" },
+      { keys: "⌘ W", label: "Fermer l'onglet actif" },
+      { keys: "↵ / Échap", label: "Renommer : valider / annuler (arborescence et sidebar)" },
+    ],
+  },
+  {
+    title: "Git & Revue",
+    items: [
+      { keys: "⌘ ↵", label: "Valider le commit (dans la zone de message)" },
+      { keys: "⌘ ↵", label: "Marquer « Vu » / envoyer une note de plan" },
+    ],
+  },
+  {
+    title: "Fenêtres & popovers",
+    items: [{ keys: "Échap", label: "Fermer la fenêtre, le popover ou le menu actif" }],
+  },
+];

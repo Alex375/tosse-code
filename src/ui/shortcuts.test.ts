@@ -1,15 +1,23 @@
 import { describe, it, expect } from "vitest";
 import {
+  ACTION_BINDINGS,
   isEditableTarget,
   isSettingsChord,
   isSoundToggleChord,
   isUndoChord,
+  matchChord,
+  SHORTCUT_GROUPS,
   viewForShortcut,
+  type ChordEvent,
   type SettingsChordEvent,
   type SoundToggleChordEvent,
   type UndoChordEvent,
   type ViewShortcutEvent,
 } from "./shortcuts";
+
+function chord(p: Partial<ChordEvent>): ChordEvent {
+  return { key: "", code: "", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...p };
+}
 
 function ev(p: Partial<ViewShortcutEvent>): ViewShortcutEvent {
   return { code: "Digit1", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...p };
@@ -113,6 +121,55 @@ describe("isSettingsChord", () => {
     expect(isSettingsChord(cev({}))).toBe(false); // bare comma, no modifier
     expect(isSettingsChord(cev({ metaKey: true, shiftKey: true }))).toBe(false);
     expect(isSettingsChord(cev({ metaKey: true, altKey: true }))).toBe(false);
+  });
+});
+
+describe("matchChord", () => {
+  it("matches a letter chord via the PRODUCED key (case-insensitive), ⌘ or Ctrl", () => {
+    expect(matchChord(chord({ metaKey: true, key: "b" }), { key: "b" })).toBe(true);
+    expect(matchChord(chord({ ctrlKey: true, key: "B" }), { key: "b" })).toBe(true);
+    expect(matchChord(chord({ metaKey: true, key: "x" }), { key: "b" })).toBe(false);
+  });
+
+  it("requires ⌘/Ctrl", () => {
+    expect(matchChord(chord({ key: "b" }), { key: "b" })).toBe(false);
+    expect(matchChord(chord({ shiftKey: true, key: "b" }), { key: "b" })).toBe(false);
+  });
+
+  it("matches Shift/Alt EXACTLY (⌘L ≠ ⌘⇧L ≠ ⌥⌘L)", () => {
+    // plain ⌘L requires no Shift and no Alt
+    expect(matchChord(chord({ metaKey: true, key: "l" }), { key: "l" })).toBe(true);
+    expect(matchChord(chord({ metaKey: true, shiftKey: true, key: "l" }), { key: "l" })).toBe(false);
+    expect(matchChord(chord({ metaKey: true, altKey: true, key: "l" }), { key: "l" })).toBe(false);
+    // a shift-required chord (⌘⇧G) only fires WITH shift
+    expect(matchChord(chord({ metaKey: true, shiftKey: true, key: "g" }), { key: "g", shift: true })).toBe(true);
+    expect(matchChord(chord({ metaKey: true, key: "g" }), { key: "g", shift: true })).toBe(false);
+  });
+
+  it("matches an arrow chord via the PHYSICAL code (⌘⌥↑ / ⌘⌥↓)", () => {
+    expect(matchChord(chord({ metaKey: true, altKey: true, code: "ArrowUp" }), { code: "ArrowUp", alt: true })).toBe(true);
+    expect(matchChord(chord({ metaKey: true, altKey: true, code: "ArrowDown" }), { code: "ArrowUp", alt: true })).toBe(false);
+    // the arrow chords require Alt: bare ⌘↑ must not match
+    expect(matchChord(chord({ metaKey: true, code: "ArrowUp" }), { code: "ArrowUp", alt: true })).toBe(false);
+  });
+});
+
+describe("ACTION_BINDINGS / SHORTCUT_GROUPS", () => {
+  it("has a unique chord per action (no two bindings collide)", () => {
+    const seen = new Set<string>();
+    for (const b of ACTION_BINDINGS) {
+      const sig = `${b.spec.key ?? ""}|${b.spec.code ?? ""}|${b.spec.shift ? "S" : ""}|${b.spec.alt ? "A" : ""}`;
+      expect(seen.has(sig), `duplicate chord for ${b.action}`).toBe(false);
+      seen.add(sig);
+    }
+  });
+
+  it("every catalogue group is non-empty (the Settings recap renders something)", () => {
+    expect(SHORTCUT_GROUPS.length).toBeGreaterThan(0);
+    for (const g of SHORTCUT_GROUPS) {
+      expect(g.title.length).toBeGreaterThan(0);
+      expect(g.items.length).toBeGreaterThan(0);
+    }
   });
 });
 
