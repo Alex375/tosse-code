@@ -993,4 +993,253 @@ mod tests {
         }
         transport.shutdown().await;
     }
+
+    /// Live capture: reproduce the "sub-agent woken via SendMessage" bug and DUMP the
+    /// wire, so we can see how a re-activated background agent is correlated —
+    /// specifically whether the wake emits a fresh `task_started`, its `task_type`, and
+    /// whether its `tool_use_id` is the NEW `SendMessage` block, the ORIGINAL `Agent`
+    /// block, or absent. The extension we have (2.1.181) predates this feature, so the
+    /// only source of truth is the installed binary. Ignored by default (spawns claude:
+    /// network + auth + a real sub-agent run). Run with:
+    ///   cargo test --lib --ignored live_capture_subagent_wake -- --nocapture
+    #[tokio::test]
+    #[ignore = "spawns the real claude binary; captures the SendMessage-wake-a-background-agent wire"]
+    async fn live_capture_subagent_wake() {
+        use crate::supervisor::protocol::{CliMessage, SystemMsg};
+        use crate::supervisor::transport::{self, SpawnConfig, Transport};
+        use std::io::Write as _;
+        use std::time::{Duration, Instant};
+
+        // Log both to stderr (--nocapture) and to a file for later inspection.
+        let log_path = std::env::var("TOSSE_WAKE_LOG")
+            .unwrap_or_else(|_| "/tmp/wake_capture.log".to_string());
+        let mut file = std::fs::File::create(&log_path).ok();
+        macro_rules! logln { ($($a:tt)*) => {{
+            let s = format!($($a)*);
+            eprintln!("{s}");
+            if let Some(f) = file.as_mut() { let _ = writeln!(f, "{s}"); }
+        }}; }
+
+        let cwd = std::env::current_dir().unwrap();
+        let mut cfg = SpawnConfig::new(cwd);
+        // Allowlist the tools the parent + sub-agent might touch so nothing blocks on a
+        // permission prompt (we also auto-allow below, belt-and-suspenders).
+        cfg.allowed_tools = [
+            "Agent", "Task", "SendMessage", "Bash", "Read", "Grep", "Glob",
+            "TaskOutput", "AgentOutput", "BashOutput", "TodoWrite", "Write", "Edit", "LS",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (mut transport, mut rx) = Transport::spawn(cfg).expect("claude should spawn");
+        transport
+            .send_line(initialize_request("cap-init"))
+            .expect("send initialize");
+
+        // Pull the tool_use blocks (id, name, input) out of an assistant `message` Value.
+        fn tool_uses(msg: &Value) -> Vec<(String, String, Value)> {
+            let mut out = Vec::new();
+            if let Some(arr) = msg.get("content").and_then(Value::as_array) {
+                for b in arr {
+                    if b.get("type").and_then(Value::as_str) == Some("tool_use") {
+                        out.push((
+                            b.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
+                            b.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                            b.get("input").cloned().unwrap_or(Value::Null),
+                        ));
+                    }
+                }
+            }
+            out
+        }
+        // Flatten a user `message` Value's tool_result blocks to (tool_use_id, text).
+        fn tool_results(msg: &Value) -> Vec<(String, String)> {
+            let mut out = Vec::new();
+            if let Some(arr) = msg.get("content").and_then(Value::as_array) {
+                for b in arr {
+                    if b.get("type").and_then(Value::as_str) == Some("tool_result") {
+                        let id = b.get("tool_use_id").and_then(Value::as_str).unwrap_or("").to_string();
+                        let text = match b.get("content") {
+                            Some(Value::String(s)) => s.clone(),
+                            Some(Value::Array(a)) => a
+                                .iter()
+                                .filter_map(|x| x.get("text").and_then(Value::as_str))
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            _ => String::new(),
+                        };
+                        out.push((id, text));
+                    }
+                }
+            }
+            out
+        }
+
+        // Phase 1: launch ONE detached background sub-agent that stays BUSY for a few
+        // seconds (a Bash `sleep`), so we can observe what a "running" sub-agent looks
+        // like on the wire — the control for the wake below.
+        let launch = "Use the Agent tool with run_in_background set to true to launch ONE detached \
+            background sub-agent. Its prompt must instruct it to FIRST run the bash command \
+            `sleep 6` and then reply with exactly the word BANANA. Use subagent_type \
+            \"general-purpose\". After launching it, end your turn immediately without doing \
+            anything else.";
+        transport
+            .send_line(transport::user_message(launch, &uuid::Uuid::new_v4().to_string()))
+            .expect("send launch");
+
+        let mut agent_id: Option<String> = None; // the resumable agentId (a...-...)
+        let mut agent_tool_use_id: Option<String> = None; // the launching Agent tool_use id
+        let mut sub_task_id: Option<String> = None; // the sub-agent's local_agent task_id
+        let mut wake_sent = false;
+        let mut wake_task_started_seen = false;
+        // Set once a POST-wake event re-flips the sub-agent task to a non-terminal state
+        // (a fresh `task_started`, or a `task_updated`/`task_progress` with a running-ish
+        // status). This is the fix-critical signal: does a woken agent re-enter "running"?
+        let mut wake_running_seen = false;
+        let mut wake_time: Option<Instant> = None;
+
+        let deadline = Instant::now() + Duration::from_secs(300);
+        while Instant::now() < deadline {
+            let msg = match tokio::time::timeout(Duration::from_secs(120), rx.recv()).await {
+                Ok(Some(m)) => m,
+                Ok(None) => { logln!("<stdout closed>"); break; }
+                Err(_) => { logln!("<recv timeout>"); break; }
+            };
+            match msg {
+                CliMessage::ControlRequest(v) => {
+                    // Auto-allow any permission prompt; error any other inbound request so
+                    // the CLI never hangs waiting on us.
+                    if let Some((rid, body)) = parse_inbound_control(&v) {
+                        match body {
+                            Ok(InboundControl::CanUseTool(req)) => {
+                                logln!("[perm] allow {} tool_use_id={}", req.tool_name, req.tool_use_id);
+                                let _ = transport.send_line(permission_allow_response(
+                                    &rid, &req.tool_use_id, req.input.clone(),
+                                ));
+                            }
+                            _ => {
+                                let _ = transport.send_line(control_error_response(&rid, "unsupported"));
+                            }
+                        }
+                    }
+                }
+                CliMessage::Assistant(a) => {
+                    let parent = a.parent_tool_use_id.as_deref();
+                    for (id, name, input) in tool_uses(&a.message) {
+                        logln!("[assistant tool_use] parent={:?} name={name} id={id} input={}",
+                            parent, serde_json::to_string(&input).unwrap_or_default());
+                        if (name == "Agent" || name == "Task") && agent_tool_use_id.is_none() {
+                            agent_tool_use_id = Some(id.clone());
+                        }
+                        if name == "SendMessage" {
+                            logln!("[wake] SendMessage tool_use id={id} input={}",
+                                serde_json::to_string(&input).unwrap_or_default());
+                        }
+                    }
+                }
+                CliMessage::User(u) => {
+                    for (id, text) in tool_results(&u.message) {
+                        let head: String = text.chars().take(240).collect();
+                        logln!("[tool_result] tool_use_id={id} text={:?}", head);
+                        // Parse the resumable agentId out of the Agent launch ack.
+                        if agent_id.is_none() {
+                            if let Some(m) = text.split("agentId:").nth(1) {
+                                let raw = m.trim();
+                                let id: String = raw
+                                    .chars()
+                                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                                    .collect();
+                                if !id.is_empty() {
+                                    logln!("[agentId] resolved => {id}");
+                                    agent_id = Some(id);
+                                }
+                            }
+                        }
+                    }
+                }
+                CliMessage::System(SystemMsg::TaskStarted(t)) => {
+                    logln!("[task_started] task_id={} tool_use_id={:?} task_type={:?} subagent_type={:?} description={:?}",
+                        t.task_id, t.tool_use_id, t.task_type, t.subagent_type, t.description);
+                    if t.task_type.as_deref() == Some("local_agent") {
+                        if !wake_sent {
+                            sub_task_id = Some(t.task_id.clone());
+                        } else {
+                            wake_task_started_seen = true;
+                            wake_running_seen = true;
+                            logln!("[WAKE task_started] >>> task_id={} tool_use_id={:?} (original Agent tool_use_id was {:?}) task_type={:?}",
+                                t.task_id, t.tool_use_id, agent_tool_use_id, t.task_type);
+                        }
+                    }
+                }
+                CliMessage::System(SystemMsg::TaskProgress(t)) => {
+                    logln!("[task_progress] task_id={} tool_use_id={:?} description={:?}",
+                        t.task_id, t.tool_use_id, t.description);
+                    if wake_sent && sub_task_id.as_deref() == Some(t.task_id.as_str()) {
+                        wake_running_seen = true;
+                        logln!("[WAKE task_progress] >>> woken agent is active (task_id={})", t.task_id);
+                    }
+                }
+                CliMessage::System(SystemMsg::TaskUpdated(t)) => {
+                    let status = t.patch.as_ref().and_then(|p| p.status.clone());
+                    logln!("[task_updated] task_id={} status={:?}", t.task_id, status);
+                    let running_ish = matches!(
+                        status.as_deref(),
+                        Some("running") | Some("in_progress") | Some("queued") | Some("active") | Some("started")
+                    );
+                    if wake_sent && running_ish && sub_task_id.as_deref() == Some(t.task_id.as_str()) {
+                        wake_running_seen = true;
+                        logln!("[WAKE task_updated running] >>> task_id={} status={:?}", t.task_id, status);
+                    }
+                }
+                CliMessage::System(SystemMsg::TaskNotification(t)) => {
+                    logln!("[task_notification] task_id={} tool_use_id={:?} status={:?} output_file={:?}",
+                        t.task_id, t.tool_use_id, t.status, t.output_file);
+                    // The sub-agent finished → wake it via SendMessage (once).
+                    let is_sub = sub_task_id.as_deref() == Some(t.task_id.as_str());
+                    if is_sub && !wake_sent {
+                        if let Some(aid) = agent_id.clone() {
+                            logln!("=== SUB-AGENT FINISHED; sending SendMessage wake to {aid} ===");
+                            let wake = format!(
+                                "Use the SendMessage tool to resume the background sub-agent you \
+                                 launched. Set `to` to exactly \"{aid}\", set `summary` to \"kiwi \
+                                 after sleep\", and set `message` to \"First run the bash command \
+                                 `sleep 8`, then reply with exactly the word KIWI.\". Do nothing else."
+                            );
+                            let _ = transport.send_line(
+                                transport::user_message(wake, &uuid::Uuid::new_v4().to_string()),
+                            );
+                            wake_sent = true;
+                            wake_time = Some(Instant::now());
+                        } else {
+                            logln!("!! sub-agent finished but no agentId parsed — cannot wake");
+                        }
+                    } else if wake_sent && is_sub {
+                        // A terminal notification AFTER the wake: the woken agent settled.
+                        // Only stop once we've observed whether it re-entered "running" (or
+                        // enough time passed that we can conclude it never did).
+                        logln!("=== post-wake task_notification (woken agent settled); wake_running_seen={wake_running_seen} ===");
+                        if wake_running_seen
+                            || wake_time.map_or(false, |w| w.elapsed() > Duration::from_secs(12))
+                        {
+                            break;
+                        }
+                    }
+                }
+                CliMessage::Result(_) => {
+                    logln!("[result] (turn ended)");
+                }
+                _ => {}
+            }
+        }
+
+        logln!("=== CAPTURE SUMMARY ===");
+        logln!("agent_tool_use_id (launch) = {:?}", agent_tool_use_id);
+        logln!("agent_id (resumable)       = {:?}", agent_id);
+        logln!("sub_task_id (1st run)      = {:?}", sub_task_id);
+        logln!("wake_sent                  = {wake_sent}");
+        logln!("wake_task_started_seen     = {wake_task_started_seen}  (fresh task_started on wake?)");
+        logln!("wake_running_seen          = {wake_running_seen}  (woken agent re-entered running?)");
+        logln!("log written to {log_path}");
+        transport.shutdown().await;
+    }
 }

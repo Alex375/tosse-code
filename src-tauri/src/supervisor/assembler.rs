@@ -435,6 +435,14 @@ impl Assembler {
     /// `"<phase>: <label>"`) and re-emit. Tolerates a tick for an unseen task.
     fn ingest_task_progress(&mut self, t: &TaskProgressMsg, out: &mut Vec<SessionEvent>) {
         let task = self.task_entry(&t.task_id, t.tool_use_id.as_deref());
+        // A progress tick on a COMPLETED sub-agent means a resumed agent came back to life
+        // (the wire never re-emits `task_started` on a `SendMessage` wake). This is the
+        // backstop for a resume we didn't observe as a local `SendMessage` tool_use — e.g.
+        // one issued from the phone via Remote Control; [`Self::resume_agent_via_send_message`]
+        // handles the local case eagerly. Only a tool-using woken agent emits progress,
+        // hence both signals. The helper resets stale roll-up (incl. `progress`), so set
+        // THIS tick's description AFTER it, or the fresh label would be wiped.
+        reactivate_completed_agent(task);
         if t.description.is_some() {
             task.progress = t.description.clone();
         }
@@ -511,6 +519,27 @@ impl Assembler {
             }
         }
         out.push(SessionEvent::Task(task.clone()));
+    }
+
+    /// A `SendMessage` tool_use whose `to` names an existing COMPLETED background sub-agent
+    /// RESUMES it. For a sub-agent the wire's `to` IS the agentId, which IS the task_id — so
+    /// a direct `background_tasks` lookup is exact. The resume re-activates the agent under
+    /// the SAME task_id and NEVER re-emits `task_started`, so we flip it back to Running via
+    /// [`reactivate_completed_agent`] (which keeps the ORIGINAL `Agent` `tool_use_id` — still
+    /// in the front's `bgAgentIds` — and resets the prior run's roll-up). A `to` that is a
+    /// live-teammate NAME or the literal `"main"` (neither an agentId) simply won't match any
+    /// task_id and is a safe no-op; likewise a `to` that matches a task of another kind, or a
+    /// task that is Stopped/Failed rather than a natural finish, is left untouched by the
+    /// helper's scoping. Idempotent: an already-Running task is not re-emitted.
+    fn resume_agent_via_send_message(&mut self, input: &Value, out: &mut Vec<SessionEvent>) {
+        let Some(target) = input.get("to").and_then(Value::as_str) else {
+            return;
+        };
+        if let Some(task) = self.background_tasks.get_mut(target) {
+            if reactivate_completed_agent(task) {
+                out.push(SessionEvent::Task(task.clone()));
+            }
+        }
     }
 
     /// Get (or lazily create) the tracked task for `task_id`. A `task_updated` /
@@ -726,6 +755,11 @@ impl Assembler {
         for b in &blocks {
             if let NormalizedBlock::ToolUse { id, name, input } = b {
                 self.record_tool(id, name, Some(input), out);
+                // A `SendMessage` that targets an existing background agent RESUMES it:
+                // flip that agent's task back to Running eagerly (before any progress tick).
+                if name == "SendMessage" {
+                    self.resume_agent_via_send_message(input, out);
+                }
             }
         }
         out.push(SessionEvent::Item(ConversationItem::AssistantMessage {
@@ -977,6 +1011,36 @@ fn classify_task(task_type: Option<&str>, tool_name: Option<&str>) -> Background
         Some("local_agent") => BackgroundTaskKind::Agent,
         _ => BackgroundTaskKind::Other,
     }
+}
+
+/// Re-activate a background sub-agent task we'd already marked terminal. A detached
+/// sub-agent RESUMED via `SendMessage` re-uses its task_id (== its agentId) and NEVER
+/// re-emits `task_started` (captured by the `live_capture_subagent_wake` probe), so the
+/// socle has to flip it back to Running itself — the running-gated AgentBar / FlightDeck
+/// would otherwise never re-surface a woken agent.
+///
+/// SCOPED to exactly what the capture proves — a naturally-FINISHED (`Completed`) sub-agent
+/// (`kind == Agent`): we deliberately do NOT revive a `Stopped` task (a user's Stop must
+/// win, absent a real new `task_started`) nor a `Failed` one, and never touch a
+/// Bash/Monitor/Workflow task (whose ids can't be a `SendMessage` target anyway). This
+/// keeps a Stop from silently un-doing itself and avoids resurrecting a task the CLI won't
+/// actually re-run (which, lacking a fresh terminal event, would linger Running until the
+/// whole session ends).
+///
+/// On the flip it also RESETS the previous run's usage roll-up (tokens / tool_uses /
+/// duration_ms / summary / progress) so the re-running row shows live-blank stats, not the
+/// last run's numbers. Returns whether it flipped (so the caller re-emits the task).
+fn reactivate_completed_agent(task: &mut BackgroundTask) -> bool {
+    if task.kind != BackgroundTaskKind::Agent || task.status != BackgroundTaskStatus::Completed {
+        return false;
+    }
+    task.status = BackgroundTaskStatus::Running;
+    task.tokens = None;
+    task.tool_uses = None;
+    task.duration_ms = None;
+    task.summary = None;
+    task.progress = None;
+    true
 }
 
 /// Map a wire status string onto our coarse [`BackgroundTaskStatus`]. Anything we do
@@ -1985,5 +2049,202 @@ mod tests {
         }))
         .unwrap();
         assert!(asm.ingest(&m).is_empty(), "a meta user line must be dropped");
+    }
+
+    // --- Shared helpers for the SendMessage-wake tests -----------------------------------
+    /// Ingest a main-loop `SendMessage{to}` tool_use and return any `Task` events it emits.
+    fn ingest_send(asm: &mut Assembler, to: &str) -> Vec<BackgroundTask> {
+        let m: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "assistant",
+            "message": {"id": "m", "role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_s", "name": "SendMessage",
+                 "input": {"to": to, "message": "go", "summary": "go"}}
+            ]},
+            "session_id": "s", "uuid": "u"
+        }))
+        .unwrap();
+        asm.ingest(&m)
+            .into_iter()
+            .filter_map(|e| match e {
+                SessionEvent::Task(t) => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+    /// Seed a COMPLETED background task carrying a usage roll-up (so a later reactivation can
+    /// be checked to reset it). `task_type` = `local_agent` → kind Agent; `local_bash` → Bash.
+    fn seed_completed(asm: &mut Assembler, task_id: &str, tool_use_id: &str, task_type: &str) {
+        let started: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "task_started", "task_id": task_id,
+            "tool_use_id": tool_use_id, "description": "x", "task_type": task_type
+        }))
+        .unwrap();
+        asm.ingest(&started);
+        let done: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "task_notification", "task_id": task_id,
+            "tool_use_id": tool_use_id, "status": "completed",
+            "usage": {"total_tokens": 999, "tool_uses": 2, "duration_ms": 500}
+        }))
+        .unwrap();
+        asm.ingest(&done);
+    }
+
+    /// REGRESSION (task f267b721): a detached background sub-agent RESUMED via `SendMessage`
+    /// must re-surface as Running. The wire re-uses the agent's task_id (== its agentId) and
+    /// NEVER re-emits `task_started`, so the socle flips the tracked task back to Running off
+    /// the `SendMessage{to}` tool_use. Drives the FULL captured wire fixture — including the
+    /// post-wake `task_notification` whose `tool_use_id` is the SendMessage id (line 11), the
+    /// one place the identity the AgentBar keys on could be clobbered.
+    #[test]
+    fn send_message_wake_reactivates_a_completed_background_agent() {
+        const WAKE: &str = include_str!("fixtures/capture_subagent_wake.jsonl");
+        const TASK: &str = "a5704a9056e4e1a0c"; // task_id == agentId (stable across the wake)
+        let lines: Vec<&str> = WAKE.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 11, "fixture shape: launch (1..=6) + wake (7..=11)");
+
+        let mut asm = Assembler::new();
+        let mut last: Option<BackgroundTask> = None;
+        let mut after_first_completion: Option<BackgroundTask> = None;
+        let mut after_wake: Option<BackgroundTask> = None;
+        for (i, line) in lines.iter().enumerate() {
+            let msg: CliMessage = serde_json::from_str(line).unwrap();
+            for ev in asm.ingest(&msg) {
+                if let SessionEvent::Task(t) = ev {
+                    if t.task_id == TASK {
+                        last = Some(t);
+                    }
+                }
+            }
+            match i {
+                5 => after_first_completion = last.clone(), // line 6: first task_notification
+                6 => after_wake = last.clone(),             // line 7: the SendMessage wake
+                _ => {}
+            }
+        }
+
+        // First run finished: Completed, Agent, with its usage roll-up folded in.
+        let done = after_first_completion.expect("the launched agent should have a tracked task");
+        assert_eq!(done.status, BackgroundTaskStatus::Completed, "the agent finished its first run");
+        assert_eq!(done.kind, BackgroundTaskKind::Agent);
+        assert_eq!(done.tool_use_id.as_deref(), Some("toolu_agent"));
+        assert_eq!(done.tokens, Some(1234));
+        assert_eq!(done.tool_uses, Some(1));
+
+        // The SendMessage wake flips it back to Running, KEEPS the original Agent tool_use_id
+        // (the AgentBar keys on it via bgAgentIds), and RESETS the prior run's stale roll-up.
+        let woke = after_wake.expect("the SendMessage wake must re-emit the agent's task");
+        assert_eq!(woke.status, BackgroundTaskStatus::Running, "the resumed agent is Running again");
+        assert_eq!(woke.tool_use_id.as_deref(), Some("toolu_agent"));
+        assert_eq!(woke.kind, BackgroundTaskKind::Agent);
+        assert_eq!(woke.tokens, None, "the prior run's token count must not show on the running row");
+        assert_eq!(woke.tool_uses, None);
+        assert_eq!(woke.duration_ms, None);
+
+        // After the full wake — incl. the terminal `task_notification` whose tool_use_id is the
+        // SendMessage id (fixture line 11) — the task settles Completed but its identity must be
+        // UNCLOBBERED (still the Agent tool_use_id), now carrying run #2's roll-up.
+        let end = last.expect("a final snapshot");
+        assert_eq!(end.status, BackgroundTaskStatus::Completed);
+        assert_eq!(
+            end.tool_use_id.as_deref(),
+            Some("toolu_agent"),
+            "the SendMessage tool_use_id must NOT overwrite the identity the AgentBar keys on"
+        );
+        assert_eq!(end.kind, BackgroundTaskKind::Agent);
+        assert_eq!(end.tokens, Some(2345), "the second run's usage roll-up");
+        assert_eq!(end.duration_ms, Some(8100));
+    }
+
+    /// The progress-tick backstop: a `task_progress` on a COMPLETED sub-agent flips it back to
+    /// Running AND resets the prior run's stale roll-up, while keeping the fresh tick label.
+    /// Covers a resume we did NOT observe as a local `SendMessage` tool_use (e.g. one issued
+    /// from the phone via Remote Control).
+    #[test]
+    fn task_progress_reactivates_a_completed_agent_and_resets_stale_stats() {
+        let mut asm = Assembler::new();
+        seed_completed(&mut asm, "t1", "toolu_agent", "local_agent"); // Completed Agent w/ usage
+        let progress: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "task_progress", "task_id": "t1",
+            "tool_use_id": "toolu_send", "description": "Running again"
+        }))
+        .unwrap();
+        let events = asm.ingest(&progress);
+        let t = events
+            .into_iter()
+            .find_map(|e| match e {
+                SessionEvent::Task(t) => Some(t),
+                _ => None,
+            })
+            .expect("the progress tick re-emits the task");
+        assert_eq!(t.status, BackgroundTaskStatus::Running, "a completed agent came back to life");
+        assert_eq!(t.progress.as_deref(), Some("Running again"), "the fresh tick label survives the reset");
+        assert_eq!(t.tokens, None, "the prior run's roll-up is cleared on reactivation");
+        assert_eq!(t.tool_uses, None);
+        assert_eq!(t.tool_use_id.as_deref(), Some("toolu_agent"), "identity preserved");
+    }
+
+    /// SCOPING (hardening from the adversarial review): reactivation is NOT unconditional. A
+    /// STOPPED agent (the user hit Stop → the CLI settles it `stopped`) must NOT be resurrected
+    /// — neither by a trailing `task_progress` tick nor by a later `SendMessage` to it. Absent a
+    /// real new `task_started`, the user's Stop wins.
+    #[test]
+    fn a_stopped_agent_is_not_resurrected() {
+        let mut asm = Assembler::new();
+        let started: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "task_started", "task_id": "t1",
+            "tool_use_id": "toolu_agent", "description": "go", "subagent_type": "Explore",
+            "task_type": "local_agent"
+        }))
+        .unwrap();
+        asm.ingest(&started);
+        let stopped: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "task_updated", "task_id": "t1",
+            "patch": {"status": "stopped"}
+        }))
+        .unwrap();
+        asm.ingest(&stopped);
+
+        // A later SendMessage to it emits nothing (the helper's scoping refuses a non-Completed
+        // task)…
+        assert!(
+            ingest_send(&mut asm, "t1").is_empty(),
+            "SendMessage must not resurrect a stopped agent"
+        );
+        // …and a trailing progress tick still shows it Stopped, proving the store wasn't flipped.
+        let progress: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "task_progress", "task_id": "t1", "description": "late tick"
+        }))
+        .unwrap();
+        let t = asm
+            .ingest(&progress)
+            .into_iter()
+            .find_map(|e| match e {
+                SessionEvent::Task(t) => Some(t),
+                _ => None,
+            })
+            .expect("progress re-emits the task");
+        assert_eq!(t.status, BackgroundTaskStatus::Stopped, "a stopped agent stays stopped");
+    }
+
+    /// SELECTIVITY (hardening from the adversarial review): against a POPULATED store,
+    /// `resume_agent_via_send_message` flips ONLY a matching Completed AGENT. A teammate NAME
+    /// matches no task_id; a `to` matching a non-agent (Bash) task is scoped out by kind.
+    #[test]
+    fn send_message_resume_is_selective() {
+        let mut asm = Assembler::new();
+        seed_completed(&mut asm, "agentX", "toolu_agent", "local_agent");
+        seed_completed(&mut asm, "bashY", "toolu_bash", "local_bash");
+
+        // A teammate NAME / "main" matches no task_id → no flip at all.
+        assert!(ingest_send(&mut asm, "researcher").is_empty(), "a teammate name matches no task");
+        assert!(ingest_send(&mut asm, "main").is_empty(), "\"main\" matches no task");
+        // A `to` matching a non-agent (Bash) task → scoped out by the kind guard → no flip.
+        assert!(ingest_send(&mut asm, "bashY").is_empty(), "a Bash task must not be resurrected");
+        // A `to` matching the completed agent → flips exactly that one to Running.
+        let flipped = ingest_send(&mut asm, "agentX");
+        assert_eq!(flipped.len(), 1, "exactly the matching agent flips");
+        assert_eq!(flipped[0].task_id, "agentX");
+        assert_eq!(flipped[0].status, BackgroundTaskStatus::Running);
+        assert_eq!(flipped[0].kind, BackgroundTaskKind::Agent);
     }
 }
