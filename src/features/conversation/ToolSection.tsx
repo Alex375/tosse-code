@@ -16,6 +16,7 @@ import { Ico } from "../../ui/kit";
 import { DiffView } from "./DiffView";
 import { MentionPathChip } from "./FileMention";
 import { QuestionnaireSummary } from "./QuestionnaireAsk";
+import { StreamMarkdown } from "./StreamMarkdown";
 import { ToolResultBody } from "./ToolResultBody";
 import { toolMeta } from "./toolMeta";
 import { WebToolDetail } from "./WebSources";
@@ -49,10 +50,17 @@ export function resultContentText(content: JsonValue): string | null {
   return null;
 }
 
-/** Does this tool have an expandable detail body (diff / output / questionnaire)? */
+/** Does this tool have an expandable detail body (diff / output / questionnaire / plan)? */
 function hasDetailFor(name: string, input: JsonValue, result: StepResult | undefined): boolean {
   const kind = toolMeta(name, input).kind;
-  return kind === "edit" || kind === "write" || kind === "bash" || name === "AskUserQuestion" || !!result;
+  return (
+    kind === "edit" ||
+    kind === "write" ||
+    kind === "bash" ||
+    name === "AskUserQuestion" ||
+    name === "ExitPlanMode" ||
+    !!result
+  );
 }
 
 /** The expanded detail of a step: a diff (Edit/Write), the command + output (Bash),
@@ -69,6 +77,10 @@ export function ToolDetail({
   const meta = toolMeta(name, input);
 
   if (name === "AskUserQuestion") return <QuestionnaireSummary input={input} result={result?.content} />;
+
+  // The proposed plan (rare in a settled/sub-agent transcript, where the rich <PlanCard> is not
+  // used): render the plan markdown so an expanded row isn't empty.
+  if (name === "ExitPlanMode") return <StreamMarkdown text={field(input, "plan") ?? ""} />;
 
   if (meta.kind === "edit") {
     if (name === "MultiEdit")
