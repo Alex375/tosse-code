@@ -1188,6 +1188,7 @@ mod tests {
     use super::*;
 
     const CAPTURE: &str = include_str!("fixtures/capture_text.jsonl");
+    const CAPTURE_SKILL: &str = include_str!("fixtures/capture_skill.jsonl");
 
     #[test]
     fn assembles_fixture_into_normalized_events() {
@@ -1232,6 +1233,40 @@ mod tests {
         );
         assert_eq!(turn, Some(("success".to_string(), false)));
         assert_eq!(ended_idle, Some(false), "session should be idle after the result");
+    }
+
+    /// A model-invoked skill (land → /done) fixture: the `Skill` tool_use IS surfaced (the
+    /// front renders it as a command chip), while the SKILL.md body — a following `user` line
+    /// with `isMeta:true` — is dropped, so it never shows as a fake user bubble. The tool_result
+    /// ack surfaces as a ToolResult (attached to the Skill card), NOT a UserMessage.
+    #[test]
+    fn skill_invocation_fixture_surfaces_tool_use_not_body() {
+        let mut asm = Assembler::new();
+        let mut saw_skill_tool_use = false;
+        let mut user_messages = 0;
+        for line in CAPTURE_SKILL.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let msg: CliMessage = serde_json::from_str(line).unwrap();
+            for ev in asm.ingest(&msg) {
+                match ev {
+                    SessionEvent::Item(ConversationItem::AssistantMessage { blocks, .. }) => {
+                        saw_skill_tool_use |= blocks
+                            .iter()
+                            .any(|b| matches!(b, NormalizedBlock::ToolUse { name, .. } if name == "Skill"));
+                    }
+                    SessionEvent::Item(ConversationItem::UserMessage { .. }) => user_messages += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_skill_tool_use, "the Skill tool_use must be surfaced (rendered as a chip)");
+        assert_eq!(
+            user_messages, 0,
+            "neither the tool_result ack nor the isMeta SKILL.md body may surface as a user bubble"
+        );
     }
 
     #[test]
@@ -2049,6 +2084,31 @@ mod tests {
         }))
         .unwrap();
         assert!(asm.ingest(&m).is_empty(), "a meta user line must be dropped");
+    }
+
+    /// REGRESSION (task 2247ebd6): a MODEL-invoked skill (the `Skill` tool — e.g. land → /done)
+    /// expands its SKILL.md body onto the wire as a `user` line carrying `isMeta:true` (verified
+    /// on-disk on every model-invoked skill: a `tool_result` ack then a text-block body opening
+    /// on "Base directory for this skill:"). It MUST be dropped like any meta line — never
+    /// surfaced as a fake user bubble. The visible trace is the `Skill` tool_use itself (rendered
+    /// as a command chip by the front), so this redundant body stays hidden.
+    #[test]
+    fn skill_body_user_line_is_dropped() {
+        let mut asm = seeded();
+        let m: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                {"type": "text",
+                 "text": "Base directory for this skill: /x/.claude/skills/done\n\n# Done — Terminer une tâche\n\n…whole SKILL.md body…"}
+            ]},
+            "isMeta": true,
+            "uuid": "u-skill-body"
+        }))
+        .unwrap();
+        assert!(
+            asm.ingest(&m).is_empty(),
+            "a model-invoked skill's isMeta body must be dropped, never surfaced as a user bubble"
+        );
     }
 
     // --- Shared helpers for the SendMessage-wake tests -----------------------------------

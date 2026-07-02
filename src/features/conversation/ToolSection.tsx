@@ -16,6 +16,8 @@ import { Ico } from "../../ui/kit";
 import { DiffView } from "./DiffView";
 import { MentionPathChip } from "./FileMention";
 import { QuestionnaireSummary } from "./QuestionnaireAsk";
+import { resultContentText } from "./resultText";
+import { StreamMarkdown } from "./StreamMarkdown";
 import { ToolResultBody } from "./ToolResultBody";
 import { toolMeta } from "./toolMeta";
 import { WebToolDetail } from "./WebSources";
@@ -35,24 +37,21 @@ export interface StepResult {
   isError: boolean;
 }
 
-/** Flatten a tool_result content to text, for the line-count summaries. */
-export function resultContentText(content: JsonValue): string | null {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const b of content) {
-      if (b && typeof b === "object" && !Array.isArray(b) && typeof (b as Record<string, JsonValue>).text === "string")
-        parts.push((b as Record<string, JsonValue>).text as string);
-    }
-    return parts.length ? parts.join("\n") : null;
-  }
-  return null;
-}
+// Re-exported for callers that historically imported it from here (the implementation now
+// lives in the framework-free ./resultText so planStatus can share it without pulling React).
+export { resultContentText };
 
-/** Does this tool have an expandable detail body (diff / output / questionnaire)? */
+/** Does this tool have an expandable detail body (diff / output / questionnaire / plan)? */
 function hasDetailFor(name: string, input: JsonValue, result: StepResult | undefined): boolean {
   const kind = toolMeta(name, input).kind;
-  return kind === "edit" || kind === "write" || kind === "bash" || name === "AskUserQuestion" || !!result;
+  return (
+    kind === "edit" ||
+    kind === "write" ||
+    kind === "bash" ||
+    name === "AskUserQuestion" ||
+    name === "ExitPlanMode" ||
+    !!result
+  );
 }
 
 /** The expanded detail of a step: a diff (Edit/Write), the command + output (Bash),
@@ -69,6 +68,10 @@ export function ToolDetail({
   const meta = toolMeta(name, input);
 
   if (name === "AskUserQuestion") return <QuestionnaireSummary input={input} result={result?.content} />;
+
+  // The proposed plan (rare in a settled/sub-agent transcript, where the rich <PlanCard> is not
+  // used): render the plan markdown so an expanded row isn't empty.
+  if (name === "ExitPlanMode") return <StreamMarkdown text={field(input, "plan") ?? ""} />;
 
   if (meta.kind === "edit") {
     if (name === "MultiEdit")

@@ -19,6 +19,7 @@
 // existing conversation — reading the transcript is what fills it back in.
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
+import { uid } from "../util/id";
 import { commands } from "../ipc/client";
 import type { ConversationItem, ConversationRecord, DiskConversation, PermissionMode, RepoRecord } from "../ipc/client";
 import type { ReminderKind } from "../agent/status";
@@ -32,6 +33,13 @@ import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./con
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
 import { clearWorkFold, clearAllWorkFold } from "./workFold";
+import {
+  clearPlanAnnotations,
+  clearAllPlanAnnotations,
+  snapshotPlanAnnotations,
+  restorePlanAnnotations,
+  type PlanConvSnapshot,
+} from "./planAnnotations";
 import { clearSidebarFold, clearAllSidebarFold } from "./sidebarFold";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useGitViewStore } from "../features/git/gitViewStore";
@@ -134,11 +142,6 @@ export function repoName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-function uid(): string {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  return `id-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-}
-
 function deriveName(text: string): string {
   const t = text.trim().replace(/\s+/g, " ");
   if (!t) return DEFAULT_CONV_NAME;
@@ -183,6 +186,10 @@ const lastAppliedSeq = new Map<string, number>();
 // an accidental delete is undoable within the session, not across restarts. Cleared
 // on wipe. Drained by ⌘Z via [undoRemoveConversation].
 const removedConversations: Conversation[] = [];
+// Parallel to the undo stack: a deleted conversation's plan annotations + notes (user-authored
+// content), keyed by id so ⌘Z can re-seed them. Without this, clearPlanAnnotations on delete
+// would silently lose the comments even though the row itself is restorable.
+const removedPlanAnnotations = new Map<string, PlanConvSnapshot | null>();
 
 // ---- Persistence adapter ----------------------------------------------------
 // The ONE place that knows the SQL-facing DTO shape (snake_case `*Record`).
@@ -394,6 +401,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       clearTodoBarOpen(c.id);
       clearComposerDraft(c.id);
       clearWorkFold(c.id);
+      clearPlanAnnotations(c.id);
       useGitViewStore.getState().clear(c.id);
       useRemoteControlStore.getState().clear(c.id);
       useLastMessageSummaryStore.getState().clear(c.id);
@@ -434,7 +442,12 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // Push the pre-teardown snapshot onto the undo stack BEFORE we mutate anything,
     // so ⌘Z (undoRemoveConversation) can restore the row exactly as it was. The delete
     // is friction-free (no confirm dialog), so this is the safety net.
-    if (conv) removedConversations.push(conv);
+    if (conv) {
+      removedConversations.push(conv);
+      // Capture the plan annotations/notes BEFORE clearing them below, so undo can restore
+      // this user content (the row is restorable but the comments would otherwise be gone).
+      removedPlanAnnotations.set(id, snapshotPlanAnnotations(id));
+    }
     set((s) => {
       const rest = s.conversations.filter((c) => c.id !== id);
       return {
@@ -456,6 +469,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     clearTodoBarOpen(id);
     clearComposerDraft(id);
     clearWorkFold(id);
+    clearPlanAnnotations(id);
     autoTitlePending.delete(id);
     titleContext.delete(id);
     titleGenCount.delete(id);
@@ -492,6 +506,9 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // re-spawns it via --resume). addConversation re-selects + re-persists the row.
     historyLoaded.delete(snapshot.id);
     get().addConversation({ ...snapshot, handle: null });
+    // Re-seed the plan annotations/notes captured at delete time (user content).
+    restorePlanAnnotations(snapshot.id, removedPlanAnnotations.get(snapshot.id) ?? null);
+    removedPlanAnnotations.delete(snapshot.id);
     return true;
   },
 
@@ -1180,12 +1197,14 @@ export async function wipeAllData(): Promise<void> {
   clearAllTodoBarOpen();
   clearAllComposerDrafts();
   clearAllWorkFold();
+  clearAllPlanAnnotations();
   clearAllSidebarFold();
   autoTitlePending.clear();
   titleContext.clear();
   titleGenCount.clear();
   lastAppliedSeq.clear();
   removedConversations.length = 0; // nothing to "undo" back into a wiped slate
+  removedPlanAnnotations.clear();
   clearMentionCache();
   useConversationsStore.setState({ repos: [], conversations: [], activeId: null });
   useConversationStore.setState({ sessions: {} });

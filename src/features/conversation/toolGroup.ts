@@ -83,6 +83,14 @@ export type Segment =
   // A `Workflow` renders as its OWN persistent inline card (live overview → post-run report),
   // like a sub-agent: dedicated segment, breaks the run, never hidden.
   | { kind: "workflow"; key: string; step: ToolStep }
+  // A `Skill` (a slash-command the MODEL invoked) renders as a dedicated inline command chip,
+  // like a user-typed `/foo`: its own segment, breaks the run, never grouped into a step row.
+  | { kind: "skill"; key: string; step: ToolStep }
+  // `ExitPlanMode` — the proposed plan — renders as its OWN prominent inline card (markdown
+  // plan + accept/reject decision + annotations). Like a sub-agent it gets a dedicated
+  // segment that breaks the surrounding run; it is a DECISION artifact, never intermediate
+  // work, so it is also peeled out of the clean-output work fold (see splitFinalMessage).
+  | { kind: "plan"; key: string; step: ToolStep }
   // An in-band marker (control-change bar / message injected mid-work) shown inline in the
   // flow. NOT work: it doesn't count as a step and never breaks the clean-output work fold —
   // it just renders at its chronological place (see coalesceCleanRounds / interleaveMarkers).
@@ -159,6 +167,19 @@ export function groupBlocks(
         out.push({ kind: "workflow", key: `w-${i}`, step: { id: b.id, name: b.name, input: b.input } });
         return;
       }
+      // A Skill (model-invoked slash-command) is its own inline command chip — breaks the run
+      // so the invocation stands out instead of hiding in an "Exécuté N étapes" step row.
+      if (b.name === "Skill") {
+        run = null;
+        out.push({ kind: "skill", key: `sk-${i}`, step: { id: b.id, name: b.name, input: b.input } });
+        return;
+      }
+      // ExitPlanMode is the proposed plan — its own prominent inline card, breaks the run.
+      if (b.name === "ExitPlanMode") {
+        run = null;
+        out.push({ kind: "plan", key: `p-${i}`, step: { id: b.id, name: b.name, input: b.input } });
+        return;
+      }
       if (!run) {
         run = [];
         out.push({ kind: "run", key: `run-${i}`, steps: run });
@@ -205,8 +226,21 @@ export function splitFinalMessage(segments: Segment[]): {
   // marker stays in clear next to the message instead of emptying `final` and defeating the fold
   // (which would render the whole settled round unfolded). A marker separated from the final text
   // by a run still stops the scan at that run — only intermediate work folds.
+  //
+  // A trailing `plan` (ExitPlanMode) is peeled too: the proposed plan is a decision artifact, not
+  // intermediate work — it must stay in clear even under clean output, especially while it awaits
+  // approval (the agent pauses right after it). A plan buried mid-response (e.g. a resumed history
+  // where the approved plan is followed by more work in the same group) is NOT peeled here — the
+  // scan stops at the trailing run — but it is still shown in clear: CleanBlocks splits the fold
+  // at each plan (see renderFoldedWork), so a buried plan is never hidden inside the work block.
   let i = segments.length;
-  while (i > 0 && (segments[i - 1].kind === "text" || segments[i - 1].kind === "marker")) i--;
+  while (
+    i > 0 &&
+    (segments[i - 1].kind === "text" ||
+      segments[i - 1].kind === "marker" ||
+      segments[i - 1].kind === "plan")
+  )
+    i--;
   return { work: segments.slice(0, i), final: segments.slice(i) };
 }
 
@@ -220,6 +254,10 @@ export type WorkAtom =
   | { kind: "step"; key: string; step: ToolStep }
   | { kind: "agent"; key: string; step: ToolStep }
   | { kind: "workflow"; key: string; step: ToolStep }
+  // A skill chip: a non-step atom (like text/thinking) — it folds with the surrounding work
+  // but never counts as a step nor holds the live window open (its ack settles instantly).
+  | { kind: "skill"; key: string; step: ToolStep }
+  | { kind: "plan"; key: string; step: ToolStep }
   | { kind: "thinking"; key: string; text: string }
   | { kind: "text"; key: string; text: string }
   // An in-band marker: a non-step atom (like text/thinking) — it folds with the surrounding
@@ -236,6 +274,10 @@ export function flattenWork(segs: Segment[]): WorkAtom[] {
       out.push({ kind: "agent", key: seg.key, step: seg.step });
     } else if (seg.kind === "workflow") {
       out.push({ kind: "workflow", key: seg.key, step: seg.step });
+    } else if (seg.kind === "skill") {
+      out.push({ kind: "skill", key: seg.key, step: seg.step });
+    } else if (seg.kind === "plan") {
+      out.push({ kind: "plan", key: seg.key, step: seg.step });
     } else if (seg.kind === "thinking") {
       out.push({ kind: "thinking", key: seg.key, text: seg.text });
     } else if (seg.kind === "marker") {
@@ -266,6 +308,8 @@ export function atomsToSegments(atoms: WorkAtom[], keyPrefix: string): Segment[]
     run = null;
     if (a.kind === "agent") out.push({ kind: "agent", key: a.key, step: a.step });
     else if (a.kind === "workflow") out.push({ kind: "workflow", key: a.key, step: a.step });
+    else if (a.kind === "skill") out.push({ kind: "skill", key: a.key, step: a.step });
+    else if (a.kind === "plan") out.push({ kind: "plan", key: a.key, step: a.step });
     else if (a.kind === "thinking") out.push({ kind: "thinking", key: a.key, text: a.text });
     else if (a.kind === "marker")
       out.push({ kind: "marker", key: a.key, markerKind: a.markerKind, id: a.id });

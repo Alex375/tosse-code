@@ -32,6 +32,7 @@ import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/sub
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
 import { QuestionnaireAsk } from "./QuestionnaireAsk";
+import { PlanCard } from "./PlanCard";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { SubAgentTranscript } from "./SubAgentTranscript";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -52,7 +53,7 @@ import {
 } from "./toolGroup";
 import { useEffectiveCleanOutput } from "../../store/display";
 import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
-import { UserText } from "./userText";
+import { SkillChip, UserText } from "./userText";
 import { parseSpecialMessage } from "./specialMessage";
 import { SpecialMessageCard } from "./SpecialMessageCard";
 import { useShallow } from "zustand/react/shallow";
@@ -537,6 +538,20 @@ function renderSegments(
           input={seg.step.input}
         />
       );
+    if (seg.kind === "skill")
+      // A model-invoked slash-command renders as a dedicated command chip (never a raw tool row).
+      return <SkillChip key={seg.key} input={seg.step.input} />;
+    if (seg.kind === "plan")
+      // A proposed plan (ExitPlanMode) renders as its own prominent card: the plan markdown,
+      // its accept/reject decision (hosted here, not in the bottom AskTurn), and annotations.
+      return (
+        <PlanCard
+          key={seg.key}
+          session={session}
+          toolUseId={seg.step.id}
+          input={seg.step.input}
+        />
+      );
     // A `run` of regular tools. The trailing run of the live turn renders EXPANDED so its
     // steps appear live (spinner → result), then collapses to its header on settle. Past
     // / non-trailing runs render collapsed. `active` gates the spinner so a resultless
@@ -556,6 +571,52 @@ function renderSegments(
 /** The live sliding window: how many trailing steps stay visible (current activity) before
  *  the rest fold into the block. */
 const LIVE_WINDOW = 3;
+
+/** Render a clean-output round's folded WORK. Normally one collapsible <ClaudeWorkBlock>. But a
+ *  `plan` (ExitPlanMode) is a DECISION artifact that must never hide inside the fold — even when
+ *  it's buried mid-round (e.g. a resumed history where an approved plan is followed by more work
+ *  in the same group, so splitFinalMessage can't peel it into `final`). When the fold holds a
+ *  plan, split it at each plan: every contiguous work run folds into its own block and each plan
+ *  renders in clear between them, preserving chronology. The common (no-plan) case is byte-for-byte
+ *  unchanged and keeps the round's single foldKey, so its remembered open/collapsed state stands. */
+function renderFoldedWork(session: string, folded: Segment[], roundKey: string): ReactNode {
+  if (!folded.some((s) => s.kind === "plan")) {
+    return (
+      <ClaudeWorkBlock count={countWorkSteps(folded)} foldConv={session} foldKey={roundKey}>
+        {renderSegments(session, folded, false, -1)}
+      </ClaudeWorkBlock>
+    );
+  }
+  const out: ReactNode[] = [];
+  let chunk: Segment[] = [];
+  let part = 0;
+  const flush = () => {
+    if (chunk.length === 0) return;
+    const c = chunk;
+    const idx = part++;
+    out.push(
+      <ClaudeWorkBlock
+        key={`fold-${idx}`}
+        count={countWorkSteps(c)}
+        foldConv={session}
+        foldKey={`${roundKey}#${idx}`}
+      >
+        {renderSegments(session, c, false, -1)}
+      </ClaudeWorkBlock>,
+    );
+    chunk = [];
+  };
+  for (const seg of folded) {
+    if (seg.kind === "plan") {
+      flush();
+      out.push(...renderSegments(session, [seg], false, -1));
+    } else {
+      chunk.push(seg);
+    }
+  }
+  flush();
+  return out;
+}
 
 /**
  * The clean-output body of one assistant response: the fold + the trailing region + the final
@@ -637,11 +698,7 @@ function CleanBlocks({
 
   return (
     <>
-      {folded.length > 0 ? (
-        <ClaudeWorkBlock count={countWorkSteps(folded)} foldConv={session} foldKey={roundKey}>
-          {renderSegments(session, folded, false, -1)}
-        </ClaudeWorkBlock>
-      ) : null}
+      {folded.length > 0 ? renderFoldedWork(session, folded, roundKey) : null}
       {visible.length > 0 ? renderSegments(session, visible, true, liveIdx) : null}
       {final.length > 0 ? renderSegments(session, final, false, -1) : null}
     </>
@@ -907,9 +964,15 @@ export function ConductorThread({
                 return <TurnResultRow key={item.id} session={session} resultId={item.id} />;
               return null;
             })}
-            {pending.map((req) => (
-              <AskTurn key={req.request_id} session={session} request={req} />
-            ))}
+            {pending
+              // ExitPlanMode's approval is hosted ON its plan card (see PlanCard) — which
+              // finds this pending request by tool_use_id — so it must NOT also appear as a
+              // generic yes/no AskTurn at the bottom. A pending plan is always the trailing
+              // block (the agent pauses right after proposing it), so its card is on screen.
+              .filter((req) => req.tool_name !== "ExitPlanMode")
+              .map((req) => (
+                <AskTurn key={req.request_id} session={session} request={req} />
+              ))}
             {busy && !awaiting && <WorkingIndicator session={session} />}
           </>
         )}

@@ -84,6 +84,16 @@ describe("groupBlocks", () => {
     if (segs[1].kind === "agent") expect(segs[1].step.id).toBe("ag");
   });
 
+  it("renders a model-invoked Skill as its own segment, breaking the run", () => {
+    const segs = groupBlocks([
+      tool("a", "Read"),
+      tool("sk", "Skill", { skill: "tosse-workflow:done" }),
+      tool("b", "Read"),
+    ]);
+    expect(segs.map((s) => s.kind)).toEqual(["run", "skill", "run"]);
+    if (segs[1].kind === "skill") expect(segs[1].step.id).toBe("sk");
+  });
+
   it("hides a detached (background) sub-agent entirely", () => {
     const segs = groupBlocks([tool("ag", "Agent", { run_in_background: true })]);
     expect(segs).toEqual([]);
@@ -156,6 +166,53 @@ describe("groupBlocks — Workflow", () => {
     expect(segs.map((s) => s.kind)).toEqual(["run", "workflow", "run"]);
     const wf = segs[1];
     if (wf.kind === "workflow") expect(wf.step.id).toBe("w");
+  });
+});
+
+describe("groupBlocks — ExitPlanMode (proposed plan)", () => {
+  it("emits a dedicated `plan` segment that breaks the surrounding run", () => {
+    const segs = groupBlocks([
+      tool("r", "Read", { file_path: "a.ts" }),
+      tool("p", "ExitPlanMode", { plan: "# Plan\n- do a thing" }),
+      tool("g", "Grep", { pattern: "x" }),
+    ]);
+    expect(segs.map((s) => s.kind)).toEqual(["run", "plan", "run"]);
+    const pl = segs[1];
+    if (pl.kind === "plan") expect(pl.step.id).toBe("p");
+  });
+
+  it("is NOT hidden inline (must always show), unlike a background tool", () => {
+    expect(isHiddenInline("ExitPlanMode", { plan: "x" })).toBe(false);
+  });
+
+  it("does not count the plan as a work step (it's a decision, not work)", () => {
+    const segs = groupBlocks([tool("a", "Read"), tool("p", "ExitPlanMode", { plan: "x" })]);
+    expect(countWorkSteps(segs)).toBe(1);
+    expect(workStepIds(segs)).toEqual(["a"]);
+  });
+
+  it("peels a TRAILING plan (with any closing prose) into `final` so it stays in clear", () => {
+    // A pending plan is the last block — the agent pauses right after ExitPlanMode. It must NOT
+    // fold into the work block: the user has to see it to accept/reject.
+    const { work, final } = splitFinalMessage(
+      groupBlocks([
+        tool("a", "Read"),
+        tool("b", "Edit"),
+        tool("p", "ExitPlanMode", { plan: "# Plan" }),
+      ]),
+    );
+    expect(work.map((s) => s.kind)).toEqual(["run"]);
+    expect(final.map((s) => s.kind)).toEqual(["plan"]);
+  });
+
+  it("survives a flattenWork → atomsToSegments round-trip (plan stays its own atom)", () => {
+    const work = groupBlocks([tool("a", "Read"), tool("p", "ExitPlanMode", { plan: "x" })]);
+    const atoms = flattenWork(work);
+    expect(atoms.map((a) => a.kind)).toEqual(["step", "plan"]);
+    const back = atomsToSegments(atoms, "vis");
+    expect(back.map((s) => s.kind)).toEqual(["run", "plan"]);
+    const pl = back[1];
+    if (pl.kind === "plan") expect(pl.step.id).toBe("p");
   });
 });
 
@@ -462,6 +519,18 @@ describe("flattenWork / atomsToSegments", () => {
     const b = atomsToSegments(atoms.slice(1), "vis");
     expect(a[0].key).toBe("vis-run-0");
     expect(b[0].key).toBe("vis-run-0"); // same key though it now holds only the 2nd step
+  });
+
+  it("keeps a Skill as a non-step atom that breaks a run and round-trips", () => {
+    const work = segs([tool("a", "Read"), tool("sk", "Skill", { skill: "x:done" }), tool("b", "Edit")]);
+    const atoms = flattenWork(work);
+    expect(atoms.map((a) => a.kind)).toEqual(["step", "skill", "step"]);
+    const back = atomsToSegments(atoms, "vis");
+    // The skill breaks the run: the two reads DON'T coalesce across it.
+    expect(back.map((s) => s.kind)).toEqual(["run", "skill", "run"]);
+    // A skill is a meta-action, not "work": it never counts as a step nor subscribes as one.
+    expect(countWorkSteps(work)).toBe(2);
+    expect(workStepIds(work)).toEqual(["a", "b"]);
   });
 });
 

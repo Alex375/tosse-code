@@ -3,6 +3,13 @@
 // <command-args>…</command-args>` — raw noise the user shouldn't read. We surface it as a
 // clean command chip instead. Shared by the live thread (MsgUser) and the disk transcript
 // (SubAgentTranscript) so both render commands identically.
+//
+// A skill the MODEL invokes goes through a different wire shape: a `Skill` tool_use (not a
+// user turn), so it's surfaced by a sister renderer (SkillChip) off the tool input — see
+// parseSkillInvocation. Both funnel into the same `.cv-cmd` affordance so "/done" reads
+// identically whether the human typed it or the agent invoked it.
+import type { JsonValue } from "../../ipc/client";
+import { field } from "../../agent/ask";
 import { Ico } from "../../ui/kit";
 
 const NAME_RE = /<command-name>([\s\S]*?)<\/command-name>/;
@@ -31,6 +38,43 @@ export function UserText({ text }: { text: string }) {
       <Ico name="wand" className="sm" />
       <span className="cv-cmd-name">{cmd.command}</span>
       {cmd.args ? <span className="cv-cmd-args">{cmd.args}</span> : null}
+    </span>
+  );
+}
+
+/** Read a model-invoked skill's command out of a `Skill` tool_use input. The `skill` field is
+ *  the fully-qualified id the model called (`tosse-workflow:done`, `start`, `code-review`); we
+ *  present it as the command a human would type — drop any `plugin:` namespace (everything up
+ *  to and including the last `:`) and prefix a slash: `tosse-workflow:done` → `/done`,
+ *  `start` → `/start`. `qualified` keeps the full id for a disambiguating tooltip. `null` when
+ *  the input carries no skill. */
+export function parseSkillInvocation(
+  input: JsonValue,
+): { command: string; qualified: string; args: string } | null {
+  const skill = field(input, "skill");
+  if (!skill || !skill.trim()) return null;
+  const qualified = skill.trim();
+  const short = qualified.slice(qualified.lastIndexOf(":") + 1);
+  const args = (field(input, "args") ?? "").trim();
+  return { command: "/" + short, qualified, args };
+}
+
+/** A skill the model invoked (the `Skill` tool), shown as a dedicated command chip — the SAME
+ *  `.cv-cmd` affordance as a user-typed slash-command, so the agent's `/done` reads like a
+ *  command, never a raw tool card. Shared by the live thread and the disk transcript. */
+export function SkillChip({ input }: { input: JsonValue }) {
+  const inv = parseSkillInvocation(input);
+  if (!inv) return null;
+  // Show the qualified id on hover only when it adds information (a plugin command whose short
+  // form hides its namespace); a bare project skill's tooltip would just echo the chip.
+  const title = "/" + inv.qualified !== inv.command ? inv.qualified : undefined;
+  return (
+    <span className="cv-skill">
+      <span className="cv-cmd" title={title}>
+        <Ico name="wand" className="sm" />
+        <span className="cv-cmd-name">{inv.command}</span>
+        {inv.args ? <span className="cv-cmd-args">{inv.args}</span> : null}
+      </span>
     </span>
   );
 }
