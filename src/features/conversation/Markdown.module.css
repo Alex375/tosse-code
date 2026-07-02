@@ -84,10 +84,23 @@
   border: 1px solid var(--border);
   padding: var(--space-2) var(--space-3);
   text-align: left;
+  /* Restore a proper per-column min-content floor. `.root` sets
+     overflow-wrap:anywhere (so long URLs/paths wrap in prose); inherited into
+     table cells it collapses each column's min-content width to ~1 char, which
+     lets table-layout:auto crush a short column to ~2 chars and break its
+     header mid-word. `break-word` wraps a pathological long token WITHOUT
+     counting those breaks toward min-content, so a column can never be squeezed
+     below its longest word. */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .root th {
   background: var(--bg-surface);
   font-weight: 600;
+  /* A header must stay readable in full: keep it on one line. If the table runs
+     out of room the wrapper (.md-tablewrap / block table) scrolls horizontally,
+     so headers are never truncated and no data is lost. */
+  white-space: nowrap;
 }
 
 /* GFM task lists */
