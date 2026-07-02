@@ -83,6 +83,16 @@ export interface Turn {
    * nets so the badge can never linger.
    */
   queued?: boolean;
+  /**
+   * User turn only: DURABLE record that this message was injected mid-work (sent while
+   * the agent was busy). Unlike `queued` (a transient badge that clears on delivery), this
+   * is set once and NEVER cleared, so clean-output can tell a genuine mid-work injection
+   * (absorb it into the round as an in-band marker) from a real new prompt (starts its own
+   * round) — see `coalesceCleanRounds`. Absent on turns hydrated from disk (the transcript
+   * carries no such flag), so a RESUMED conversation's user prompts correctly stay their own
+   * rounds instead of collapsing into one fold.
+   */
+  injectedMidTurn?: boolean;
 }
 
 /** A tool result, joined to its tool_use by id. */
@@ -135,6 +145,20 @@ export type TimelineEntry =
   | { kind: "notice"; id: string }
   | { kind: "turn_result"; id: string }
   | { kind: "error"; id: string };
+
+/**
+ * A neutral in-band marker absorbed into a clean-output assistant round (see
+ * `coalesceCleanRounds`): either a control-change bar (a `notice`) or a message the user
+ * injected mid-work (a `user` turn). It renders inline in the response flow at its
+ * chronological place WITHOUT breaking the work fold — the fix for "a mid-turn marker cuts
+ * clean output in two". `after` = how many of the round's assistant turns precede it (0 =
+ * before the first turn); the referenced `id` is resolved to content only at render time.
+ */
+export interface RoundMarker {
+  markerKind: "notice" | "user";
+  id: string;
+  after: number;
+}
 
 /** Everything we hold for one live session. */
 export interface SessionEntry {
