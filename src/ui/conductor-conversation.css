@@ -445,10 +445,25 @@
 .cv-slash-foot { display:flex; align-items:baseline; gap:8px; padding:7px 11px; border-top:1px solid var(--wf-line-2); background:var(--wf-panel); }
 .cv-slash-foot-cmd { font-size:11px; color:var(--wf-tx); white-space:nowrap; flex:0 0 auto; }
 .cv-slash-foot-desc { font-size:11px; color:var(--wf-tx-lo); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.cv-add { width:28px; height:28px; flex:0 0 auto; border:0; border-radius:7px; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; cursor:default; }
+.cv-add { width:28px; height:28px; flex:0 0 auto; border:0; border-radius:7px; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; cursor:pointer; transition:background .12s ease, color .12s ease; }
 .cv-add:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
 .cv-ph { flex:1; font-size:12.5px; color:var(--wf-tx-lo); }
 .cv-send { width:30px; height:30px; flex:0 0 auto; border:0; border-radius:8px; background:var(--wf-accent); color:#1a0f0a; display:inline-flex; align-items:center; justify-content:center; cursor:default; }
+
+/* Attachments: model-attachable images joined to the next message, shown as chips
+   above the text row (removable), then as thumbnails in the sent user bubble. */
+.cv-attach-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:6px 8px 2px; }
+.cv-attach { display:inline-flex; align-items:center; gap:7px; max-width:220px; padding:4px 4px 4px 5px; background:var(--wf-panel-2); border:1px solid var(--wf-line); border-radius:9px; }
+.cv-attach-thumb { width:30px; height:30px; flex:0 0 auto; object-fit:cover; border-radius:6px; background:var(--wf-panel-3); }
+.cv-attach-name { font-size:11.5px; color:var(--wf-tx); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cv-attach-x { width:20px; height:20px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; transition:background .12s ease, color .12s ease; }
+.cv-attach-x:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+.cv-attach-x .wf-ico { width:13px; height:13px; }
+.cv-attach-err { font-size:11px; color:var(--wf-err); }
+
+/* Joined images shown inside a sent user bubble. */
+.cv-user-images { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.cv-user-image { max-width:220px; max-height:180px; border-radius:8px; border:1px solid var(--wf-line); object-fit:contain; background:var(--wf-panel-3); }
 /* Controls row sits at the bottom of the same card, just below the text row. */
 .cv-comp-foot { display:flex; align-items:center; gap:3px; padding:5px 6px 2px; font-size:11px; color:var(--wf-tx-lo); }
 .cv-foot-sep { width:1px; height:16px; background:var(--wf-line); margin:0 5px; }

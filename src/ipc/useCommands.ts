@@ -6,6 +6,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { commands } from "./client";
 import type { PermissionDecision, Result } from "./client";
 import { useConversationStore } from "../store/conversationStore";
+import type { UserTurnImage } from "../store/types";
 import {
   ensureConversationSession,
   liveHandle,
@@ -38,11 +39,22 @@ export function useSendMessage(convId: string) {
     // `worktree` (first send only): spawn this conversation inside a freshly
     // created git worktree instead of the repo's main checkout. `queued`: the
     // agent was busy at send time, so the CLI will inject this mid-turn — flag the
-    // optimistic turn so the UI shows it as "en attente".
-    mutationFn: async ({ text, worktree, queued }: { text: string; worktree?: boolean; queued?: boolean }) => {
+    // optimistic turn so the UI shows it as "en attente". `images`: files joined via
+    // the composer's "+" / paste, sent as `image` blocks and shown as thumbnails.
+    mutationFn: async ({
+      text,
+      worktree,
+      queued,
+      images,
+    }: {
+      text: string;
+      worktree?: boolean;
+      queued?: boolean;
+      images?: UserTurnImage[];
+    }) => {
       // The core does not echo user turns, so append optimistically (keyed by the
       // stable id) before sending — instant even while the session spawns.
-      addUserTurn(convId, text, queued);
+      addUserTurn(convId, text, queued, images);
       // Sending the next message consumes any pending reminder: the user has moved
       // on from the previous result. `addUserTurn` clears the LIVE turnSeen; clear
       // the PERSISTED reminder too so it doesn't re-surface on the next restart.
@@ -53,7 +65,10 @@ export function useSendMessage(convId: string) {
       // Lazy spawn: a conversation has no live process until its first message
       // (or its first message after being stopped/ended).
       const handle = await ensureConversationSession(convId, { worktree });
-      const res = await unwrap(commands.sendMessage(handle, text));
+      // Map the UI's image shape to the wire's `ImageAttachment` (media_type + raw
+      // base64). Empty array for a plain text turn.
+      const wireImages = (images ?? []).map((i) => ({ media_type: i.mediaType, data: i.dataBase64 }));
+      const res = await unwrap(commands.sendMessage(handle, text, wireImages));
       // On each of the first few messages of a still-untitled conversation, ask the
       // binary to (re)generate a smart title from the accumulated intent (capped, then
       // frozen; no-op once renamed / over the cap / no live session). Like the VS Code

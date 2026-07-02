@@ -209,7 +209,11 @@ export const mockCommands = {
     return ok(session);
   },
 
-  async sendMessage(session: string, _text: string): Promise<Result<null, string>> {
+  async sendMessage(
+    session: string,
+    _text: string,
+    _images?: { media_type: string; data: string }[],
+  ): Promise<Result<null, string>> {
     const demo =
       typeof location !== "undefined"
         ? new URLSearchParams(location.search).get("demo")

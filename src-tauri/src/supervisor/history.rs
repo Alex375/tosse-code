@@ -258,6 +258,7 @@ fn push_user(entry: &Value, items: &mut Vec<ConversationItem>) {
         Value::String(text) => push_user_text(&uuid, text, items),
         Value::Array(blocks) => {
             let mut text = String::new();
+            let mut has_image = false;
             for b in blocks {
                 match b.get("type").and_then(Value::as_str) {
                     Some("text") => {
@@ -268,6 +269,7 @@ fn push_user(entry: &Value, items: &mut Vec<ConversationItem>) {
                             text.push_str(t);
                         }
                     }
+                    Some("image") => has_image = true,
                     Some("tool_result") => items.push(ConversationItem::ToolResult {
                         tool_use_id: b
                             .get("tool_use_id")
@@ -281,7 +283,14 @@ fn push_user(entry: &Value, items: &mut Vec<ConversationItem>) {
                     _ => {}
                 }
             }
-            push_user_text(&uuid, &text, items);
+            // An image-only human turn (no text block) still gets a bubble on reload —
+            // a "[image]" placeholder, consistent with the history-list excerpt — instead
+            // of vanishing (the base64 itself is never rendered as text).
+            if text.trim().is_empty() && has_image {
+                push_user_text(&uuid, "[image]", items);
+            } else {
+                push_user_text(&uuid, &text, items);
+            }
         }
         _ => {}
     }
@@ -559,15 +568,26 @@ fn first_user_text(entry: &Value) -> Option<String> {
         Value::String(s) => s.clone(),
         Value::Array(blocks) => {
             let mut t = String::new();
+            let mut has_image = false;
             for b in blocks {
-                if b.get("type").and_then(Value::as_str) == Some("text") {
-                    if let Some(s) = b.get("text").and_then(Value::as_str) {
-                        if !t.is_empty() {
-                            t.push(' ');
+                match b.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(s) = b.get("text").and_then(Value::as_str) {
+                            if !t.is_empty() {
+                                t.push(' ');
+                            }
+                            t.push_str(s);
                         }
-                        t.push_str(s);
                     }
+                    Some("image") => has_image = true,
+                    _ => {}
                 }
+            }
+            // An image-only human turn (e.g. a screenshot sent with no caption) is real
+            // content — give it a placeholder excerpt so the conversation is still listed
+            // and indexed, instead of being discarded as an empty "noise" session.
+            if t.trim().is_empty() && has_image {
+                return Some("[image]".to_string());
             }
             t
         }
