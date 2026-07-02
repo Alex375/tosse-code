@@ -223,6 +223,18 @@ export function rowAttention(s: AgentStatus): "input" | "review" | "error" | nul
 }
 
 /**
+ * Whether the conversation is actively doing work right now — a turn in flight
+ * (`running`) or background tools still running (`backgrounding`). Deleting it in
+ * these states kills live work, so the sidebar gates the otherwise friction-free,
+ * ⌘Z-undoable delete behind a confirm here. The blocked states
+ * (needInput / needIntervention) are paused waiting on the user — not running — and
+ * a settled review/error/idle/off is inert; those keep the one-click delete.
+ */
+export function isActivelyRunning(s: AgentStatus): boolean {
+  return s.kind === "running" || s.kind === "backgrounding";
+}
+
+/**
  * Sort key for the FlightDeck: what to surface first. Lower = more important, so
  * action-required and errors come first (leftmost in a lane / top repo), then
  * review, then running, then the inactive history (idle, off). Ties are broken by

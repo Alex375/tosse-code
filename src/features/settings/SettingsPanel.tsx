@@ -40,11 +40,13 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
       .catch(() => setVersion(null));
   }, [open]);
 
-  // Close on Escape, but never mid-wipe.
+  // Close on Escape, but never mid-wipe, and never when a higher layer already
+  // consumed it (a ConfirmDialog mounted inside — e.g. the update relaunch confirm —
+  // calls preventDefault so its Escape doesn't ALSO tear down the whole panel).
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) close();
+      if (e.key === "Escape" && !busy && !e.defaultPrevented) close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

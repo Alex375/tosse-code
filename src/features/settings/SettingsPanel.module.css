@@ -233,19 +233,93 @@
 
 /* ---- Update section ----------------------------------------------------- */
 
-.notes {
-  margin: 0 0 var(--space-4);
-  padding: var(--space-3);
-  max-height: 160px;
-  overflow: auto;
-  background: var(--bg-hover);
+/* Inviting header for an available update: a soft accent card with the update
+   motif and a clear current → new version jump. */
+.updateHero {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px 16px;
+  margin-bottom: var(--space-4);
+  background: var(--accent-dim, var(--bg-hover));
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+}
+.updateSpark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+}
+/* Ico renders the GLOBAL `wf-ico` class → must escape CSS-module hashing with
+   :global, otherwise this descendant rule never matches (icon stays 15px). */
+.updateSpark :global(.wf-ico) {
+  width: 18px;
+  height: 18px;
+}
+.updateHeroText {
+  min-width: 0;
+}
+.updateHeadline {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.versionJump {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.versionJump :global(.wf-ico) {
+  color: var(--text-muted);
+}
+.versionOld {
+  color: var(--text-muted);
+}
+.versionNew {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Release notes ("Nouveautés"), rendered as Markdown inside a framed card. */
+.notesCard {
+  margin-bottom: var(--space-4);
   border: 1px solid var(--wf-line);
   border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-body);
-  white-space: pre-wrap;
-  word-break: break-word;
+  overflow: hidden;
+}
+.notesTitle {
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--wf-line);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+.notesBody {
+  padding: 2px 14px;
+  max-height: 240px;
+  overflow: auto;
+  /* The Markdown container (StreamMarkdown `.root`) sets its own color / font-size /
+     line-height, so typographic props here would be inert — kept box-only on purpose. */
+}
+
+/* The update CTA: a touch bigger, icon + label, to invite the click. */
+.btnUpdate {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  font-weight: 600;
 }
 
 .progressWrap {
