@@ -2,6 +2,7 @@ pub mod extensions;
 pub mod fs;
 pub mod git;
 mod ipc;
+pub mod plugins;
 pub mod store;
 pub mod supervisor;
 pub mod terminal;
@@ -12,15 +13,18 @@ use ipc::commands::{
     delete_repo, delete_to_trash, fetch_slash_commands,
     generate_conversation_title, get_plan_usage, git_branches, git_commit, git_commit_file_diff,
     git_commit_files, git_diff, git_fetch, git_log, git_pull, git_push, git_status,
-    interrupt_session, list_disk_conversations, list_extensions, list_plugin_contents,
+    interrupt_session, list_disk_conversations, list_extensions, list_marketplaces,
+    list_plugin_contents,
     list_worktrees, load_persisted_state, load_session_context, load_session_history,
     load_subagent_transcript, load_workflow_journal, load_workflow_phases, load_workflow_run,
     mcp_authenticate, mcp_clear_auth, mcp_reconnect, mcp_status, mcp_toggle, open_in_terminal,
     path_exists, ping, prime_history_index, read_dir, read_file, read_image, read_task_output_file,
+    refresh_plugin_marketplaces, reload_plugins,
     remove_worktree, rename_entry, reveal_in_finder, request_user_attention, search_conversations,
-    send_message, set_active_conversation, set_effort_level, set_model,
+    send_message, set_active_conversation, set_all_marketplaces_auto_update, set_effort_level,
+    set_marketplace_auto_update, set_model,
     set_permission_mode, set_plugin_enabled, set_remote_control, set_ultracode, spawn_session,
-    stop_session, stop_task,
+    stop_session, stop_task, update_plugin,
     terminal_close, terminal_open, terminal_resize, terminal_write, unwatch_dir, upsert_conversation,
     upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file, HistoryIndex, Sessions,
 };
@@ -75,6 +79,12 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             list_extensions,
             set_plugin_enabled,
             list_plugin_contents,
+            list_marketplaces,
+            set_marketplace_auto_update,
+            set_all_marketplaces_auto_update,
+            refresh_plugin_marketplaces,
+            update_plugin,
+            reload_plugins,
             path_exists,
             git_status,
             git_diff,

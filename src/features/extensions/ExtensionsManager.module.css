@@ -362,6 +362,12 @@
   border: 1px solid var(--wf-line-2);
   background: var(--wf-panel-3);
   color: var(--wf-tx);
+  /* Flex so an icon centers vertically with the label (baseline alignment otherwise
+     drops the svg to the text baseline) and the icon/label/badge get a consistent gap.
+     Harmless for text-only actBtn buttons (single child). */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
 }
 .actBtn:hover:not(:disabled) {
@@ -919,4 +925,111 @@
   margin-top: 8px;
   font-size: 11.5px;
   color: var(--wf-tx-lo);
+}
+
+/* ---- Plugin updates (marketplaces section + per-plugin badge/button) ---- */
+/* An amber tone signals "update available", distinct from the green enabled dot and
+   the neutral controls — matching the sPending/sWarn amber already used for MCP. */
+.updateBadge {
+  flex: 0 0 auto;
+  font-family: var(--wf-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 5px;
+  color: #f0b15a;
+  border: 1px solid #5a4225;
+  background: rgba(240, 177, 90, 0.08);
+  white-space: nowrap;
+}
+/* "Mettre à jour" — an amber-tinted action, sitting between the row body and toggle. */
+.updateBtn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #f0b15a;
+  border: 1px solid #5a4225;
+  background: rgba(240, 177, 90, 0.1);
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+.updateBtn:hover:not(:disabled) {
+  background: rgba(240, 177, 90, 0.18);
+  border-color: #f0b15a;
+}
+.updateBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* Neutral "force update" for a plugin with no detected update (on-demand, quiet). */
+.updateBtnGhost {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--wf-tx-lo);
+  border: 1px solid var(--wf-line-2);
+  background: transparent;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+/* Quiet by default; revealed on row hover / focus so it doesn't clutter every row. */
+.pluginRow:hover .updateBtnGhost,
+.updateBtnGhost:focus-visible {
+  opacity: 1;
+}
+.updateBtnGhost:hover:not(:disabled) {
+  color: var(--wf-tx-hi);
+  border-color: var(--wf-tx-xlo);
+  background: var(--wf-panel-3);
+}
+.updateBtnGhost:disabled {
+  opacity: 0;
+  cursor: default;
+}
+/* One marketplace row (name + source + auto-update toggle) — same shell as .row. */
+.mktRow {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 14px;
+  border: 1px solid var(--wf-line);
+  border-radius: 10px;
+  background: var(--wf-panel-2);
+}
+/* Marketplaces page — a modest centered overlay reached from the Plugins section. */
+.mktScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-scrim);
+}
+.mktPanel {
+  width: 560px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--wf-panel);
+  border: 1px solid var(--wf-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
 }

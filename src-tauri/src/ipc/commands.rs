@@ -1178,6 +1178,94 @@ pub async fn list_plugin_contents(
         .map_err(|e| e.to_string())
 }
 
+// ---- Plugin updates (marketplaces + auto-update + on-demand update) ---------
+//
+// Reads (marketplace list, per-marketplace auto-update state) go through
+// `crate::extensions` (the on-disk config authority). Mutations (refresh a
+// marketplace, update a plugin) shell out to the `claude plugin …` CLI via
+// `crate::plugins` — the officially supported path. A live conversation applies an
+// update at once with `reload_plugins`; otherwise it lands on the next session spawn.
+
+/// List every marketplace registered with Claude Code (user-global) with its resolved
+/// auto-update state. Best-effort — the blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_marketplaces() -> Result<Vec<crate::extensions::MarketplaceInfo>, String> {
+    tokio::task::spawn_blocking(crate::extensions::list_marketplaces)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Turn a marketplace's auto-update on/off (writes `~/.claude/settings.json`
+/// `extraKnownMarketplaces[name].autoUpdate` — per-marketplace is the only granularity
+/// Claude Code exposes). Atomic write; the blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_marketplace_auto_update(name: String, enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        crate::extensions::set_marketplace_auto_update(&name, enabled)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Turn auto-update on/off for EVERY registered marketplace at once (the global master
+/// toggle) — one atomic settings.json write. The blocking file IO runs off the runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_all_marketplaces_auto_update(enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        crate::extensions::set_all_marketplaces_auto_update(enabled)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Refresh marketplace(s) from upstream (`claude plugin marketplace update [name]`) —
+/// the network "check for updates" step that makes on-disk pins current. With `name`
+/// null, refreshes all. Shells out to the `claude` CLI off the async runtime; a
+/// refresh can take a few seconds (git fetches).
+#[tauri::command]
+#[specta::specta]
+pub async fn refresh_plugin_marketplaces(name: Option<String>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::plugins::refresh_marketplaces(name.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Update ONE plugin to its marketplace's latest version (`claude plugin update
+/// <plugin> [-s <scope>]`). `scope` is the install scope (`user`/`project`/`local`);
+/// `path` is the repo/conversation cwd the command runs in — required so project/local
+/// scope resolves the right project (the CLI selects it from the working directory). A
+/// LIVE session should follow with `reload_plugins` to hot-apply; otherwise the new
+/// version is picked up on the next session spawn. Shells out off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn update_plugin(
+    plugin_id: String,
+    scope: Option<String>,
+    path: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        crate::plugins::update_plugin(&plugin_id, scope.as_deref(), &path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Hot-reload a running session's plugins after an update (`reload_plugins` control
+/// request) — applies the change without a restart. Errors with "unknown session" when
+/// the conversation has no live `claude` process (then the update lands on next spawn).
+#[tauri::command]
+#[specta::specta]
+pub async fn reload_plugins(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.reload_plugins().await.map_err(|e| e.to_string())
+}
+
 // ---- Persistence (conversation metadata) ----------------------------------
 //
 // These commands are the front's single boundary to the store. They forward to

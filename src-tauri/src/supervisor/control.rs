@@ -343,6 +343,18 @@ pub fn parse_generate_session_title(line: &Value) -> Option<String> {
     (!title.is_empty()).then(|| title.to_string())
 }
 
+/// `reload_plugins` — hot-reload this session's plugins after a `claude plugin …`
+/// mutation (install / enable / disable / update), so a RUNNING conversation picks up
+/// the change without a restart. Mirrors the official VS Code extension's
+/// `sdk_reload_plugins` (`request({subtype:"reload_plugins"})`) — the one plugin
+/// message on the control channel (all other plugin ops are CLI shell-outs). The CLI
+/// otherwise prints "restart required"; this is the extension-blessed hot-apply.
+/// Fire-and-correlate: the bare-success ack is a no-op (the freshened plugins arrive
+/// via the stream / next turn); a rejection surfaces as a control error.
+pub fn reload_plugins_request(request_id: &str) -> Value {
+    control_request(request_id, json!({ "subtype": "reload_plugins" }))
+}
+
 /// `mcp_status` — query the LIVE connection status of every MCP server the
 /// session knows. This is what the official extension's `Query.mcpServerStatus()`
 /// sends; the response carries the real per-server status (connected / needs-auth

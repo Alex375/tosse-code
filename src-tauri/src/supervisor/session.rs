@@ -77,6 +77,10 @@ pub enum SessionCommand {
         name: Option<String>,
         reply: oneshot::Sender<RemoteControlState>,
     },
+    /// Hot-reload this session's plugins after a `claude plugin …` mutation (update /
+    /// enable / disable), so a running conversation applies it without a restart.
+    /// Fire-and-correlate (bare-success ack; rejection surfaces as a control error).
+    ReloadPlugins,
     Shutdown,
 }
 
@@ -118,6 +122,9 @@ enum PendingControl {
     McpToggle,
     McpReconnect,
     McpClearAuth,
+    /// A `reload_plugins` request — its failure surfaces as a control error so the user
+    /// knows the freshly-updated plugin was NOT hot-applied (a restart is still needed).
+    ReloadPlugins,
 }
 
 impl PendingControl {
@@ -135,6 +142,7 @@ impl PendingControl {
             PendingControl::McpToggle => "activation d'un serveur MCP",
             PendingControl::McpReconnect => "reconnexion d'un serveur MCP",
             PendingControl::McpClearAuth => "réinitialisation de l'authentification MCP",
+            PendingControl::ReloadPlugins => "rechargement des plugins",
         }
     }
 }
@@ -272,6 +280,12 @@ impl SessionHandle {
             Ok(Ok(state)) => Ok(state),
             _ => Err(SessionError::Closed),
         }
+    }
+
+    /// Hot-reload this session's plugins (after a `claude plugin …` mutation) so a
+    /// running conversation applies the change without a restart. Fire-and-correlate.
+    pub async fn reload_plugins(&self) -> Result<(), SessionError> {
+        self.send(SessionCommand::ReloadPlugins).await
     }
 
     pub async fn shutdown(&self) -> Result<(), SessionError> {
@@ -713,7 +727,8 @@ impl SessionCore {
             | PendingControl::StopTask
             | PendingControl::McpToggle
             | PendingControl::McpReconnect
-            | PendingControl::McpClearAuth => {}
+            | PendingControl::McpClearAuth
+            | PendingControl::ReloadPlugins => {}
         }
     }
 
@@ -943,6 +958,12 @@ impl SessionCore {
                 if self.send(control::remote_control_request(&rid, enabled, name.as_deref())) {
                     self.pending_remote_control.insert(rid, (enabled, reply));
                 }
+            }
+            SessionCommand::ReloadPlugins => {
+                // Fire-and-correlate: the bare-success ack is a no-op (the reloaded
+                // plugins take effect for the next turn); a rejection surfaces as a
+                // control error so the user knows the update wasn't hot-applied.
+                self.send_tracked(PendingControl::ReloadPlugins, control::reload_plugins_request);
             }
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown => {}

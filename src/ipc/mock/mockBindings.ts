@@ -19,6 +19,7 @@ import type {
   GitFileEntry,
   GitStatus,
   ImageContent,
+  MarketplaceInfo,
   McpAuthResult,
   McpServerLive,
   PluginContents,
@@ -705,6 +706,27 @@ export const mockCommands = {
     return ok({ skills: [], agents: [], mcp_servers: [] });
   },
   async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async listMarketplaces(): Promise<Result<MarketplaceInfo[], string>> {
+    return ok([
+      { name: "tosse-plugins", source: "Alex375/tosse-claude-plugin", auto_update: true },
+      { name: "claude-plugins-official", source: "anthropics/claude-plugins-official", auto_update: false },
+    ]);
+  },
+  async setMarketplaceAutoUpdate(_name: string, _enabled: boolean): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async setAllMarketplacesAutoUpdate(_enabled: boolean): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async refreshPluginMarketplaces(_name: string | null): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async updatePlugin(_pluginId: string, _scope: string | null, _path: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async reloadPlugins(_session: string): Promise<Result<null, string>> {
     return ok(null);
   },
   async mcpStatus(_session: string): Promise<Result<McpServerLive[], string>> {
