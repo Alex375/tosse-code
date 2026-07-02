@@ -138,6 +138,11 @@
 .cv-cmd .wf-ico { color:var(--wf-accent); flex:none; }
 .cv-cmd-name { color:var(--wf-tx-hi); font-weight:600; }
 .cv-cmd-args { color:var(--wf-tx-lo); overflow-wrap:anywhere; }
+/* A skill/command the MODEL invoked (the `Skill` tool, e.g. land → /done), shown inline in the
+   assistant flow as its own command pill — distinct from a user-typed chip (which sits inside a
+   user bubble). Reuses the `.cv-cmd` chip inside so "/done" reads identically either way. */
+.cv-skill { display:flex; }
+.cv-skill .cv-cmd { width:fit-content; max-width:100%; padding:5px 10px; border:1px solid var(--wf-line); border-radius:8px; background:var(--wf-panel-2); }
 /* Queued user message (sent while the agent was busy): dashed wait-coloured border
    + an "en attente" tag, so it reads clearly as not-yet-processed. The tag clears
    once the agent picks the message up (next message_started; see conversationStore). */

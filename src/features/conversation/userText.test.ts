@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSlashCommand } from "./userText";
+import { parseSkillInvocation, parseSlashCommand } from "./userText";
 
 describe("parseSlashCommand", () => {
   it("extracts a bare command (with and without args)", () => {
@@ -26,5 +26,34 @@ describe("parseSlashCommand", () => {
   it("returns null for a normal prompt", () => {
     expect(parseSlashCommand("just fix the login bug please")).toBeNull();
     expect(parseSlashCommand("")).toBeNull();
+  });
+});
+
+describe("parseSkillInvocation", () => {
+  it("drops a plugin namespace to the short command", () => {
+    expect(parseSkillInvocation({ skill: "tosse-workflow:done" })).toEqual({
+      command: "/done",
+      qualified: "tosse-workflow:done",
+      args: "",
+    });
+  });
+
+  it("keeps a bare project skill as-is and carries args", () => {
+    expect(parseSkillInvocation({ skill: "code-review", args: "20" })).toEqual({
+      command: "/code-review",
+      qualified: "code-review",
+      args: "20",
+    });
+    expect(parseSkillInvocation({ skill: "start" })).toEqual({
+      command: "/start",
+      qualified: "start",
+      args: "",
+    });
+  });
+
+  it("returns null when there is no skill field", () => {
+    expect(parseSkillInvocation({})).toBeNull();
+    expect(parseSkillInvocation({ skill: "  " })).toBeNull();
+    expect(parseSkillInvocation("not an object" as never)).toBeNull();
   });
 });

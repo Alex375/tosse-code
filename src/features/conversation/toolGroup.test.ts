@@ -84,6 +84,16 @@ describe("groupBlocks", () => {
     if (segs[1].kind === "agent") expect(segs[1].step.id).toBe("ag");
   });
 
+  it("renders a model-invoked Skill as its own segment, breaking the run", () => {
+    const segs = groupBlocks([
+      tool("a", "Read"),
+      tool("sk", "Skill", { skill: "tosse-workflow:done" }),
+      tool("b", "Read"),
+    ]);
+    expect(segs.map((s) => s.kind)).toEqual(["run", "skill", "run"]);
+    if (segs[1].kind === "skill") expect(segs[1].step.id).toBe("sk");
+  });
+
   it("hides a detached (background) sub-agent entirely", () => {
     const segs = groupBlocks([tool("ag", "Agent", { run_in_background: true })]);
     expect(segs).toEqual([]);
@@ -462,6 +472,18 @@ describe("flattenWork / atomsToSegments", () => {
     const b = atomsToSegments(atoms.slice(1), "vis");
     expect(a[0].key).toBe("vis-run-0");
     expect(b[0].key).toBe("vis-run-0"); // same key though it now holds only the 2nd step
+  });
+
+  it("keeps a Skill as a non-step atom that breaks a run and round-trips", () => {
+    const work = segs([tool("a", "Read"), tool("sk", "Skill", { skill: "x:done" }), tool("b", "Edit")]);
+    const atoms = flattenWork(work);
+    expect(atoms.map((a) => a.kind)).toEqual(["step", "skill", "step"]);
+    const back = atomsToSegments(atoms, "vis");
+    // The skill breaks the run: the two reads DON'T coalesce across it.
+    expect(back.map((s) => s.kind)).toEqual(["run", "skill", "run"]);
+    // A skill is a meta-action, not "work": it never counts as a step nor subscribes as one.
+    expect(countWorkSteps(work)).toBe(2);
+    expect(workStepIds(work)).toEqual(["a", "b"]);
   });
 });
 

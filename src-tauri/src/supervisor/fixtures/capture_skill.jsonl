@@ -1,0 +1,3 @@
+{"type":"assistant","session_id":"s","uuid":"a1","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"Le travail est fini, je lance /done."},{"type":"tool_use","id":"toolu_skill","name":"Skill","input":{"skill":"tosse-workflow:done"}}]}}
+{"type":"user","session_id":"s","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_skill","content":"Launching skill: tosse-workflow:done"}]}}
+{"type":"user","session_id":"s","uuid":"u2","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /Users/x/.claude/plugins/cache/tosse-plugins/tosse-workflow/1.1.0/skills/done\n\n# Done — Terminer une tâche\n\nCe skill clôture la tâche en cours et gère les conséquences.\n"}]}}
