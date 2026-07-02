@@ -514,6 +514,28 @@ pub async fn generate_conversation_title(
         .map_err(|e| e.to_string())
 }
 
+/// Ask the binary to summarize the user's LAST message in a few words (≤6) — a distinct
+/// routing over the same `generate_session_title` wire as [`generate_conversation_title`],
+/// but fed ONLY that one message (not the accumulated intent). `seq` is a monotonic
+/// per-conversation tag echoed back in the `SessionSummaryEvent` so the front drops a
+/// stale (superseded) response. Fire-and-forget: the summary comes back asynchronously
+/// as a `SessionSummaryEvent`, shown on the Flight Deck card. A generation failure is
+/// swallowed in the core — the front keeps its optimistic truncation of the message.
+#[tauri::command]
+#[specta::specta]
+pub async fn generate_message_summary(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+    text: String,
+    seq: u32,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle
+        .generate_summary(text, seq)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Interrupt the current turn (without killing the process).
 #[tauri::command]
 #[specta::specta]

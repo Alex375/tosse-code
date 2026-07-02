@@ -10,7 +10,8 @@ pub mod usage;
 use ipc::commands::{
     answer_permission, copy_entry, create_dir, create_file, create_worktree, delete_conversation,
     delete_repo, delete_to_trash, fetch_slash_commands,
-    generate_conversation_title, get_plan_usage, git_branches, git_commit, git_commit_file_diff,
+    generate_conversation_title, generate_message_summary, get_plan_usage, git_branches, git_commit,
+    git_commit_file_diff,
     git_commit_files, git_diff, git_fetch, git_log, git_pull, git_push, git_status,
     interrupt_session, list_disk_conversations, list_extensions, list_plugin_contents,
     list_worktrees, load_persisted_state, load_session_context, load_session_history,
@@ -26,8 +27,8 @@ use ipc::commands::{
 };
 use ipc::events::{
     FsChangeEvent, FsWatchErrorEvent, SessionCommandsEvent, SessionMessageEvent,
-    SessionPermissionEvent, SessionRemoteControlEvent, SessionStateEvent, SessionTaskEvent,
-    SessionTitleEvent, TerminalExitEvent, TerminalOutputEvent, TickEvent,
+    SessionPermissionEvent, SessionRemoteControlEvent, SessionStateEvent, SessionSummaryEvent,
+    SessionTaskEvent, SessionTitleEvent, TerminalExitEvent, TerminalOutputEvent, TickEvent,
 };
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
@@ -58,6 +59,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             set_ultracode,
             set_remote_control,
             generate_conversation_title,
+            generate_message_summary,
             interrupt_session,
             mcp_status,
             mcp_toggle,
@@ -118,6 +120,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionCommandsEvent,
             SessionTaskEvent,
             SessionTitleEvent,
+            SessionSummaryEvent,
             SessionRemoteControlEvent,
             FsChangeEvent,
             FsWatchErrorEvent,

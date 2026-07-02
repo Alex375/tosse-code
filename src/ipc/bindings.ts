@@ -302,6 +302,23 @@ async generateConversationTitle(session: string, description: string, seq: numbe
 }
 },
 /**
+ * Ask the binary to summarize the user's LAST message in a few words (≤6) — a distinct
+ * routing over the same `generate_session_title` wire as [`generate_conversation_title`],
+ * but fed ONLY that one message (not the accumulated intent). `seq` is a monotonic
+ * per-conversation tag echoed back in the `SessionSummaryEvent` so the front drops a
+ * stale (superseded) response. Fire-and-forget: the summary comes back asynchronously
+ * as a `SessionSummaryEvent`, shown on the Flight Deck card. A generation failure is
+ * swallowed in the core — the front keeps its optimistic truncation of the message.
+ */
+async generateMessageSummary(session: string, text: string, seq: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("generate_message_summary", { session, text, seq }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Interrupt the current turn (without killing the process).
  */
 async interruptSession(session: string) : Promise<Result<null, string>> {
@@ -918,6 +935,7 @@ sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionRemoteControlEvent: SessionRemoteControlEvent,
 sessionStateEvent: SessionStateEvent,
+sessionSummaryEvent: SessionSummaryEvent,
 sessionTaskEvent: SessionTaskEvent,
 sessionTitleEvent: SessionTitleEvent,
 terminalExitEvent: TerminalExitEvent,
@@ -931,6 +949,7 @@ sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionRemoteControlEvent: "session-remote-control-event",
 sessionStateEvent: "session-state-event",
+sessionSummaryEvent: "session-summary-event",
 sessionTaskEvent: "session-task-event",
 sessionTitleEvent: "session-title-event",
 terminalExitEvent: "terminal-exit-event",
@@ -1798,6 +1817,15 @@ context_window: number | null;
  * percentage — that lives behind the `/api/oauth/usage` endpoint (separate task).
  */
 rate_limit: RateLimitSnapshot | null }
+/**
+ * A model-generated few-word summary of the user's LAST message arrived (from a
+ * `generate_session_title` control response — same wire as the title, a distinct
+ * routing). The UI maps `session` (handle) → conversation and shows it on the Flight
+ * Deck card. `seq` is the monotonic per-conversation tag the UI sent: it applies the
+ * summary only if `seq` still matches the latest message, so a stale (superseded)
+ * response can't overwrite a fresher one.
+ */
+export type SessionSummaryEvent = { session: string; summary: string; seq: number }
 /**
  * A background task (sub-agent / workflow / Monitor / background Bash) was created
  * or changed state. Emitted on every `task_*` transition, keyed (inside the

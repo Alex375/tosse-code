@@ -48,6 +48,13 @@ pub enum SessionCommand {
     /// (stale) response. The title comes back asynchronously; a failure is logged but
     /// never surfaced (the UI keeps its optimistic placeholder / last title).
     GenerateTitle { description: String, seq: u32 },
+    /// Ask the binary to summarize the user's LAST message in a few words (same wire as
+    /// `GenerateTitle` — `generate_session_title` — but fed ONLY that one message, not
+    /// the accumulated intent). `seq` is a monotonic per-conversation tag echoed back in
+    /// [`SessionEvent::Summary`] so the UI drops a stale (superseded) response. Comes
+    /// back asynchronously; a failure is logged, never surfaced (the UI keeps its
+    /// optimistic truncation of the message).
+    GenerateSummary { text: String, seq: u32 },
     Interrupt,
     /// Stop a single background task (a `run_in_background` Bash / Monitor /
     /// sub-agent) by its `task_id`, without ending the turn or the session.
@@ -109,6 +116,11 @@ enum PendingControl {
     /// out-of-order responses). Swallowed on failure — never surfaced, since the UI
     /// has a placeholder name.
     GenerateTitle(u32),
+    /// A `generate_session_title` request used to summarize the user's LAST message (a
+    /// distinct routing over the same wire), carrying the monotonic `seq` so the ack's
+    /// summary can be tagged with it. Swallowed on failure — never surfaced, since the
+    /// UI has an optimistic truncation as fallback.
+    GenerateSummary(u32),
     Interrupt,
     /// A `stop_task` request — its failure surfaces as a control error so the user
     /// knows the background task is still running.
@@ -130,6 +142,7 @@ impl PendingControl {
             PendingControl::SetEffort => "effort",
             PendingControl::SetUltracode => "ultracode",
             PendingControl::GenerateTitle(_) => "génération du titre",
+            PendingControl::GenerateSummary(_) => "résumé du dernier message",
             PendingControl::Interrupt => "interruption",
             PendingControl::StopTask => "arrêt d'une tâche de fond",
             PendingControl::McpToggle => "activation d'un serveur MCP",
@@ -205,6 +218,10 @@ impl SessionHandle {
 
     pub async fn generate_title(&self, description: String, seq: u32) -> Result<(), SessionError> {
         self.send(SessionCommand::GenerateTitle { description, seq }).await
+    }
+
+    pub async fn generate_summary(&self, text: String, seq: u32) -> Result<(), SessionError> {
+        self.send(SessionCommand::GenerateSummary { text, seq }).await
     }
 
     pub async fn interrupt(&self) -> Result<(), SessionError> {
@@ -532,6 +549,9 @@ impl SessionCore {
             SessionEvent::Commands(c) => self.emitter.emit_commands(&self.id, &c),
             SessionEvent::Task(t) => self.emitter.emit_task(&self.id, &t),
             SessionEvent::Title { title, seq } => self.emitter.emit_title(&self.id, &title, seq),
+            SessionEvent::Summary { summary, seq } => {
+                self.emitter.emit_summary(&self.id, &summary, seq)
+            }
             SessionEvent::RemoteControl(s) => self.emitter.emit_remote_control(&self.id, &s),
         }
     }
@@ -650,7 +670,7 @@ impl SessionCore {
             // Title generation is cosmetic and has an optimistic placeholder as its
             // fallback, so a rejection here is logged but NOT surfaced as a timeline
             // error (and triggers no settings re-read) — unlike model/effort/mode.
-            if matches!(kind, PendingControl::GenerateTitle(_)) {
+            if matches!(kind, PendingControl::GenerateTitle(_) | PendingControl::GenerateSummary(_)) {
                 eprintln!(
                     "[session {}] generate_session_title rejected: {}",
                     self.id,
@@ -700,6 +720,15 @@ impl SessionCore {
             PendingControl::GenerateTitle(seq) => {
                 if let Some(title) = control::parse_generate_session_title(&v) {
                     self.emit(SessionEvent::Title { title, seq });
+                }
+            }
+            // The few-word summary of the last message, tagged with the `seq` we sent so
+            // the UI can drop a stale (superseded) response. Same response shape as the
+            // title (`response.response.title`). A success ack with no usable text is a
+            // no-op — the UI's optimistic truncation stays.
+            PendingControl::GenerateSummary(seq) => {
+                if let Some(summary) = control::parse_generate_session_title(&v) {
+                    self.emit(SessionEvent::Summary { summary, seq });
                 }
             }
             // The bare success of set_model / apply_flag_settings carries no payload;
@@ -888,6 +917,15 @@ impl SessionCore {
                     control::generate_session_title_request(rid, &description)
                 });
             }
+            SessionCommand::GenerateSummary { text, seq } => {
+                // Same wire as GenerateTitle, fed ONLY the last message; the ack carries
+                // the summary, emitted as SessionEvent::Summary with this `seq` (see
+                // on_control_response). No optimistic state — the UI shows a truncation
+                // it will replace.
+                self.send_tracked(PendingControl::GenerateSummary(seq), |rid| {
+                    control::generate_summary_request(rid, &text)
+                });
+            }
             SessionCommand::Interrupt => {
                 self.send_tracked(PendingControl::Interrupt, control::interrupt_request);
             }
@@ -998,6 +1036,9 @@ mod tests {
         }
         fn emit_title(&self, _session: &str, title: &str, seq: u32) {
             let _ = self.tx.send(SessionEvent::Title { title: title.to_string(), seq });
+        }
+        fn emit_summary(&self, _session: &str, summary: &str, seq: u32) {
+            let _ = self.tx.send(SessionEvent::Summary { summary: summary.to_string(), seq });
         }
         fn emit_remote_control(&self, _session: &str, state: &RemoteControlState) {
             let _ = self.tx.send(SessionEvent::RemoteControl(state.clone()));
@@ -1432,6 +1473,48 @@ mod tests {
             })
             .expect("a Title event should be emitted");
         assert_eq!(title, ("Bug de login".to_string(), 2));
+    }
+
+    /// ACCEPTANCE (deterministic): a GenerateSummary command sends a
+    /// `generate_session_title` control request (the shared wire) carrying ONLY the last
+    /// message plus the ≤6-word summary hint, and its success ack surfaces a `Summary`
+    /// event tagged with the seq we sent.
+    #[test]
+    fn generate_summary_round_trip_emits_summary_event() {
+        let (mut core, mut events, mut out) = test_core();
+        core.on_command(SessionCommand::GenerateSummary {
+            text: "Peux-tu corriger le crash au login stp".to_string(),
+            seq: 5,
+        });
+
+        let sent = drain(&mut out);
+        let req = find_req(&sent, "generate_session_title").expect("a generate_session_title request");
+        let desc = req["request"]["description"].as_str().expect("description is a string");
+        assert!(desc.starts_with("Peux-tu corriger le crash au login stp"), "message leads, got: {desc:?}");
+        assert!(desc.contains("at most 6 words"), "summary hint appended, got: {desc:?}");
+        assert_eq!(req["request"]["persist"], json!(false));
+        let rid = req["request_id"].as_str().expect("request_id").to_string();
+
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": rid,
+                    "response": { "title": "Corriger le crash login" }
+                }
+            }))
+            .unwrap(),
+        );
+
+        let summary = drain(&mut events)
+            .into_iter()
+            .find_map(|e| match e {
+                SessionEvent::Summary { summary, seq } => Some((summary, seq)),
+                _ => None,
+            })
+            .expect("a Summary event should be emitted");
+        assert_eq!(summary, ("Corriger le crash login".to_string(), 5));
     }
 
     /// REGRESSION (no noisy error): a REJECTED generate_session_title must NOT

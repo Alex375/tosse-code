@@ -26,6 +26,7 @@ import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
 import { useWorkflowLiveStore } from "./workflowLive";
 import { useRemoteControlStore } from "./remoteControl";
+import { useLastMessageSummaryStore } from "./lastMessageSummary";
 import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
@@ -384,6 +385,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
         clearWorkFold(c.id);
         useGitViewStore.getState().clear(c.id);
         useRemoteControlStore.getState().clear(c.id);
+        useLastMessageSummaryStore.getState().clear(c.id);
       }
     }
     set((s) => {
@@ -451,6 +453,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // Drop the bridge state too — the session was just stopped, so a lingering
     // "connected" chip would be a stale, misleading indicator.
     useRemoteControlStore.getState().clear(id);
+    // Drop its Flight Deck last-message summary — the card is gone.
+    useLastMessageSummaryStore.getState().clear(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
@@ -1175,6 +1179,7 @@ export async function wipeAllData(): Promise<void> {
   useWorkflowLiveStore.getState().clear();
   useGitViewStore.getState().clearAll();
   useRemoteControlStore.getState().clearAll();
+  useLastMessageSummaryStore.getState().clearAll();
 }
 
 export const useConversations = () =>

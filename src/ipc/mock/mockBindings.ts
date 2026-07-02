@@ -39,6 +39,7 @@ import type {
   SessionStateEvent,
   SessionTaskEvent,
   SessionTitleEvent,
+  SessionSummaryEvent,
   SlashCommand,
   TerminalExitEvent,
   TerminalOutputEvent,
@@ -104,6 +105,7 @@ const sessionStateEvent = new MockEmitter<SessionStateEvent>();
 const sessionCommandsEvent = new MockEmitter<SessionCommandsEvent>();
 const sessionTaskEvent = new MockEmitter<SessionTaskEvent>();
 const sessionTitleEvent = new MockEmitter<SessionTitleEvent>();
+const sessionSummaryEvent = new MockEmitter<SessionSummaryEvent>();
 // No real bridge in the browser mock — never fires, but must exist so the composer's
 // Remote Control chip / event router can subscribe without crashing.
 const sessionRemoteControlEvent = new MockEmitter<SessionRemoteControlEvent>();
@@ -124,6 +126,7 @@ export const mockEvents = {
   sessionCommandsEvent,
   sessionTaskEvent,
   sessionTitleEvent,
+  sessionSummaryEvent,
   sessionRemoteControlEvent,
   tickEvent,
   fsChangeEvent,
@@ -295,6 +298,21 @@ export const mockCommands = {
       const words = description.trim().replace(/\s+/g, " ").split(" ").slice(0, 6).join(" ");
       const title = words ? words.charAt(0).toUpperCase() + words.slice(1) : "Nouvelle conversation";
       sessionTitleEvent.emit({ session, title, seq });
+    }, 40);
+    return ok(null);
+  },
+
+  async generateMessageSummary(
+    session: string,
+    text: string,
+    seq: number,
+  ): Promise<Result<null, string>> {
+    // No real model in the browser mock — synthesize a plausible ≤6-word summary from
+    // the message and emit it (echoing `seq`), so the Flight Deck summary line is
+    // exercised end to end in dev/Playwright.
+    setTimeout(() => {
+      const summary = text.trim().replace(/\s+/g, " ").split(" ").slice(0, 6).join(" ");
+      if (summary) sessionSummaryEvent.emit({ session, summary, seq });
     }, 40);
     return ok(null);
   },
