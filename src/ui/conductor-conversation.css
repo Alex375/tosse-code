@@ -30,6 +30,8 @@
 .cv-repo-act { width:24px; height:24px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; opacity:.8; transition:opacity .12s ease, background .12s ease, color .12s ease; }
 .cv-repo-h:hover .cv-repo-act { opacity:1; }
 .cv-repo-act:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+/* The repo-delete button is a reveal action but danger-tinted on hover (mirrors .cv-sess-del). */
+.cv-repo-del:hover { background:var(--wf-err-bg); color:var(--wf-err); }
 /* Reveal-on-hover: display:none at rest so it reserves ZERO width (a flexed icon button
    won't collapse to 0 via width/min-width alone — its icon keeps a min-content floor), which
    lets the title run right up to the +. On header hover the buttons appear with a small
