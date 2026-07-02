@@ -258,6 +258,16 @@ pub struct UserMsg {
     /// is appended. Absent (→ `None`) on transcript lines.
     #[serde(rename = "isReplay")]
     pub is_replay: Option<bool>,
+    /// On the PERSISTED transcript, a user line injected as a tool_use's expansion (e.g.
+    /// the `SKILL.md` body a `Skill` tool_use expands into) carries `sourceToolUseID` = the
+    /// spawning tool_use's id. ⚠️ On the LIVE stdout wire the CLI OMITS this (AND `isMeta`)
+    /// on that line — proven by `live_capture_skill_body_replay` (both came back `None`
+    /// live, `isMeta:true` + `sourceToolUseID` only on disk). So it is NOT a live-safe
+    /// distinguisher; the live skill-body drop keys on the boilerplate prefix while a
+    /// `Skill` tool_use is armed (see `Assembler::skill_invocation_pending`). Kept for the
+    /// disk shape and future wire changes.
+    #[serde(rename = "sourceToolUseID")]
+    pub source_tool_use_id: Option<String>,
 }
 
 /// `result` — emitted at the end of every turn (NOT end of session; the session

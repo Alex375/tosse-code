@@ -63,6 +63,18 @@ pub struct Assembler {
     /// → suppressed. A remote (phone/web) turn carries a uuid we never sent → surfaced.
     /// Consumed on match (removed), so the set self-bounds to in-flight sends.
     sent_user_uuids: HashSet<String>,
+    /// Armed when a model-invoked `Skill` tool_use is seen; consumed in `ingest_user`.
+    /// A `Skill` tool_use expands into an INJECTED `user` line carrying the SKILL.md body
+    /// (it opens with `Base directory for this skill:`). ON DISK that line is flagged
+    /// `isMeta:true` and dropped by the `is_meta` guard (mirrored by `history.rs`). But on
+    /// the LIVE stdout wire the CLI OMITS `isMeta` (and `sourceToolUseID`) on it — proven
+    /// by a live capture (`live_capture_skill_body_replay`) — so the `is_meta` guard never
+    /// fires live and the body leaked as a fake user bubble. This was LIVE-ONLY: a reload
+    /// reads the on-disk `isMeta:true` line and drops it, which is why it looked "fixed but
+    /// still happening". While armed we drop that body by its boilerplate prefix. Reset at
+    /// end-of-turn (`ingest_result`) so it can never swallow a real user turn (those only
+    /// arrive AFTER a `result`, never mid-turn).
+    skill_invocation_pending: bool,
 }
 
 /// The last-announced friendly labels for the three controls (see [`Assembler`]).
@@ -760,6 +772,12 @@ impl Assembler {
                 if name == "SendMessage" {
                     self.resume_agent_via_send_message(input, out);
                 }
+                // A model-invoked skill: the CLI will inject the SKILL.md body as a bare
+                // `user` text line that — LIVE — lacks the `isMeta` flag we'd normally drop
+                // it by. Arm the drop; it's consumed in `ingest_user`. See the field doc.
+                if name == "Skill" {
+                    self.skill_invocation_pending = true;
+                }
             }
         }
         out.push(SessionEvent::Item(ConversationItem::AssistantMessage {
@@ -855,6 +873,16 @@ impl Assembler {
             _ => {}
         }
         if !text.trim().is_empty() {
+            // Drop the INJECTED SKILL.md body of a model-invoked skill. On disk it's
+            // `isMeta:true` (already dropped above); LIVE the CLI omits `isMeta`, so we
+            // recognise it by its boilerplate prefix WHILE a `Skill` invocation is in
+            // flight this turn. Gated on BOTH (armed flag AND prefix) so a real user turn
+            // is never swallowed — the visible trace is the `Skill` tool_use (SkillChip).
+            if self.skill_invocation_pending
+                && text.trim_start().starts_with("Base directory for this skill:")
+            {
+                return;
+            }
             let uuid = u.uuid.clone().unwrap_or_default();
             // Suppress the echo of a turn WE sent (`--replay-user-messages` returns it
             // with the uuid we stamped) — the UI shows our own messages optimistically.
@@ -877,6 +905,9 @@ impl Assembler {
         self.state.activity = None;
         self.state.awaiting_permission = false;
         self.current_message_id = None;
+        // Disarm the skill-body drop at end-of-turn: a real user turn can only arrive after
+        // this `result`, so the guard must never straddle into the next turn.
+        self.skill_invocation_pending = false;
         // Authoritative end-of-turn context fill + window size. A multi-call turn's
         // top-level `usage` can aggregate its `iterations[]`, so prefer the LAST
         // iteration — the final model call's prompt = current context occupancy.
@@ -1189,6 +1220,12 @@ mod tests {
 
     const CAPTURE: &str = include_str!("fixtures/capture_text.jsonl");
     const CAPTURE_SKILL: &str = include_str!("fixtures/capture_skill.jsonl");
+    /// The LIVE stdout shape of a model-invoked skill (captured via
+    /// `live_capture_skill_body_replay`): the injected SKILL.md body carries NO `isMeta`
+    /// (the CLI only adds it when persisting), so the `is_meta` guard can't drop it — only
+    /// the armed skill-body drop can. This is the fixture the ON-DISK `capture_skill.jsonl`
+    /// could NOT model.
+    const CAPTURE_SKILL_LIVE: &str = include_str!("fixtures/capture_skill_live.jsonl");
 
     #[test]
     fn assembles_fixture_into_normalized_events() {
@@ -1266,6 +1303,71 @@ mod tests {
         assert_eq!(
             user_messages, 0,
             "neither the tool_result ack nor the isMeta SKILL.md body may surface as a user bubble"
+        );
+    }
+
+    /// REGRESSION (task 7e69f8ee): the LIVE wire of a model-invoked skill. The injected
+    /// SKILL.md body arrives WITHOUT `isMeta` (the CLI only adds it when persisting to the
+    /// transcript — proven by `live_capture_skill_body_replay`), so the `is_meta` guard the
+    /// prior fix relied on NEVER fires live and the body leaked as a fake user bubble (bug
+    /// was LIVE-ONLY: a reload read the on-disk `isMeta:true` line and dropped it). The
+    /// armed skill-body drop (a `Skill` tool_use + the boilerplate prefix) must suppress it.
+    /// This fixture has NO `isMeta`, so it FAILS the prior fix and PASSES this one.
+    #[test]
+    fn skill_body_live_line_without_ismeta_is_dropped() {
+        let mut asm = Assembler::new();
+        let mut saw_skill_tool_use = false;
+        let mut user_messages = 0;
+        for line in CAPTURE_SKILL_LIVE.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let msg: CliMessage = serde_json::from_str(line).unwrap();
+            for ev in asm.ingest(&msg) {
+                match ev {
+                    SessionEvent::Item(ConversationItem::AssistantMessage { blocks, .. }) => {
+                        saw_skill_tool_use |= blocks
+                            .iter()
+                            .any(|b| matches!(b, NormalizedBlock::ToolUse { name, .. } if name == "Skill"));
+                    }
+                    SessionEvent::Item(ConversationItem::UserMessage { .. }) => user_messages += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_skill_tool_use, "the Skill tool_use must still surface (the SkillChip)");
+        assert_eq!(
+            user_messages, 0,
+            "the LIVE SKILL.md body (no isMeta) must be dropped, never a fake user bubble"
+        );
+    }
+
+    /// The armed skill-body drop is GATED: it must not swallow a real user turn that merely
+    /// arrives after a skill invocation. A genuine turn only comes after the `result` that
+    /// disarms the guard — and even in-turn, only the exact boilerplate prefix is dropped.
+    #[test]
+    fn skill_body_drop_does_not_swallow_real_next_turn() {
+        let mut asm = Assembler::new();
+        // Drive a full skill invocation (arms, then disarms on `result`).
+        for line in CAPTURE_SKILL_LIVE.lines().filter(|l| !l.trim().is_empty()) {
+            let msg: CliMessage = serde_json::from_str(line.trim()).unwrap();
+            asm.ingest(&msg);
+        }
+        // A real user turn in the NEXT turn must surface normally.
+        let real: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": "thanks, now do X"}]},
+            "uuid": "u-real-next"
+        }))
+        .unwrap();
+        let events = asm.ingest(&real);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                SessionEvent::Item(ConversationItem::UserMessage { text, .. }) if text == "thanks, now do X"
+            )),
+            "a real user turn after a skill invocation must NOT be swallowed by the drop guard"
         );
     }
 
