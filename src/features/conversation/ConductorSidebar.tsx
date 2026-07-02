@@ -137,11 +137,12 @@ async function newConversationInPickedFolder() {
   if (path) void createConversationInRepo(path);
 }
 
-/** One repo swimlane in the sidebar. The header is TWO rows so the repo title gets a full
- *  line to itself (shown in its entirety, as the section's headline): row 1 = collapse
- *  chevron + title (clicking toggles the fold); row 2 = the repo's tools on their own line
- *  (worktrees · extensions · new-conversation), so they never crowd the name. The collapsed
- *  state is per-repo and persisted (see sidebarFold). */
+/** One repo swimlane in the sidebar. Single-line header: collapse chevron + repo title,
+ *  which flexes to run the full width up to the ALWAYS-visible new-conversation (+) button
+ *  pinned at the right. Hovering the header slides in the secondary tools (worktrees,
+ *  extensions) between the title and the +, at which point the title truncates to make room.
+ *  So at rest the name reaches the right edge; the extra tools only appear on demand. The
+ *  collapsed state is per-repo and persisted (see sidebarFold). */
 function RepoGroup({
   repo,
   items,
@@ -159,7 +160,8 @@ function RepoGroup({
   return (
     <div className={"cv-repo" + (collapsed ? " collapsed" : "")}>
       <div className="cv-repo-h">
-        {/* Row 1 — the title headline. Clicking it (chevron + name) folds the section. */}
+        {/* Chevron + title — the collapse toggle. Flexes to fill all the space the buttons
+            leave, so at rest the name runs right up to the + at the edge. */}
         <button
           type="button"
           className="cv-repo-title"
@@ -171,40 +173,39 @@ function RepoGroup({
           <Ico name="chev" className="sm cv-repo-fold-chev" />
           <span className="cv-repo-n">{repoName(repo.path)}</span>
         </button>
-        {/* Row 2 — the repo's tools on their own line: worktrees · extensions · new conversation. */}
-        <div className="cv-repo-actions">
-          <button
-            type="button"
-            className="cv-repo-act"
-            title="Ouvrir les worktrees de ce dépôt"
-            onClick={() => openManager(repo.id)}
-          >
-            <Ico name="branch" className="sm" />
-          </button>
-          <button
-            type="button"
-            className="cv-repo-act"
-            title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
-            onClick={() =>
-              openExtensions({
-                kind: "project",
-                path: repo.path,
-                title: repoName(repo.path),
-                session: null,
-              })
-            }
-          >
-            <Ico name="layers" className="sm" />
-          </button>
-          <button
-            type="button"
-            className="cv-repo-act"
-            title="Nouvelle conversation dans ce dépôt"
-            onClick={() => void createConversationInRepo(repo.path)}
-          >
-            <Ico name="plus" className="sm" />
-          </button>
-        </div>
+        {/* Worktrees + extensions — revealed only on header hover (0-width at rest). */}
+        <button
+          type="button"
+          className="cv-repo-act cv-repo-reveal"
+          title="Ouvrir les worktrees de ce dépôt"
+          onClick={() => openManager(repo.id)}
+        >
+          <Ico name="branch" className="sm" />
+        </button>
+        <button
+          type="button"
+          className="cv-repo-act cv-repo-reveal"
+          title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
+          onClick={() =>
+            openExtensions({
+              kind: "project",
+              path: repo.path,
+              title: repoName(repo.path),
+              session: null,
+            })
+          }
+        >
+          <Ico name="layers" className="sm" />
+        </button>
+        {/* New conversation (+) — always visible, pinned at the right edge. */}
+        <button
+          type="button"
+          className="cv-repo-act"
+          title="Nouvelle conversation dans ce dépôt"
+          onClick={() => void createConversationInRepo(repo.path)}
+        >
+          <Ico name="plus" className="sm" />
+        </button>
       </div>
       {collapsed ? null : items.length === 0 ? (
         <div className="cv-repo-empty">Aucune conversation</div>

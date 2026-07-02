@@ -11,13 +11,13 @@
 .cv-search:hover { background:var(--wf-panel-2); border-color:var(--wf-line-2); color:var(--wf-tx); }
 .cv-sess-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior-y:contain; padding:6px 6px 6px; display:flex; flex-direction:column; gap:12px; }
 .cv-repo { display:flex; flex-direction:column; gap:3px; }
-/* Two-row repo header. Row 1 (.cv-repo-title) = the fold toggle + the repo title, which
-   owns a full line so it shows in its entirety and reads as the section's headline. Row 2
-   (.cv-repo-actions) = the repo's tools, moved off the title line so they never crowd it. */
-.cv-repo-h { display:flex; flex-direction:column; gap:2px; padding:9px 6px 5px 4px; }
+/* Single-line repo header: chevron + title (flexes to run full-width up to the always-on +),
+   then the reveal-on-hover tools (worktrees, extensions), then the + pinned at the right. */
+.cv-repo-h { display:flex; align-items:center; gap:1px; padding:8px 5px 6px 4px; }
 .cv-repo-h .wf-ico { color:var(--wf-tx-lo); }
-/* Title row: chevron + name; the whole row is the collapse toggle (a big, obvious target). */
-.cv-repo-title { display:flex; align-items:center; gap:6px; width:100%; min-width:0; border:0; background:transparent; font:inherit; color:inherit; padding:3px 5px; margin:-3px -5px; border-radius:6px; cursor:pointer; text-align:left; }
+/* Chevron + title — the collapse toggle. Flexes to fill all the space the buttons leave, so
+   at rest the name runs right up to the + at the edge. */
+.cv-repo-title { flex:1; min-width:0; display:flex; align-items:center; gap:6px; border:0; background:transparent; font:inherit; color:inherit; padding:3px 5px; margin:-3px -3px -3px -5px; border-radius:6px; cursor:pointer; text-align:left; }
 .cv-repo-title:hover { background:var(--wf-panel-2); }
 /* The title itself — the important element: normal case (fits more than the old uppercase),
    larger and semibold, in the strong text colour, so it clearly headlines the section. */
@@ -25,11 +25,18 @@
 /* Fold chevron — points down when expanded, rotates to point right when collapsed. */
 .cv-repo-fold-chev { flex:0 0 auto; transition:transform .16s ease; }
 .cv-repo.collapsed .cv-repo-fold-chev { transform:rotate(-90deg); }
-/* Actions row: worktrees · extensions · new conversation. Indented under the title text
-   (past the chevron); small, subtle icon buttons that brighten on hover. */
-.cv-repo-actions { display:flex; align-items:center; gap:1px; padding-left:16px; }
-.cv-repo-act { width:26px; height:24px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; opacity:.75; transition:opacity .12s ease, background .12s ease, color .12s ease; }
-.cv-repo-act:hover { opacity:1; background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+/* Action buttons. The + carries only .cv-repo-act (always shown); worktree/extensions add
+   .cv-repo-reveal (0-width at rest → slide in on header hover, truncating the title). */
+.cv-repo-act { width:24px; height:24px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; opacity:.8; transition:opacity .12s ease, background .12s ease, color .12s ease; }
+.cv-repo-h:hover .cv-repo-act { opacity:1; }
+.cv-repo-act:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+/* Reveal-on-hover: display:none at rest so it reserves ZERO width (a flexed icon button
+   won't collapse to 0 via width/min-width alone — its icon keeps a min-content floor), which
+   lets the title run right up to the +. On header hover the buttons appear with a small
+   fade/slide, and the title truncates to make room. */
+.cv-repo-reveal { display:none; }
+.cv-repo-h:hover .cv-repo-reveal { display:inline-flex; animation:cv-reveal-in .14s ease; }
+@keyframes cv-reveal-in { from { opacity:0; transform:translateX(-3px); } to { opacity:1; transform:none; } }
 .cv-repo-empty { font-size:11.5px; color:var(--wf-tx-xlo); padding:3px 9px 6px 27px; font-style:italic; }
 .cv-sess-list { display:flex; flex-direction:column; gap:1px; padding:2px 6px; }
 /* Row = the hover/active target; it holds the main button + the kebab menu. */
