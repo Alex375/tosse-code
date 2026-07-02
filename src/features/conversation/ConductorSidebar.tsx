@@ -137,9 +137,11 @@ async function newConversationInPickedFolder() {
   if (path) void createConversationInRepo(path);
 }
 
-/** One repo swimlane in the sidebar: a header (collapse chevron · name/worktree ·
- *  extensions · new-conversation · count) and, unless collapsed, its conversation
- *  rows. The collapsed state is per-repo and persisted (see sidebarFold). */
+/** One repo swimlane in the sidebar. The header is TWO rows so the repo title gets a full
+ *  line to itself (shown in its entirety, as the section's headline): row 1 = collapse
+ *  chevron + title (clicking toggles the fold); row 2 = the repo's tools on their own line
+ *  (worktrees · extensions · new-conversation), so they never crowd the name. The collapsed
+ *  state is per-repo and persisted (see sidebarFold). */
 function RepoGroup({
   repo,
   items,
@@ -157,50 +159,52 @@ function RepoGroup({
   return (
     <div className={"cv-repo" + (collapsed ? " collapsed" : "")}>
       <div className="cv-repo-h">
+        {/* Row 1 — the title headline. Clicking it (chevron + name) folds the section. */}
         <button
           type="button"
-          className="cv-repo-fold"
+          className="cv-repo-title"
           title={collapsed ? "Déplier ce dépôt" : "Replier ce dépôt"}
           aria-label={collapsed ? "Déplier ce dépôt" : "Replier ce dépôt"}
           aria-expanded={!collapsed}
           onClick={() => toggleFold(repo.id)}
         >
           <Ico name="chev" className="sm cv-repo-fold-chev" />
-        </button>
-        {/* The repo title is a button that opens this repo's worktree manager. The branch
-            glyph (the app's worktree icon, as on WorktreeBadge) is revealed to the RIGHT of
-            the name on hover and turns coral — advertising the click without cluttering the
-            header when idle. */}
-        <button
-          type="button"
-          className="cv-repo-wt"
-          title="Ouvrir les worktrees de ce dépôt"
-          onClick={() => openManager(repo.id)}
-        >
           <span className="cv-repo-n">{repoName(repo.path)}</span>
-          <Ico name="branch" className="sm cv-repo-wt-hint" />
         </button>
-        <button
-          className="cv-repo-ext"
-          title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
-          onClick={() =>
-            openExtensions({
-              kind: "project",
-              path: repo.path,
-              title: repoName(repo.path),
-              session: null,
-            })
-          }
-        >
-          <Ico name="layers" className="sm" />
-        </button>
-        <button
-          className="cv-repo-add"
-          title="Nouvelle conversation dans ce dépôt"
-          onClick={() => void createConversationInRepo(repo.path)}
-        >
-          <Ico name="plus" className="sm" />
-        </button>
+        {/* Row 2 — the repo's tools on their own line: worktrees · extensions · new conversation. */}
+        <div className="cv-repo-actions">
+          <button
+            type="button"
+            className="cv-repo-act"
+            title="Ouvrir les worktrees de ce dépôt"
+            onClick={() => openManager(repo.id)}
+          >
+            <Ico name="branch" className="sm" />
+          </button>
+          <button
+            type="button"
+            className="cv-repo-act"
+            title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
+            onClick={() =>
+              openExtensions({
+                kind: "project",
+                path: repo.path,
+                title: repoName(repo.path),
+                session: null,
+              })
+            }
+          >
+            <Ico name="layers" className="sm" />
+          </button>
+          <button
+            type="button"
+            className="cv-repo-act"
+            title="Nouvelle conversation dans ce dépôt"
+            onClick={() => void createConversationInRepo(repo.path)}
+          >
+            <Ico name="plus" className="sm" />
+          </button>
+        </div>
       </div>
       {collapsed ? null : items.length === 0 ? (
         <div className="cv-repo-empty">Aucune conversation</div>
