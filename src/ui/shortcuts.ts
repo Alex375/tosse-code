@@ -77,6 +77,35 @@ export function isSoundToggleChord(e: SoundToggleChordEvent): boolean {
   return e.key.toLowerCase() === "m";
 }
 
+/** The minimal shape we decide the settings chord on. Like the LETTER chords (and
+ *  unlike the digit chords) it reads the produced `e.key`, not the physical `e.code`. */
+export interface SettingsChordEvent {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+/**
+ * Whether `e` is the "open settings" chord: ⌘/Ctrl+, — the macOS-standard Preferences
+ * shortcut.
+ *
+ * We match the PRODUCED character `e.key === ","`, NOT the physical `e.code === "Comma"`
+ * — same AZERTY reasoning as {@link isUndoChord}/{@link isSoundToggleChord}, and the
+ * OPPOSITE of the digit chords. The comma is a character whose physical position moves
+ * between layouts: on AZERTY the key the user reads as "," produces `e.key === ","`
+ * UNSHIFTED but sits at QWERTY's `KeyM` position, while `e.code === "Comma"` there is the
+ * ";" key. Keying off `e.code` would fire on the wrong physical key and never on the one
+ * the user reads as comma. Because "," is unshifted on both QWERTY and AZERTY, Shift
+ * disqualifies (keeps ⌘⇧, free); Alt disqualifies too. App-global like the other chords:
+ * ⌘, never types a character, so it fires without the editable-target guard.
+ */
+export function isSettingsChord(e: SettingsChordEvent): boolean {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return false;
+  return e.key === ",";
+}
+
 /**
  * Whether focus sits in a control that owns its OWN undo, so a global ⌘Z must not be
  * hijacked from it: a text input/textarea/select, any contenteditable, the Monaco

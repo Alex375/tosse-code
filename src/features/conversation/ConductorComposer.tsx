@@ -17,7 +17,11 @@ import {
   DEFAULT_PERMISSION_MODE,
   useConversationsStore,
 } from "../../store/conversationsStore";
-import { prefetchSlashCommands, useSlashCommands } from "../../store/commandsStore";
+import {
+  prefetchSlashCommands,
+  refetchSlashCommands,
+  useSlashCommands,
+} from "../../store/commandsStore";
 import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts";
 import { useEffectiveCleanOutput } from "../../store/display";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
@@ -26,9 +30,11 @@ import { useContextData } from "../../store/contextData";
 import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
 import { useUltraBlast } from "../../store/ultraBlast";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
+import { RemoteControlChip } from "./RemoteControlChip";
 import {
   SlashCommandMenu,
   filterSlashCommands,
+  isReloadSkillsCommand,
   slashTokenAt,
   type SlashToken,
 } from "./SlashCommandMenu";
@@ -46,6 +52,10 @@ import styles from "./ConductorComposer.module.css";
 // The real Claude models. Wire value = CLI alias (sent verbatim to set_model and
 // used at spawn); the hint surfaces Opus's 1M context window. Default = Opus 4.8.
 const MODEL_OPTS: [string, string, string?][] = [
+  // Fable 5: time-limited preview model (special rate limit, until 2026-07-07). Same
+  // effort tier as Opus (see effortLevelsForModel). Alias "fable" is sent verbatim to
+  // set_model. Pinned at the top while the preview window is open.
+  ["Fable 5", "fable", "7 juil."],
   ["Opus 4.8", "opus", "1M"],
   ["Sonnet 4.6", "sonnet"],
   ["Haiku 4.5", "haiku"],
@@ -91,6 +101,7 @@ function modelFamily(id?: string | null): string | null {
   if (s.includes("opus")) return "opus";
   if (s.includes("sonnet")) return "sonnet";
   if (s.includes("haiku")) return "haiku";
+  if (s.includes("fable")) return "fable";
   return null;
 }
 
@@ -101,6 +112,7 @@ function modelLabel(id?: string | null): string {
   if (s.includes("opus")) return "Opus 4.8";
   if (s.includes("sonnet")) return "Sonnet 4.6";
   if (s.includes("haiku")) return "Haiku 4.5";
+  if (s.includes("fable")) return "Fable 5";
   return id;
 }
 
@@ -349,6 +361,10 @@ export const ConductorComposer = forwardRef<
     // `queued`: busy at send time → the CLI will inject this mid-turn, so the
     // bubble shows an "en attente" badge until the turn ends.
     send.mutate({ text: t, worktree: useWorktree && isFresh, queued: busy });
+    // `/reload-skills` makes the CLI re-scan on-disk skills; mirror that in the
+    // `/` menu by re-fetching this cwd's catalogue (a fresh spawn reads disk
+    // afresh), overwriting the once-per-session cache. Fire-and-forget.
+    if (isReloadSkillsCommand(t)) void refetchSlashCommands(cwd);
     setText("");
     histNav.current = IDLE_NAV;
     setSlashToken(null);
@@ -588,9 +604,9 @@ export const ConductorComposer = forwardRef<
             })
           }
           title="Extensions de cette conversation — MCP (statut live), plugins, skills, sous-agents"
+          aria-label="Extensions"
         >
           <Ico name="layers" className="sm" />
-          <span className="wf-chip-t">Extensions</span>
         </button>
         {/* Clean-output toggle — fold each round's work behind a "Travail de Claude"
             block so only the final message stays in clear. PER-CONVERSATION: the toggle
@@ -605,6 +621,7 @@ export const ConductorComposer = forwardRef<
             useConversationsStore.getState().setConvCleanOutput(session, !cleanOutput)
           }
           title="Clean output (cette conversation) — n'afficher que le message final de chaque réponse ; replier le travail de Claude (outils, réflexion, étapes)"
+          aria-label="Clean output"
           style={
             cleanOutput
               ? { borderColor: "var(--wf-accent)", color: "var(--wf-accent)" }
@@ -612,8 +629,13 @@ export const ConductorComposer = forwardRef<
           }
         >
           <Ico name="list" className="sm" />
-          <span className="wf-chip-t">Clean output</span>
         </button>
+        {/* Remote control — bridge this conversation to claude.ai/code + the Claude
+            mobile app (native /remote-control). Messages sent from the phone/web arrive
+            live in this thread. Shows the active state + the session link when on.
+            Pass the pending worktree choice so enabling it on a brand-new conversation
+            still spawns in the chosen worktree. */}
+        <RemoteControlChip session={session} worktreeOnSpawn={useWorktree && isFresh} />
         {/* Worktree checkbox — only before the session spawns (first message).
             Explicit empty/checked box so the on/off state is unambiguous. */}
         {isFresh ? (

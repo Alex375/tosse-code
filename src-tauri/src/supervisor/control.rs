@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
 
-use super::model::{McpAuthResult, McpServerLive, SlashCommand};
+use super::model::{McpAuthResult, McpServerLive, RemoteControlState, SlashCommand};
 
 /// Permission mode, switched at runtime via `set_permission_mode` (spec §4.5).
 /// The wire tokens are exactly these camelCase strings.
@@ -480,6 +480,61 @@ pub fn parse_mcp_authenticate(line: &Value, err: Option<&str>) -> McpAuthResult 
     }
 }
 
+/// Build a `remote_control` control request — enable/disable this session's Remote
+/// Control bridge (the native `/remote-control`), mirroring the official VS Code
+/// extension SDK transport (`enableRemoteControl(enabled, name?) → request({subtype:
+/// "remote_control", enabled, name?})`). The optional `name` labels the session on
+/// claude.ai/code. On success the binary answers with a `session_url` (parsed by
+/// [`parse_remote_control`]); disabling returns no URL.
+pub fn remote_control_request(request_id: &str, enabled: bool, name: Option<&str>) -> Value {
+    let mut request = json!({ "subtype": "remote_control", "enabled": enabled });
+    if let Some(n) = name {
+        request["name"] = json!(n);
+    }
+    control_request(request_id, request)
+}
+
+/// Parse a `remote_control` control response into a [`RemoteControlState`]. Like
+/// `mcp_status`/`mcp_authenticate`, the payload is doubly nested (`response.response`)
+/// and carries `{session_url, connect_url}` when enabling. `enabled` is the direction
+/// we asked for; `err` is a routed control-response rejection (surfaced to the UI, not
+/// a fatal session error). A wire success with no `session_url` is treated as an error
+/// so the UI never shows "connected" without a link to actually control the session.
+pub fn parse_remote_control(line: &Value, enabled: bool, err: Option<&str>) -> RemoteControlState {
+    if let Some(e) = err {
+        return RemoteControlState {
+            status: "error".to_string(),
+            session_url: None,
+            error: Some(e.to_string()),
+        };
+    }
+    if !enabled {
+        return RemoteControlState {
+            status: "disconnected".to_string(),
+            session_url: None,
+            error: None,
+        };
+    }
+    let session_url = line
+        .get("response")
+        .and_then(|r| r.get("response"))
+        .and_then(|p| p.get("session_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    match session_url {
+        Some(url) => RemoteControlState {
+            status: "connected".to_string(),
+            session_url: Some(url),
+            error: None,
+        },
+        None => RemoteControlState {
+            status: "error".to_string(),
+            session_url: None,
+            error: Some("Le bridge n'a pas renvoyé d'URL de session.".to_string()),
+        },
+    }
+}
+
 /// A successful `control_response` carrying a permission ALLOW result (spec §5.2).
 /// Note the doubly-nested `response.response` and the camelCase result fields.
 pub fn permission_allow_response(request_id: &str, tool_use_id: &str, updated_input: Value) -> Value {
@@ -603,6 +658,78 @@ mod tests {
         assert_eq!(r["response"]["response"]["behavior"], json!("deny"));
         assert_eq!(r["response"]["response"]["message"], json!("not allowed in tests"));
         assert_eq!(r["response"]["response"]["toolUseID"], json!("toolu_9"));
+    }
+
+    #[test]
+    fn remote_control_request_builds_enable_and_disable_wire() {
+        // Mirrors the VS Code extension SDK: {subtype:"remote_control", enabled, name?}.
+        let on = remote_control_request("req-1", true, Some("My Project"));
+        assert_eq!(on["type"], json!("control_request"));
+        assert_eq!(on["request"]["subtype"], json!("remote_control"));
+        assert_eq!(on["request"]["enabled"], json!(true));
+        assert_eq!(on["request"]["name"], json!("My Project"));
+        // No name (the toggle path) → the field is omitted, not null.
+        let off = remote_control_request("req-2", false, None);
+        assert_eq!(off["request"]["enabled"], json!(false));
+        assert!(off["request"].get("name").is_none());
+    }
+
+    #[test]
+    fn parse_remote_control_enable_success_yields_connected_with_url() {
+        // The URL is doubly nested (response.response), like mcp_status/authenticate.
+        let line = json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "req-1",
+                "response": {
+                    "session_url": "https://claude.ai/code?session=abc",
+                    "connect_url": "https://x"
+                }
+            }
+        });
+        let s = parse_remote_control(&line, true, None);
+        assert_eq!(s.status, "connected");
+        assert_eq!(s.session_url.as_deref(), Some("https://claude.ai/code?session=abc"));
+        assert!(s.error.is_none());
+    }
+
+    #[test]
+    fn parse_remote_control_disable_yields_disconnected() {
+        let line = json!({
+            "type": "control_response",
+            "response": { "subtype": "success", "request_id": "r", "response": {} }
+        });
+        let s = parse_remote_control(&line, false, None);
+        assert_eq!(s.status, "disconnected");
+        assert!(s.session_url.is_none());
+        assert!(s.error.is_none());
+    }
+
+    #[test]
+    fn parse_remote_control_rejection_yields_error_message() {
+        let line = json!({
+            "type": "control_response",
+            "response": { "subtype": "error", "request_id": "r" }
+        });
+        let s = parse_remote_control(&line, true, Some("Remote Control disabled by org policy"));
+        assert_eq!(s.status, "error");
+        assert_eq!(s.error.as_deref(), Some("Remote Control disabled by org policy"));
+        assert!(s.session_url.is_none());
+    }
+
+    #[test]
+    fn parse_remote_control_enable_without_url_is_error_not_fake_connected() {
+        // A wire "success" that omits session_url must NOT show as connected (there'd
+        // be no link to actually control the session) — it surfaces as an error.
+        let line = json!({
+            "type": "control_response",
+            "response": { "subtype": "success", "request_id": "r", "response": {} }
+        });
+        let s = parse_remote_control(&line, true, None);
+        assert_eq!(s.status, "error");
+        assert!(s.session_url.is_none());
+        assert!(s.error.is_some());
     }
 
     #[test]

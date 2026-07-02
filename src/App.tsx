@@ -27,9 +27,11 @@ import {
   useConversationsStore,
 } from "./store/conversationsStore";
 import { useNotifications } from "./store/notifications";
+import { useSettingsUi } from "./store/settingsUi";
 import { NavBtn, Tag, Win } from "./ui/kit";
 import {
   isEditableTarget,
+  isSettingsChord,
   isSoundToggleChord,
   isUndoChord,
   viewForShortcut,
@@ -70,9 +72,10 @@ export default function App() {
   // ⌘/Ctrl+1 → Conversation, ⌘/Ctrl+2 → Flight Deck. Works from anywhere (even the
   // composer): ⌘+digit never types a character, so it won't clash with editing. The
   // physical-key / modifier logic lives in `viewForShortcut` (pure + unit-tested).
+  // ⌘/Ctrl+, opens Settings (the macOS-standard Preferences chord).
   // ⌘/Ctrl+Z restores the last conversation deleted via its × (the no-confirm delete's
   // undo) — but ONLY when focus isn't in a control with its own undo (composer, Monaco,
-  // rename input, terminal), so we never steal their Z. Both decisions are pure helpers.
+  // rename input, terminal), so we never steal their Z. All decisions are pure helpers.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const target = viewForShortcut(e);
@@ -87,6 +90,14 @@ export default function App() {
       if (isSoundToggleChord(e)) {
         e.preventDefault();
         useNotifications.getState().toggleSound();
+        return;
+      }
+      // ⌘, opens the Settings panel — the macOS-standard Preferences shortcut. Like the
+      // other chords it never types a character, so it fires app-wide without an
+      // editable-target guard. Decision lives in the pure `isSettingsChord` helper.
+      if (isSettingsChord(e)) {
+        e.preventDefault();
+        useSettingsUi.getState().openSettings();
         return;
       }
       if (isUndoChord(e) && !isEditableTarget(document.activeElement)) {

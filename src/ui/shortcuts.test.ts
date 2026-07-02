@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   isEditableTarget,
+  isSettingsChord,
   isSoundToggleChord,
   isUndoChord,
   viewForShortcut,
+  type SettingsChordEvent,
   type SoundToggleChordEvent,
   type UndoChordEvent,
   type ViewShortcutEvent,
@@ -19,6 +21,10 @@ function uev(p: Partial<UndoChordEvent>): UndoChordEvent {
 
 function sev(p: Partial<SoundToggleChordEvent>): SoundToggleChordEvent {
   return { key: "m", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...p };
+}
+
+function cev(p: Partial<SettingsChordEvent>): SettingsChordEvent {
+  return { key: ",", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...p };
 }
 
 describe("viewForShortcut", () => {
@@ -85,6 +91,28 @@ describe("isSoundToggleChord", () => {
     expect(isSoundToggleChord(sev({ shiftKey: true }))).toBe(false); // ⇧M without ⌘/Ctrl
     expect(isSoundToggleChord(sev({ metaKey: true, shiftKey: true, altKey: true }))).toBe(false);
     expect(isSoundToggleChord(sev({ key: "m" }))).toBe(false); // bare m
+  });
+});
+
+describe("isSettingsChord", () => {
+  it("⌘, / Ctrl+, is the settings chord", () => {
+    expect(isSettingsChord(cev({ metaKey: true }))).toBe(true);
+    expect(isSettingsChord(cev({ ctrlKey: true }))).toBe(true);
+  });
+
+  it("keys off the PRODUCED character e.key, not the physical code (AZERTY safety)", () => {
+    // The comma is a character whose physical position moves across layouts: on AZERTY
+    // the key read as "," produces e.key="," unshifted but sits at QWERTY's KeyM
+    // position (e.code="Comma" there is the ";" key). So we track the produced ",",
+    // same reasoning as the letter chords — never the physical e.code.
+    expect(isSettingsChord(cev({ metaKey: true, key: ";" }))).toBe(false);
+    expect(isSettingsChord(cev({ metaKey: true, key: "." }))).toBe(false);
+  });
+
+  it("requires ⌘/Ctrl and rejects Shift or Alt", () => {
+    expect(isSettingsChord(cev({}))).toBe(false); // bare comma, no modifier
+    expect(isSettingsChord(cev({ metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isSettingsChord(cev({ metaKey: true, altKey: true }))).toBe(false);
   });
 });
 

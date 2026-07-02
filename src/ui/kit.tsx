@@ -187,6 +187,19 @@ export function Dot({ s, pulse }: { s: StreamState; pulse?: boolean }) {
   return <span className={"wf-dot " + st + (live ? " pulse" : "")} />;
 }
 
+/** A dedicated "this conversation is running" indicator with more presence than a
+ *  plain pulsing dot: a steady green core emitting two staggered sonar rings (pure
+ *  CSS, GPU-friendly transform/opacity; rings are `::before`/`::after` in the CSS,
+ *  and honour `prefers-reduced-motion`). Used in the sidebar for a conversation whose
+ *  turn is in flight — the "indicateur de run plus travaillé". */
+export function RunPulse() {
+  return (
+    <span className="cv-run-ind" aria-hidden="true">
+      <i />
+    </span>
+  );
+}
+
 /** The three bouncing "working" dots — the shared motif used by the main thread
  *  indicator and the pinned bars (AgentBar / BashBar), so a running agent or
  *  background command reads identically across the UI. */
@@ -324,13 +337,16 @@ export function ChipBtn({
   icon,
   iconNode,
   children,
+  className,
   ...rest
 }: { icon?: string; iconNode?: ReactNode } & ButtonHTMLAttributes<HTMLButtonElement>) {
   // A disabled chip opens no menu, so the dropdown chevron would be misleading.
   // `iconNode` lets a chip render a custom leading mark (e.g. the Claude logo)
-  // instead of a named stroke icon.
+  // instead of a named stroke icon. `className` is MERGED (not overridden) so a caller
+  // can add a modifier class without losing `wf-chip` (which carries the transparent-bg
+  // reset — dropping it falls back to the native button's light background).
   return (
-    <button className="wf-chip" {...rest}>
+    <button className={"wf-chip" + (className ? " " + className : "")} {...rest}>
       {iconNode ?? (icon ? <Ico name={icon} className="sm" /> : null)}
       {children ? <span className="wf-chip-t">{children}</span> : null}
       {rest.disabled ? null : <Ico name="chev" className="sm wf-chip-chev" />}

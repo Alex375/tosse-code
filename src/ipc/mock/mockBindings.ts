@@ -27,12 +27,14 @@ import type {
   PersistedState,
   PlanUsage,
   Pong,
+  RemoteControlState,
   RepoRecord,
   Result,
   SearchHit,
   SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
+  SessionRemoteControlEvent,
   SessionStatePayload,
   SessionStateEvent,
   SessionTaskEvent,
@@ -102,6 +104,9 @@ const sessionStateEvent = new MockEmitter<SessionStateEvent>();
 const sessionCommandsEvent = new MockEmitter<SessionCommandsEvent>();
 const sessionTaskEvent = new MockEmitter<SessionTaskEvent>();
 const sessionTitleEvent = new MockEmitter<SessionTitleEvent>();
+// No real bridge in the browser mock — never fires, but must exist so the composer's
+// Remote Control chip / event router can subscribe without crashing.
+const sessionRemoteControlEvent = new MockEmitter<SessionRemoteControlEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
 // No real filesystem in the browser mock — these never fire, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
@@ -119,6 +124,7 @@ export const mockEvents = {
   sessionCommandsEvent,
   sessionTaskEvent,
   sessionTitleEvent,
+  sessionRemoteControlEvent,
   tickEvent,
   fsChangeEvent,
   fsWatchErrorEvent,
@@ -258,6 +264,23 @@ export const mockCommands = {
     rec.lastState = { ...rec.lastState, effort: "xhigh", ultracode: true };
     sessionStateEvent.emit({ session, state: rec.lastState });
     return ok(null);
+  },
+
+  async setRemoteControl(
+    session: string,
+    enabled: boolean,
+    _name: string | null,
+  ): Promise<Result<RemoteControlState, string>> {
+    // No real bridge in the browser mock — synthesize a plausible connected state
+    // (with a fake claude.ai/code URL) so the composer chip is exercised end to end.
+    const state: RemoteControlState = enabled
+      ? {
+          status: "connected",
+          session_url: `https://claude.ai/code?session=mock-${session}`,
+          error: null,
+        }
+      : { status: "disconnected", session_url: null, error: null };
+    return ok(state);
   },
 
   async generateConversationTitle(

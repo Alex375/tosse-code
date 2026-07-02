@@ -12,13 +12,13 @@
 //! The assembler owns the coarse [`SessionStatePayload`]; the session asks it to
 //! reflect permission / mode changes so all state lives in one place.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
 use super::model::{
     BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ConversationItem, NormalizedBlock,
-    RateLimitSnapshot, SessionEvent, SessionStatePayload,
+    RateLimitSnapshot, RemoteControlState, SessionEvent, SessionStatePayload,
 };
 use super::protocol::{
     AssistantMsg, CliMessage, RateLimitMsg, ResultMsg, StreamEventMsg, SystemMsg,
@@ -57,6 +57,12 @@ pub struct Assembler {
     /// scan was pure waste on every one. Kept in lock-step with each task's `tool_use_id`
     /// via [`Assembler::link_tool_use`].
     tasks_by_tool_use: HashMap<String, String>,
+    /// Uuids of user turns WE wrote to stdin (see [`Assembler::note_sent_user_message`]).
+    /// `--replay-user-messages` echoes every user turn back on stdout with its uuid;
+    /// an echo whose uuid is in here is OUR own message (already shown optimistically)
+    /// → suppressed. A remote (phone/web) turn carries a uuid we never sent → surfaced.
+    /// Consumed on match (removed), so the set self-bounds to in-flight sends.
+    sent_user_uuids: HashSet<String>,
 }
 
 /// The last-announced friendly labels for the three controls (see [`Assembler`]).
@@ -92,6 +98,14 @@ impl Assembler {
     /// Read-only view of the current session state.
     pub fn state(&self) -> &SessionStatePayload {
         &self.state
+    }
+
+    /// Record the uuid of a user turn WE just wrote to `claude`'s stdin, so its
+    /// `--replay-user-messages` echo (same uuid) is recognised as our own and NOT
+    /// re-rendered (the UI already showed it optimistically). Called by the session
+    /// actor right before it sends the message. See [`Assembler::ingest_user`].
+    pub fn note_sent_user_message(&mut self, uuid: &str) {
+        self.sent_user_uuids.insert(uuid.to_string());
     }
 
     /// Flip the "awaiting permission" flag and return the resulting state event.
@@ -321,6 +335,24 @@ impl Assembler {
             SystemMsg::TaskProgress(t) => self.ingest_task_progress(t, out),
             SystemMsg::TaskUpdated(t) => self.ingest_task_updated(t, out),
             SystemMsg::TaskNotification(t) => self.ingest_task_notification(t, out),
+            // Remote Control health: a bridged session's remote surface dropped
+            // (`disconnected`) or the bridge errored (`error`, with a `detail`). This
+            // only ever DOWNGRADES — "connected" comes from the `remote_control`
+            // control response, never from here. Any other `state` is ignored
+            // (forward-compat). Not persisted in `self.state`: the front's
+            // remote-control store, seeded by the control-response ack, owns it.
+            SystemMsg::BridgeState { state, detail } => {
+                let status = match state.as_deref() {
+                    Some("disconnected") => "disconnected",
+                    Some("error") => "error",
+                    _ => return,
+                };
+                out.push(SessionEvent::RemoteControl(RemoteControlState {
+                    status: status.to_string(),
+                    session_url: None,
+                    error: if status == "error" { detail.clone() } else { None },
+                }));
+            }
             // Other subtypes are discarded by the protocol layer's catch-all; we
             // surface nothing for them yet.
             SystemMsg::Unknown => {}
@@ -734,30 +766,74 @@ impl Assembler {
     }
 
     fn ingest_user(&mut self, u: &UserMsg, out: &mut Vec<SessionEvent>) {
-        // A `user` message is the delivery vehicle for tool_result blocks.
-        if let Some(Value::Array(blocks)) = u.message.get("content") {
-            for b in blocks {
-                if b.get("type").and_then(Value::as_str) == Some("tool_result") {
-                    let tool_use_id = b
-                        .get("tool_use_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let content = b.get("content").cloned().unwrap_or(Value::Null);
-                    // A background `Bash`/`Monitor` tool_result announces where its output
-                    // is being written ("…Output is being written to: <path>"). Capture
-                    // that absolute path NOW so the output popover can read (and live-tail)
-                    // it — the CLI writes to a temp dir the app can't reconstruct.
-                    if let Some(path) = output_file_from_tool_result(&content) {
-                        self.set_task_output_file(&tool_use_id, path, out);
+        // Injected/meta lines are never real turns — drop them exactly as the
+        // transcript restore does (history.rs `push_user`), so live and reload agree.
+        if u.is_meta == Some(true) {
+            return;
+        }
+        // A `user` message carries two things we surface: `tool_result` blocks (always),
+        // AND — when the session is bridged (Remote Control) — a turn typed on the
+        // phone/web, which the binary injects into the stream as an ordinary text user
+        // message. Our OWN messages are shown optimistically and are NOT echoed here (no
+        // `--replay-user-messages`), so a text user message on the live stream is
+        // remote-originated: surface it (keyed by uuid → the UI dedupes a re-delivery)
+        // or it would only appear on reload. Mirrors history.rs `push_user`.
+        let mut text = String::new();
+        match u.message.get("content") {
+            Some(Value::String(s)) => text.push_str(s),
+            Some(Value::Array(blocks)) => {
+                for b in blocks {
+                    match b.get("type").and_then(Value::as_str) {
+                        Some("text") => {
+                            if let Some(t) = b.get("text").and_then(Value::as_str) {
+                                if !text.is_empty() {
+                                    text.push('\n');
+                                }
+                                text.push_str(t);
+                            }
+                        }
+                        Some("tool_result") => {
+                            let tool_use_id = b
+                                .get("tool_use_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            let content = b.get("content").cloned().unwrap_or(Value::Null);
+                            // A background `Bash`/`Monitor` tool_result announces where its
+                            // output is being written ("…Output is being written to: <path>").
+                            // Capture that absolute path NOW so the output popover can read
+                            // (and live-tail) it — the CLI writes to a temp dir the app can't
+                            // reconstruct.
+                            if let Some(path) = output_file_from_tool_result(&content) {
+                                self.set_task_output_file(&tool_use_id, path, out);
+                            }
+                            out.push(SessionEvent::Item(ConversationItem::ToolResult {
+                                tool_use_id,
+                                content,
+                                is_error: b.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+                                parent_tool_use_id: u.parent_tool_use_id.clone(),
+                            }));
+                        }
+                        _ => {}
                     }
-                    out.push(SessionEvent::Item(ConversationItem::ToolResult {
-                        tool_use_id,
-                        content,
-                        is_error: b.get("is_error").and_then(Value::as_bool).unwrap_or(false),
-                        parent_tool_use_id: u.parent_tool_use_id.clone(),
-                    }));
                 }
+            }
+            _ => {}
+        }
+        if !text.trim().is_empty() {
+            let uuid = u.uuid.clone().unwrap_or_default();
+            // Suppress the echo of a turn WE sent (`--replay-user-messages` returns it
+            // with the uuid we stamped) — the UI shows our own messages optimistically.
+            // A remote (phone/web) turn carries a uuid we never sent, so it is surfaced.
+            if !self.sent_user_uuids.remove(&uuid) {
+                out.push(SessionEvent::Item(ConversationItem::UserMessage {
+                    id: uuid,
+                    text,
+                    parent_tool_use_id: u.parent_tool_use_id.clone(),
+                    // A live wire turn is an out-of-order replay to splice into place;
+                    // a real remote turn always carries `isReplay:true` here.
+                    replay: u.is_replay == Some(true),
+                }));
             }
         }
     }
@@ -1767,5 +1843,147 @@ mod tests {
         assert_eq!(detail["control"], serde_json::json!("Modèle"));
         assert_eq!(detail["from"], serde_json::json!("Opus 4.8"));
         assert_eq!(detail["to"], serde_json::json!("Sonnet 4.6"));
+    }
+
+    /// `system/bridge_state` is a Remote Control HEALTH signal: a `disconnected` /
+    /// `error` state DOWNGRADES the bridge (emitting a `RemoteControl` event); any
+    /// other `state` is ignored, and it never carries a session URL (that only comes
+    /// from the control response).
+    #[test]
+    fn bridge_state_disconnected_and_error_downgrade_but_other_is_ignored() {
+        let mut asm = seeded();
+        let disconnected: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "bridge_state", "state": "disconnected"
+        }))
+        .unwrap();
+        match asm.ingest(&disconnected).as_slice() {
+            [SessionEvent::RemoteControl(s)] => {
+                assert_eq!(s.status, "disconnected");
+                assert!(s.session_url.is_none());
+                assert!(s.error.is_none());
+            }
+            other => panic!("expected one RemoteControl event, got {other:?}"),
+        }
+
+        let errored: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "bridge_state", "state": "error", "detail": "bridge closed"
+        }))
+        .unwrap();
+        match asm.ingest(&errored).as_slice() {
+            [SessionEvent::RemoteControl(s)] => {
+                assert_eq!(s.status, "error");
+                assert_eq!(s.error.as_deref(), Some("bridge closed"));
+            }
+            other => panic!("expected one RemoteControl error event, got {other:?}"),
+        }
+
+        // A `connected`/unknown state on bridge_state is NOT authoritative → ignored.
+        let connected: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "system", "subtype": "bridge_state", "state": "connected"
+        }))
+        .unwrap();
+        assert!(asm.ingest(&connected).is_empty(), "bridge_state never drives connected");
+    }
+
+    /// A remote-originated user turn (typed on the phone while the session is bridged)
+    /// arrives as an ordinary text `user` message on the live stream — it must surface
+    /// as a `UserMessage` (keyed by uuid), or it would only appear on reload.
+    #[test]
+    fn remote_user_text_message_surfaces_as_user_message_live() {
+        let mut asm = seeded();
+        // String content, carrying the live `isReplay:true` marker → replay=true.
+        let m: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": "salut depuis le téléphone" },
+            "uuid": "u-remote-1", "isReplay": true
+        }))
+        .unwrap();
+        match asm.ingest(&m).as_slice() {
+            [SessionEvent::Item(ConversationItem::UserMessage { id, text, replay, .. })] => {
+                assert_eq!(id, "u-remote-1");
+                assert_eq!(text, "salut depuis le téléphone");
+                assert!(*replay, "a live wire echo carries replay=true → spliced by the UI");
+            }
+            other => panic!("expected one UserMessage, got {other:?}"),
+        }
+        // Array content with a text block.
+        let m2: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": [{ "type": "text", "text": "deuxième" }] },
+            "uuid": "u-remote-2"
+        }))
+        .unwrap();
+        match asm.ingest(&m2).as_slice() {
+            [SessionEvent::Item(ConversationItem::UserMessage { id, text, .. })] => {
+                assert_eq!(id, "u-remote-2");
+                assert_eq!(text, "deuxième");
+            }
+            other => panic!("expected one UserMessage, got {other:?}"),
+        }
+    }
+
+    /// A `user` message that only carries a `tool_result` (no text) must emit the
+    /// ToolResult but NOT a spurious empty UserMessage.
+    #[test]
+    fn tool_result_only_user_message_emits_no_user_message() {
+        let mut asm = seeded();
+        let m: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "toolu_1", "content": "ok" }
+            ] },
+            "uuid": "u-tr"
+        }))
+        .unwrap();
+        let events = asm.ingest(&m);
+        assert!(
+            events.iter().all(|e| !matches!(e, SessionEvent::Item(ConversationItem::UserMessage { .. }))),
+            "a tool_result-only user message must not emit a UserMessage"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, SessionEvent::Item(ConversationItem::ToolResult { .. }))),
+            "the tool_result must still be surfaced"
+        );
+    }
+
+    /// A user turn WE sent (uuid recorded via `note_sent_user_message`) is echoed back
+    /// by `--replay-user-messages` — that echo must be SUPPRESSED (the UI shows it
+    /// optimistically). The suppression is one-shot (the uuid is consumed), which
+    /// self-bounds the set — a message is only ever replayed once.
+    #[test]
+    fn own_sent_user_message_echo_is_suppressed_one_shot() {
+        let mut asm = seeded();
+        asm.note_sent_user_message("mine-1");
+        let echo: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user", "uuid": "mine-1", "isReplay": true,
+            "message": { "role": "user", "content": "hello" }
+        }))
+        .unwrap();
+        assert!(asm.ingest(&echo).is_empty(), "our own replayed turn must be suppressed");
+        // The uuid is consumed: were the same uuid to arrive again (it never does in
+        // practice), it would now surface — proving the set self-bounds.
+        assert!(
+            asm.ingest(&echo).iter().any(|e| matches!(
+                e,
+                SessionEvent::Item(ConversationItem::UserMessage { .. })
+            )),
+            "the suppression is one-shot (uuid consumed)"
+        );
+    }
+
+    /// An injected/meta user line (`isMeta:true` — command output, system reminders,
+    /// the queued "while you were working" wrapper) is NOT a real turn → dropped, just
+    /// like the transcript restore does.
+    #[test]
+    fn meta_user_message_is_dropped() {
+        let mut asm = seeded();
+        let m: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": "<system-reminder>…</system-reminder>" },
+            "isMeta": true,
+            "uuid": "u-meta"
+        }))
+        .unwrap();
+        assert!(asm.ingest(&m).is_empty(), "a meta user line must be dropped");
     }
 }

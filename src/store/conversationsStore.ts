@@ -25,11 +25,13 @@ import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
 import { useWorkflowLiveStore } from "./workflowLive";
+import { useRemoteControlStore } from "./remoteControl";
 import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
 import { clearWorkFold, clearAllWorkFold } from "./workFold";
+import { clearSidebarFold, clearAllSidebarFold } from "./sidebarFold";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useGitViewStore } from "../features/git/gitViewStore";
 import { clearMentionCache } from "../features/conversation/mentionCache";
@@ -370,6 +372,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
   removeRepo: (path) => {
     const repo = get().repos.find((r) => r.path === path);
     if (!repo) return;
+    // Forget this repo's sidebar collapse state (the group is about to disappear).
+    clearSidebarFold(repo.id);
     // Kill the integrated terminal of every conversation under this repo (the rows
     // are about to be cascade-deleted) so no PTY shell is orphaned.
     for (const c of get().conversations) {
@@ -379,6 +383,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
         clearComposerDraft(c.id);
         clearWorkFold(c.id);
         useGitViewStore.getState().clear(c.id);
+        useRemoteControlStore.getState().clear(c.id);
       }
     }
     set((s) => {
@@ -443,6 +448,9 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // policy as the claude session above. No-op if it never opened a terminal.
     disposeTerminal(id);
     useGitViewStore.getState().clear(id);
+    // Drop the bridge state too — the session was just stopped, so a lingering
+    // "connected" chip would be a stale, misleading indicator.
+    useRemoteControlStore.getState().clear(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
@@ -977,6 +985,9 @@ export async function stopConversationSession(convId: string): Promise<void> {
   // busy=true) and the composer would stay locked. Reset it to idle so the
   // conversation reads as off and a new message can re-spawn it.
   useConversationStore.getState().clearState(convId);
+  // Same reason: the bridge died with the process, but its `ended` clear won't fire
+  // (handle already cleared) — drop the remote-control state here so the chip resets.
+  useRemoteControlStore.getState().clear(convId);
   if (res.status !== "ok") throw new Error(res.error);
 }
 
@@ -1052,16 +1063,19 @@ export async function loadConversationHistory(convId: string): Promise<void> {
     return;
   }
   if (res.data.length === 0) return;
-  const { ensureSession, applyItem, applyContextFill, markSeen } =
+  const { ensureSession, applyItem, applyContextFill, markSeen, reanchorReplay } =
     useConversationStore.getState();
   ensureSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // The transcript carries NO `turn_result`, so the remote-replay anchor was never
+  // re-armed during hydration — pin it to the end now, so the FIRST live remote turn
+  // splices at the tail of the restored history, not above it.
+  reanchorReplay(convId);
   // Root the editor on the worktree this conversation actually lives in, read back
   // from the transcript (its live cwd is in-memory only and lost on restart).
   rehydrateWorktreeCwd(convId, res.data);
-  // The replayed transcript ends on a past turn_result, which arms "review". But a
-  // historical completion is not a fresh "Claude just finished, go look" — mark it
-  // seen so only genuine LIVE completions surface as review.
+  // Mark the restored history seen: a historical completion is not a fresh "Claude
+  // just finished, go look", so only genuine LIVE completions surface as review.
   markSeen(convId);
   // Seed the context ring from the transcript so it shows immediately on open,
   // before any new live turn reports usage. A missing/unreadable transcript is NOT
@@ -1101,16 +1115,18 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
     return; // keep the current timeline
   }
   if (res.data.length === 0) return; // nothing on disk → keep timeline
-  const { resetSession, applyItem, applyContextFill, markSeen } =
+  const { resetSession, applyItem, applyContextFill, markSeen, reanchorReplay } =
     useConversationStore.getState();
   resetSession(convId);
   for (const item of res.data) applyItem(convId, item);
+  // Transcript carries no `turn_result` → pin the remote-replay anchor to the tail so
+  // a later live remote turn splices at the end, not above the restored history.
+  reanchorReplay(convId);
   // Re-root the editor on the conversation's actual worktree, re-derived from the
   // freshly re-read transcript (live cwd is in-memory only).
   rehydrateWorktreeCwd(convId, res.data);
-  // Replayed history ends on a past turn_result; mark it seen so turning the
-  // stream on doesn't flash an old conversation as "review" (only fresh LIVE
-  // completions should).
+  // Mark restored history seen so turning the stream on doesn't flash an old
+  // conversation as "review" (only fresh LIVE completions should).
   markSeen(convId);
   // Re-seed the context ring from the transcript (resetSession cleared it); window
   // from the persisted cache (the real 200k-vs-1M value learned on a prior turn).
@@ -1146,6 +1162,7 @@ export async function wipeAllData(): Promise<void> {
   clearAllTodoBarOpen();
   clearAllComposerDrafts();
   clearAllWorkFold();
+  clearAllSidebarFold();
   autoTitlePending.clear();
   titleContext.clear();
   titleGenCount.clear();
@@ -1157,6 +1174,7 @@ export async function wipeAllData(): Promise<void> {
   useBackgroundTasksStore.getState().clear();
   useWorkflowLiveStore.getState().clear();
   useGitViewStore.getState().clearAll();
+  useRemoteControlStore.getState().clearAll();
 }
 
 export const useConversations = () =>

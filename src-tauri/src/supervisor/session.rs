@@ -21,8 +21,8 @@ use tokio::sync::{mpsc, oneshot};
 use super::assembler::Assembler;
 use super::control::{self, InboundControl, PermissionDecision, PermissionMode};
 use super::model::{
-    ConversationItem, McpAuthResult, McpServerLive, PermissionRequestPayload, SessionEmitter,
-    SessionEvent,
+    ConversationItem, McpAuthResult, McpServerLive, PermissionRequestPayload, RemoteControlState,
+    SessionEmitter, SessionEvent,
 };
 use super::protocol::CliMessage;
 use super::transport::{self, SpawnConfig, Transport, TransportError};
@@ -68,6 +68,14 @@ pub enum SessionCommand {
     McpAuthenticate {
         server_name: String,
         reply: oneshot::Sender<McpAuthResult>,
+    },
+    /// Enable/disable this session's Remote Control bridge (native `/remote-control`).
+    /// The reply carries the resulting state — on enable, `connected` + the
+    /// claude.ai/code `session_url`; on disable, `disconnected`; on rejection, `error`.
+    SetRemoteControl {
+        enabled: bool,
+        name: Option<String>,
+        reply: oneshot::Sender<RemoteControlState>,
     },
     Shutdown,
 }
@@ -249,6 +257,23 @@ impl SessionHandle {
         }
     }
 
+    /// Enable/disable this session's Remote Control bridge (native `/remote-control`),
+    /// returning the resulting state (connected + `session_url`, or disconnected, or
+    /// error). Bounded wait, like `mcp_authenticate`: a non-answering CLI or a dropped
+    /// reply (session ended) surfaces as [`SessionError::Closed`].
+    pub async fn set_remote_control(
+        &self,
+        enabled: bool,
+        name: Option<String>,
+    ) -> Result<RemoteControlState, SessionError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(SessionCommand::SetRemoteControl { enabled, name, reply: tx }).await?;
+        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(state)) => Ok(state),
+            _ => Err(SessionError::Closed),
+        }
+    }
+
     pub async fn shutdown(&self) -> Result<(), SessionError> {
         self.send(SessionCommand::Shutdown).await
     }
@@ -354,6 +379,10 @@ struct SessionCore {
     /// In-flight `mcp_authenticate` requests, keyed by `request_id` — the reply
     /// (authUrl / requiresUserAction) is delivered back over the oneshot.
     pending_mcp_auth: HashMap<String, oneshot::Sender<McpAuthResult>>,
+    /// In-flight `remote_control` requests, keyed by `request_id`. The stored `bool`
+    /// is the direction we asked for (enable/disable), so the ack is parsed as a
+    /// `session_url` grant or a plain disconnect; the reply carries the result state.
+    pending_remote_control: HashMap<String, (bool, oneshot::Sender<RemoteControlState>)>,
     next_req: u64,
     /// Outbound JSON lines (→ the process stdin in production, → a test channel
     /// in unit tests).
@@ -387,6 +416,7 @@ impl SessionCore {
             restore_ultracode: initial.ultracode,
             pending_mcp: HashMap::new(),
             pending_mcp_auth: HashMap::new(),
+            pending_remote_control: HashMap::new(),
             next_req: 0,
             outbound,
         }
@@ -502,6 +532,7 @@ impl SessionCore {
             SessionEvent::Commands(c) => self.emitter.emit_commands(&self.id, &c),
             SessionEvent::Task(t) => self.emitter.emit_task(&self.id, &t),
             SessionEvent::Title { title, seq } => self.emitter.emit_title(&self.id, &title, seq),
+            SessionEvent::RemoteControl(s) => self.emitter.emit_remote_control(&self.id, &s),
         }
     }
 
@@ -587,6 +618,14 @@ impl SessionCore {
         // timeline control error — auth failures are expected and actionable there.
         if let Some(reply) = self.pending_mcp_auth.remove(&resp.request_id) {
             let _ = reply.send(control::parse_mcp_authenticate(&v, resp.error.as_deref()));
+            return;
+        }
+        // A `remote_control` reply: parse the ack into a bridge state (connected +
+        // session_url / disconnected / error) and fulfill the caller's oneshot. A
+        // rejection (resp.error) is carried INSIDE the state (surfaced on the toggle),
+        // not as a timeline control error — a refused bridge is expected/actionable.
+        if let Some((enabled, reply)) = self.pending_remote_control.remove(&resp.request_id) {
+            let _ = reply.send(control::parse_remote_control(&v, enabled, resp.error.as_deref()));
             return;
         }
         // The initialize handshake completes exactly once.
@@ -745,7 +784,12 @@ impl SessionCore {
     fn on_command(&mut self, cmd: SessionCommand) {
         match cmd {
             SessionCommand::SendUserText(text) => {
-                if self.send(transport::user_message(text)) {
+                // Stamp a uuid so `--replay-user-messages` echo of THIS turn can be
+                // recognised as our own and suppressed (the UI shows it optimistically);
+                // a remote turn carries a uuid we never recorded, so it surfaces live.
+                let uuid = uuid::Uuid::new_v4().to_string();
+                if self.send(transport::user_message(text, &uuid)) {
+                    self.assembler.note_sent_user_message(&uuid);
                     let ev = self.assembler.set_busy(true);
                     self.emit(ev);
                 } else {
@@ -892,6 +936,14 @@ impl SessionCore {
                     self.pending_mcp_auth.insert(rid, reply);
                 }
             }
+            SessionCommand::SetRemoteControl { enabled, name, reply } => {
+                let rid = self.next_request_id();
+                // Same closed-channel guard: drop `reply` on a failed send so the caller
+                // returns at once (SessionError::Closed) instead of blocking the timeout.
+                if self.send(control::remote_control_request(&rid, enabled, name.as_deref())) {
+                    self.pending_remote_control.insert(rid, (enabled, reply));
+                }
+            }
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown => {}
         }
@@ -946,6 +998,9 @@ mod tests {
         }
         fn emit_title(&self, _session: &str, title: &str, seq: u32) {
             let _ = self.tx.send(SessionEvent::Title { title: title.to_string(), seq });
+        }
+        fn emit_remote_control(&self, _session: &str, state: &RemoteControlState) {
+            let _ = self.tx.send(SessionEvent::RemoteControl(state.clone()));
         }
     }
 
@@ -1286,6 +1341,53 @@ mod tests {
         let lines = drain(&mut out);
         assert_eq!(lines[0]["type"], json!("user"));
         assert_eq!(lines[0]["message"]["content"][0]["text"], json!("hello"));
+        // The turn is stamped with a uuid (so `--replay-user-messages` echo dedup works).
+        assert!(lines[0]["uuid"].as_str().is_some_and(|u| !u.is_empty()));
+    }
+
+    /// ACCEPTANCE (Remote Control live sync): with `--replay-user-messages`, the CLI
+    /// echoes every user turn on stdout. The echo of OUR OWN turn (same uuid we stamped)
+    /// must be SUPPRESSED (the UI shows it optimistically), while a REMOTE turn (a uuid
+    /// we never sent — typed on the phone) must be SURFACED as a `UserMessage`.
+    #[test]
+    fn own_user_message_echo_suppressed_remote_surfaced() {
+        let (mut core, mut events, mut out) = test_core();
+        core.on_command(SessionCommand::SendUserText("hello".to_string()));
+        let uuid = drain(&mut out)[0]["uuid"].as_str().unwrap().to_string();
+        let _ = drain(&mut events); // the busy state event from the send
+
+        // The binary replays OUR message back with the uuid we stamped.
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "user", "uuid": uuid, "isReplay": true,
+                "message": { "role": "user", "content": [{ "type": "text", "text": "hello" }] }
+            }))
+            .unwrap(),
+        );
+        assert!(
+            drain(&mut events).iter().all(|e| !matches!(
+                e,
+                SessionEvent::Item(ConversationItem::UserMessage { .. })
+            )),
+            "our own replayed turn must be suppressed"
+        );
+
+        // A remote turn (uuid we never sent) IS surfaced.
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "user", "uuid": "remote-xyz", "isReplay": true,
+                "message": { "role": "user", "content": "depuis le téléphone" }
+            }))
+            .unwrap(),
+        );
+        assert!(
+            drain(&mut events).iter().any(|e| matches!(
+                e,
+                SessionEvent::Item(ConversationItem::UserMessage { id, text, .. })
+                    if id == "remote-xyz" && text == "depuis le téléphone"
+            )),
+            "a remote turn must be surfaced as a UserMessage"
+        );
     }
 
     /// ACCEPTANCE (deterministic): a GenerateTitle command sends a
@@ -1525,6 +1627,42 @@ mod tests {
         assert_eq!(res.auth_url.as_deref(), Some("https://auth.example/x"));
         assert!(res.requires_user_action);
         assert_eq!(res.error, None);
+    }
+
+    /// ACCEPTANCE: a `SetRemoteControl{enabled:true}` command round-trips — the request
+    /// carries `{subtype:"remote_control", enabled:true}`, and the response's
+    /// `session_url` comes back over the reply channel as a `connected` state.
+    #[test]
+    fn set_remote_control_round_trips_session_url() {
+        let (mut core, _events, mut out) = test_core();
+        let (tx, mut rx) = oneshot::channel();
+        core.on_command(SessionCommand::SetRemoteControl {
+            enabled: true,
+            name: None,
+            reply: tx,
+        });
+        let req = drain(&mut out)
+            .into_iter()
+            .find(|l| l["request"]["subtype"] == json!("remote_control"))
+            .expect("a remote_control control_request should be written");
+        assert_eq!(req["request"]["enabled"], json!(true));
+        let rid = req["request_id"].as_str().unwrap().to_string();
+
+        core.on_message(
+            serde_json::from_value(json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": rid,
+                    "response": { "session_url": "https://claude.ai/code?session=abc" }
+                }
+            }))
+            .unwrap(),
+        );
+
+        let state = rx.try_recv().expect("the remote-control reply should be delivered");
+        assert_eq!(state.status, "connected");
+        assert_eq!(state.session_url.as_deref(), Some("https://claude.ai/code?session=abc"));
     }
 
     /// LIVE end-to-end: spawn a real `claude`, run a tool to completion. In this

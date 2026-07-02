@@ -102,6 +102,25 @@ pub struct McpAuthResult {
     pub error: Option<String>,
 }
 
+/// Live state of a session's Remote Control ("bridge") — the native Claude Code
+/// feature (`/remote-control`) that mirrors this local session onto claude.ai/code
+/// and the Claude mobile app so it can be viewed/driven from another device. Toggled
+/// via a `remote_control` control request; enabling returns `session_url` (the
+/// claude.ai/code link to open). A `connected` bridge can later be DOWNGRADED by a
+/// `system/bridge_state` health message (the phone/web dropped, or the bridge
+/// errored) — "connected" is only ever reached from the control response, never from
+/// `bridge_state`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct RemoteControlState {
+    /// `"disconnected"` | `"connecting"` | `"connected"` | `"error"`.
+    pub status: String,
+    /// The claude.ai/code URL to view & control this session — present when
+    /// `status == "connected"`.
+    pub session_url: Option<String>,
+    /// A rejection / bridge-error message — present when `status == "error"`.
+    pub error: Option<String>,
+}
+
 /// Context-meter seed for a conversation, read from its on-disk transcript so the
 /// ring shows the real fill the moment a conversation is opened / its stream turned
 /// on — before the first new turn streams live usage. `context_window` is the model's
@@ -168,6 +187,11 @@ pub enum ConversationItem {
         id: String,
         text: String,
         parent_tool_use_id: Option<String>,
+        /// `true` for a LIVE echo re-emitted by `--replay-user-messages` (a remote
+        /// phone/web turn): the UI splices it before the current turn's response (it
+        /// can arrive out-of-order). `false` for a chronological transcript restore,
+        /// which the UI appends. See the front `user_message` reducer.
+        replay: bool,
     },
     /// The authoritative assembled assistant message (text + tool_use blocks).
     /// Carries the same `id` as the streamed `message_start` — the UI reconciles.
@@ -409,6 +433,12 @@ pub enum SessionEvent {
     /// out-of-order (stale) response. Applied as the name UNLESS the user set a
     /// custom title in the meantime.
     Title { title: String, seq: u32 },
+    /// The session's Remote Control ("bridge") state changed — either the ack of a
+    /// `remote_control` request we sent (→ connected, carrying the claude.ai/code
+    /// `session_url`, or → disconnected), or an async `system/bridge_state` health
+    /// downgrade (the remote surface dropped / the bridge errored). Drives the
+    /// composer's Remote Control chip.
+    RemoteControl(RemoteControlState),
 }
 
 /// Sink for a session's events. The IPC layer implements this over a Tauri
@@ -420,4 +450,5 @@ pub trait SessionEmitter: Send + Sync + 'static {
     fn emit_commands(&self, session: &str, commands: &[SlashCommand]);
     fn emit_task(&self, session: &str, task: &BackgroundTask);
     fn emit_title(&self, session: &str, title: &str, seq: u32);
+    fn emit_remote_control(&self, session: &str, state: &RemoteControlState);
 }
