@@ -12,7 +12,10 @@ import { FlightDeckReplyModal } from "./features/flightdeck/FlightDeckReplyModal
 import { useFlightdeckModal } from "./features/flightdeck/flightdeckModalStore";
 import { SoundToggle } from "./features/notifications/SoundToggle";
 import { ExtensionsManager } from "./features/extensions/ExtensionsManager";
+import { useExtensionsUi } from "./features/extensions/extensionsUiStore";
 import { HistoryPanel } from "./features/history/HistoryPanel";
+import { useHistoryUi } from "./features/history/historyUiStore";
+import { useEditorStore } from "./features/editor/editorStore";
 import { UltraCodeBlast } from "./features/conversation/UltraCodeBlast";
 import { UpdateBanner } from "./features/settings/UpdateBanner";
 import { AppErrorBanner } from "./ui/AppErrorBanner";
@@ -22,21 +25,27 @@ import { initNotifications } from "./notifications/notify";
 import { primeAudioUnlock } from "./notifications/sound";
 import {
   bootConversations,
+  createConversationInRepo,
+  groupConversationsByRepo,
   repoName,
   useActiveConversationId,
   useConversationRepo,
   useConversations,
   useConversationsStore,
 } from "./store/conversationsStore";
+import { useDisplay, resolveCleanOutput } from "./store/display";
 import { useNotifications } from "./store/notifications";
 import { useSettingsUi } from "./store/settingsUi";
 import { NavBtn, Tag, Win } from "./ui/kit";
 import {
+  ACTION_BINDINGS,
   isEditableTarget,
   isSettingsChord,
   isSoundToggleChord,
   isUndoChord,
+  matchChord,
   viewForShortcut,
+  type ShortcutAction,
   type View,
 } from "./ui/shortcuts";
 
@@ -48,6 +57,11 @@ export default function App() {
   const active = conversations.find((c) => c.id === activeId) ?? null;
   const activeRepo = useConversationRepo(activeId);
   const booted = useRef(false);
+  // Live mirror of the current view, read inside the (deps-light) keydown handler so
+  // conversation-scoped shortcuts (⌘B/⌘J/…) can tell whether we're on the deck without
+  // re-subscribing the listener on every view change.
+  const viewRef = useRef(view);
+  viewRef.current = view;
 
   // The reply modal lives ONLY on the Flight Deck. Switch views through `changeView`
   // so leaving the deck dismisses it SYNCHRONOUSLY (not in a post-render effect): the
@@ -128,11 +142,109 @@ export default function App() {
         // Only consume the key if something was actually restored, so an empty undo
         // stack leaves any other ⌘Z handling untouched.
         if (useConversationsStore.getState().undoRemoveConversation()) e.preventDefault();
+        return;
+      }
+      // The rest of the app-action chords (toggle panels, new/nav conversation,
+      // extensions, history) are driven from the shared ACTION_BINDINGS table so the
+      // Settings → Raccourcis page documents exactly what's wired. Conversation-scoped
+      // ones are inert off the conversation view; global ones fire anywhere. Like the
+      // chords above, ⌘+key never types a character, so they win over the editor.
+      for (const b of ACTION_BINDINGS) {
+        if (!matchChord(e, b.spec)) continue;
+        if (b.scope === "conversation" && viewRef.current !== "conversation") return;
+        if (dispatchAction(b.action)) e.preventDefault();
+        return;
+      }
+    }
+
+    /** Run one app-action shortcut; returns whether it did something (so the caller
+     *  only swallows the key when it actually acted). Reads live store state at event
+     *  time — no stale closures. */
+    function dispatchAction(action: ShortcutAction): boolean {
+      const store = useConversationsStore.getState();
+      const conv = store.conversations.find((c) => c.id === store.activeId) ?? null;
+      const editor = useEditorStore.getState();
+      switch (action) {
+        case "toggle-editor":
+          if (!conv) return false;
+          editor.toggleOpen();
+          return true;
+        case "toggle-terminal":
+          if (!conv) return false;
+          editor.toggleTerminal();
+          return true;
+        case "toggle-git":
+          if (!conv) return false;
+          editor.toggleGit();
+          return true;
+        case "toggle-clean-output": {
+          if (!conv) return false;
+          const eff = resolveCleanOutput(conv.cleanOutput ?? null, useDisplay.getState().cleanOutput);
+          store.setConvCleanOutput(conv.id, !eff);
+          return true;
+        }
+        case "open-extensions":
+          if (!conv) return false;
+          useExtensionsUi.getState().openManager({
+            kind: "conversation",
+            path: conv.liveCwd ?? conv.cwd ?? ".",
+            title: conv.name,
+            session: conv.id,
+          });
+          return true;
+        case "new-conversation": {
+          const repoPath =
+            (conv && store.repos.find((r) => r.id === conv.repoId)?.path) ??
+            store.repos[0]?.path ??
+            null;
+          if (!repoPath) return false;
+          createConversationInRepo(repoPath);
+          changeView("conversation");
+          return true;
+        }
+        case "prev-conversation":
+        case "next-conversation": {
+          const ordered = groupConversationsByRepo(store.repos, store.conversations).flatMap(
+            (g) => g.conversations,
+          );
+          if (ordered.length < 2) return false;
+          const idx = ordered.findIndex((c) => c.id === store.activeId);
+          if (idx < 0) return false;
+          const nextIdx = action === "prev-conversation" ? idx - 1 : idx + 1;
+          if (nextIdx < 0 || nextIdx >= ordered.length) return false; // clamp at the ends
+          store.selectConversation(ordered[nextIdx].id);
+          changeView("conversation");
+          return true;
+        }
+        case "open-history":
+          useHistoryUi.getState().openPanel();
+          return true;
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [changeView]);
+
+  // Claim Escape for the app so it never makes macOS exit NATIVE fullscreen (the OS
+  // default when a keydown reaches AppKit unhandled). This is the SINGLE authority for
+  // that: we preventDefault UNCONDITIONALLY (Monaco/xterm excepted — they own their
+  // Escape), in CAPTURE phase so it lands as early as possible in the dispatch. We
+  // never stopPropagation, so every overlay/menu still receives Escape and closes.
+  //
+  // Because this always sets `defaultPrevented`, overlays must NOT gate their close on
+  // it (that signal is now ours). The one-Escape-closes-one-layer ordering is instead
+  // enforced by the nested drill-in popovers calling `stopPropagation()` — so an outer
+  // window-level modal simply doesn't receive the key when an inner popover consumed it.
+  useEffect(() => {
+    function onEscape(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const el = document.activeElement;
+      if (el && el.closest(".monaco-editor, .xterm")) return;
+      e.preventDefault();
+    }
+    window.addEventListener("keydown", onEscape, true);
+    return () => window.removeEventListener("keydown", onEscape, true);
+  }, []);
 
   return (
     <Win

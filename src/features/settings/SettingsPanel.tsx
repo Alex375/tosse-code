@@ -13,11 +13,13 @@ import { Toggle } from "../../ui/Toggle";
 import { UpdateSection } from "./UpdateSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { ConversationSection } from "./ConversationSection";
+import { ShortcutsSection } from "./ShortcutsSection";
 import styles from "./SettingsPanel.module.css";
 
 const TABS: Array<{ id: SettingsSection; label: string; icon: string }> = [
   { id: "general", label: "Général", icon: "cog" },
   { id: "conversation", label: "Conversation", icon: "chat" },
+  { id: "shortcuts", label: "Raccourcis", icon: "key" },
   { id: "notifications", label: "Notifications", icon: "bell" },
   { id: "updates", label: "Mises à jour", icon: "refresh" },
   { id: "data", label: "Données", icon: "trash" },
@@ -116,6 +118,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
             )}
 
             {section === "conversation" && <ConversationSection />}
+
+            {section === "shortcuts" && <ShortcutsSection />}
 
             {section === "notifications" && <NotificationsSection />}
 

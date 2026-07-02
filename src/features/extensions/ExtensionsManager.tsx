@@ -755,14 +755,12 @@ function MarketplacesPage({
   const total = totalUpdates(plugins);
   const allOn = allMarketplacesAuto(list);
 
-  // Escape closes the overlay, like the app's other dialogs. `!e.defaultPrevented`
-  // keeps to the convention: if a nested layer ever consumes Escape first, we bail.
+  // Escape closes the overlay, like the app's other dialogs. Fullscreen is protected
+  // globally by the capture-phase guard in App.tsx (which always preventDefaults Escape),
+  // so this no longer needs to preventDefault or gate on `defaultPrevented`.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !e.defaultPrevented) {
-        e.preventDefault();
-        onClose();
-      }
+      if (e.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
