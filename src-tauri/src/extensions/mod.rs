@@ -82,12 +82,38 @@ pub struct PluginInfo {
     pub description: Option<String>,
     pub enabled: bool,
     pub scope: ExtScope,
+    /// Whether the plugin's installed pin differs from its marketplace's currently
+    /// downloaded pin (compared on-disk — see [`compute_update`]). Only as fresh as
+    /// the last `claude plugin marketplace update`; the UI's "Vérifier" button runs
+    /// that refresh then re-reads. Never a false positive: unknown pins → `false`.
+    pub update_available: bool,
+    /// The marketplace's human version when it is KNOWN and DIFFERS from the installed
+    /// one (for a "vX → vY" badge). `None` for sha-only updates (a new commit with the
+    /// same semver) — the UI falls back to a generic "Mise à jour disponible" then.
+    pub latest_version: Option<String>,
     /// What the plugin provides (scanned from its cache dir), regardless of
     /// enabled state — so the UI can show "5 skills" even when toggled off.
     pub skill_count: u32,
     pub agent_count: u32,
     pub command_count: u32,
     pub mcp_count: u32,
+}
+
+/// One marketplace registered with Claude Code (`~/.claude/plugins/known_marketplaces.json`),
+/// with its resolved auto-update state. Auto-update is a PER-MARKETPLACE flag (the only
+/// granularity the CLI exposes — there is no per-plugin auto-update). The count of
+/// plugins with an update available is derived on the UI side by grouping [`PluginInfo`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+pub struct MarketplaceInfo {
+    /// Registry key (`tosse-plugins`, `claude-plugins-official`, …) — matches the
+    /// `<marketplace>` half of a plugin id.
+    pub name: String,
+    /// Short human source (a `owner/repo`, a URL, or the source kind) for display.
+    pub source: String,
+    /// Resolved auto-update: `settings.json` `extraKnownMarketplaces[name].autoUpdate`
+    /// (what we write, and what the CLI reads) takes precedence over the mirrored
+    /// `known_marketplaces.json` flag. Absent in both = off.
+    pub auto_update: bool,
 }
 
 /// One skill available to a repository (file-based or plugin-provided).
@@ -202,6 +228,51 @@ struct SettingsJson {
     enabled_plugins: BTreeMap<String, bool>,
     #[serde(default, rename = "mcpServers")]
     mcp_servers: BTreeMap<String, McpRaw>,
+    /// User-declared marketplaces. The authoritative source of the per-marketplace
+    /// `autoUpdate` flag (mirrored into `known_marketplaces.json` by the CLI).
+    #[serde(default, rename = "extraKnownMarketplaces")]
+    extra_known_marketplaces: BTreeMap<String, ExtraMarketplace>,
+}
+
+/// One `extraKnownMarketplaces[name]` entry — only the fields we read.
+#[derive(Debug, Default, Deserialize)]
+struct ExtraMarketplace {
+    #[serde(default, rename = "autoUpdate")]
+    auto_update: Option<bool>,
+}
+
+/// `~/.claude/plugins/known_marketplaces.json` — the CLI's registry of every known
+/// marketplace (flat map keyed by name). We read the source (for display), the
+/// install location (to locate its `marketplace.json`), and the mirrored autoUpdate.
+#[derive(Debug, Default, Clone, Deserialize)]
+struct KnownMarketplace {
+    #[serde(default)]
+    source: Option<serde_json::Value>,
+    #[serde(default, rename = "installLocation")]
+    install_location: Option<String>,
+    #[serde(default, rename = "autoUpdate")]
+    auto_update: Option<bool>,
+}
+
+/// A `<marketplace>/.claude-plugin/marketplace.json` — the upstream catalogue that
+/// pins each plugin's latest version/commit. Only the `plugins` array is read; each
+/// entry is kept as a raw value ([`extract_pin`] plucks the pin out) because the
+/// `source` field is polymorphic (an object for git/url sources, a bare string for a
+/// relative path source).
+#[derive(Debug, Default, Deserialize)]
+struct MarketplaceManifest {
+    #[serde(default)]
+    plugins: Vec<serde_json::Value>,
+}
+
+/// A plugin's pin in a marketplace catalogue: the git commit `sha` (git-pinned
+/// sources) and/or a human `version` (path/version sources). Either can be absent —
+/// `tosse-workflow`'s bare-`url` source, for instance, carries neither, so its update
+/// status is simply "unknown" (never a false positive).
+#[derive(Debug, Default, Clone, PartialEq)]
+struct MarketplacePin {
+    sha: Option<String>,
+    version: Option<String>,
 }
 
 /// `~/.claude/plugins/installed_plugins.json` (version 2).
@@ -223,6 +294,11 @@ struct PluginInstall {
     install_path: Option<String>,
     #[serde(default)]
     version: Option<String>,
+    /// The full git commit the plugin was installed at (git-sourced plugins). The
+    /// reliable pin for update detection — compared against the marketplace's
+    /// `source.sha`. Absent for path-sourced plugins (compared by `version` instead).
+    #[serde(default, rename = "gitCommitSha")]
+    git_commit_sha: Option<String>,
 }
 
 /// `<plugin>/.claude-plugin/plugin.json` — only name/description/version.
@@ -315,6 +391,13 @@ pub fn list_extensions(repo_path: &str) -> ExtensionsSnapshot {
     // --- Plugins (+ their skills/agents/mcp). Only installs relevant to this repo.
     let installed: InstalledPlugins =
         read_or_warn(&home.join(".claude/plugins/installed_plugins.json"), &mut snap.warnings);
+    // Marketplace registry — locates each marketplace's catalogue for update detection.
+    // Best-effort: an absent/broken registry just means "no update info" (never a warning
+    // — a missing registry is normal, and update status degrading to unknown is safe).
+    let known: BTreeMap<String, KnownMarketplace> =
+        read_json(&home.join(".claude/plugins/known_marketplaces.json")).unwrap_or_default();
+    // Each marketplace.json is read at most once per scan (many plugins share one).
+    let mut pin_cache: BTreeMap<String, BTreeMap<String, MarketplacePin>> = BTreeMap::new();
     for (id, installs) in &installed.plugins {
         let Some(install) = relevant_install(installs, repo_path) else {
             continue;
@@ -322,12 +405,26 @@ pub fn list_extensions(repo_path: &str) -> ExtensionsSnapshot {
         let scope = install_scope(install);
         let enabled = settings.enabled_plugins.get(id).copied().unwrap_or(true);
         let marketplace = id.split_once('@').map(|(_, m)| m).unwrap_or("").to_string();
+        // The plugin's key in its marketplace catalogue = the id half before '@'.
+        let plugin_key = id.split_once('@').map(|(n, _)| n).unwrap_or(id);
         let dir = install.install_path.as_deref().map(PathBuf::from);
 
         let manifest: PluginManifest = dir
             .as_ref()
             .and_then(|d| read_json(&d.join(".claude-plugin/plugin.json")))
             .unwrap_or_default();
+
+        // Update detection: installed pin (gitCommitSha / version) vs this plugin's pin
+        // in the marketplace catalogue (read lazily, once per marketplace).
+        let pins = pin_cache
+            .entry(marketplace.clone())
+            .or_insert_with(|| read_marketplace_pins(&home, &marketplace, known.get(&marketplace)));
+        let installed_ver = manifest.version.as_deref().or(install.version.as_deref());
+        let (update_available, latest_version) = compute_update(
+            install.git_commit_sha.as_deref(),
+            installed_ver,
+            pins.get(plugin_key),
+        );
 
         // Scan what the plugin provides (counts always; entries only when enabled).
         let skills = dir
@@ -357,6 +454,8 @@ pub fn list_extensions(repo_path: &str) -> ExtensionsSnapshot {
             description: manifest.description,
             enabled,
             scope,
+            update_available,
+            latest_version,
             skill_count: skills.len() as u32,
             agent_count: agents.len() as u32,
             command_count,
@@ -421,6 +520,39 @@ pub fn list_plugin_contents(repo_path: &str, plugin_id: &str) -> PluginContents 
     }
 }
 
+/// List every marketplace registered with Claude Code, with its resolved auto-update
+/// state (see [`MarketplaceInfo`]). User-global (not repo-scoped): reads
+/// `~/.claude/plugins/known_marketplaces.json` for the registry and
+/// `~/.claude/settings.json` for the authoritative `autoUpdate` (settings wins over
+/// the mirrored registry flag). Best-effort and infallible — absent files yield an
+/// empty list, so the UI degrades to "no marketplaces" rather than failing to open.
+pub fn list_marketplaces() -> Vec<MarketplaceInfo> {
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    let known: BTreeMap<String, KnownMarketplace> =
+        read_json(&home.join(".claude/plugins/known_marketplaces.json")).unwrap_or_default();
+    let settings: SettingsJson =
+        read_json(&home.join(".claude/settings.json")).unwrap_or_default();
+    let mut out: Vec<MarketplaceInfo> = known
+        .iter()
+        .map(|(name, k)| MarketplaceInfo {
+            name: name.clone(),
+            source: display_source(k.source.as_ref()),
+            // settings.json is what we write AND what the CLI reads, so it wins over
+            // the (possibly stale) mirrored flag in known_marketplaces.json.
+            auto_update: settings
+                .extra_known_marketplaces
+                .get(name)
+                .and_then(|e| e.auto_update)
+                .or(k.auto_update)
+                .unwrap_or(false),
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
 // ---- actions ---------------------------------------------------------------
 
 /// Enable or disable a plugin (by id `<plugin>@<marketplace>`) in the user's
@@ -439,24 +571,147 @@ pub fn list_plugin_contents(repo_path: &str, plugin_id: &str) -> PluginContents 
 /// it. A running session reads it at spawn, so the change takes effect on the next
 /// (re)start of a conversation.
 pub fn set_plugin_enabled(plugin_id: &str, enabled: bool) -> Result<(), String> {
-    let home = home_dir().ok_or("répertoire personnel ($HOME) introuvable")?;
-    let path = home.join(".claude/settings.json");
     // A fresh install has no settings.json yet (the CLI writes it only on first
-    // setting change) — treat absent as an empty object so the very first plugin
-    // toggle CREATES the file instead of erroring. A present-but-unreadable file is
-    // still a real error.
+    // setting change) — `write_settings` treats absent as an empty object so the very
+    // first toggle CREATES the file; a present-but-unreadable file is still a real error.
+    let home = home_dir().ok_or("répertoire personnel ($HOME) introuvable")?;
+    write_settings(&home, |text| apply_plugin_enabled(text, plugin_id, enabled))
+}
+
+/// Turn a marketplace's auto-update on/off, writing
+/// `~/.claude/settings.json` `extraKnownMarketplaces[name].autoUpdate` — the
+/// authoritative flag the CLI reads (and mirrors into `known_marketplaces.json`).
+/// Per-marketplace is the ONLY granularity Claude Code exposes (there is no per-plugin
+/// auto-update). Same safety as [`set_plugin_enabled`]: fresh read, single-key change,
+/// atomic write. If the marketplace has no `extraKnownMarketplaces` entry yet, one is
+/// created carrying its `source` (copied from `known_marketplaces.json`) so the entry
+/// stays valid for the CLI.
+pub fn set_marketplace_auto_update(name: &str, enabled: bool) -> Result<(), String> {
+    let home = home_dir().ok_or("répertoire personnel ($HOME) introuvable")?;
+    let source = marketplace_source(&home, name);
+    write_settings(&home, |text| {
+        apply_marketplace_auto_update(text, name, enabled, source.clone())
+    })
+}
+
+/// Turn auto-update on/off for EVERY registered marketplace at once (the global master
+/// toggle) — one atomic settings.json write. Ensures each known marketplace has an
+/// `extraKnownMarketplaces` entry (with its `source`) carrying the new flag.
+pub fn set_all_marketplaces_auto_update(enabled: bool) -> Result<(), String> {
+    let home = home_dir().ok_or("répertoire personnel ($HOME) introuvable")?;
+    let known: BTreeMap<String, KnownMarketplace> =
+        read_json(&home.join(".claude/plugins/known_marketplaces.json")).unwrap_or_default();
+    let entries: Vec<(String, Option<serde_json::Value>)> = known
+        .iter()
+        .map(|(name, k)| (name.clone(), k.source.clone()))
+        .collect();
+    write_settings(&home, |text| {
+        apply_all_marketplaces_auto_update(text, &entries, enabled)
+    })
+}
+
+/// The `source` object of a marketplace, from `known_marketplaces.json` — used to seed
+/// a fresh `extraKnownMarketplaces` entry so it stays valid for the CLI. `None` when
+/// the registry is absent or the marketplace is unknown.
+fn marketplace_source(home: &Path, name: &str) -> Option<serde_json::Value> {
+    let known: BTreeMap<String, KnownMarketplace> =
+        read_json(&home.join(".claude/plugins/known_marketplaces.json")).unwrap_or_default();
+    known.get(name).and_then(|k| k.source.clone())
+}
+
+/// Read `~/.claude/settings.json` fresh, apply `transform`, and write the result back
+/// atomically — the shared read-modify-write spine of [`set_plugin_enabled`] and the
+/// auto-update setters. Absent file → an empty object (the first write creates it).
+fn write_settings(
+    home: &Path,
+    transform: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<(), String> {
+    let path = home.join(".claude/settings.json");
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".to_string(),
         Err(e) => return Err(format!("lecture de settings.json impossible : {e}")),
     };
-    let updated = apply_plugin_enabled(&text, plugin_id, enabled)?;
-    // Ensure ~/.claude exists before the atomic rename (it may not on a fresh install).
+    let updated = transform(&text)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("création du dossier de config impossible : {e}"))?;
     }
     write_atomic(&path, updated.as_bytes())
+}
+
+/// Pure transform: set `extraKnownMarketplaces[name].autoUpdate = enabled` in a
+/// settings.json document, creating the entry (with `source`) if absent, preserving
+/// every other key and its order. Split out so it is unit-testable without the FS.
+fn apply_marketplace_auto_update(
+    text: &str,
+    name: &str,
+    enabled: bool,
+    source: Option<serde_json::Value>,
+) -> Result<String, String> {
+    let mut root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("settings.json illisible : {e}"))?;
+    let obj = root
+        .as_object_mut()
+        .ok_or("settings.json n'est pas un objet JSON")?;
+    set_marketplace_flag(obj, name, enabled, source);
+    serde_json::to_string_pretty(&root).map_err(|e| format!("sérialisation JSON : {e}"))
+}
+
+/// Pure transform for the global master toggle: set `autoUpdate = enabled` on EVERY
+/// listed marketplace in one document. Order-preserving; testable without the FS.
+fn apply_all_marketplaces_auto_update(
+    text: &str,
+    marketplaces: &[(String, Option<serde_json::Value>)],
+    enabled: bool,
+) -> Result<String, String> {
+    let mut root: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("settings.json illisible : {e}"))?;
+    let obj = root
+        .as_object_mut()
+        .ok_or("settings.json n'est pas un objet JSON")?;
+    for (name, source) in marketplaces {
+        set_marketplace_flag(obj, name, enabled, source.clone());
+    }
+    serde_json::to_string_pretty(&root).map_err(|e| format!("sérialisation JSON : {e}"))
+}
+
+/// Set `extraKnownMarketplaces[name].autoUpdate = enabled` on a settings root object,
+/// creating the `extraKnownMarketplaces` map and/or the marketplace entry (seeded with
+/// `source`) as needed. Shared by both auto-update transforms.
+fn set_marketplace_flag(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    name: &str,
+    enabled: bool,
+    source: Option<serde_json::Value>,
+) {
+    if !obj.get("extraKnownMarketplaces").map(|v| v.is_object()).unwrap_or(false) {
+        obj.insert("extraKnownMarketplaces".to_string(), serde_json::json!({}));
+    }
+    let Some(mkts) = obj
+        .get_mut("extraKnownMarketplaces")
+        .and_then(|v| v.as_object_mut())
+    else {
+        return;
+    };
+    let entry = mkts
+        .entry(name.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    // A pre-existing entry that isn't an object (hand-mangled settings.json) would make
+    // `as_object_mut` return None and the flag silently vanish while we report success —
+    // replace it with a fresh object so the write always lands.
+    if !entry.is_object() {
+        *entry = serde_json::json!({});
+    }
+    if let Some(map) = entry.as_object_mut() {
+        // Seed `source` only when creating/replacing (never clobber an existing one).
+        if !map.contains_key("source") {
+            if let Some(src) = source {
+                map.insert("source".to_string(), src);
+            }
+        }
+        map.insert("autoUpdate".to_string(), serde_json::Value::Bool(enabled));
+    }
 }
 
 /// Pure transform: set `enabledPlugins[plugin_id] = enabled` in a settings.json
@@ -573,6 +828,124 @@ fn relevant_install<'a>(installs: &'a [PluginInstall], repo_path: &str) -> Optio
         .iter()
         .find(|i| i.scope.as_deref() == Some("user"))
         .or_else(|| installs.iter().find(|i| i.project_path.as_deref() == Some(repo_path)))
+}
+
+/// Read a marketplace's catalogue and index each plugin's pin by plugin name. The
+/// catalogue lives at `<installLocation>/.claude-plugin/marketplace.json`, falling
+/// back to the conventional `~/.claude/plugins/marketplaces/<name>/…` path when the
+/// registry doesn't say. Missing/unparseable → empty map (update status degrades to
+/// "unknown", never an error).
+fn read_marketplace_pins(
+    home: &Path,
+    marketplace: &str,
+    known: Option<&KnownMarketplace>,
+) -> BTreeMap<String, MarketplacePin> {
+    let dir = known
+        .and_then(|k| k.install_location.clone())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude/plugins/marketplaces").join(marketplace));
+    let manifest: MarketplaceManifest =
+        read_json(&dir.join(".claude-plugin/marketplace.json")).unwrap_or_default();
+    let mut out = BTreeMap::new();
+    for entry in &manifest.plugins {
+        if let Some(name) = entry.get("name").and_then(|v| v.as_str()) {
+            out.insert(name.to_string(), extract_pin(entry));
+        }
+    }
+    out
+}
+
+/// Pluck the pin (git `sha` + human `version`) out of one marketplace `plugins[]`
+/// entry. The `sha` lives at `source.sha` (git-pinned sources); the `version` is the
+/// entry's top-level `version`, else `source.version`. Both optional — an entry can
+/// carry neither (a bare-`url` source), which reads back as "unknown".
+fn extract_pin(entry: &serde_json::Value) -> MarketplacePin {
+    let sha = entry
+        .get("source")
+        .and_then(|s| s.get("sha"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let version = entry
+        .get("version")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            entry
+                .get("source")
+                .and_then(|s| s.get("version"))
+                .and_then(|v| v.as_str())
+        })
+        .map(str::to_string);
+    MarketplacePin { sha, version }
+}
+
+/// Decide whether a plugin has an update and, when meaningful, the target human
+/// version. Pure and total, so it is unit-tested against every pin combination.
+///
+/// Priority: a git `sha` mismatch is authoritative (a new commit) — the human version
+/// may be unchanged, so a "vX → vY" label is offered only when the versions DO differ.
+/// Falls back to a pure `version` comparison for path/version sources. Anything unknown
+/// (missing installed OR marketplace pin) is "no update": we never flag one we can't
+/// prove, so a plugin never nags without cause.
+fn compute_update(
+    installed_sha: Option<&str>,
+    installed_ver: Option<&str>,
+    pin: Option<&MarketplacePin>,
+) -> (bool, Option<String>) {
+    let Some(pin) = pin else {
+        return (false, None);
+    };
+    // Git-pinned: the commit sha is the truth (tolerating abbreviation — see sha_eq).
+    if let (Some(a), Some(b)) = (installed_sha, pin.sha.as_deref()) {
+        if sha_eq(a, b) {
+            return (false, None);
+        }
+        let target = match (installed_ver, pin.version.as_deref()) {
+            (Some(iv), Some(pv)) if iv != pv => Some(pv.to_string()),
+            _ => None,
+        };
+        return (true, target);
+    }
+    // Version-pinned (path sources) or a plugin.json version bump.
+    if let (Some(a), Some(b)) = (installed_ver, pin.version.as_deref()) {
+        if a != b {
+            return (true, Some(b.to_string()));
+        }
+    }
+    (false, None)
+}
+
+/// Whether two git shas denote the same commit, tolerating abbreviation: equal when
+/// they match exactly, or when the shorter is a ≥7-char prefix of the longer.
+/// `installed_plugins.json` stores the FULL 40-char sha, but a marketplace catalogue
+/// may pin an ABBREVIATED one — exact string equality would then flag a permanent
+/// phantom "update available" that `claude plugin update` could never clear. The
+/// 7-char floor is git's default abbreviation length, guarding against a pathologically
+/// short prefix causing a false negative.
+fn sha_eq(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    short.len() >= 7 && long.starts_with(short)
+}
+
+/// A short, human source string for a marketplace `source` object: an `owner/repo`
+/// (github), else a `url`, else the `source` kind, else a bare-string source. Empty
+/// when unknown. Display-only.
+fn display_source(source: Option<&serde_json::Value>) -> String {
+    let Some(s) = source else {
+        return String::new();
+    };
+    if let Some(repo) = s.get("repo").and_then(|v| v.as_str()) {
+        return repo.to_string();
+    }
+    if let Some(url) = s.get("url").and_then(|v| v.as_str()) {
+        return url.to_string();
+    }
+    if let Some(kind) = s.get("source").and_then(|v| v.as_str()) {
+        return kind.to_string();
+    }
+    s.as_str().unwrap_or("").to_string()
 }
 
 /// Map an install's `scope` string to our [`ExtScope`].
@@ -895,6 +1268,137 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&after).unwrap();
         assert_eq!(v["enabledPlugins"]["x@y"], false);
         assert_eq!(v["language"], "french", "existing keys are kept");
+    }
+
+    #[test]
+    fn extract_pin_reads_git_subdir_sha_and_version() {
+        // A git-subdir entry pins a sha; no top-level version.
+        let git = serde_json::json!({
+            "name": "railway",
+            "source": { "source": "git-subdir", "url": "x", "ref": "main", "sha": "aa1e055b" }
+        });
+        assert_eq!(
+            extract_pin(&git),
+            MarketplacePin { sha: Some("aa1e055b".into()), version: None }
+        );
+        // A path source carries a top-level version, no sha.
+        let path = serde_json::json!({ "name": "swift-lsp", "version": "1.0.0", "source": "./plugins/swift-lsp" });
+        assert_eq!(
+            extract_pin(&path),
+            MarketplacePin { sha: None, version: Some("1.0.0".into()) }
+        );
+        // A bare-url source with neither → unknown (never a false positive downstream).
+        let bare = serde_json::json!({ "name": "tosse-workflow", "source": { "source": "url", "url": "x" } });
+        assert_eq!(extract_pin(&bare), MarketplacePin::default());
+    }
+
+    #[test]
+    fn compute_update_sha_is_authoritative_and_version_labels_only_when_differ() {
+        // Same sha → no update, regardless of version.
+        let pin = MarketplacePin { sha: Some("abc".into()), version: Some("1.1.0".into()) };
+        assert_eq!(compute_update(Some("abc"), Some("1.0.0"), Some(&pin)), (false, None));
+        // Different sha, same version → update, but no "vX → vY" label (sha-only bump).
+        let pin = MarketplacePin { sha: Some("def".into()), version: Some("1.0.0".into()) };
+        assert_eq!(compute_update(Some("abc"), Some("1.0.0"), Some(&pin)), (true, None));
+        // Different sha AND version → update with the target version to display.
+        let pin = MarketplacePin { sha: Some("def".into()), version: Some("1.1.0".into()) };
+        assert_eq!(
+            compute_update(Some("abc"), Some("1.0.0"), Some(&pin)),
+            (true, Some("1.1.0".into()))
+        );
+    }
+
+    #[test]
+    fn compute_update_tolerates_abbreviated_marketplace_sha() {
+        // Installed is the full 40-char sha; the marketplace pins an abbreviated one for
+        // the SAME commit → no phantom update (exact `==` would wrongly flag it forever).
+        let full = "aa1e055b0f18d13787232b164cfb7416b553bd03";
+        let pin = MarketplacePin { sha: Some("aa1e055b".into()), version: None };
+        assert_eq!(compute_update(Some(full), None, Some(&pin)), (false, None));
+        // A DIFFERENT abbreviated sha is still an update.
+        let other = MarketplacePin { sha: Some("bbbbbbb".into()), version: None };
+        assert_eq!(compute_update(Some(full), None, Some(&other)), (true, None));
+        // Guard: a too-short (<7) prefix is NOT treated as equal (avoids coincidences).
+        assert!(!sha_eq(full, "aa1e0"));
+        assert!(sha_eq(full, "aa1e055b"));
+        assert!(sha_eq("aa1e055b", full));
+    }
+
+    #[test]
+    fn compute_update_version_only_and_unknown_pins() {
+        // No installed sha (path source): compare versions.
+        let pin = MarketplacePin { sha: None, version: Some("2.0.0".into()) };
+        assert_eq!(
+            compute_update(None, Some("1.0.0"), Some(&pin)),
+            (true, Some("2.0.0".into()))
+        );
+        assert_eq!(compute_update(None, Some("2.0.0"), Some(&pin)), (false, None));
+        // No marketplace pin at all, or no overlapping fields → never an update.
+        assert_eq!(compute_update(Some("abc"), Some("1.0.0"), None), (false, None));
+        let empty = MarketplacePin::default();
+        assert_eq!(compute_update(Some("abc"), Some("1.0.0"), Some(&empty)), (false, None));
+        // Installed has only a sha, marketplace has only a version → can't compare → none.
+        let ver_only = MarketplacePin { sha: None, version: Some("1.1.0".into()) };
+        assert_eq!(compute_update(Some("abc"), None, Some(&ver_only)), (false, None));
+    }
+
+    #[test]
+    fn apply_marketplace_auto_update_sets_flag_seeding_source_and_preserving_order() {
+        // Existing entry (no source seeding, no clobber) — order + siblings intact.
+        let before = r#"{
+  "language": "french",
+  "extraKnownMarketplaces": {
+    "mkt-a": { "source": { "source": "github", "repo": "o/a" } }
+  },
+  "voice": { "enabled": true }
+}"#;
+        let after = apply_marketplace_auto_update(before, "mkt-a", true, None).unwrap();
+        let lang = after.find("\"language\"").unwrap();
+        let mkts = after.find("\"extraKnownMarketplaces\"").unwrap();
+        let voice = after.find("\"voice\"").unwrap();
+        assert!(lang < mkts && mkts < voice, "top-level key order preserved");
+        let v: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v["extraKnownMarketplaces"]["mkt-a"]["autoUpdate"], true);
+        assert_eq!(v["extraKnownMarketplaces"]["mkt-a"]["source"]["repo"], "o/a", "source untouched");
+        assert_eq!(v["voice"]["enabled"], true);
+    }
+
+    #[test]
+    fn apply_marketplace_auto_update_creates_entry_with_seeded_source() {
+        // Absent marketplace → entry created carrying the passed source.
+        let src = serde_json::json!({ "source": "github", "repo": "o/new" });
+        let after = apply_marketplace_auto_update("{}", "mkt-new", false, Some(src)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v["extraKnownMarketplaces"]["mkt-new"]["autoUpdate"], false);
+        assert_eq!(v["extraKnownMarketplaces"]["mkt-new"]["source"]["repo"], "o/new");
+    }
+
+    #[test]
+    fn apply_all_marketplaces_auto_update_sets_every_listed_marketplace() {
+        let before = r#"{"extraKnownMarketplaces":{"a":{"source":{"repo":"o/a"},"autoUpdate":false}}}"#;
+        let mkts = vec![
+            ("a".to_string(), Some(serde_json::json!({ "repo": "o/a" }))),
+            ("b".to_string(), Some(serde_json::json!({ "repo": "o/b" }))),
+        ];
+        let after = apply_all_marketplaces_auto_update(before, &mkts, true).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v["extraKnownMarketplaces"]["a"]["autoUpdate"], true, "existing flipped");
+        assert_eq!(v["extraKnownMarketplaces"]["b"]["autoUpdate"], true, "new added");
+        assert_eq!(v["extraKnownMarketplaces"]["b"]["source"]["repo"], "o/b", "new carries source");
+    }
+
+    #[test]
+    fn display_source_prefers_repo_then_url_then_kind() {
+        assert_eq!(
+            display_source(Some(&serde_json::json!({ "source": "github", "repo": "o/r" }))),
+            "o/r"
+        );
+        assert_eq!(
+            display_source(Some(&serde_json::json!({ "source": "url", "url": "https://x/y.git" }))),
+            "https://x/y.git"
+        );
+        assert_eq!(display_source(Some(&serde_json::json!({ "source": "local" }))), "local");
+        assert_eq!(display_source(None), "");
     }
 
     #[test]

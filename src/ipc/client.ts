@@ -27,6 +27,7 @@ export type {
   GitStatus,
   ImageContent,
   JsonValue,
+  MarketplaceInfo,
   McpAuthResult,
   McpServerInfo,
   McpServerLive,

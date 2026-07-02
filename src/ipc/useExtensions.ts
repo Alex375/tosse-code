@@ -11,7 +11,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { commands } from "./client";
-import type { ExtensionsSnapshot, McpServerLive, PluginContents, Result } from "./client";
+import type {
+  ExtensionsSnapshot,
+  MarketplaceInfo,
+  McpServerLive,
+  PluginContents,
+  Result,
+} from "./client";
 
 /** Throw on the Result.error branch so the query's error state is populated. */
 async function unwrap<T>(p: Promise<Result<T, string>>): Promise<T> {
@@ -153,4 +159,105 @@ export function useSetPluginEnabled(path: string | null) {
   });
 }
 
-export type { ExtensionsSnapshot };
+// ---- Plugin updates (marketplaces + auto-update + on-demand update) -----------
+//
+// Marketplaces are USER-GLOBAL (not repo-scoped), so their list caches under a single
+// key. Auto-update is a PER-MARKETPLACE flag (the only granularity Claude Code exposes)
+// with a global master that flips them all. "Update now" is per-plugin: it shells out
+// to `claude plugin update`, then hot-applies to a live session via `reload_plugins`.
+
+/** Query key for the user-global marketplace list (with per-marketplace auto-update). */
+export const marketplacesKey = () => ["marketplaces"] as const;
+
+/**
+ * The marketplaces registered with Claude Code, each with its resolved auto-update
+ * state. User-global; `path` only gates the fetch (disabled when the manager is
+ * closed / no target). Refetches on window focus so a marketplace added / auto-update
+ * changed from the CLI shows up.
+ */
+export function useMarketplaces(path: string | null) {
+  return useQuery<MarketplaceInfo[]>({
+    queryKey: marketplacesKey(),
+    enabled: !!path,
+    queryFn: () => unwrap(commands.listMarketplaces()),
+    // 0 so the section refetches whenever it (re)mounts — i.e. on every manager open,
+    // matching the "fresh picture on each open" contract the extensions snapshot has.
+    // Our own toggles/refresh invalidate this key too; this only adds the on-open read.
+    staleTime: 0,
+  });
+}
+
+/**
+ * Refresh marketplace(s) from upstream — the network "Vérifier les mises à jour"
+ * action (`claude plugin marketplace update`, all when `name` is omitted). On success
+ * it invalidates BOTH the extensions snapshot (so per-plugin `update_available`
+ * recomputes against the fresh pins) and the marketplace list. Can take a few seconds.
+ */
+export function useCheckPluginUpdates(path: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name?: string | null): Promise<null> =>
+      unwrap(commands.refreshPluginMarketplaces(name ?? null)),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: extensionsKey(path) });
+      void qc.invalidateQueries({ queryKey: marketplacesKey() });
+    },
+  });
+}
+
+/**
+ * Update ONE plugin to its marketplace's latest version (`claude plugin update`),
+ * then — when a live session exists — hot-apply it with `reload_plugins` so a running
+ * conversation picks it up without a restart. A failed hot-reload is non-fatal (the
+ * update is already on disk and lands on the next spawn; a genuine reject still
+ * surfaces in the thread as a control error), so it never fails the mutation. On
+ * success the extensions snapshot is invalidated so the "update available" badge clears.
+ */
+export function useUpdatePlugin(path: string | null, handle: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { pluginId: string; scope: string | null }): Promise<null> => {
+      // Pass the repo/conversation cwd so project/local-scoped updates resolve the
+      // right project (the CLI selects it from the working directory).
+      await unwrap(commands.updatePlugin(args.pluginId, args.scope, path ?? ""));
+      if (handle) {
+        // Best-effort hot-apply; a dead session ("unknown session") is harmless here.
+        try {
+          await unwrap(commands.reloadPlugins(handle));
+        } catch {
+          /* update already written to disk; it applies on the next session spawn */
+        }
+      }
+      return null;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: extensionsKey(path) }),
+  });
+}
+
+/**
+ * Toggle one marketplace's auto-update (writes settings.json). Invalidates the
+ * marketplace list so the switch reflects the new state.
+ */
+export function useSetMarketplaceAutoUpdate(_path: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { name: string; enabled: boolean }): Promise<null> =>
+      unwrap(commands.setMarketplaceAutoUpdate(args.name, args.enabled)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: marketplacesKey() }),
+  });
+}
+
+/**
+ * The global master: turn auto-update on/off for EVERY marketplace at once. `path`
+ * is unused by the command (user-global) but kept in the signature for symmetry.
+ */
+export function useSetAllMarketplacesAutoUpdate(_path: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean): Promise<null> =>
+      unwrap(commands.setAllMarketplacesAutoUpdate(enabled)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: marketplacesKey() }),
+  });
+}
+
+export type { ExtensionsSnapshot, MarketplaceInfo };
