@@ -19,6 +19,7 @@
 // existing conversation — reading the transcript is what fills it back in.
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
+import { uid } from "../util/id";
 import { commands } from "../ipc/client";
 import type { ConversationItem, ConversationRecord, DiskConversation, PermissionMode, RepoRecord } from "../ipc/client";
 import type { ReminderKind } from "../agent/status";
@@ -139,11 +140,6 @@ function asReminderKind(s: string | null): ReminderKind | null {
 export function repoName(path: string): string {
   const parts = path.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || path;
-}
-
-function uid(): string {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  return `id-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
 }
 
 function deriveName(text: string): string {

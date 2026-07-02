@@ -1,6 +1,6 @@
 // User annotations on a proposed plan (ExitPlanMode) — a highlighted span of the rendered
 // plan text plus a comment, PLUS a per-plan general note, keyed by conversation id → tool_use
-// id. Persisted to localStorage with the same lightweight pattern as workFold.ts / display.ts
+// id. Persisted to localStorage via the shared {@link loadJson}/{@link saveJson} helpers
 // (pure UI state, kept out of the SQLite core — no schema migration).
 //
 // Why a store and not local component state: the conversation pane is remounted per
@@ -17,6 +17,8 @@
 // + notes and the undo re-seeds them — this is deliberate user content, unlike the transient
 // UI caches cleared the same way (see conversationsStore removeConversation/undo).
 import { create } from "zustand";
+import { uid } from "../util/id";
+import { loadJson, saveJson } from "./persist";
 
 const ANN_KEY = "tosse:planannotations";
 const NOTE_KEY = "tosse:plannotes";
@@ -44,30 +46,9 @@ export interface PlanConvSnapshot {
   notes: Record<string, string>;
 }
 
-function load<T>(key: string): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return {} as T;
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as T) : ({} as T);
-  } catch {
-    return {} as T;
-  }
-}
-
-function save(key: string, map: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(map));
-  } catch {
-    /* quota / disabled storage — best-effort, ignore */
-  }
-}
-
 /** A unique enough id for a local annotation (no collisions within one plan in practice). */
 export function newAnnotationId(): string {
-  const c = globalThis.crypto as Crypto | undefined;
-  if (c && typeof c.randomUUID === "function") return c.randomUUID();
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return uid();
 }
 
 const EMPTY: PlanAnnotation[] = [];
@@ -82,39 +63,39 @@ interface PlanAnnotationsState {
   clearAll: () => void;
 }
 
-function withList(
-  map: AnnMap,
+// Immutably set (or, when `value` is undefined, delete) `map[conv][key]`, pruning an emptied
+// inner map so the outer map only ever holds conversations with live content. Shared by the
+// annotations map and the notes map — the two differ only in what counts as "empty" (an empty
+// list vs an empty string), which the caller resolves by passing `undefined` to delete.
+function setNested<V>(
+  map: Record<string, Record<string, V>>,
   conv: string,
-  toolUseId: string,
-  next: PlanAnnotation[],
-): AnnMap {
+  key: string,
+  value: V | undefined,
+): Record<string, Record<string, V>> {
   const convMap = { ...(map[conv] ?? {}) };
-  if (next.length === 0) delete convMap[toolUseId];
-  else convMap[toolUseId] = next;
+  if (value === undefined) delete convMap[key];
+  else convMap[key] = value;
   const out = { ...map };
   if (Object.keys(convMap).length === 0) delete out[conv];
   else out[conv] = convMap;
   return out;
 }
 
-function withNote(map: NoteMap, conv: string, toolUseId: string, note: string): NoteMap {
-  const convMap = { ...(map[conv] ?? {}) };
-  if (note === "") delete convMap[toolUseId];
-  else convMap[toolUseId] = note;
-  const out = { ...map };
-  if (Object.keys(convMap).length === 0) delete out[conv];
-  else out[conv] = convMap;
-  return out;
-}
+const withList = (map: AnnMap, conv: string, toolUseId: string, next: PlanAnnotation[]): AnnMap =>
+  setNested(map, conv, toolUseId, next.length === 0 ? undefined : next);
+
+const withNote = (map: NoteMap, conv: string, toolUseId: string, note: string): NoteMap =>
+  setNested(map, conv, toolUseId, note === "" ? undefined : note);
 
 export const usePlanAnnotationsStore = create<PlanAnnotationsState>((set) => ({
-  byConv: load<AnnMap>(ANN_KEY),
-  notes: load<NoteMap>(NOTE_KEY),
+  byConv: loadJson<AnnMap>(ANN_KEY, {}),
+  notes: loadJson<NoteMap>(NOTE_KEY, {}),
   add: (conv, toolUseId, ann) =>
     set((s) => {
       const list = s.byConv[conv]?.[toolUseId] ?? EMPTY;
       const next = withList(s.byConv, conv, toolUseId, [...list, ann]);
-      save(ANN_KEY, next);
+      saveJson(ANN_KEY, next);
       return { byConv: next };
     }),
   remove: (conv, toolUseId, id) =>
@@ -122,13 +103,13 @@ export const usePlanAnnotationsStore = create<PlanAnnotationsState>((set) => ({
       const list = s.byConv[conv]?.[toolUseId];
       if (!list) return s;
       const next = withList(s.byConv, conv, toolUseId, list.filter((a) => a.id !== id));
-      save(ANN_KEY, next);
+      saveJson(ANN_KEY, next);
       return { byConv: next };
     }),
   setNote: (conv, toolUseId, note) =>
     set((s) => {
       const next = withNote(s.notes, conv, toolUseId, note);
-      save(NOTE_KEY, next);
+      saveJson(NOTE_KEY, next);
       return { notes: next };
     }),
   clearConversation: (conv) =>
@@ -140,14 +121,14 @@ export const usePlanAnnotationsStore = create<PlanAnnotationsState>((set) => ({
       const notes = { ...s.notes };
       delete byConv[conv];
       delete notes[conv];
-      save(ANN_KEY, byConv);
-      save(NOTE_KEY, notes);
+      saveJson(ANN_KEY, byConv);
+      saveJson(NOTE_KEY, notes);
       return { byConv, notes };
     }),
   clearAll: () =>
     set(() => {
-      save(ANN_KEY, {});
-      save(NOTE_KEY, {});
+      saveJson(ANN_KEY, {});
+      saveJson(NOTE_KEY, {});
       return { byConv: {}, notes: {} };
     }),
 }));
@@ -189,8 +170,8 @@ export function restorePlanAnnotations(conv: string, snap: PlanConvSnapshot | nu
     const notes = { ...s.notes };
     if (Object.keys(snap.ann).length > 0) byConv[conv] = snap.ann;
     if (Object.keys(snap.notes).length > 0) notes[conv] = snap.notes;
-    save(ANN_KEY, byConv);
-    save(NOTE_KEY, notes);
+    saveJson(ANN_KEY, byConv);
+    saveJson(NOTE_KEY, notes);
     return { byConv, notes };
   });
 }

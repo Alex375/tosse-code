@@ -4,37 +4,25 @@
 
 import type { JsonValue } from "../../ipc/client";
 import type { PlanAnnotation } from "../../store/planAnnotations";
+import { resultContentText } from "./resultText";
 
 /** The plan's outcome as read from its settled tool_result (the live "pending" state is
  *  decided by the presence of an open permission, not here). `unknown` = a result we can't
  *  classify (never mislabel it approved/rejected). */
 export type PlanResultDecision = "approved" | "rejected" | "unknown";
 
-/** Flatten a tool_result content (string or content-block array) to plain text. */
-function flatten(content: JsonValue): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const b of content) {
-      if (b && typeof b === "object" && !Array.isArray(b)) {
-        const t = (b as Record<string, JsonValue>).text;
-        if (typeof t === "string") parts.push(t);
-      }
-    }
-    return parts.join("\n");
-  }
-  return "";
-}
-
 /**
- * Classify a settled ExitPlanMode result. The CLI returns, on approval:
- *   "User has approved your plan. You can now start coding. …"
- * A denied permission comes back as an ERROR result carrying our deny message (or the CLI's
- * own rejection phrasing). Anything else stays `unknown` so the card shows a neutral state
- * rather than a wrong badge.
+ * Classify a settled ExitPlanMode result into approved / rejected / unknown.
+ *
+ * The CLI returns, on approval: "User has approved your plan. You can now start coding. …".
+ * ExitPlanMode is a permission-gated tool that does no work of its own, so the ONLY way it
+ * yields an error result is a DENIED permission (the deny carries our feedback message, or the
+ * CLI's own rejection phrasing) — hence `isError` is deterministically a rejection here. A
+ * NON-error result we recognize as neither an approval nor an explicit rejection stays
+ * `unknown`, so the card shows a neutral state rather than a wrong badge.
  */
 export function planResultDecision(content: JsonValue, isError: boolean): PlanResultDecision {
-  const text = flatten(content).toLowerCase();
+  const text = (resultContentText(content) ?? "").toLowerCase();
   if (!isError && /approved your plan|has approved the plan|approved the plan/.test(text))
     return "approved";
   if (isError) return "rejected";

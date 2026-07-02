@@ -769,6 +769,18 @@ export const usePendingPermissions = (
     useShallow((s) => s.sessions[session]?.pendingPermissions ?? EMPTY_PERMS),
   );
 
+/** Subscribe to the pending permission for ONE tool_use, or undefined. Unlike
+ *  {@link usePendingPermissions} this does not observe the whole array: add/remove preserve the
+ *  existing request object references, so `.find` returns a stable ref (Object.is-equal) and a
+ *  permission raised/answered for another tool in the session never re-renders this subscriber. */
+export const usePendingPermission = (
+  session: string,
+  toolUseId: string,
+): PermissionRequestPayload | undefined =>
+  useConversationStore((s) =>
+    s.sessions[session]?.pendingPermissions.find((p) => p.tool_use_id === toolUseId),
+  );
+
 export const useSubThread = (
   session: string,
   parentToolUseId: string,
