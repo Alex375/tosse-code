@@ -29,6 +29,7 @@ import type {
   ErrorItem,
   NoticeItem,
   NormalizedBlock,
+  RoundMarker,
   SessionEntry,
   TimelineEntry,
   TodoItem,
@@ -305,6 +306,9 @@ export const useConversationStore = create<ConversationState>((set) => {
           parentToolUseId: null,
           hasThinking: false,
           queued,
+          // Durable twin of `queued` for clean-output grouping: never cleared, so a mid-work
+          // injection stays distinguishable from a fresh prompt long after the badge clears.
+          injectedMidTurn: queued,
         };
         return {
           ...entry,
@@ -614,14 +618,16 @@ export const useTurn = (session: string, id: string): Turn | undefined =>
  *  one grouped response (not one section per message); a user message / error / etc.
  *  breaks the group. */
 export type RenderItem =
-  | { kind: "ai"; ids: string[] }
+  // `markers` (clean-output only) are in-band items — a control-change bar, a message injected
+  // mid-work — absorbed into this round so they render inline WITHOUT cutting the work fold
+  // (see coalesceCleanRounds). Absent/empty in the default plan.
+  | { kind: "ai"; ids: string[]; markers?: RoundMarker[] }
   | { kind: "user"; id: string }
   | { kind: "notice"; id: string }
   | { kind: "turn_result"; id: string }
   | { kind: "error"; id: string };
 
 const EMPTY_PLAN: RenderItem[] = [];
-const EMPTY_BLOCKS: NormalizedBlock[] = [];
 
 /** Pure: fold the timeline into render items, coalescing consecutive assistant turns. */
 export function planTimelineRender(entry: SessionEntry | undefined): RenderItem[] {
@@ -649,6 +655,69 @@ export function planTimelineRender(entry: SessionEntry | undefined): RenderItem[
   return out.length ? out : EMPTY_PLAN;
 }
 
+/** A `notice` that is a NEUTRAL in-band marker (folds into a clean-output round without
+ *  cutting the work): only a confirmed control change. Every other notice — errors — is a
+ *  hard boundary that ends the round. */
+function isSoftNotice(subtype: string | undefined): boolean {
+  return subtype === "control_change";
+}
+
+/**
+ * Clean-output only: merge the `ai` groups of ONE assistant response that a mid-turn marker
+ * split apart, back into a single round — absorbing the marker(s) as inline `markers` so they
+ * render in place WITHOUT cutting the "Travail de Claude" fold or resetting the live window.
+ * Two triggers, treated identically: a control-change bar (`notice control_change`) and a
+ * message injected while Claude works (a `user` turn mid-response).
+ *
+ * A round ends at a HARD boundary — `turn_result` / `error` / a non-control notice — OR at a
+ * genuine new user prompt. The critical distinction: a `user` item joins the round as a marker
+ * ONLY when `userIsInjected(id)` says it was sent mid-work (durable `injectedMidTurn`); any
+ * other user turn is a real new prompt that ENDS the round and stays its own item. This is what
+ * keeps a RESUMED conversation correct: hydrated history carries no `turn_result` boundaries and
+ * no injection flag, so without this gate every past prompt would be swallowed and the whole
+ * conversation would collapse into one fold. A LEADING user message (round not started) is never
+ * absorbed either. Pure + testable; the default plan (non-clean) is untouched.
+ */
+export function coalesceCleanRounds(
+  plan: RenderItem[],
+  noticeSubtype: (id: string) => string | undefined,
+  userIsInjected: (id: string) => boolean,
+): RenderItem[] {
+  const out: RenderItem[] = [];
+  let i = 0;
+  while (i < plan.length) {
+    const item = plan[i];
+    if (item.kind !== "ai") {
+      out.push(item);
+      i++;
+      continue;
+    }
+    const ids = [...item.ids];
+    const markers: RoundMarker[] = [];
+    let j = i + 1;
+    for (; j < plan.length; j++) {
+      const nxt = plan[j];
+      if (nxt.kind === "ai") {
+        ids.push(...nxt.ids);
+        continue;
+      }
+      if (nxt.kind === "notice" && isSoftNotice(noticeSubtype(nxt.id))) {
+        markers.push({ markerKind: "notice", id: nxt.id, after: ids.length });
+        continue;
+      }
+      if (nxt.kind === "user" && userIsInjected(nxt.id)) {
+        markers.push({ markerKind: "user", id: nxt.id, after: ids.length });
+        continue;
+      }
+      // A real new prompt, turn_result, error or hard notice ends the response (and this round).
+      break;
+    }
+    out.push(markers.length ? { kind: "ai", ids, markers } : { kind: "ai", ids });
+    i = j;
+  }
+  return out;
+}
+
 // Memoised on `timeline` identity: turn roles never change, so the plan is stable while
 // the agent streams (timeline ref unchanged) and recomputes only when an entry is added.
 const renderPlanCache = new Map<string, { timeline: TimelineEntry[]; result: RenderItem[] }>();
@@ -663,22 +732,6 @@ export const useTimelineRender = (session: string): RenderItem[] =>
     renderPlanCache.set(session, { timeline: entry.timeline, result });
     return result;
   });
-
-/** The blocks of an `ai` group: every grouped assistant turn's finalized blocks, in
- *  order — so consecutive tool calls across several messages group into one run. */
-export const useGroupBlocks = (session: string, ids: string[]): NormalizedBlock[] =>
-  useConversationStore(
-    useShallow((s) => {
-      const entry = s.sessions[session];
-      if (!entry) return EMPTY_BLOCKS;
-      const out: NormalizedBlock[] = [];
-      for (const id of ids) {
-        const t = entry.turns[id];
-        if (t) for (const b of t.blocks) out.push(b);
-      }
-      return out.length ? out : EMPTY_BLOCKS;
-    }),
-  );
 
 export const useToolResult = (
   session: string,

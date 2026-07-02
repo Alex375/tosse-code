@@ -44,6 +44,9 @@ function renderSegments(segments: Segment[], results: Map<string, JoinedResult>)
     // so they MUST be handled here — otherwise they fall through to the run branch and crash.
     if (seg.kind === "agent" || seg.kind === "workflow")
       return <StaticToolStep key={seg.key} step={seg.step} result={results.get(seg.step.id)} />;
+    // In-band markers only exist in the LIVE thread (interleaveMarkers); a disk transcript
+    // has none, but the union requires the branch — render nothing.
+    if (seg.kind === "marker") return null;
     const errored = seg.steps.some((s) => results.get(s.id)?.isError ?? false);
     return (
       <ToolSection key={seg.key} title={runHeader(seg.steps)} errored={errored}>

@@ -11,10 +11,10 @@ import { useAnswerPermission } from "../../ipc/useCommands";
 import { classifyAsk, field } from "../../agent/ask";
 import { useLiveActivity, useLiveBashCommand } from "../../store/activity";
 import {
+  coalesceCleanRounds,
   useConversationStore,
   useError,
   useBackgroundAgentIds,
-  useGroupBlocks,
   useNotice,
   usePendingPermissions,
   useSessionState,
@@ -25,6 +25,7 @@ import {
   useTurn,
   useTurnResult,
 } from "../../store/conversationStore";
+import type { RoundMarker } from "../../store/types";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { useBackgroundTasksStore, useTaskByToolUse } from "../../store/backgroundTasksStore";
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
@@ -40,10 +41,12 @@ import {
   countWorkSteps,
   flattenWork,
   groupBlocks,
+  interleaveMarkers,
   liveVisibleStart,
   runHeader,
   splitFinalMessage,
   workStepIds,
+  type GroupInput,
   type Segment,
   type ToolStep,
 } from "./toolGroup";
@@ -60,6 +63,8 @@ import type { StickToBottom } from "./useStickToBottom";
 import styles from "./ConductorThread.module.css";
 
 
+const EMPTY_BLOCKS: NormalizedBlock[] = [];
+
 export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
   // A `<task-notification>` (and other CLI-injected markers) reaches us AS a user turn,
   // but the human didn't type it — render the clean card instead of a raw user bubble.
@@ -75,6 +80,42 @@ export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
             en attente
           </span>
         ) : null}
+        <UserText text={text} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A message the user injected WHILE Claude was working ("while you were working"), rendered
+ * inline inside the assistant round in clean output — a light note, not a full user bubble,
+ * so it sits at its chronological place WITHOUT cutting the work fold (see coalesceCleanRounds).
+ */
+function InlineUserMarker({ session, turnId }: { session: string; turnId: string }) {
+  const turn = useTurn(session, turnId);
+  const text = turn?.streamingText ?? "";
+  if (!text.trim()) return null;
+  // A CLI-injected special message (e.g. a `<task-notification>`) reaches us as a user turn
+  // too — render its clean card, exactly like a standalone user turn (MsgUser), never raw XML.
+  const special = parseSpecialMessage(text);
+  if (special) return <SpecialMessageCard data={special} />;
+  // Mirror MsgUser's affordance: while the message is still QUEUED (not yet delivered to the
+  // CLI) show "en attente", switching to "Message envoyé" once the badge clears on delivery.
+  const queued = turn?.queued ?? false;
+  return (
+    <div className={styles.injectedMsg}>
+      <span
+        className={styles.injectedMsgTag}
+        title={
+          queued
+            ? "Envoyé pendant que l'agent travaille — sera traité en cours de route"
+            : undefined
+        }
+      >
+        <Ico name="clock" className="sm" />
+        {queued ? "en attente" : "Message envoyé"}
+      </span>
+      <div className={styles.injectedMsgBody}>
         <UserText text={text} />
       </div>
     </div>
@@ -467,6 +508,14 @@ function renderSegments(
     if (seg.kind === "text") return <StreamMarkdown key={seg.key} text={seg.text} />;
     if (seg.kind === "thinking")
       return <ThinkingBlock key={seg.key} text={seg.text} finalized />;
+    if (seg.kind === "marker")
+      // An in-band marker absorbed into this round: a control-change bar (NoticeRow) or a
+      // message injected mid-work (InlineUserMarker), rendered in place — never cuts the work.
+      return seg.markerKind === "notice" ? (
+        <NoticeRow key={seg.key} session={session} noticeId={seg.id} />
+      ) : (
+        <InlineUserMarker key={seg.key} session={session} turnId={seg.id} />
+      );
     if (seg.kind === "agent")
       // A sub-agent always renders inline (live lifecycle + drill-in transcript),
       // never grouped nor hidden by the live-trailing suppression.
@@ -615,7 +664,8 @@ function AssistantBlocks({
   roundKey,
 }: {
   session: string;
-  blocks: NormalizedBlock[];
+  /** Content blocks, possibly with in-band marker sentinels spliced in (clean output). */
+  blocks: GroupInput[];
   live: boolean;
   /** Stable id of this assistant round (first turn id), forwarded to the clean-output fold
    *  so its open/collapsed state is remembered per conversation. */
@@ -686,23 +736,41 @@ function MsgAI({
  * spread across several messages — the agent's loop emits one tool per message — groups
  * into ONE section; only a real text message breaks the run. The LAST turn carries the
  * live streaming tail and drives `live`.
+ *
+ * `markers` (clean output) are in-band items — a control-change bar, a message injected
+ * mid-work — that split this response in the raw plan but were coalesced back in (see
+ * coalesceCleanRounds). They're spliced into the block stream at their turn boundaries so
+ * they render inline in place, WITHOUT cutting the work fold.
  */
 function MsgAIGroup({
   session,
   turnIds,
+  markers,
   busy,
   awaiting,
 }: {
   session: string;
   turnIds: string[];
+  markers?: RoundMarker[];
   busy: boolean;
   awaiting: boolean;
 }) {
-  const blocks = useGroupBlocks(session, turnIds);
+  // Per-turn blocks (shallow-compared: each turn's `blocks` is a stable ref) so we can splice
+  // the markers back at their turn boundaries. With no markers this is just the concatenated
+  // stream — identical to the plain grouped blocks.
+  const blocksByTurn = useConversationStore(
+    useShallow((s) =>
+      turnIds.map((id) => s.sessions[session]?.turns[id]?.blocks ?? EMPTY_BLOCKS),
+    ),
+  );
   const lastTurn = useTurn(session, turnIds[turnIds.length - 1]);
   // Turns stay "streaming" until turn_result, so the group is live while its last turn
   // streams → the combined trailing run shows live and collapses once the turn settles.
   const live = busy && !awaiting && lastTurn?.status === "streaming";
+  const blocks = useMemo(
+    () => interleaveMarkers(blocksByTurn, markers ?? []),
+    [blocksByTurn, markers],
+  );
   return (
     <div className="cv-msg cv-ai">
       <Avatar ai>
@@ -774,7 +842,30 @@ export function ConductorThread({
   scrollRef: StickToBottom["scrollRef"];
   onRender: StickToBottom["onRender"];
 }) {
-  const plan = useTimelineRender(session);
+  const rawPlan = useTimelineRender(session);
+  // In clean output, a mid-turn marker (control-change bar / injected message) split the
+  // assistant response into two `ai` groups → two work sections. Coalesce them back into one
+  // round, absorbing the markers as inline items so they render in place without cutting the
+  // fold. The default plan is untouched (markers keep rendering as their own rows).
+  const cleanOutput = useEffectiveCleanOutput(session);
+  const notices = useConversationStore((s) => s.sessions[session]?.notices);
+  const plan = useMemo(() => {
+    if (!cleanOutput) return rawPlan;
+    // A `user` turn is absorbed as an in-band marker ONLY if it was injected mid-work (durable
+    // `injectedMidTurn`); a genuine new prompt starts its own round. This keeps a RESUMED
+    // conversation correct — hydrated history has no turn_result boundaries and no injection
+    // flag, so without this gate every past prompt would collapse into one giant fold.
+    //
+    // `injectedMidTurn` is immutable once set and `rawPlan` already changes whenever a turn is
+    // added, so we read the turns map NON-reactively (getState) rather than subscribing to it —
+    // subscribing would re-run this on every streamed token and re-render the whole thread.
+    const turns = useConversationStore.getState().sessions[session]?.turns;
+    return coalesceCleanRounds(
+      rawPlan,
+      (id) => notices?.[id]?.subtype,
+      (id) => turns?.[id]?.injectedMidTurn ?? false,
+    );
+  }, [cleanOutput, rawPlan, notices, session]);
   const pending = usePendingPermissions(session);
   const state = useSessionState(session);
   const busy = state?.busy ?? false;
@@ -801,6 +892,7 @@ export function ConductorThread({
                     key={item.ids[0]}
                     session={session}
                     turnIds={item.ids}
+                    markers={item.markers}
                     busy={busy}
                     awaiting={awaiting}
                   />
