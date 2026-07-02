@@ -215,7 +215,7 @@ function useStableOrder<T>(
   rank: (x: T) => number,
   resetToken: string,
 ): T[] {
-  const ref = useRef<{ token: string; keys: string[] }>({ token: " ", keys: [] });
+  const ref = useRef<{ token: string | null; keys: string[] }>({ token: null, keys: [] });
   if (ref.current.token !== resetToken) {
     ref.current = { token: resetToken, keys: [] }; // window (re)opened → refreeze
   }
@@ -615,6 +615,7 @@ function ConversationBody({
             onOpen={() => onOpenPlugin(p)}
             onUpdate={() => updatePlugin.mutate({ pluginId: p.id, scope: cliScope(p.scope) })}
             updating={updatePlugin.isPending && updatePlugin.variables?.pluginId === p.id}
+            anyUpdating={updatePlugin.isPending}
           />
         ))}
       </Section>
@@ -753,6 +754,19 @@ function MarketplacesPage({
   const list = marketplaces.data ?? [];
   const total = totalUpdates(plugins);
   const allOn = allMarketplacesAuto(list);
+
+  // Escape closes the overlay, like the app's other dialogs. `!e.defaultPrevented`
+  // keeps to the convention: if a nested layer ever consumes Escape first, we bail.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   return (
     <div className={styles.mktScrim} onClick={onClose}>

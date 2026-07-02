@@ -375,18 +375,32 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     if (!repo) return;
     // Forget this repo's sidebar collapse state (the group is about to disappear).
     clearSidebarFold(repo.id);
-    // Kill the integrated terminal of every conversation under this repo (the rows
-    // are about to be cascade-deleted) so no PTY shell is orphaned.
+    // Cascade-delete every conversation under this repo. Mirror removeConversation's
+    // full per-row teardown: the Rust delete_repo only cascades DB rows, so we must
+    // stop each live `claude` process here (no orphan) and drop every per-conversation
+    // store + persisted cache so nothing is leaked.
     for (const c of get().conversations) {
-      if (c.repoId === repo.id) {
-        disposeTerminal(c.id);
-        clearTodoBarOpen(c.id);
-        clearComposerDraft(c.id);
-        clearWorkFold(c.id);
-        useGitViewStore.getState().clear(c.id);
-        useRemoteControlStore.getState().clear(c.id);
-        useLastMessageSummaryStore.getState().clear(c.id);
+      if (c.repoId !== repo.id) continue;
+      // Kill the live `claude` process (if any) so deleting a repo never leaves an
+      // orphan — same no-orphan policy as removeConversation.
+      if (c.handle) {
+        syncToCore("stopSession", () => commands.stopSession(c.handle!));
       }
+      useConversationStore.getState().dropSession(c.id);
+      useBackgroundTasksStore.getState().dropSession(c.id);
+      useWorkflowLiveStore.getState().drop(c.id);
+      clearCachedWindow(c.id);
+      disposeTerminal(c.id);
+      clearTodoBarOpen(c.id);
+      clearComposerDraft(c.id);
+      clearWorkFold(c.id);
+      useGitViewStore.getState().clear(c.id);
+      useRemoteControlStore.getState().clear(c.id);
+      useLastMessageSummaryStore.getState().clear(c.id);
+      autoTitlePending.delete(c.id);
+      titleContext.delete(c.id);
+      titleGenCount.delete(c.id);
+      lastAppliedSeq.delete(c.id);
     }
     set((s) => {
       const conversations = s.conversations.filter((c) => c.repoId !== repo.id);
