@@ -1,11 +1,11 @@
-// Contextual card actions. EVERY "open" action here opens the conversation in the
-// Flight Deck REPLY MODAL, so you can read/answer in place without leaving the deck.
-// The card TITLE (in StreamCard) stays the full-screen entry point, so both options
-// are always available — even on a calm card. A permission is authorised/refused
-// from inside the modal (its context is right there), not blindly on the card. "Vu"
-// acknowledges inline (the opposite of opening). When the status says "blocked" but
-// no request is actually queued yet (the awaiting vs queue race), we fall through to
-// a plain "Ouvrir" (which also opens the modal).
+// Contextual card actions — ONLY the ones that need prominence: "Répondre" (answer a
+// permission / question) and "Vu" (acknowledge inline). Opening the conversation is no
+// longer a button here: clicking the card BODY opens the reply modal, and the card
+// TITLE (in StreamCard) stays the full-screen entry point. A permission is
+// authorised/refused from inside that modal (its context is right there), not blindly
+// on the card. When the status says "blocked" but no request is actually queued yet
+// (the awaiting vs queue race), there's nothing to answer → no action row (the card
+// body still opens it).
 import { Ico } from "../../ui/kit";
 import type { AgentStatus } from "../../agent/status";
 import { usePendingPermissions } from "../../store/conversationStore";
@@ -38,7 +38,7 @@ export function StateActions({
         </div>
       );
     }
-    // no live request yet → fall through to "Ouvrir"
+    // no live request yet → no action row (the card body still opens it)
   } else if (status.kind === "needInput") {
     if (status.via === "questionnaire") {
       const req = pending[0];
@@ -53,7 +53,7 @@ export function StateActions({
           </div>
         );
       }
-      // no live questionnaire request → fall through to "Ouvrir"
+      // no live questionnaire request → no action row (the card body still opens it)
     } else {
       // Open question (heuristic) — dismissable inline, or open the modal to reply.
       return (
@@ -70,27 +70,21 @@ export function StateActions({
       );
     }
   } else if (status.kind === "error" || status.kind === "review") {
+    // "Vu" acknowledges inline. Opening is now the card BODY's job (it opens the
+    // reply modal), so the redundant "Ouvrir" is gone.
     return (
       <div className="ag-card-actions">
         <button className="wf-btn ghost sm" onClick={() => acknowledgeConversation(convId)}>
           <Ico name="check" className="sm" />
           Vu
         </button>
-        <button className="wf-btn prim sm" onClick={reply}>
-          Ouvrir
-        </button>
       </div>
     );
   }
 
   // running / idle / off — and the "blocked but no request yet" fall-throughs —
-  // nothing to answer, but you can still peek/reply in place. "Ouvrir" opens the
-  // modal too; the card TITLE remains the full-screen entry point.
-  return (
-    <div className="ag-card-actions">
-      <button className="wf-btn ghost sm" onClick={reply}>
-        Ouvrir
-      </button>
-    </div>
-  );
+  // nothing to answer. Opening in place is handled by clicking the card body (reply
+  // modal) and the card TITLE remains the full-screen entry point, so there's no
+  // action row to render here.
+  return null;
 }
