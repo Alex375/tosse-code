@@ -1,7 +1,7 @@
 // Open/collapsed state of the "Travail de Claude" fold blocks (clean-output mode),
-// keyed by conversation id → round key → open. Persisted to localStorage with the
-// same lightweight pattern as display.ts / notifications.ts (not the SQLite metadata
-// store — this is pure UI state, so it stays out of the Rust core, no schema migration).
+// keyed by conversation id → round key → open. Persisted to localStorage via the shared
+// {@link loadJson}/{@link saveJson} helpers (not the SQLite metadata store — this is pure UI
+// state, so it stays out of the Rust core, no schema migration).
 //
 // Why a store and not a plain React useState in ClaudeWorkBlock: the conversation pane
 // is remounted per conversation (`key={conv.id}` in ConductorConversation), so any local
@@ -12,6 +12,7 @@
 // stable across reloads), so a persisted entry re-associates with the right block on
 // return; an orphaned key just falls back to collapsed (the default), which is harmless.
 import { create } from "zustand";
+import { loadJson, saveJson } from "./persist";
 
 const STORAGE_KEY = "tosse:workfold";
 
@@ -19,24 +20,8 @@ const STORAGE_KEY = "tosse:workfold";
 // entries the user actually touched.
 type FoldMap = Record<string, Record<string, boolean>>;
 
-function load(): FoldMap {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as FoldMap) : {};
-  } catch {
-    return {};
-  }
-}
-
-function save(map: FoldMap): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    /* quota / disabled storage — best-effort, ignore */
-  }
-}
+const load = (): FoldMap => loadJson<FoldMap>(STORAGE_KEY, {});
+const save = (map: FoldMap): void => saveJson(STORAGE_KEY, map);
 
 interface WorkFoldState {
   open: FoldMap;

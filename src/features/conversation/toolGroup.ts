@@ -230,8 +230,9 @@ export function splitFinalMessage(segments: Segment[]): {
   // A trailing `plan` (ExitPlanMode) is peeled too: the proposed plan is a decision artifact, not
   // intermediate work — it must stay in clear even under clean output, especially while it awaits
   // approval (the agent pauses right after it). A plan buried mid-response (e.g. a resumed history
-  // where the approved plan is followed by more work in the same group) stays in the fold — the
-  // scan stops at the trailing run, which is acceptable for that settled-history case.
+  // where the approved plan is followed by more work in the same group) is NOT peeled here — the
+  // scan stops at the trailing run — but it is still shown in clear: CleanBlocks splits the fold
+  // at each plan (see renderFoldedWork), so a buried plan is never hidden inside the work block.
   let i = segments.length;
   while (
     i > 0 &&

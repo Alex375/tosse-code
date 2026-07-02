@@ -572,6 +572,52 @@ function renderSegments(
  *  the rest fold into the block. */
 const LIVE_WINDOW = 3;
 
+/** Render a clean-output round's folded WORK. Normally one collapsible <ClaudeWorkBlock>. But a
+ *  `plan` (ExitPlanMode) is a DECISION artifact that must never hide inside the fold — even when
+ *  it's buried mid-round (e.g. a resumed history where an approved plan is followed by more work
+ *  in the same group, so splitFinalMessage can't peel it into `final`). When the fold holds a
+ *  plan, split it at each plan: every contiguous work run folds into its own block and each plan
+ *  renders in clear between them, preserving chronology. The common (no-plan) case is byte-for-byte
+ *  unchanged and keeps the round's single foldKey, so its remembered open/collapsed state stands. */
+function renderFoldedWork(session: string, folded: Segment[], roundKey: string): ReactNode {
+  if (!folded.some((s) => s.kind === "plan")) {
+    return (
+      <ClaudeWorkBlock count={countWorkSteps(folded)} foldConv={session} foldKey={roundKey}>
+        {renderSegments(session, folded, false, -1)}
+      </ClaudeWorkBlock>
+    );
+  }
+  const out: ReactNode[] = [];
+  let chunk: Segment[] = [];
+  let part = 0;
+  const flush = () => {
+    if (chunk.length === 0) return;
+    const c = chunk;
+    const idx = part++;
+    out.push(
+      <ClaudeWorkBlock
+        key={`fold-${idx}`}
+        count={countWorkSteps(c)}
+        foldConv={session}
+        foldKey={`${roundKey}#${idx}`}
+      >
+        {renderSegments(session, c, false, -1)}
+      </ClaudeWorkBlock>,
+    );
+    chunk = [];
+  };
+  for (const seg of folded) {
+    if (seg.kind === "plan") {
+      flush();
+      out.push(...renderSegments(session, [seg], false, -1));
+    } else {
+      chunk.push(seg);
+    }
+  }
+  flush();
+  return out;
+}
+
 /**
  * The clean-output body of one assistant response: the fold + the trailing region + the final
  * message, rendered as ONE component so it has stable React identity. That stability is what
@@ -652,11 +698,7 @@ function CleanBlocks({
 
   return (
     <>
-      {folded.length > 0 ? (
-        <ClaudeWorkBlock count={countWorkSteps(folded)} foldConv={session} foldKey={roundKey}>
-          {renderSegments(session, folded, false, -1)}
-        </ClaudeWorkBlock>
-      ) : null}
+      {folded.length > 0 ? renderFoldedWork(session, folded, roundKey) : null}
       {visible.length > 0 ? renderSegments(session, visible, true, liveIdx) : null}
       {final.length > 0 ? renderSegments(session, final, false, -1) : null}
     </>

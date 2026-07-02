@@ -14,7 +14,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JsonValue } from "../../ipc/client";
 import { field } from "../../agent/ask";
 import { useAnswerPermission } from "../../ipc/useCommands";
-import { usePendingPermissions, useToolResult } from "../../store/conversationStore";
+import { usePendingPermission, useToolResult } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
 import {
   newAnnotationId,
@@ -162,7 +162,7 @@ export function PlanCard({
   input: JsonValue;
 }) {
   const plan = field(input, "plan") ?? "";
-  const pending = usePendingPermissions(session).find((p) => p.tool_use_id === toolUseId);
+  const pending = usePendingPermission(session, toolUseId);
   const result = useToolResult(session, toolUseId);
   const annotations = usePlanAnnotations(session, toolUseId);
   const answer = useAnswerPermission(session);
@@ -245,13 +245,24 @@ export function PlanCard({
     republishHighlights();
   }, [annotations, draft, plan]);
 
-  // Dismiss the in-progress draft: drop the composer, reset its text, and clear the native
-  // selection so the passage stops looking highlighted (the draft highlight is keyed off
-  // `draft`; the OS selection tint would linger otherwise — the "Annuler left it highlighted" bug).
+  // Clear the native selection ONLY when it lives inside THIS card's plan body. The Selection
+  // API is document-global, so an unscoped removeAllRanges would wipe a selection the user made
+  // elsewhere on screen (e.g. copying from another message) whenever this card tears down a draft
+  // — including when the plan is answered from phone/web. Scoping it keeps foreign selections.
+  const clearOwnSelection = () => {
+    const sel = window.getSelection();
+    const root = bodyRef.current;
+    if (sel && root && sel.rangeCount > 0 && root.contains(sel.getRangeAt(0).commonAncestorContainer))
+      sel.removeAllRanges();
+  };
+
+  // Dismiss the in-progress draft: drop the composer, reset its text, and clear our own passage's
+  // selection so it stops looking highlighted (the draft highlight is keyed off `draft`; the OS
+  // selection tint would linger otherwise — the "Annuler left it highlighted" bug).
   const clearDraft = () => {
     setDraft(null);
     setDraftText("");
-    window.getSelection()?.removeAllRanges();
+    clearOwnSelection();
   };
 
   // A resolved plan can't be annotated: tear down any open draft the moment the card stops being
@@ -282,12 +293,25 @@ export function PlanCard({
         top = Math.max(VIEWPORT_MARGIN, rect.top - COMPOSER_H - 6);
       setPos({ left, top });
     };
+    // rAF-coalesce scroll/resize: a burst of events measures at most once per frame. `place`
+    // walks the plan body's text nodes (rangeFromOffsets) then getBoundingClientRect (a forced
+    // synchronous layout), so calling it per raw scroll event would thrash layout while a
+    // composer is open. The initial placement runs synchronously below.
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        place();
+      });
+    };
     place();
-    window.addEventListener("scroll", place, true);
-    window.addEventListener("resize", place);
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
     return () => {
-      window.removeEventListener("scroll", place, true);
-      window.removeEventListener("resize", place);
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
     };
   }, [draft]);
 
@@ -324,7 +348,7 @@ export function PlanCard({
     addAnn(session, toolUseId, ann);
     setDraft(null);
     setDraftText("");
-    window.getSelection()?.removeAllRanges();
+    clearOwnSelection();
   };
 
   const accept = () => {
