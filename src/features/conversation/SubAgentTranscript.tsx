@@ -23,7 +23,7 @@ import {
   type Segment,
 } from "./toolGroup";
 import { ClaudeWorkBlock, StaticToolStep, ToolSection } from "./ToolSection";
-import { UserText } from "./userText";
+import { SkillChip, UserText } from "./userText";
 import { parseSpecialMessage } from "./specialMessage";
 import { SpecialMessageCard } from "./SpecialMessageCard";
 
@@ -44,6 +44,8 @@ function renderSegments(segments: Segment[], results: Map<string, JoinedResult>)
     // so they MUST be handled here — otherwise they fall through to the run branch and crash.
     if (seg.kind === "agent" || seg.kind === "workflow")
       return <StaticToolStep key={seg.key} step={seg.step} result={results.get(seg.step.id)} />;
+    // A model-invoked slash-command: the same dedicated command chip as the live thread.
+    if (seg.kind === "skill") return <SkillChip key={seg.key} input={seg.step.input} />;
     // In-band markers only exist in the LIVE thread (interleaveMarkers); a disk transcript
     // has none, but the union requires the branch — render nothing.
     if (seg.kind === "marker") return null;

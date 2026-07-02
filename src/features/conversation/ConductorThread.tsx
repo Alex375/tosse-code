@@ -52,7 +52,7 @@ import {
 } from "./toolGroup";
 import { useEffectiveCleanOutput } from "../../store/display";
 import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
-import { UserText } from "./userText";
+import { SkillChip, UserText } from "./userText";
 import { parseSpecialMessage } from "./specialMessage";
 import { SpecialMessageCard } from "./SpecialMessageCard";
 import { useShallow } from "zustand/react/shallow";
@@ -537,6 +537,9 @@ function renderSegments(
           input={seg.step.input}
         />
       );
+    if (seg.kind === "skill")
+      // A model-invoked slash-command renders as a dedicated command chip (never a raw tool row).
+      return <SkillChip key={seg.key} input={seg.step.input} />;
     // A `run` of regular tools. The trailing run of the live turn renders EXPANDED so its
     // steps appear live (spinner → result), then collapses to its header on settle. Past
     // / non-trailing runs render collapsed. `active` gates the spinner so a resultless

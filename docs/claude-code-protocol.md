@@ -276,6 +276,41 @@ A `tool_result` comes back as a top-level `user` message:
 May carry `isSynthetic`. **Correlation:** `tool_result.tool_use_id == tool_use.id`. `content`
 can be a `String` OR an array of content blocks → model as untagged enum.
 
+### 3.7.1 Skill / slash-command invocation (`confirmed` on-disk; spec gap in upstream docs)
+
+There is **no dedicated wire type** for "a skill/slash-command ran". Both a user-typed `/foo`
+and a model-invoked skill expand into ordinary `user` messages (never `tool_result`, never
+`system`). The two entry paths differ:
+
+**User types `/foo` in the composer** → two `user` messages:
+1. **Header** — `content` is a **string** opening on the `<command-*>` wrapper, `isMeta` absent:
+   ```json
+   {"type":"user","uuid":"...","message":{"role":"user",
+     "content":"<command-message>done</command-message>\n<command-name>/done</command-name>\n<command-args></command-args>"}}
+   ```
+2. **Body** — `content` is a **text-block array** opening on `Base directory for this skill:`,
+   flagged **`isMeta:true`**:
+   ```json
+   {"type":"user","uuid":"...","isMeta":true,"message":{"role":"user",
+     "content":[{"type":"text","text":"Base directory for this skill: <abs>\n\n# <Title>\n<whole SKILL.md body>"}]}}
+   ```
+
+**The MODEL invokes a skill (the `Skill` tool)** → an assistant `tool_use{name:"Skill",
+input:{skill,args?}}`, then:
+1. a `user` `tool_result` **ack** (`"Launching skill: <skill>"`), `isMeta` absent;
+2. the **same `isMeta:true` body** as above.
+   There is **NO `<command-*>` header** here — the `Skill` tool_use *is* the header.
+
+**Handling (both live `assembler.rs::ingest_user` and reload `history.rs::push_user`):** an
+`isMeta:true` user line is **dropped** — it's injected boilerplate (also covers system-reminders
+and the "while you were working" wrapper), never a real turn. So the SKILL.md **body never
+renders as a user bubble**. The visible trace is: for a typed command, the header string →
+rendered as a clean `.cv-cmd` chip (`userText.tsx`); for a model invocation, the `Skill`
+tool_use → rendered as a dedicated command chip (`SkillChip`, from `input.skill`). ⚠️ The
+`isMeta` drop is what keeps the body hidden — do NOT surface `isMeta` user lines. Fixture:
+`fixtures/capture_skill.jsonl`; regression tests: `skill_body_user_line_is_dropped`,
+`skill_body_line_is_skipped_on_restore`, `skill_invocation_fixture_surfaces_tool_use_not_body`.
+
 ### 3.8 `parent_tool_use_id` = sub-agent (Task) grouping (`confirmed`)
 
 `parent_tool_use_id` holds the `id` of the `Task` tool_use that spawned a sub-agent; `null` at

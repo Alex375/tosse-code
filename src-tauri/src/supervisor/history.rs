@@ -992,6 +992,21 @@ mod tests {
         assert_eq!(load_context_fill_in(&base, "does-not-exist"), ContextFill::default());
     }
 
+    /// REGRESSION (task 2247ebd6): a MODEL-invoked skill's SKILL.md body lands on disk as a
+    /// `user` line with `isMeta:true` (a text-block array opening on "Base directory for this
+    /// skill:"). On restore it MUST be skipped — mirroring the live assembler — so a reloaded
+    /// conversation never shows the body as a fake user bubble. Exercises `push_user` directly.
+    #[test]
+    fn skill_body_line_is_skipped_on_restore() {
+        let entry: Value = serde_json::from_str(
+            r#"{"type":"user","isMeta":true,"uuid":"m1","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /x/.claude/skills/done\n\n# Done\n…body…"}]}}"#,
+        )
+        .unwrap();
+        let mut items = Vec::new();
+        push_user(&entry, &mut items);
+        assert!(items.is_empty(), "a skill's isMeta body must be skipped on restore");
+    }
+
     /// REGRESSION (silent error): a malformed transcript line is tolerated (the good
     /// turns still restore) BUT no longer vanishes silently — a `history_error` notice
     /// is appended so the user knows the restored conversation may be incomplete.

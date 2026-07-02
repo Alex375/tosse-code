@@ -83,6 +83,9 @@ export type Segment =
   // A `Workflow` renders as its OWN persistent inline card (live overview → post-run report),
   // like a sub-agent: dedicated segment, breaks the run, never hidden.
   | { kind: "workflow"; key: string; step: ToolStep }
+  // A `Skill` (a slash-command the MODEL invoked) renders as a dedicated inline command chip,
+  // like a user-typed `/foo`: its own segment, breaks the run, never grouped into a step row.
+  | { kind: "skill"; key: string; step: ToolStep }
   // An in-band marker (control-change bar / message injected mid-work) shown inline in the
   // flow. NOT work: it doesn't count as a step and never breaks the clean-output work fold —
   // it just renders at its chronological place (see coalesceCleanRounds / interleaveMarkers).
@@ -159,6 +162,13 @@ export function groupBlocks(
         out.push({ kind: "workflow", key: `w-${i}`, step: { id: b.id, name: b.name, input: b.input } });
         return;
       }
+      // A Skill (model-invoked slash-command) is its own inline command chip — breaks the run
+      // so the invocation stands out instead of hiding in an "Exécuté N étapes" step row.
+      if (b.name === "Skill") {
+        run = null;
+        out.push({ kind: "skill", key: `sk-${i}`, step: { id: b.id, name: b.name, input: b.input } });
+        return;
+      }
       if (!run) {
         run = [];
         out.push({ kind: "run", key: `run-${i}`, steps: run });
@@ -220,6 +230,9 @@ export type WorkAtom =
   | { kind: "step"; key: string; step: ToolStep }
   | { kind: "agent"; key: string; step: ToolStep }
   | { kind: "workflow"; key: string; step: ToolStep }
+  // A skill chip: a non-step atom (like text/thinking) — it folds with the surrounding work
+  // but never counts as a step nor holds the live window open (its ack settles instantly).
+  | { kind: "skill"; key: string; step: ToolStep }
   | { kind: "thinking"; key: string; text: string }
   | { kind: "text"; key: string; text: string }
   // An in-band marker: a non-step atom (like text/thinking) — it folds with the surrounding
@@ -236,6 +249,8 @@ export function flattenWork(segs: Segment[]): WorkAtom[] {
       out.push({ kind: "agent", key: seg.key, step: seg.step });
     } else if (seg.kind === "workflow") {
       out.push({ kind: "workflow", key: seg.key, step: seg.step });
+    } else if (seg.kind === "skill") {
+      out.push({ kind: "skill", key: seg.key, step: seg.step });
     } else if (seg.kind === "thinking") {
       out.push({ kind: "thinking", key: seg.key, text: seg.text });
     } else if (seg.kind === "marker") {
@@ -266,6 +281,7 @@ export function atomsToSegments(atoms: WorkAtom[], keyPrefix: string): Segment[]
     run = null;
     if (a.kind === "agent") out.push({ kind: "agent", key: a.key, step: a.step });
     else if (a.kind === "workflow") out.push({ kind: "workflow", key: a.key, step: a.step });
+    else if (a.kind === "skill") out.push({ kind: "skill", key: a.key, step: a.step });
     else if (a.kind === "thinking") out.push({ kind: "thinking", key: a.key, text: a.text });
     else if (a.kind === "marker")
       out.push({ kind: "marker", key: a.key, markerKind: a.markerKind, id: a.id });
