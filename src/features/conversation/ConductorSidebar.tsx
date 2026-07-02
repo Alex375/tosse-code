@@ -94,7 +94,13 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
         onDoubleClick={startEdit}
       >
         <StatusDot status={status} />
-        <span className="cv-sess-n">{conv.name}</span>
+        {/* Keyed by the name so an incoming auto-title (applyAutoTitle) REMOUNTS this
+            node instead of mutating its text in place. WebKit fails to repaint a
+            text-overflow:ellipsis box when only its text content changes at an identical
+            box size — old and new glyphs superimpose (the "ghost title" that only a
+            sidebar resize cleared). A fresh node gets a clean paint region. Repo titles
+            never change, which is why they never ghosted. */}
+        <span key={conv.name} className="cv-sess-n">{conv.name}</span>
       </button>
       <WorktreeBadge conv={conv} />
       {isDismissable(status) ? (
