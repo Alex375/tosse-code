@@ -37,6 +37,32 @@ pnpm bump <patch|minor|major|X.Y.Z>
 
 Le script met à jour les 4 emplacements d'un coup (`tauri.conf.json`, `package.json`, `Cargo.toml`, `Cargo.lock`). **N'édite jamais ces versions à la main.**
 
+## Étape 3b — Mettre à jour `CHANGELOG.md` (les nouveautés affichées DANS l'app)
+
+`CHANGELOG.md` (racine) alimente la page « Mise à jour » de l'app : `release.yml` lit la section de la version qu'on release et la met en description de la release GitHub, que l'updater affiche. Il faut donc une section pour la **nouvelle** version. **Reste simple et rapide** — quelques puces suffisent, ne sur-analyse pas.
+
+1. Liste les commits depuis la dernière release :
+
+   ```bash
+   LAST=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "")
+   git log ${LAST:+$LAST..}HEAD --no-merges --pretty=format:'%s'
+   ```
+
+2. Résume-les en **3 à 6 puces courtes, orientées utilisateur** (ce que ça change POUR LUI, pas le détail technique). Garde les `feat:` / `fix:` parlants ; **ignore** `chore:`, `docs:`, `test:`, `refactor:`, `chore(release):` et les merges. Reformule en français clair.
+
+3. Ajoute la section **tout en haut** du corps de `CHANGELOG.md` (juste sous le bloc d'en-tête, avant la section précédente), au format **exact** :
+
+   ```md
+   ## vX.Y.Z
+
+   - Première nouveauté
+   - Deuxième nouveauté
+   ```
+
+   où `X.Y.Z` = la version que tu viens de bumper (étape 3). ⚠️ Le `v` du titre est **obligatoire** (`release.yml` cherche `## v<version>`). Si une section `## vX.Y.Z` de cette version existe **déjà** (préparée pendant le dev), garde-la ou affine-la — n'en crée pas une deuxième.
+
+Si tu n'es pas sûr ou qu'il n'y a rien de notable, une seule puce générique suffit : le workflow a de toute façon un repli si la section manque. Ne bloque jamais la release pour le changelog.
+
 ## Étape 4 — Synchroniser `CLAUDE.md` avec TOSSE
 
 Avant de pousser, régénère `CLAUDE.md` depuis les contextes TOSSE pour que la release parte avec la doc projet à jour.
@@ -47,7 +73,7 @@ Le fichier régénéré sera embarqué par le `git add -A` de l'étape suivante.
 
 ## Étape 5 — Commiter et pousser `dev`
 
-Le `git add -A` inclut à la fois le bump de version et le `CLAUDE.md` régénéré.
+Le `git add -A` inclut le bump de version, le `CHANGELOG.md` mis à jour (étape 3b) et le `CLAUDE.md` régénéré.
 
 ```bash
 git add -A

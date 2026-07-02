@@ -93,6 +93,37 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version à publier : $VERSION"
 
+      # Corps de la release = les nouveautés du CHANGELOG.md (affichées DANS l'app via
+      # l'updater) + la note d'installation Gatekeeper APRÈS un marqueur `<!-- gh-only -->`
+      # (visible seulement sur la page GitHub — l'app la masque, cf. `inAppReleaseNotes`).
+      # Le CHANGELOG est rempli au moment du bump par le skill `/release`.
+      - name: Composer les notes de release
+        id: notes
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          # Section « ## vX.Y.Z » du CHANGELOG, jusqu'au prochain titre « ## ».
+          SECTION="$(awk -v ver="$VERSION" '
+            /^## / { if (cap) exit; if (index($0, "v" ver) > 0) { cap=1; next } }
+            cap { print }
+          ' CHANGELOG.md 2>/dev/null || true)"
+          # Vide (section absente / CHANGELOG manquant) → repli générique : on ne bloque
+          # JAMAIS une release pour des notes manquantes.
+          if [ -z "$(printf '%s' "$SECTION" | tr -d '[:space:]')" ]; then
+            SECTION="- Améliorations et corrections diverses."
+          fi
+          # La note d'installation Gatekeeper vit dans un fichier (pas de heredoc à la
+          # colonne 0 qui casserait le bloc YAML) : on l'ajoute après le marqueur.
+          {
+            echo "body<<RELEASE_BODY_EOF"
+            printf '%s\n\n' "$SECTION"
+            echo '<!-- gh-only -->'
+            echo ""
+            cat .github/release-install-note.md
+            echo "RELEASE_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Notes de release composées pour v$VERSION."
+
       - name: Refuser une version déjà publiée
         env:
           GH_TOKEN: ${{ github.token }}
@@ -181,16 +212,9 @@ jobs:
         with:
           tagName: v${{ steps.version.outputs.version }}
           releaseName: "Tosse Code v${{ steps.version.outputs.version }}"
-          releaseBody: |
-            Build automatique depuis `main` — macOS universel (Apple Silicon + Intel).
-
-            ⚠️ App signée (certificat auto-signé) mais **non notarisée** : au premier lancement,
-            faire **clic droit → Ouvrir** (ou `xattr -cr /Applications/Tosse\ Code.app`) pour
-            passer Gatekeeper.
-
-            ℹ️ Sur cette mise à jour, macOS peut redemander **une dernière fois** l'accès à vos
-            dossiers (Bureau/Documents/…) — c'est la transition vers la signature stable ;
-            ensuite les autorisations persistent d'une version à l'autre.
+          # Composé à l'étape « Composer les notes de release » : nouveautés (CHANGELOG,
+          # affichées in-app) + marqueur `<!-- gh-only -->` + note d'installation (GitHub only).
+          releaseBody: ${{ steps.notes.outputs.body }}
           # Brouillon d'abord : la signature est VÉRIFIÉE (étape suivante) AVANT publication,
           # pour qu'une release mal signée reste un brouillon plutôt que d'être publiée.
           releaseDraft: true

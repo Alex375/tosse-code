@@ -39,7 +39,14 @@ export function ConfirmDialog({
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
+      // Own Escape while open: preventDefault so an outer layer whose own Escape
+      // handler checks `!e.defaultPrevented` (e.g. the Settings panel closing on
+      // Escape) doesn't ALSO fire — one Escape closes exactly one layer (the repo's
+      // "topmost layer claims Escape" convention).
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
