@@ -8,6 +8,8 @@ import { WorktreeManager } from "./features/git/WorktreeManager";
 import { GitToggle } from "./features/git/GitToggle";
 import { EditorToggle } from "./features/editor/EditorToggle";
 import { FlightDeck } from "./features/flightdeck/FlightDeck";
+import { FlightDeckReplyModal } from "./features/flightdeck/FlightDeckReplyModal";
+import { useFlightdeckModal } from "./features/flightdeck/flightdeckModalStore";
 import { SoundToggle } from "./features/notifications/SoundToggle";
 import { ExtensionsManager } from "./features/extensions/ExtensionsManager";
 import { HistoryPanel } from "./features/history/HistoryPanel";
@@ -47,11 +49,21 @@ export default function App() {
   const activeRepo = useConversationRepo(activeId);
   const booted = useRef(false);
 
-  // Focusing an agent from the FlightDeck = select it and switch to its thread.
+  // Focusing an agent from the FlightDeck = select it and switch to its thread. Also
+  // used to PROMOTE the reply modal to the full view (its "Plein écran" button).
   const openConversation = (id: string) => {
     useConversationsStore.getState().selectConversation(id);
     setView("conversation");
   };
+
+  // The reply modal lives ONLY on the Flight Deck. Close it whenever we leave that
+  // view — so promoting it (openConversation → view "conversation") and any ⌘1
+  // switch both dismiss it, and the same conversation is never mounted twice (modal
+  // + full view) at once.
+  const closeReplyModal = useFlightdeckModal((s) => s.close);
+  useEffect(() => {
+    if (view !== "flightdeck") closeReplyModal();
+  }, [view, closeReplyModal]);
 
   // On first mount: hydrate from the core's persisted state. Lazy policy — boot
   // spawns nothing; a conversation's history loads when it's shown and its
@@ -160,6 +172,10 @@ export default function App() {
       ) : (
         <FlightDeck onOpen={openConversation} />
       )}
+      {/* Reply-in-place modal over the Flight Deck (store-driven, opened by a card's
+          attention action). Gated on the view so it can't overlay the Conversation
+          view or double-mount a conversation already shown there. */}
+      {view === "flightdeck" ? <FlightDeckReplyModal onPromote={openConversation} /> : null}
       {/* Mounted once, globally: opens for whichever repo the indicator/badge asks. */}
       <WorktreeManager />
       {/* Idem: the extensions manager, opened per repo (sidebar) or per conversation (composer). */}

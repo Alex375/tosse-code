@@ -56,6 +56,19 @@
 .ag-card-act { padding:9px 11px; background:var(--wf-bg-2); border:1px solid var(--wf-line); border-radius:var(--wf-r); min-height:38px; display:flex; align-items:center; }
 .ag-card-foot { display:flex; align-items:center; flex-wrap:wrap; gap:8px 13px; min-width:0; font-size:11px; color:var(--wf-tx-lo); }
 .ag-card-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:11px; border-top:1px solid var(--wf-line); }
+/* Card action buttons ("Vu" / "Répondre" / "Ouvrir") — the base .wf-btn has cursor:default
+   and no hover/active state, so it doesn't read as clickable. Give these a clear button feel:
+   pointer cursor + a light lift on hover and a quick press on click. Scoped to the card
+   actions so the rest of the app's .wf-btn usage is untouched. */
+.ag-card-actions .wf-btn { cursor:pointer; transition:transform .12s ease, background-color .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease, filter .12s ease; }
+.ag-card-actions .wf-btn:hover { transform:translateY(-1px); }
+.ag-card-actions .wf-btn.ghost:hover { background:var(--wf-panel-3); border-color:var(--wf-line-2); color:var(--wf-tx-hi); }
+.ag-card-actions .wf-btn.prim:hover { filter:brightness(1.08); box-shadow:0 3px 10px -3px color-mix(in srgb, var(--wf-accent) 55%, transparent); }
+/* Press: a quick settle-down that overrides the hover lift, so the click is felt. */
+.ag-card-actions .wf-btn:active { transform:translateY(0) scale(.96); transition-duration:.04s; box-shadow:none; }
+@media (prefers-reduced-motion: reduce) {
+  .ag-card-actions .wf-btn, .ag-card-actions .wf-btn:hover, .ag-card-actions .wf-btn:active { transform:none; }
+}
 
 /* whole-view empty state (no repos / no conversations yet) */
 .ag-empty { margin:auto; text-align:center; color:var(--wf-tx-lo); max-width:440px; padding:40px; line-height:1.7; }

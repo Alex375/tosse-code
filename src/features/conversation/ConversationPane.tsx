@@ -27,11 +27,16 @@ export function ConversationPane({
   cwd,
   composerRef,
   onBackgroundClick,
+  inertMentions = false,
 }: {
   session: string;
   cwd: string;
   composerRef: RefObject<ComposerHandle>;
   onBackgroundClick: (e: ReactMouseEvent<HTMLDivElement>) => void;
+  /** Render file mentions as plain text (no editor reveal). Set by the Flight Deck
+   *  reply modal, which mounts the pane WITHOUT an editor host, so a mention click
+   *  would be a dead link that silently flips the persisted editorOpen flag. */
+  inertMentions?: boolean;
 }) {
   // Toggling "clean output" folds/unfolds every round → big height change. Pass the
   // EFFECTIVE per-conversation value as the preserve key so the thread re-anchors instead
@@ -42,7 +47,7 @@ export function ConversationPane({
     <div className="wf-col cv-pane" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
       {/* Provide the conversation id + live cwd so file mentions in the thread
           resolve + open in this conversation's editor. */}
-      <FileMentionProvider convId={session} cwd={cwd}>
+      <FileMentionProvider convId={session} cwd={cwd} inert={inertMentions}>
         <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
       </FileMentionProvider>
       <AgentBar session={session} />

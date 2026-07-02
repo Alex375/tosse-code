@@ -98,7 +98,7 @@ export function StreamCard({
         </span>
       </div>
 
-      <StateActions convId={conv.id} status={status} onOpen={onOpen} />
+      <StateActions convId={conv.id} status={status} />
     </div>
   );
 }

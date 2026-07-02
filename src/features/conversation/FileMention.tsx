@@ -33,6 +33,10 @@ import { looksLikeFile, looksLikePath, segmentPath, type PathParts } from "./pat
 interface MentionCtx {
   convId: string;
   cwd: string;
+  /** When true, mentions render as plain, non-clickable text. Used by the Flight
+   *  Deck reply modal, which mounts the thread WITHOUT an editor host: a click would
+   *  be a dead link AND would silently flip the persisted `editorOpen` layout flag. */
+  inert: boolean;
 }
 
 const Ctx = createContext<MentionCtx | null>(null);
@@ -40,13 +44,15 @@ const Ctx = createContext<MentionCtx | null>(null);
 export function FileMentionProvider({
   convId,
   cwd,
+  inert = false,
   children,
 }: {
   convId: string;
   cwd: string;
+  inert?: boolean;
   children: ReactNode;
 }) {
-  const value = useMemo(() => ({ convId, cwd }), [convId, cwd]);
+  const value = useMemo(() => ({ convId, cwd, inert }), [convId, cwd, inert]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
@@ -87,7 +93,7 @@ function useMentionTarget(raw: string): MentionTarget | null {
     if (abs) ensureMentionChecked(abs);
   }, [abs, status]);
 
-  if (!ctx || !mention || !abs || status !== "exists") return null;
+  if (!ctx || ctx.inert || !mention || !abs || status !== "exists") return null;
   return { ctx, abs, mention };
 }
 
@@ -117,7 +123,7 @@ function useAuthoritativeTarget(path: string | undefined): MentionTarget | null 
     const trimmed = path?.trim();
     // Guard the one non-filesystem shape that can slip through an authoritative
     // arg: a URL/remote handle (a tool naming its arg `file_path` with a URL).
-    if (!ctx || !cwd || !trimmed || SCHEME.test(trimmed)) return null;
+    if (!ctx || ctx.inert || !cwd || !trimmed || SCHEME.test(trimmed)) return null;
     return { ctx, abs: resolveMentionAbs(cwd, trimmed), mention: { path: trimmed } };
   }, [ctx, cwd, path]);
 }
