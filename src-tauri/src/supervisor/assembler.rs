@@ -854,12 +854,18 @@ impl Assembler {
             }
             _ => {}
         }
-        if !text.trim().is_empty() {
+        {
             let uuid = u.uuid.clone().unwrap_or_default();
-            // Suppress the echo of a turn WE sent (`--replay-user-messages` returns it
-            // with the uuid we stamped) — the UI shows our own messages optimistically.
-            // A remote (phone/web) turn carries a uuid we never sent, so it is surfaced.
-            if !self.sent_user_uuids.remove(&uuid) {
+            // Consume the echo bookkeeping FIRST, regardless of content: a turn WE sent
+            // (`--replay-user-messages` returns it with the uuid we stamped) is recognised
+            // and dropped from `sent_user_uuids` here. Doing this outside the text guard
+            // matters for an images-only turn (empty text + image blocks): its uuid would
+            // otherwise linger in the set forever (a slow leak on a long-lived session).
+            let was_ours = !uuid.is_empty() && self.sent_user_uuids.remove(&uuid);
+            // Only surface a bubble for a genuine remote turn WITH text — the UI already
+            // shows our own turns optimistically, and image-only content isn't rendered on
+            // the live/replay path (an accepted limit).
+            if !was_ours && !text.trim().is_empty() {
                 out.push(SessionEvent::Item(ConversationItem::UserMessage {
                     id: uuid,
                     text,

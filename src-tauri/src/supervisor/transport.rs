@@ -149,19 +149,56 @@ fn known_claude_locations() -> Vec<PathBuf> {
     out
 }
 
+/// An image joined to a user turn: base64 bytes + their MIME type. Sent inside the
+/// message `content` array as an `image` block (spec §3.10) — verified accepted by
+/// `claude` 2.1.187, which "sees" it and answers about its content. The `data` field
+/// is raw base64 (NO `data:` URL prefix). Also an IPC command param (`send_message`),
+/// so it derives `specta::Type` for the generated TS bindings.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ImageAttachment {
+    /// MIME type, e.g. `image/png`, `image/jpeg`, `image/gif`, `image/webp`.
+    pub media_type: String,
+    /// Base64-encoded image bytes, with NO `data:image/...;base64,` prefix.
+    pub data: String,
+}
+
 /// Build a `user` turn message in the Anthropic message shape (spec §2.3), stamped
 /// with `uuid`. The uuid is echoed back verbatim by `--replay-user-messages`
 /// (`isReplay:true`), which is how the core recognises — and suppresses — the echo of
 /// a turn WE sent (vs a remote turn, whose uuid we never sent). Mirrors the official
 /// extension, which sends its own `crypto.randomUUID()` and dedupes the replay by it.
 pub fn user_message(text: impl Into<String>, uuid: &str) -> Value {
+    user_message_with_images(text, &[], uuid)
+}
+
+/// Build a `user` turn with an optional text block followed by any joined images
+/// (`image` blocks). `content` is an ARRAY of blocks (spec §3.10): the text block is
+/// included only when non-empty, so an images-only turn carries just the image blocks.
+/// An all-empty turn can't happen from the UI (empty sends are gated), but we still
+/// emit a single empty text block as a defensive floor so `content` is never `[]`.
+pub fn user_message_with_images(
+    text: impl Into<String>,
+    images: &[ImageAttachment],
+    uuid: &str,
+) -> Value {
+    let text = text.into();
+    let mut content: Vec<Value> = Vec::new();
+    if !text.is_empty() {
+        content.push(json!({ "type": "text", "text": text }));
+    }
+    for img in images {
+        content.push(json!({
+            "type": "image",
+            "source": { "type": "base64", "media_type": img.media_type, "data": img.data },
+        }));
+    }
+    if content.is_empty() {
+        content.push(json!({ "type": "text", "text": "" }));
+    }
     json!({
         "type": "user",
         "uuid": uuid,
-        "message": {
-            "role": "user",
-            "content": [{ "type": "text", "text": text.into() }],
-        }
+        "message": { "role": "user", "content": content }
     })
 }
 
@@ -604,6 +641,46 @@ mod tests {
         let cfg = SpawnConfig::new("/tmp");
         assert_eq!(cfg.claude_bin, PathBuf::from("claude"));
         assert_eq!(cfg.cwd, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn plain_user_message_is_a_single_text_block() {
+        let v = user_message("hi", "u3");
+        assert_eq!(v["type"], "user");
+        assert_eq!(v["uuid"], "u3");
+        let content = v["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "hi");
+    }
+
+    #[test]
+    fn user_message_with_images_puts_text_then_image_blocks() {
+        let imgs = vec![ImageAttachment {
+            media_type: "image/png".into(),
+            data: "AAAA".into(),
+        }];
+        let v = user_message_with_images("hello", &imgs, "u1");
+        let content = v["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "hello");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["data"], "AAAA");
+    }
+
+    #[test]
+    fn images_only_turn_omits_the_empty_text_block() {
+        let imgs = vec![ImageAttachment {
+            media_type: "image/jpeg".into(),
+            data: "BBBB".into(),
+        }];
+        let v = user_message_with_images("", &imgs, "u2");
+        let content = v["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1, "an empty text block must not be sent");
+        assert_eq!(content[0]["type"], "image");
     }
 
     /// A vanished cwd (e.g. a conversation whose worktree was deleted) must report

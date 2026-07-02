@@ -15,7 +15,7 @@ use crate::supervisor::model::{
     ContextFill, ConversationItem, SlashCommand, WorkflowJournal, WorkflowPhase, WorkflowRun,
 };
 use crate::supervisor::session::{self, InitialControls, SessionHandle};
-use crate::supervisor::transport::SpawnConfig;
+use crate::supervisor::transport::{ImageAttachment, SpawnConfig};
 use crate::usage::{PlanUsage, UsageError};
 
 /// Typed return value of `ping`. Proves React -> Rust (typed command).
@@ -377,16 +377,19 @@ pub async fn get_plan_usage() -> Result<PlanUsage, UsageError> {
     crate::usage::fetch_plan_usage().await
 }
 
-/// Send a user turn to a session.
+/// Send a user turn to a session: the typed `text` plus any joined `images` (sent as
+/// `image` blocks in the message `content` array). `images` is empty for a plain text
+/// turn.
 #[tauri::command]
 #[specta::specta]
 pub async fn send_message(
     sessions: tauri::State<'_, Sessions>,
     session: String,
     text: String,
+    images: Vec<ImageAttachment>,
 ) -> Result<(), String> {
     let handle = sessions.get(&session).ok_or_else(unknown_session)?;
-    handle.send_user_text(text).await.map_err(|e| e.to_string())
+    handle.send_user(text, images).await.map_err(|e| e.to_string())
 }
 
 /// Answer a pending `can_use_tool` permission prompt (allow / deny).

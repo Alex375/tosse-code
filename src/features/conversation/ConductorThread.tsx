@@ -25,7 +25,8 @@ import {
   useTurn,
   useTurnResult,
 } from "../../store/conversationStore";
-import type { RoundMarker } from "../../store/types";
+import type { RoundMarker, UserTurnImage } from "../../store/types";
+import { imageDataUrl } from "./composerAttachments";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { useBackgroundTasksStore, useTaskByToolUse } from "../../store/backgroundTasksStore";
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
@@ -66,7 +67,15 @@ import styles from "./ConductorThread.module.css";
 
 const EMPTY_BLOCKS: NormalizedBlock[] = [];
 
-export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
+export function MsgUser({
+  text,
+  queued,
+  images,
+}: {
+  text: string;
+  queued?: boolean;
+  images?: UserTurnImage[];
+}) {
   // A `<task-notification>` (and other CLI-injected markers) reaches us AS a user turn,
   // but the human didn't type it — render the clean card instead of a raw user bubble.
   const special = parseSpecialMessage(text);
@@ -81,7 +90,20 @@ export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
             en attente
           </span>
         ) : null}
-        <UserText text={text} />
+        {images && images.length ? (
+          <div className="cv-user-images">
+            {images.map((img, i) => (
+              <img
+                key={i}
+                className="cv-user-image"
+                src={imageDataUrl(img)}
+                alt={img.name ?? "image jointe"}
+                title={img.name}
+              />
+            ))}
+          </div>
+        ) : null}
+        {text.trim() ? <UserText text={text} /> : null}
       </div>
     </div>
   );
@@ -95,10 +117,13 @@ export function MsgUser({ text, queued }: { text: string; queued?: boolean }) {
 function InlineUserMarker({ session, turnId }: { session: string; turnId: string }) {
   const turn = useTurn(session, turnId);
   const text = turn?.streamingText ?? "";
-  if (!text.trim()) return null;
+  const images = turn?.images;
+  const hasImages = !!(images && images.length);
+  // Nothing to show only when there is neither text nor a joined image.
+  if (!text.trim() && !hasImages) return null;
   // A CLI-injected special message (e.g. a `<task-notification>`) reaches us as a user turn
   // too — render its clean card, exactly like a standalone user turn (MsgUser), never raw XML.
-  const special = parseSpecialMessage(text);
+  const special = text.trim() ? parseSpecialMessage(text) : null;
   if (special) return <SpecialMessageCard data={special} />;
   // Mirror MsgUser's affordance: while the message is still QUEUED (not yet delivered to the
   // CLI) show "en attente", switching to "Message envoyé" once the badge clears on delivery.
@@ -117,7 +142,20 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
         {queued ? "en attente" : "Message envoyé"}
       </span>
       <div className={styles.injectedMsgBody}>
-        <UserText text={text} />
+        {hasImages ? (
+          <div className="cv-user-images">
+            {images.map((img, i) => (
+              <img
+                key={i}
+                className="cv-user-image"
+                src={imageDataUrl(img)}
+                alt={img.name ?? "image jointe"}
+                title={img.name}
+              />
+            ))}
+          </div>
+        ) : null}
+        {text.trim() ? <UserText text={text} /> : null}
       </div>
     </div>
   );
@@ -1043,6 +1081,7 @@ export function TurnRow({
 }) {
   const turn = useTurn(session, turnId);
   if (!turn) return null;
-  if (turn.role === "user") return <MsgUser text={turn.streamingText} queued={turn.queued} />;
+  if (turn.role === "user")
+    return <MsgUser text={turn.streamingText} queued={turn.queued} images={turn.images} />;
   return <MsgAI session={session} turnId={turnId} busy={busy} awaiting={awaiting} />;
 }

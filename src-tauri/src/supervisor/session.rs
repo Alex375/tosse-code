@@ -29,7 +29,12 @@ use super::transport::{self, SpawnConfig, Transport, TransportError};
 
 /// A command sent from the UI to a running session.
 pub enum SessionCommand {
-    SendUserText(String),
+    /// A user turn: the typed text plus any images joined to it (sent as `image`
+    /// blocks in the message `content` array). `images` is empty for a plain text turn.
+    SendUser {
+        text: String,
+        images: Vec<transport::ImageAttachment>,
+    },
     AnswerPermission {
         request_id: String,
         decision: PermissionDecision,
@@ -195,8 +200,18 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
+    /// Send a user turn: text plus any joined images. `send_user_text` is the
+    /// text-only convenience used by internal callers and tests.
+    pub async fn send_user(
+        &self,
+        text: impl Into<String>,
+        images: Vec<transport::ImageAttachment>,
+    ) -> Result<(), SessionError> {
+        self.send(SessionCommand::SendUser { text: text.into(), images }).await
+    }
+
     pub async fn send_user_text(&self, text: impl Into<String>) -> Result<(), SessionError> {
-        self.send(SessionCommand::SendUserText(text.into())).await
+        self.send_user(text, Vec::new()).await
     }
 
     pub async fn answer_permission(
@@ -478,7 +493,7 @@ impl SessionCore {
         // Only track the ack if the line actually went out. If the outbound channel
         // is closed (process gone, not yet observed), surface it as a control error
         // instead of silently dropping the request and leaking a pending entry that
-        // will never be acked — same "no silent failure" guard as SendUserText.
+        // will never be acked — same "no silent failure" guard as SendUser.
         if self.send(line) {
             self.pending_control.insert(rid, kind);
         } else {
@@ -827,12 +842,12 @@ impl SessionCore {
 
     fn on_command(&mut self, cmd: SessionCommand) {
         match cmd {
-            SessionCommand::SendUserText(text) => {
+            SessionCommand::SendUser { text, images } => {
                 // Stamp a uuid so `--replay-user-messages` echo of THIS turn can be
                 // recognised as our own and suppressed (the UI shows it optimistically);
                 // a remote turn carries a uuid we never recorded, so it surfaces live.
                 let uuid = uuid::Uuid::new_v4().to_string();
-                if self.send(transport::user_message(text, &uuid)) {
+                if self.send(transport::user_message_with_images(text, &images, &uuid)) {
                     self.assembler.note_sent_user_message(&uuid);
                     let ev = self.assembler.set_busy(true);
                     self.emit(ev);
@@ -1183,7 +1198,7 @@ mod tests {
     fn send_user_text_on_a_dead_session_surfaces_a_notice() {
         let (mut core, mut events, out) = test_core();
         drop(out); // the process is gone: the outbound channel is closed
-        core.on_command(SessionCommand::SendUserText("hello".to_string()));
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
         let notice = drain(&mut events).into_iter().find_map(|e| match e {
             SessionEvent::Item(ConversationItem::Notice { subtype, .. }) => Some(subtype),
             _ => None,
@@ -1399,7 +1414,7 @@ mod tests {
     #[test]
     fn send_user_text_writes_a_user_message() {
         let (mut core, _events, mut out) = test_core();
-        core.on_command(SessionCommand::SendUserText("hello".to_string()));
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
         let lines = drain(&mut out);
         assert_eq!(lines[0]["type"], json!("user"));
         assert_eq!(lines[0]["message"]["content"][0]["text"], json!("hello"));
@@ -1414,7 +1429,7 @@ mod tests {
     #[test]
     fn own_user_message_echo_suppressed_remote_surfaced() {
         let (mut core, mut events, mut out) = test_core();
-        core.on_command(SessionCommand::SendUserText("hello".to_string()));
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
         let uuid = drain(&mut out)[0]["uuid"].as_str().unwrap().to_string();
         let _ = drain(&mut events); // the busy state event from the send
 
