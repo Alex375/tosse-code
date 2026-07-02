@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConductorConversation } from "./features/conversation/ConductorConversation";
 import { OpenInTerminalButton } from "./features/conversation/OpenInTerminalButton";
 import { TerminalToggle } from "./features/conversation/TerminalToggle";
@@ -8,6 +8,8 @@ import { WorktreeManager } from "./features/git/WorktreeManager";
 import { GitToggle } from "./features/git/GitToggle";
 import { EditorToggle } from "./features/editor/EditorToggle";
 import { FlightDeck } from "./features/flightdeck/FlightDeck";
+import { FlightDeckReplyModal } from "./features/flightdeck/FlightDeckReplyModal";
+import { useFlightdeckModal } from "./features/flightdeck/flightdeckModalStore";
 import { SoundToggle } from "./features/notifications/SoundToggle";
 import { ExtensionsManager } from "./features/extensions/ExtensionsManager";
 import { HistoryPanel } from "./features/history/HistoryPanel";
@@ -47,10 +49,32 @@ export default function App() {
   const activeRepo = useConversationRepo(activeId);
   const booted = useRef(false);
 
-  // Focusing an agent from the FlightDeck = select it and switch to its thread.
+  // The reply modal lives ONLY on the Flight Deck. Switch views through `changeView`
+  // so leaving the deck dismisses it SYNCHRONOUSLY (not in a post-render effect): the
+  // modal store's convId stays consistent with the view at all times, so an async
+  // agent notification landing mid-transition can never read a stale "watched" conv
+  // (see notify.ts). It also keeps the same conversation from being mounted twice
+  // (modal + full view) at once.
+  const closeReplyModal = useFlightdeckModal((s) => s.close);
+  const changeView = useCallback(
+    (next: View) => {
+      if (next !== "flightdeck") closeReplyModal();
+      setView(next);
+    },
+    [closeReplyModal],
+  );
+  // Defensive backstop: if a view change ever bypasses `changeView`, still close the
+  // modal on leaving the deck (post-render, so it can lag — `changeView` is the
+  // race-free path every current caller uses).
+  useEffect(() => {
+    if (view !== "flightdeck") closeReplyModal();
+  }, [view, closeReplyModal]);
+
+  // Focusing an agent from the FlightDeck = select it and switch to its thread. Also
+  // used to PROMOTE the reply modal to the full view (its "Plein écran" button).
   const openConversation = (id: string) => {
     useConversationsStore.getState().selectConversation(id);
-    setView("conversation");
+    changeView("conversation");
   };
 
   // On first mount: hydrate from the core's persisted state. Lazy policy — boot
@@ -81,7 +105,7 @@ export default function App() {
       const target = viewForShortcut(e);
       if (target) {
         e.preventDefault();
-        setView(target);
+        changeView(target);
         return;
       }
       // ⌘⇧M toggles the notification sound (mute/unmute the chime on the spot). A
@@ -108,7 +132,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [changeView]);
 
   return (
     <Win
@@ -121,14 +145,14 @@ export default function App() {
             label="Conversation"
             on={view === "conversation"}
             title="Conversation (⌘1)"
-            onClick={() => setView("conversation")}
+            onClick={() => changeView("conversation")}
           />
           <NavBtn
             icon="grid"
             label="Flight Deck"
             on={view === "flightdeck"}
             title="Flight Deck (⌘2)"
-            onClick={() => setView("flightdeck")}
+            onClick={() => changeView("flightdeck")}
           />
         </>
       }
@@ -160,6 +184,10 @@ export default function App() {
       ) : (
         <FlightDeck onOpen={openConversation} />
       )}
+      {/* Reply-in-place modal over the Flight Deck (store-driven, opened by a card's
+          attention action). Gated on the view so it can't overlay the Conversation
+          view or double-mount a conversation already shown there. */}
+      {view === "flightdeck" ? <FlightDeckReplyModal onPromote={openConversation} /> : null}
       {/* Mounted once, globally: opens for whichever repo the indicator/badge asks. */}
       <WorktreeManager />
       {/* Idem: the extensions manager, opened per repo (sidebar) or per conversation (composer). */}

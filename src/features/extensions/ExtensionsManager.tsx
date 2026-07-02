@@ -20,12 +20,17 @@ import { useEffect, useRef, useState } from "react";
 import { Ico } from "../../ui/kit";
 import { Toggle } from "../../ui/Toggle";
 import {
+  useCheckPluginUpdates,
   useExtensions,
   useExtensionDoc,
+  useMarketplaces,
   useMcpActions,
   useMcpStatus,
   usePluginContents,
+  useSetAllMarketplacesAutoUpdate,
+  useSetMarketplaceAutoUpdate,
   useSetPluginEnabled,
+  useUpdatePlugin,
 } from "../../ipc/useExtensions";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { StreamMarkdown } from "../conversation/StreamMarkdown";
@@ -38,6 +43,13 @@ import type {
   SkillInfo,
 } from "../../ipc/client";
 import { useExtensionsUi } from "./extensionsUiStore";
+import {
+  allMarketplacesAuto,
+  cliScope,
+  totalUpdates,
+  updateBadgeLabel,
+  updatesForMarketplace,
+} from "./pluginUpdates";
 import styles from "./ExtensionsManager.module.css";
 
 const CONFIG_SCOPE_LABEL: Record<ExtScope, string> = {
@@ -203,7 +215,7 @@ function useStableOrder<T>(
   rank: (x: T) => number,
   resetToken: string,
 ): T[] {
-  const ref = useRef<{ token: string; keys: string[] }>({ token: " ", keys: [] });
+  const ref = useRef<{ token: string | null; keys: string[] }>({ token: null, keys: [] });
   if (ref.current.token !== resetToken) {
     ref.current = { token: resetToken, keys: [] }; // window (re)opened → refreeze
   }
@@ -266,6 +278,8 @@ export function ExtensionsManager() {
   // The plugin explorer carries WHICH section to open at (a contribution box jumps
   // straight to skills / mcp / agents).
   const [pluginView, setPluginView] = useState<{ plugin: PluginInfo; section: ExplorerSectionKey } | null>(null);
+  // The Marketplaces page (auto-update management), reached from the Plugins section.
+  const [mktOpen, setMktOpen] = useState(false);
   const openPlugin = (p: PluginInfo, section: ExplorerSectionKey = "skills") =>
     setPluginView({ plugin: p, section });
 
@@ -323,13 +337,22 @@ export function ExtensionsManager() {
             ext={ext}
             live={live}
             handle={handle}
+            path={target.path}
             setPluginEnabled={setPluginEnabled}
             onOpenDoc={setDoc}
             onOpenPlugin={openPlugin}
+            onOpenMarketplaces={() => setMktOpen(true)}
             resetToken={openKey ?? ""}
           />
         ) : (
-          <ProjectBody ext={ext} setPluginEnabled={setPluginEnabled} onOpenDoc={setDoc} onOpenPlugin={openPlugin} />
+          <ProjectBody
+            ext={ext}
+            path={target.path}
+            setPluginEnabled={setPluginEnabled}
+            onOpenDoc={setDoc}
+            onOpenPlugin={openPlugin}
+            onOpenMarketplaces={() => setMktOpen(true)}
+          />
         )}
       </div>
 
@@ -342,6 +365,13 @@ export function ExtensionsManager() {
         />
       ) : null}
       {doc ? <DocViewer doc={doc} onClose={() => setDoc(null)} /> : null}
+      {mktOpen ? (
+        <MarketplacesPage
+          path={target.path}
+          plugins={ext.data?.plugins ?? []}
+          onClose={() => setMktOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -350,15 +380,22 @@ export function ExtensionsManager() {
 
 function ProjectBody({
   ext,
+  path,
   setPluginEnabled,
   onOpenDoc,
   onOpenPlugin,
+  onOpenMarketplaces,
 }: {
   ext: ReturnType<typeof useExtensions>;
+  path: string;
   setPluginEnabled: ReturnType<typeof useSetPluginEnabled>;
   onOpenDoc: (d: OpenDoc) => void;
   onOpenPlugin: (p: PluginInfo) => void;
+  onOpenMarketplaces: () => void;
 }) {
+  // No live session in the project lens → updates apply on the next session spawn
+  // (handle is null, so no reload_plugins hot-apply).
+  const updatePlugin = useUpdatePlugin(path, null);
   const data = ext.data;
   // No active/inactive state here — that is only knowable inside a live conversation
   // (see the conversation lens). The project lens shows what is CONFIGURED, grouped
@@ -394,7 +431,16 @@ function ProjectBody({
               <AgentRow key={a.path} agent={a} onOpen={() => onOpenDoc({ name: a.name, source: CONFIG_SCOPE_LABEL[a.scope], path: a.path, description: a.description })} />
             )} empty="" />
           ) : null}
-          <Section icon="layers" title="Plugins" count={plugins.length} empty="Aucun plugin pour ce dépôt.">
+          {updatePlugin.isError ? (
+            <div className={styles.error}>{(updatePlugin.error as Error).message}</div>
+          ) : null}
+          <Section
+            icon="layers"
+            title="Plugins"
+            count={plugins.length}
+            empty="Aucun plugin pour ce dépôt."
+            action={<MarketplacesButton updates={totalUpdates(plugins)} onOpen={onOpenMarketplaces} />}
+          >
             {plugins.map((p) => (
               <PluginRow
                 key={p.id}
@@ -402,6 +448,9 @@ function ProjectBody({
                 busy={setPluginEnabled.isPending}
                 onToggle={(enabled) => setPluginEnabled.mutate({ pluginId: p.id, enabled })}
                 onOpen={() => onOpenPlugin(p)}
+                onUpdate={() => updatePlugin.mutate({ pluginId: p.id, scope: cliScope(p.scope) })}
+                updating={updatePlugin.isPending && updatePlugin.variables?.pluginId === p.id}
+                anyUpdating={updatePlugin.isPending}
               />
             ))}
           </Section>
@@ -417,20 +466,27 @@ function ConversationBody({
   ext,
   live,
   handle,
+  path,
   setPluginEnabled,
   onOpenDoc,
   onOpenPlugin,
+  onOpenMarketplaces,
   resetToken,
 }: {
   ext: ReturnType<typeof useExtensions>;
   live: ReturnType<typeof useMcpStatus>;
   handle: string | null;
+  path: string;
   setPluginEnabled: ReturnType<typeof useSetPluginEnabled>;
   onOpenDoc: (d: OpenDoc) => void;
   onOpenPlugin: (p: PluginInfo, section?: ExplorerSectionKey) => void;
+  onOpenMarketplaces: () => void;
   resetToken: string;
 }) {
   const actions = useMcpActions(handle);
+  // A live session lets an update hot-apply via reload_plugins (handle non-null);
+  // otherwise it lands on the next spawn.
+  const updatePlugin = useUpdatePlugin(path, handle);
   // Order FROZEN at window-open (enabled/connected first), then stable — toggling an
   // item must not make it jump under the cursor (see useStableOrder).
   const plugins = useStableOrder(
@@ -540,7 +596,16 @@ function ConversationBody({
           footer={agentContribs.length ? <PluginContribFooter plugins={agentContribs} kind="agents" onOpen={onOpenPlugin} /> : null}
         />
       ) : null}
-      <Section icon="layers" title="Plugins" count={plugins.length} empty="Aucun plugin.">
+      {updatePlugin.isError ? (
+        <div className={styles.error}>{(updatePlugin.error as Error).message}</div>
+      ) : null}
+      <Section
+        icon="layers"
+        title="Plugins"
+        count={plugins.length}
+        empty="Aucun plugin."
+        action={<MarketplacesButton updates={totalUpdates(allPlugins)} onOpen={onOpenMarketplaces} />}
+      >
         {plugins.map((p) => (
           <PluginRow
             key={p.id}
@@ -548,6 +613,9 @@ function ConversationBody({
             busy={setPluginEnabled.isPending}
             onToggle={(enabled) => setPluginEnabled.mutate({ pluginId: p.id, enabled })}
             onOpen={() => onOpenPlugin(p)}
+            onUpdate={() => updatePlugin.mutate({ pluginId: p.id, scope: cliScope(p.scope) })}
+            updating={updatePlugin.isPending && updatePlugin.variables?.pluginId === p.id}
+            anyUpdating={updatePlugin.isPending}
           />
         ))}
       </Section>
@@ -563,12 +631,15 @@ function Section({
   count,
   empty,
   children,
+  action,
 }: {
   icon: string;
   title: string;
   count: number;
   empty: string;
   children: React.ReactNode;
+  /** Optional right-aligned control in the section header (e.g. a "Marketplaces" button). */
+  action?: React.ReactNode;
 }) {
   return (
     <div className={styles.section}>
@@ -576,6 +647,12 @@ function Section({
         <Ico name={icon} className="sm" />
         <span className={styles.sectionT}>{title}</span>
         <span className={styles.sectionC}>{count}</span>
+        {action ? (
+          <>
+            <span className={styles.spacer} />
+            {action}
+          </>
+        ) : null}
       </div>
       {count === 0 && empty ? (
         <div className={styles.sectionEmpty}>{empty}</div>
@@ -636,6 +713,137 @@ function GroupedSection<T extends { source: string | null; scope: ExtScope }>({
           {footer}
         </>
       )}
+    </div>
+  );
+}
+
+/** A small "Marketplaces" button for a section header — opens [`MarketplacesPage`].
+ *  Shows an amber count when some plugins have an update, as a discoverable hint. */
+function MarketplacesButton({ updates, onOpen }: { updates: number; onOpen: () => void }) {
+  return (
+    <button
+      className={styles.actBtn}
+      onClick={onOpen}
+      title="Gérer les marketplaces et les mises à jour automatiques"
+    >
+      <Ico name="layers" className="sm" />
+      Marketplaces
+      {updates > 0 ? <span className={styles.updateBadge}>{updates}</span> : null}
+    </button>
+  );
+}
+
+/** The Marketplaces page — a dedicated overlay reached from the Plugins section header.
+ *  Auto-update is PER-MARKETPLACE (the only granularity Claude Code exposes), so it
+ *  belongs here rather than as a general section: the global master toggle, one toggle
+ *  per marketplace, and the network "Vérifier" (marketplace refresh). Per-plugin update
+ *  stays on each PluginRow; the counts here are derived from the plugin list. */
+function MarketplacesPage({
+  path,
+  plugins,
+  onClose,
+}: {
+  path: string;
+  plugins: PluginInfo[];
+  onClose: () => void;
+}) {
+  const marketplaces = useMarketplaces(path);
+  const check = useCheckPluginUpdates(path);
+  const setAuto = useSetMarketplaceAutoUpdate(path);
+  const setAllAuto = useSetAllMarketplacesAutoUpdate(path);
+  const list = marketplaces.data ?? [];
+  const total = totalUpdates(plugins);
+  const allOn = allMarketplacesAuto(list);
+
+  // Escape closes the overlay, like the app's other dialogs. `!e.defaultPrevented`
+  // keeps to the convention: if a nested layer ever consumes Escape first, we bail.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className={styles.mktScrim} onClick={onClose}>
+      <div className={styles.mktPanel} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal>
+        <div className={styles.head}>
+          <Ico name="layers" className="sm" />
+          <span className={styles.title}>
+            Marketplaces
+            <span className={styles.titleSub}>
+              Mise à jour automatique des plugins{total > 0 ? ` · ${total} MAJ dispo` : ""}
+            </span>
+          </span>
+          <span className={styles.spacer} />
+          <button
+            className={styles.actBtn}
+            onClick={() => check.mutate(null)}
+            disabled={check.isPending}
+            title="Rafraîchir les marketplaces et re-vérifier les mises à jour disponibles"
+          >
+            <Ico name="refresh" className={"sm" + (check.isPending ? " " + styles.spin : "")} />
+            {check.isPending ? "Vérification…" : "Vérifier les mises à jour"}
+          </button>
+          <button className={styles.iconBtn} onClick={onClose} title="Fermer" aria-label="Fermer">
+            ✕
+          </button>
+        </div>
+        <div className={styles.body}>
+          {check.isError ? <div className={styles.error}>{(check.error as Error).message}</div> : null}
+          {setAuto.isError ? <div className={styles.error}>{(setAuto.error as Error).message}</div> : null}
+          {setAllAuto.isError ? <div className={styles.error}>{(setAllAuto.error as Error).message}</div> : null}
+          {marketplaces.isLoading ? (
+            <div className={styles.sectionEmpty}>Chargement des marketplaces…</div>
+          ) : marketplaces.isError ? (
+            <div className={styles.error}>{(marketplaces.error as Error).message}</div>
+          ) : list.length === 0 ? (
+            <div className={styles.sectionEmpty}>Aucun marketplace enregistré.</div>
+          ) : (
+            <div className={styles.list}>
+              <div className={styles.mktRow}>
+                <Ico name="bolt" className="sm" />
+                <div className={styles.rowMain}>
+                  <span className={styles.rowName}>Mise à jour automatique</span>
+                  <span className={styles.rowMeta}>Tous les marketplaces à la fois</span>
+                </div>
+                <Toggle
+                  checked={allOn}
+                  disabled={setAuto.isPending || setAllAuto.isPending}
+                  onChange={(v) => setAllAuto.mutate(v)}
+                  label="Mise à jour automatique de tous les marketplaces"
+                />
+              </div>
+              {list.map((m) => {
+                const n = updatesForMarketplace(plugins, m.name);
+                return (
+                  <div key={m.name} className={styles.mktRow}>
+                    <Ico name="layers" className="sm" />
+                    <div className={styles.rowMain}>
+                      <span className={styles.rowName}>
+                        {m.name}
+                        {n > 0 ? <span className={styles.updateBadge}>{n} MAJ</span> : null}
+                      </span>
+                      {m.source ? <span className={styles.rowMeta}>{m.source}</span> : null}
+                    </div>
+                    <Toggle
+                      checked={m.auto_update}
+                      disabled={setAuto.isPending || setAllAuto.isPending}
+                      onChange={(v) => setAuto.mutate({ name: m.name, enabled: v })}
+                      label={`Mise à jour automatique de ${m.name}`}
+                      title="Mise à jour automatique de ce marketplace"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -842,11 +1050,23 @@ function PluginRow({
   busy,
   onToggle,
   onOpen,
+  onUpdate,
+  updating,
+  anyUpdating,
 }: {
   plugin: PluginInfo;
   busy?: boolean;
   onToggle?: (enabled: boolean) => void;
   onOpen: () => void;
+  /** Trigger an on-demand update. The button is ALWAYS shown when provided (on-demand
+   *  update is a requirement, and pin-less plugins never flip `update_available`); it's
+   *  just emphasised when an update was detected. */
+  onUpdate?: () => void;
+  /** This row's update is in flight. */
+  updating?: boolean;
+  /** Any plugin's update is in flight (disables every row's button to avoid one shared
+   *  mutation hijacking another row's spinner/error). */
+  anyUpdating?: boolean;
 }) {
   const parts = pluginParts(plugin);
   return (
@@ -857,6 +1077,9 @@ function PluginRow({
           <span className={styles.rowName}>
             {plugin.name}
             <Badge label={`Installé : ${CONFIG_SCOPE_LABEL[plugin.scope]}`} cls={configBadgeCls(plugin.scope)} />
+            {plugin.update_available ? (
+              <span className={styles.updateBadge}>{updateBadgeLabel(plugin.version, plugin.latest_version)}</span>
+            ) : null}
           </span>
           <span className={styles.rowMeta}>
             {plugin.marketplace}
@@ -865,6 +1088,21 @@ function PluginRow({
         </div>
         <Ico name="arrow" className={"sm " + styles.openArrow} />
       </button>
+      {onUpdate ? (
+        <button
+          className={plugin.update_available || updating ? styles.updateBtn : styles.updateBtnGhost}
+          onClick={onUpdate}
+          disabled={updating || anyUpdating}
+          title={
+            plugin.update_available
+              ? "Mettre à jour ce plugin maintenant"
+              : "Forcer la mise à jour à la dernière version du marketplace"
+          }
+        >
+          <Ico name="refresh" className={"sm" + (updating ? " " + styles.spin : "")} />
+          {updating ? "Mise à jour…" : "Mettre à jour"}
+        </button>
+      ) : null}
       {onToggle ? (
         <Toggle
           checked={plugin.enabled}

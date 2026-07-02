@@ -14,7 +14,9 @@ Ce skill prend la branche de feature du worktree courant et la fusionne dans `de
 
 **Objectif final** : peu importe le détail, la feature doit se retrouver sur la branche `dev` du **worktree principal**. C'est tout.
 
-> Ce skill ne s'applique que si tu travailles **dans un worktree** (flux `/start`). Si tu n'es pas dans un worktree, le travail est déjà sur la branche courante : saute les étapes worktree, va directement à « mettre dev à jour / committer / pousser / `/done` ».
+**Quatre faits à reporter en fin de course** : ce skill se termine **toujours** par un tableau récapitulatif (étape 9) qui répond, au minimum, à quatre questions — *y a-t-il eu des conflits au merge ? · `dev` est-il poussé ? · le worktree est-il nettoyé ? · as-tu une modification de contexte TOSSE à proposer ?* Garde ces informations sous la main pendant toute l'opération (note-les au fil des étapes 5, 7, 8) pour pouvoir les reporter fidèlement à la fin.
+
+> Ce skill ne s'applique que si tu travailles **dans un worktree** (flux `/start`). Si tu n'es pas dans un worktree, le travail est déjà sur la branche courante : saute les étapes worktree, va directement à « mettre dev à jour / committer / pousser / `/done` ». (Dans ce cas, la ligne « worktree nettoyé » du tableau final vaut `N/A — pas de worktree`.)
 
 ## Étape 1 — Vérifier que le travail est fini
 
@@ -124,6 +126,28 @@ L'ordre compte : on retire d'abord le worktree (qui avait `feat/<slug>` checké 
 ## Étape 8 — Clôturer la tâche
 
 Lance le skill `/done` (outil Skill). Il résume le travail, met à jour le contexte de la tâche et la passe en **Review**. Ce repo n'a pas de `/deploy`, donc `/done` ne déclenchera rien d'autre — c'est `/land` qui a joué le rôle de mise en intégration.
+
+## Étape 9 — Reporting final à l'utilisateur (tableau récapitulatif)
+
+Une fois `/done` terminé, **le tout dernier message que tu affiches est un tableau récapitulatif du land**. C'est la conclusion obligatoire du skill : l'utilisateur doit pouvoir lire l'état de l'opération d'un seul coup d'œil.
+
+**Quatre lignes sont NON NÉGOCIABLES** et apparaissent toujours, même quand tout s'est bien passé :
+
+| Vérification | Statut | Détail |
+|---|---|---|
+| Conflits au merge | ✅ Aucun · **ou** ⚠️ Oui | `merge propre / fast-forward` — **ou** `N fichier(s) : a.ts, b.rs` |
+| `dev` poussé | ✅ Oui · **ou** ❌ Non | commit court (`abc1234`) poussé sur `origin/dev` — **ou** la raison du blocage |
+| Worktree nettoyé | ✅ Oui · **ou** ❌ Non · **ou** ➖ N/A | worktree `.claude/worktrees/<slug>` **et** branche `feat/<slug>` supprimés — **ou** la raison — **ou** `pas de worktree` (flux hors-worktree) |
+| Modif de contexte à proposer | ✅ Non · **ou** 💡 Oui | `rien à mettre à jour` — **ou** quel contexte (`repo` / `projet` / `mission` / `client` / `tâche`) et quoi y changer |
+
+Règles de ce tableau :
+
+- **Ces quatre lignes sont obligatoires**, dans cet ordre, et présentes même si tout est vert. Ne les omets jamais, ne les fusionne jamais.
+- **Reflète la réalité, pas l'intention.** Chaque statut décrit ce qui s'est *effectivement* passé (push réellement effectué, worktree réellement supprimé), pas ce qui aurait dû arriver. Si une étape a échoué ou a été sautée, dis-le franchement (❌ + raison) plutôt que de cocher ✅.
+- **Si un conflit a eu lieu** (⚠️), ajoute **sous le tableau** un court récap : quels fichiers, et comment tu as tranché (surtout les conflits complexes) — cohérent avec ce que tu as déjà expliqué à l'étape 5.
+- **Ligne « modif de contexte »** : c'est une **recommandation**, pas un fait mécanique. Réponds `💡 Oui` seulement si le travail a révélé quelque chose qui mérite d'être écrit dans un contexte TOSSE — nouvelle décision structurante, changement de stack/pattern, info durable — en respectant la règle d'or (une info à UN SEUL niveau, pas de redondance avec un contexte parent). Sinon `✅ Non`. Si `/done` (étape 8) a déjà proposé ou appliqué une mise à jour de contexte via `tosse-manager`, reprends-la ici (contexte visé + ce qui change) plutôt que de la réinventer. En cas de doute, cite ta suggestion et laisse l'utilisateur trancher — n'édite pas un contexte de ta propre initiative dans cette ligne.
+- **Tu peux ajouter d'autres lignes** utiles au-dessus ou en dessous des quatre obligatoires (ex : `typecheck + tests` verts, `cargo test --lib` lancé, build vérifié via `/build-dev`, tâche passée en **Review** par `/done`…). Elles enrichissent le rapport mais ne remplacent jamais les quatre lignes cœur.
+- Marqueurs visuels : `✅` ok / rien à signaler · `⚠️` a nécessité une intervention · `❌` échec/non fait · `➖` sans objet · `💡` suggestion à valider. But : l'état se lit en un clin d'œil.
 
 ## Ce que ce skill ne fait PAS
 

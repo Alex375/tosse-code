@@ -128,6 +128,41 @@
   color: var(--wf-tx, inherit);
 }
 
+/* A message the user injected mid-work, shown inline inside the assistant round (clean
+   output): a light note with a "wait"-toned rail, not a full user bubble, so it sits in
+   place without cutting the work. */
+.injectedMsg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0;
+  padding: 7px 10px;
+  border-left: 2px solid var(--wf-wait);
+  background: var(--wf-wait-bg);
+  border-radius: 0 8px 8px 0;
+}
+.injectedMsgTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--wf-wait);
+}
+.injectedMsgTag :global(.wf-ico) {
+  width: 11px;
+  height: 11px;
+}
+.injectedMsgBody {
+  font-size: 13px;
+  color: var(--wf-tx);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .status {
   margin-left: auto;
   display: inline-flex;

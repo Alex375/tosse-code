@@ -6,6 +6,7 @@ import {
   countWorkSteps,
   flattenWork,
   groupBlocks,
+  interleaveMarkers,
   isHiddenInline,
   liveVisibleStart,
   runHeader,
@@ -14,6 +15,7 @@ import {
   stepLabel,
   stepSummary,
   workStepIds,
+  type BlockMarker,
   type Segment,
   type ToolStep,
 } from "./toolGroup";
@@ -31,6 +33,12 @@ const tool = (id: string, name: string, input: unknown = {}): NormalizedBlock =>
   id,
   name,
   input: input as never,
+});
+const mkMarker = (id: string, markerKind: "notice" | "user" = "notice"): BlockMarker => ({
+  type: "marker",
+  markerKind,
+  id,
+  key: `mk-${id}`,
 });
 
 describe("groupBlocks", () => {
@@ -148,6 +156,85 @@ describe("groupBlocks — Workflow", () => {
     expect(segs.map((s) => s.kind)).toEqual(["run", "workflow", "run"]);
     const wf = segs[1];
     if (wf.kind === "workflow") expect(wf.step.id).toBe("w");
+  });
+});
+
+describe("groupBlocks — in-band markers (mid-turn separator)", () => {
+  it("emits a `marker` segment that breaks the run without being a step", () => {
+    const segs = groupBlocks([tool("a", "Read"), mkMarker("cc"), tool("b", "Read")]);
+    expect(segs.map((s) => s.kind)).toEqual(["run", "marker", "run"]);
+    const m = segs[1];
+    if (m.kind === "marker") {
+      expect(m.id).toBe("cc");
+      expect(m.markerKind).toBe("notice");
+    }
+    // A marker is NOT a tool step: it doesn't inflate the run count nor the step ids.
+    expect(countWorkSteps(segs)).toBe(2);
+    expect(workStepIds(segs)).toEqual(["a", "b"]);
+  });
+
+  it("keeps the trailing text as the final message across an earlier marker (one round)", () => {
+    const { work, final } = splitFinalMessage(
+      groupBlocks([tool("a", "Read"), mkMarker("uinj", "user"), tool("b", "Edit"), text("Fait.")]),
+    );
+    // work = run + marker + run (ONE fold), final = the closing prose only.
+    expect(work.map((s) => s.kind)).toEqual(["run", "marker", "run"]);
+    expect(final.map((s) => s.kind)).toEqual(["text"]);
+  });
+
+  it("peels a TRAILING marker (after the final text) into `final` so the fold is not defeated", () => {
+    // A control-change bar / injected message landing right at the end of the response. Without
+    // peeling markers too, final=[] would make a settled round render fully unfolded.
+    const { work, final } = splitFinalMessage(
+      groupBlocks([tool("a", "Read"), tool("b", "Edit"), text("Done."), mkMarker("cc")]),
+    );
+    expect(work.map((s) => s.kind)).toEqual(["run"]);
+    expect(final.map((s) => s.kind)).toEqual(["text", "marker"]);
+  });
+
+  it("survives a flattenWork → atomsToSegments round-trip (marker stays a non-step atom)", () => {
+    const work = groupBlocks([tool("a", "Read"), mkMarker("cc"), tool("b", "Edit")]);
+    const atoms = flattenWork(work);
+    expect(atoms.map((a) => a.kind)).toEqual(["step", "marker", "step"]);
+    const back = atomsToSegments(atoms, "vis");
+    expect(back.map((s) => s.kind)).toEqual(["run", "marker", "run"]);
+  });
+
+  it("liveVisibleStart never counts a marker toward the 3-step window", () => {
+    // 3 real steps + a marker: the window is the 3 steps, so nothing folds (start 0), and the
+    // marker rides along in the visible region.
+    const atoms = flattenWork(
+      groupBlocks([tool("a", "Read"), tool("b", "Read"), mkMarker("cc"), tool("c", "Read")]),
+    );
+    expect(liveVisibleStart(atoms, () => false, 3)).toBe(0);
+  });
+});
+
+describe("interleaveMarkers", () => {
+  const blk = (id: string): NormalizedBlock => tool(id, "Read");
+
+  it("splices a marker at its turn boundary (after: 1 → between turn 0 and turn 1)", () => {
+    const out = interleaveMarkers([[blk("a")], [blk("b")]], [
+      { markerKind: "notice", id: "cc", after: 1 },
+    ]);
+    expect(out.map((x) => ("type" in x ? x.type : "?"))).toEqual([
+      "tool_use",
+      "marker",
+      "tool_use",
+    ]);
+    const m = out[1] as BlockMarker;
+    expect(m.id).toBe("cc");
+    expect(m.key).toBe("mk-cc");
+  });
+
+  it("emits a marker with after: 0 before the first turn's blocks", () => {
+    const out = interleaveMarkers([[blk("a")]], [{ markerKind: "user", id: "u", after: 0 }]);
+    expect(out.map((x) => ("type" in x ? x.type : "?"))).toEqual(["marker", "tool_use"]);
+  });
+
+  it("with no markers, returns the turns' blocks concatenated (identical to the plain stream)", () => {
+    const out = interleaveMarkers([[blk("a"), blk("b")], [blk("c")]], []);
+    expect(out).toEqual([blk("a"), blk("b"), blk("c")]);
   });
 });
 

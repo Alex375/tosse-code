@@ -11,33 +11,35 @@
 .cv-search:hover { background:var(--wf-panel-2); border-color:var(--wf-line-2); color:var(--wf-tx); }
 .cv-sess-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior-y:contain; padding:6px 6px 6px; display:flex; flex-direction:column; gap:12px; }
 .cv-repo { display:flex; flex-direction:column; gap:3px; }
-/* Repo header: collapse chevron · repo title (takes all the free width so it isn't
-   truncated) · extensions · new-conversation. Roomier than the old 10px label so the
-   section reads as a real group head; the title gets the space, the buttons stay clear. */
-.cv-repo-h { display:flex; align-items:center; gap:3px; padding:10px 6px 7px 2px; font-size:11.5px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; color:var(--wf-tx-lo); }
+/* Single-line repo header: chevron + title (flexes to run full-width up to the always-on +),
+   then the reveal-on-hover tools (worktrees, extensions), then the + pinned at the right. */
+.cv-repo-h { display:flex; align-items:center; gap:1px; padding:8px 5px 6px 4px; }
 .cv-repo-h .wf-ico { color:var(--wf-tx-lo); }
-.cv-repo-n { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-/* Collapse/expand chevron — the section's always-visible fold control (see sidebarFold).
-   The `chev` glyph points down when expanded and rotates to point right when collapsed. */
-.cv-repo-fold { width:22px; height:22px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; transition:background .12s ease, color .12s ease; }
-.cv-repo-fold:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
-.cv-repo-fold-chev { transition:transform .16s ease; }
+/* Chevron + title — the collapse toggle. Flexes to fill all the space the buttons leave, so
+   at rest the name runs right up to the + at the edge. */
+.cv-repo-title { flex:1; min-width:0; display:flex; align-items:center; gap:6px; border:0; background:transparent; font:inherit; color:inherit; padding:3px 5px; margin:-3px -3px -3px -5px; border-radius:6px; cursor:pointer; text-align:left; }
+.cv-repo-title:hover { background:var(--wf-panel-2); }
+/* The title itself — the important element: normal case (fits more than the old uppercase),
+   larger and semibold, in the strong text colour, so it clearly headlines the section. */
+.cv-repo-n { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:13.5px; font-weight:600; letter-spacing:0; text-transform:none; color:var(--wf-tx-hi); }
+/* Fold chevron — points down when expanded, rotates to point right when collapsed. */
+.cv-repo-fold-chev { flex:0 0 auto; transition:transform .16s ease; }
 .cv-repo.collapsed .cv-repo-fold-chev { transform:rotate(-90deg); }
-/* Title is a button: clicking it opens this repo's worktree manager. It owns all the
-   free width (flex:1) and only ellipsises as a last resort for a very long name. */
-.cv-repo-wt { flex:1; min-width:0; display:flex; align-items:center; gap:6px; border:0; background:transparent; font:inherit; color:inherit; text-transform:inherit; letter-spacing:inherit; padding:3px 6px; margin:-3px -2px; border-radius:6px; cursor:pointer; text-align:left; }
-.cv-repo-wt:hover { background:var(--wf-panel-2); color:var(--wf-tx); }
-/* Worktree hint: the branch glyph revealed to the right of the name on hover (coral),
-   so the "click to open worktrees" affordance shows only when relevant. */
-.cv-repo-wt-hint { flex:0 0 auto; opacity:0; transition:opacity .12s ease, color .12s ease; }
-.cv-repo-wt:hover .cv-repo-wt-hint { opacity:1; }
-.cv-repo-wt:hover .cv-repo-wt-hint.wf-ico { color:var(--wf-accent); }
-/* Header action buttons — always visible (not hover-only) and a touch larger so they
-   read as real controls; they brighten fully on hover. */
-.cv-repo-add, .cv-repo-ext { width:24px; height:24px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; opacity:.7; transition:opacity .12s ease, background .12s ease, color .12s ease; }
-.cv-repo:hover .cv-repo-add, .cv-repo:hover .cv-repo-ext { opacity:.85; }
-.cv-repo-add:hover, .cv-repo-ext:hover { opacity:1; background:var(--wf-panel-3); color:var(--wf-tx-hi); }
-.cv-repo-empty { font-size:11.5px; color:var(--wf-tx-xlo); padding:3px 9px 6px 30px; font-style:italic; }
+/* Action buttons. The + carries only .cv-repo-act (always shown); worktree/extensions add
+   .cv-repo-reveal (0-width at rest → slide in on header hover, truncating the title). */
+.cv-repo-act { width:24px; height:24px; flex:0 0 auto; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; opacity:.8; transition:opacity .12s ease, background .12s ease, color .12s ease; }
+.cv-repo-h:hover .cv-repo-act { opacity:1; }
+.cv-repo-act:hover { background:var(--wf-panel-3); color:var(--wf-tx-hi); }
+/* The repo-delete button is a reveal action but danger-tinted on hover (mirrors .cv-sess-del). */
+.cv-repo-del:hover { background:var(--wf-err-bg); color:var(--wf-err); }
+/* Reveal-on-hover: display:none at rest so it reserves ZERO width (a flexed icon button
+   won't collapse to 0 via width/min-width alone — its icon keeps a min-content floor), which
+   lets the title run right up to the +. On header hover the buttons appear with a small
+   fade/slide, and the title truncates to make room. */
+.cv-repo-reveal { display:none; }
+.cv-repo-h:hover .cv-repo-reveal { display:inline-flex; animation:cv-reveal-in .14s ease; }
+@keyframes cv-reveal-in { from { opacity:0; transform:translateX(-3px); } to { opacity:1; transform:none; } }
+.cv-repo-empty { font-size:11.5px; color:var(--wf-tx-xlo); padding:3px 9px 6px 27px; font-style:italic; }
 .cv-sess-list { display:flex; flex-direction:column; gap:1px; padding:2px 6px; }
 /* Row = the hover/active target; it holds the main button + the kebab menu. */
 .cv-sess-row { position:relative; display:flex; align-items:center; border-radius:var(--wf-r); }

@@ -25,6 +25,8 @@ const WF_PATHS: Record<string, string> = {
   search: "M9.5 4a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11ZM14 14l4 4",
   dots: "M5 11h.01M11 11h.01M17 11h.01",
   arrow: "M5 11h12m-5-6 6 6-6 6",
+  // A "reply"/return arrow — marks the user's own last message on a Flight Deck card.
+  reply: "M9 7 5 11l4 4M5 11h7a4 4 0 0 0 4-4V5",
   bell: "M6 9a5 5 0 0 1 10 0c0 4 2 5 2 5H4s2-1 2-5ZM9 18a2 2 0 0 0 4 0",
   clock: "M11 5a6 6 0 1 1 0 12 6 6 0 0 1 0-12ZM11 8v3l2 2",
   file: "M6 3h6l4 4v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM12 3v4h4",

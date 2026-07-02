@@ -1,0 +1,102 @@
+/* Flight Deck reply modal: the full conversation column (thread + bars + composer)
+   mounted over a blurred Flight Deck, so an agent's question/permission can be
+   answered without leaving the dashboard. Same scrim/panel conventions as the
+   worktree manager, but a large panel sized for a real conversation. */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--overlay-scrim);
+  /* Keep the Flight Deck visible-but-recessed behind the modal. */
+  backdrop-filter: blur(2px);
+}
+
+.panel {
+  width: min(1000px, 92vw);
+  height: min(820px, 90vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--wf-bg);
+  border: 1px solid var(--wf-line-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+}
+
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--wf-line);
+  background: var(--wf-bg-2);
+}
+
+.title {
+  font-weight: 600;
+  color: var(--wf-tx-hi);
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+
+.repo {
+  font-size: 11.5px;
+  color: var(--wf-tx-xlo);
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.headBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--wf-tx);
+  padding: 5px 10px;
+  border: 1px solid var(--wf-line);
+  border-radius: var(--wf-r);
+  background: var(--wf-panel);
+  cursor: pointer;
+}
+.headBtn:hover {
+  background: var(--wf-panel-3);
+  color: var(--wf-tx-hi);
+  border-color: var(--wf-line-2);
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: var(--wf-tx-lo);
+  border: 1px solid var(--wf-line);
+  border-radius: var(--wf-r);
+  background: var(--wf-panel);
+  cursor: pointer;
+}
+.iconBtn:hover {
+  background: var(--wf-panel-3);
+  color: var(--wf-tx-hi);
+}
+
+/* The conversation column fills the rest; min-height:0 lets the thread scroll. */
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}

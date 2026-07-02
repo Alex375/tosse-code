@@ -8,6 +8,7 @@
 // transcript (SubAgentTranscript).
 
 import type { BackgroundTaskStatus, JsonValue, NormalizedBlock } from "../../ipc/client";
+import type { RoundMarker } from "../../store/types";
 import { field } from "../../agent/ask";
 import { toolActivityLabel } from "../../store/activity";
 import { isRunInBackground } from "../../agent/subagentMeta";
@@ -54,6 +55,23 @@ export interface ToolStep {
   input: JsonValue;
 }
 
+/**
+ * A sentinel spliced into a round's block stream (via {@link interleaveMarkers}) so an
+ * in-band marker — a control-change bar or a message injected mid-work — renders inline in
+ * the response flow. Its own `type` so {@link groupBlocks} routes it like a text/thinking
+ * boundary (flushes the run, emits a `marker` segment) instead of a tool step.
+ */
+export interface BlockMarker {
+  type: "marker";
+  markerKind: "notice" | "user";
+  /** notice id or user turn id, resolved to content at render. */
+  id: string;
+  key: string;
+}
+
+/** What {@link groupBlocks} consumes: real content blocks plus optional inline markers. */
+export type GroupInput = NormalizedBlock | BlockMarker;
+
 export type Segment =
   | { kind: "text"; key: string; text: string }
   | { kind: "thinking"; key: string; text: string }
@@ -64,7 +82,11 @@ export type Segment =
   | { kind: "agent"; key: string; step: ToolStep }
   // A `Workflow` renders as its OWN persistent inline card (live overview → post-run report),
   // like a sub-agent: dedicated segment, breaks the run, never hidden.
-  | { kind: "workflow"; key: string; step: ToolStep };
+  | { kind: "workflow"; key: string; step: ToolStep }
+  // An in-band marker (control-change bar / message injected mid-work) shown inline in the
+  // flow. NOT work: it doesn't count as a step and never breaks the clean-output work fold —
+  // it just renders at its chronological place (see coalesceCleanRounds / interleaveMarkers).
+  | { kind: "marker"; key: string; markerKind: "notice" | "user"; id: string };
 
 /**
  * A tool_use that is NEVER shown inline in the thread — it lives in a pinned bar or
@@ -99,7 +121,7 @@ export function isHiddenInline(name: string, input: JsonValue): boolean {
  * `bgAgentIds` in the store). Ignored under `includeBackground` (the disk view shows them).
  */
 export function groupBlocks(
-  blocks: NormalizedBlock[],
+  blocks: ReadonlyArray<GroupInput>,
   includeBackground = false,
   backgroundToolUseIds?: ReadonlySet<string>,
 ): Segment[] {
@@ -107,6 +129,13 @@ export function groupBlocks(
   let run: ToolStep[] | null = null;
 
   blocks.forEach((b, i) => {
+    if (b.type === "marker") {
+      // An in-band marker (control-change bar / injected message): flush the run and render
+      // it inline — like prose, it breaks the run but is NOT a tool step.
+      run = null;
+      out.push({ kind: "marker", key: b.key, markerKind: b.markerKind, id: b.id });
+      return;
+    }
     if (b.type === "tool_use") {
       // Live thread: hide everything `isHiddenInline` covers (a pinned bar shows the
       // background ones), PLUS any id the store flagged detached-by-ack. Disk transcript
@@ -171,8 +200,13 @@ export function splitFinalMessage(segments: Segment[]): {
   work: Segment[];
   final: Segment[];
 } {
+  // Peel the trailing concluding prose AND any in-band marker sitting after it (a control-change
+  // bar / injected message that lands right at the end of the response) into `final`, so the
+  // marker stays in clear next to the message instead of emptying `final` and defeating the fold
+  // (which would render the whole settled round unfolded). A marker separated from the final text
+  // by a run still stops the scan at that run — only intermediate work folds.
   let i = segments.length;
-  while (i > 0 && segments[i - 1].kind === "text") i--;
+  while (i > 0 && (segments[i - 1].kind === "text" || segments[i - 1].kind === "marker")) i--;
   return { work: segments.slice(0, i), final: segments.slice(i) };
 }
 
@@ -187,7 +221,10 @@ export type WorkAtom =
   | { kind: "agent"; key: string; step: ToolStep }
   | { kind: "workflow"; key: string; step: ToolStep }
   | { kind: "thinking"; key: string; text: string }
-  | { kind: "text"; key: string; text: string };
+  | { kind: "text"; key: string; text: string }
+  // An in-band marker: a non-step atom (like text/thinking) — it folds with the surrounding
+  // work but never counts as a step nor forces the fold open.
+  | { kind: "marker"; key: string; markerKind: "notice" | "user"; id: string };
 
 /** Flatten work segments into per-item atoms (a run → one atom per step). */
 export function flattenWork(segs: Segment[]): WorkAtom[] {
@@ -201,6 +238,8 @@ export function flattenWork(segs: Segment[]): WorkAtom[] {
       out.push({ kind: "workflow", key: seg.key, step: seg.step });
     } else if (seg.kind === "thinking") {
       out.push({ kind: "thinking", key: seg.key, text: seg.text });
+    } else if (seg.kind === "marker") {
+      out.push({ kind: "marker", key: seg.key, markerKind: seg.markerKind, id: seg.id });
     } else {
       out.push({ kind: "text", key: seg.key, text: seg.text });
     }
@@ -228,8 +267,32 @@ export function atomsToSegments(atoms: WorkAtom[], keyPrefix: string): Segment[]
     if (a.kind === "agent") out.push({ kind: "agent", key: a.key, step: a.step });
     else if (a.kind === "workflow") out.push({ kind: "workflow", key: a.key, step: a.step });
     else if (a.kind === "thinking") out.push({ kind: "thinking", key: a.key, text: a.text });
+    else if (a.kind === "marker")
+      out.push({ kind: "marker", key: a.key, markerKind: a.markerKind, id: a.id });
     else out.push({ kind: "text", key: a.key, text: a.text });
   }
+  return out;
+}
+
+/**
+ * Build a round's block stream with its in-band markers spliced back at their turn
+ * boundaries. `blocksByTurn[k]` is the k-th grouped assistant turn's blocks; a marker with
+ * `after: n` is emitted right after the n-th turn (n = 0 → before the first). Pure so the
+ * interleaving is unit-testable and shared by the live thread. With no markers it returns the
+ * turns' blocks concatenated — identical to the plain grouped stream.
+ */
+export function interleaveMarkers(
+  blocksByTurn: ReadonlyArray<ReadonlyArray<NormalizedBlock>>,
+  markers: ReadonlyArray<RoundMarker>,
+): GroupInput[] {
+  const at = (k: number): BlockMarker[] =>
+    markers
+      .filter((m) => m.after === k)
+      .map((m) => ({ type: "marker", markerKind: m.markerKind, id: m.id, key: `mk-${m.id}` }));
+  const out: GroupInput[] = [...at(0)];
+  blocksByTurn.forEach((blocks, idx) => {
+    out.push(...blocks, ...at(idx + 1));
+  });
   return out;
 }
 

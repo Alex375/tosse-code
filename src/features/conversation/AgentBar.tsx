@@ -32,8 +32,10 @@ export function AgentBar({ session }: { session: string }) {
   const [opened, setOpened] = useState<BackgroundTask | null>(null);
 
   // Only sub-agents still RUNNING in the background — a finished one drops out (its
-  // result is already back in the conversation). Reactivating spawns a new task, which
-  // reappears here.
+  // result is already back in the conversation). Resuming one via SendMessage RE-USES its
+  // task_id (== its agentId) and keeps the original Agent tool_use_id, so the socle just
+  // flips it back to Running (assembler `resume_agent_via_send_message` / the task_progress
+  // backstop) and it reappears here on the SAME row.
   const rows = useMemo(() => {
     const ids = new Set(bgIds);
     return Object.values(tasks)

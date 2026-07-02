@@ -66,6 +66,19 @@ pub struct SessionTitleEvent {
     pub seq: u32,
 }
 
+/// A model-generated few-word summary of the user's LAST message arrived (from a
+/// `generate_session_title` control response — same wire as the title, a distinct
+/// routing). The UI maps `session` (handle) → conversation and shows it on the Flight
+/// Deck card. `seq` is the monotonic per-conversation tag the UI sent: it applies the
+/// summary only if `seq` still matches the latest message, so a stale (superseded)
+/// response can't overwrite a fresher one.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionSummaryEvent {
+    pub session: String,
+    pub summary: String,
+    pub seq: u32,
+}
+
 /// This session's Remote Control ("bridge") state changed — the ack of a
 /// `remote_control` request, or an async `system/bridge_state` health downgrade. The
 /// UI maps `session` (handle) → conversation and updates its Remote Control chip
@@ -166,6 +179,14 @@ impl SessionEmitter for TauriEmitter {
         emit_logged(&self.app, "session_title", SessionTitleEvent {
             session: session.to_string(),
             title: title.to_string(),
+            seq,
+        });
+    }
+
+    fn emit_summary(&self, session: &str, summary: &str, seq: u32) {
+        emit_logged(&self.app, "session_summary", SessionSummaryEvent {
+            session: session.to_string(),
+            summary: summary.to_string(),
             seq,
         });
     }

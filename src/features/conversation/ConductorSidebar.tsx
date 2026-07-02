@@ -18,6 +18,7 @@ import { useSettingsUi } from "../../store/settingsUi";
 import { useSidebarFold, useRepoCollapsed } from "../../store/sidebarFold";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel, RunPulse } from "../../ui/kit";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { WorktreeBadge } from "../git/WorktreeBadge";
 import { useWorktreeUi } from "../git/worktreeUiStore";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
@@ -137,9 +138,12 @@ async function newConversationInPickedFolder() {
   if (path) void createConversationInRepo(path);
 }
 
-/** One repo swimlane in the sidebar: a header (collapse chevron · name/worktree ·
- *  extensions · new-conversation · count) and, unless collapsed, its conversation
- *  rows. The collapsed state is per-repo and persisted (see sidebarFold). */
+/** One repo swimlane in the sidebar. Single-line header: collapse chevron + repo title,
+ *  which flexes to run the full width up to the ALWAYS-visible new-conversation (+) button
+ *  pinned at the right. Hovering the header slides in the secondary tools (worktrees,
+ *  extensions) between the title and the +, at which point the title truncates to make room.
+ *  So at rest the name reaches the right edge; the extra tools only appear on demand. The
+ *  collapsed state is per-repo and persisted (see sidebarFold). */
 function RepoGroup({
   repo,
   items,
@@ -153,35 +157,37 @@ function RepoGroup({
   const toggleFold = useSidebarFold((s) => s.toggle);
   const openManager = useWorktreeUi((s) => s.openManager);
   const openExtensions = useExtensionsUi((s) => s.openManager);
+  const removeRepo = useConversationsStore((s) => s.removeRepo);
+  const [confirming, setConfirming] = useState(false);
 
   return (
     <div className={"cv-repo" + (collapsed ? " collapsed" : "")}>
       <div className="cv-repo-h">
+        {/* Chevron + title — the collapse toggle. Flexes to fill all the space the buttons
+            leave, so at rest the name runs right up to the + at the edge. */}
         <button
           type="button"
-          className="cv-repo-fold"
+          className="cv-repo-title"
           title={collapsed ? "Déplier ce dépôt" : "Replier ce dépôt"}
           aria-label={collapsed ? "Déplier ce dépôt" : "Replier ce dépôt"}
           aria-expanded={!collapsed}
           onClick={() => toggleFold(repo.id)}
         >
           <Ico name="chev" className="sm cv-repo-fold-chev" />
+          <span className="cv-repo-n">{repoName(repo.path)}</span>
         </button>
-        {/* The repo title is a button that opens this repo's worktree manager. The branch
-            glyph (the app's worktree icon, as on WorktreeBadge) is revealed to the RIGHT of
-            the name on hover and turns coral — advertising the click without cluttering the
-            header when idle. */}
+        {/* Worktrees + extensions — revealed only on header hover (0-width at rest). */}
         <button
           type="button"
-          className="cv-repo-wt"
+          className="cv-repo-act cv-repo-reveal"
           title="Ouvrir les worktrees de ce dépôt"
           onClick={() => openManager(repo.id)}
         >
-          <span className="cv-repo-n">{repoName(repo.path)}</span>
-          <Ico name="branch" className="sm cv-repo-wt-hint" />
+          <Ico name="branch" className="sm" />
         </button>
         <button
-          className="cv-repo-ext"
+          type="button"
+          className="cv-repo-act cv-repo-reveal"
           title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
           onClick={() =>
             openExtensions({
@@ -194,14 +200,48 @@ function RepoGroup({
         >
           <Ico name="layers" className="sm" />
         </button>
+        {/* Delete the whole repo section — revealed on hover like the other secondary tools,
+            but danger-tinted and gated behind a confirm. Unlike the per-conversation × (which
+            is friction-free and ⌘Z-undoable), removing a repo drops every conversation under it
+            and is NOT undoable, so it takes a deliberate confirmation. */}
         <button
-          className="cv-repo-add"
+          type="button"
+          className="cv-repo-act cv-repo-reveal cv-repo-del"
+          title="Supprimer ce dépôt de Tosse Code"
+          aria-label="Supprimer ce dépôt"
+          onClick={() => setConfirming(true)}
+        >
+          <Ico name="trash" className="sm" />
+        </button>
+        {/* New conversation (+) — always visible, pinned at the right edge. */}
+        <button
+          type="button"
+          className="cv-repo-act"
           title="Nouvelle conversation dans ce dépôt"
           onClick={() => void createConversationInRepo(repo.path)}
         >
           <Ico name="plus" className="sm" />
         </button>
       </div>
+      <ConfirmDialog
+        open={confirming}
+        danger
+        title={`Supprimer « ${repoName(repo.path)} » ?`}
+        confirmLabel="Supprimer le dépôt"
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          removeRepo(repo.path);
+        }}
+      >
+        {items.length === 0
+          ? "Ce dépôt sera retiré de la sidebar. "
+          : items.length === 1
+            ? "Ce dépôt et sa conversation seront retirés de la sidebar. "
+            : `Ce dépôt et ses ${items.length} conversations seront retirés de la sidebar. `}
+        Le dossier et les transcripts sur le disque ne sont pas touchés. Contrairement à la
+        suppression d'une conversation, cette action n'est pas annulable (⌘Z).
+      </ConfirmDialog>
       {collapsed ? null : items.length === 0 ? (
         <div className="cv-repo-empty">Aucune conversation</div>
       ) : (

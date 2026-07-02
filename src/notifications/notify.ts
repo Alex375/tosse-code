@@ -12,6 +12,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { commands } from "../ipc/client";
 import { useNotifications } from "../store/notifications";
+import { useFlightdeckModal } from "../features/flightdeck/flightdeckModalStore";
 import { playChime, type ChimeKind } from "./sound";
 
 /** The plugins/commands only exist inside the Tauri webview; no-op elsewhere. */
@@ -98,9 +99,16 @@ export function dispatchAgentNotification(ev: AgentNotification): void {
   }
 
   // Banner + Dock only when the user isn't already watching this conversation —
-  // no point stacking an OS banner over the window they're staring at.
+  // no point stacking an OS banner over the window they're staring at. "Watching"
+  // has TWO surfaces now: the active selection (full conversation view) AND the
+  // Flight Deck reply modal, which opens a conversation by id WITHOUT changing the
+  // active selection — so we also treat its open conversation as watched (it's only
+  // ever set while the modal is visible on the deck).
+  const modalConvId = useFlightdeckModal.getState().convId;
   const watching =
-    ev.convId === ev.activeId && typeof document !== "undefined" && document.hasFocus();
+    typeof document !== "undefined" &&
+    document.hasFocus() &&
+    (ev.convId === ev.activeId || ev.convId === modalConvId);
   if (watching) return;
 
   if (prefs.systemNotification) sendOsNotification(ev);

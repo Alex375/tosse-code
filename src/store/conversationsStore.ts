@@ -26,6 +26,7 @@ import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
 import { useWorkflowLiveStore } from "./workflowLive";
 import { useRemoteControlStore } from "./remoteControl";
+import { useLastMessageSummaryStore } from "./lastMessageSummary";
 import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
@@ -374,17 +375,32 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     if (!repo) return;
     // Forget this repo's sidebar collapse state (the group is about to disappear).
     clearSidebarFold(repo.id);
-    // Kill the integrated terminal of every conversation under this repo (the rows
-    // are about to be cascade-deleted) so no PTY shell is orphaned.
+    // Cascade-delete every conversation under this repo. Mirror removeConversation's
+    // full per-row teardown: the Rust delete_repo only cascades DB rows, so we must
+    // stop each live `claude` process here (no orphan) and drop every per-conversation
+    // store + persisted cache so nothing is leaked.
     for (const c of get().conversations) {
-      if (c.repoId === repo.id) {
-        disposeTerminal(c.id);
-        clearTodoBarOpen(c.id);
-        clearComposerDraft(c.id);
-        clearWorkFold(c.id);
-        useGitViewStore.getState().clear(c.id);
-        useRemoteControlStore.getState().clear(c.id);
+      if (c.repoId !== repo.id) continue;
+      // Kill the live `claude` process (if any) so deleting a repo never leaves an
+      // orphan — same no-orphan policy as removeConversation.
+      if (c.handle) {
+        syncToCore("stopSession", () => commands.stopSession(c.handle!));
       }
+      useConversationStore.getState().dropSession(c.id);
+      useBackgroundTasksStore.getState().dropSession(c.id);
+      useWorkflowLiveStore.getState().drop(c.id);
+      clearCachedWindow(c.id);
+      disposeTerminal(c.id);
+      clearTodoBarOpen(c.id);
+      clearComposerDraft(c.id);
+      clearWorkFold(c.id);
+      useGitViewStore.getState().clear(c.id);
+      useRemoteControlStore.getState().clear(c.id);
+      useLastMessageSummaryStore.getState().clear(c.id);
+      autoTitlePending.delete(c.id);
+      titleContext.delete(c.id);
+      titleGenCount.delete(c.id);
+      lastAppliedSeq.delete(c.id);
     }
     set((s) => {
       const conversations = s.conversations.filter((c) => c.repoId !== repo.id);
@@ -451,6 +467,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // Drop the bridge state too — the session was just stopped, so a lingering
     // "connected" chip would be a stale, misleading indicator.
     useRemoteControlStore.getState().clear(id);
+    // Drop its Flight Deck last-message summary — the card is gone.
+    useLastMessageSummaryStore.getState().clear(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
     syncToCore("setActive", () => commands.setActiveConversation(get().activeId));
   },
@@ -1175,6 +1193,7 @@ export async function wipeAllData(): Promise<void> {
   useWorkflowLiveStore.getState().clear();
   useGitViewStore.getState().clearAll();
   useRemoteControlStore.getState().clearAll();
+  useLastMessageSummaryStore.getState().clearAll();
 }
 
 export const useConversations = () =>

@@ -88,7 +88,13 @@ export function TranscriptPopover({
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      // Claim Escape (preventDefault) so an outer window-level listener — e.g. the
+      // Flight Deck reply modal — doesn't ALSO close on the same keypress; this
+      // popover is the topmost layer and owns the key while open.
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

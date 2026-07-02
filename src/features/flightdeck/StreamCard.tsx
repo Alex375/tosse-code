@@ -8,6 +8,7 @@ import { agentStatusToDot, rowAttention } from "../../agent/status";
 import { effortLabel } from "../../agent/subagentMeta";
 import { useTodos, useTodoSummary, useSessionState } from "../../store/conversationStore";
 import { useContextData } from "../../store/contextData";
+import { useLastMessageSummary } from "../../store/lastMessageSummary";
 import { WorktreeIndicator } from "../git/WorktreeIndicator";
 import type { Conversation } from "../../store/conversationsStore";
 import type { TodoItem } from "../../store/types";
@@ -55,6 +56,9 @@ export function StreamCard({
   const state = useSessionState(conv.id);
   const effort = effortLabel(state?.effort, state?.ultracode);
   const ultra = !!state?.ultracode;
+  // A few-word summary of the user's LAST message (live-only, this run). Complements
+  // the activity line: it says what YOU last asked, not what the agent is doing now.
+  const lastMsg = useLastMessageSummary(conv.id);
 
   const cls =
     "wf-card ag-card" +
@@ -82,6 +86,13 @@ export function StreamCard({
         ) : null}
       </div>
 
+      {lastMsg ? (
+        <div className="ag-lastmsg" title={lastMsg}>
+          <Ico name="reply" className="sm" />
+          <span className="ag-lastmsg-txt">{lastMsg}</span>
+        </div>
+      ) : null}
+
       <StateBlock convId={conv.id} status={status} />
 
       <div className="ag-card-foot">
@@ -98,7 +109,7 @@ export function StreamCard({
         </span>
       </div>
 
-      <StateActions convId={conv.id} status={status} onOpen={onOpen} />
+      <StateActions convId={conv.id} status={status} />
     </div>
   );
 }

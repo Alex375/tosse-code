@@ -95,6 +95,14 @@ fn default_claude_bin() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("claude"))
 }
 
+/// The `claude` binary path this app would spawn, resolved exactly as at session
+/// spawn (`$TOSSE_CLAUDE_BIN` → `PATH` → well-known install locations). Exposed for
+/// OUT-of-session CLI calls (e.g. `claude plugin update`) so they hit the same binary
+/// as our sessions — and still resolve in a Finder-launched bundle's minimal PATH.
+pub fn resolved_claude_bin() -> PathBuf {
+    resolve_bin(&default_claude_bin())
+}
+
 /// Resolve the binary actually handed to `Command::new` at spawn time.
 ///
 /// Normally `claude` resolves on `PATH` (the terminal PATH in dev; the PATH

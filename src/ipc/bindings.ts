@@ -302,6 +302,23 @@ async generateConversationTitle(session: string, description: string, seq: numbe
 }
 },
 /**
+ * Ask the binary to summarize the user's LAST message in a few words (≤6) — a distinct
+ * routing over the same `generate_session_title` wire as [`generate_conversation_title`],
+ * but fed ONLY that one message (not the accumulated intent). `seq` is a monotonic
+ * per-conversation tag echoed back in the `SessionSummaryEvent` so the front drops a
+ * stale (superseded) response. Fire-and-forget: the summary comes back asynchronously
+ * as a `SessionSummaryEvent`, shown on the Flight Deck card. A generation failure is
+ * swallowed in the core — the front keeps its optimistic truncation of the message.
+ */
+async generateMessageSummary(session: string, text: string, seq: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("generate_message_summary", { session, text, seq }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Interrupt the current turn (without killing the process).
  */
 async interruptSession(session: string) : Promise<Result<null, string>> {
@@ -519,6 +536,86 @@ async setPluginEnabled(pluginId: string, enabled: boolean) : Promise<Result<null
 async listPluginContents(repoPath: string, pluginId: string) : Promise<Result<PluginContents, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_plugin_contents", { repoPath, pluginId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List every marketplace registered with Claude Code (user-global) with its resolved
+ * auto-update state. Best-effort — the blocking file IO runs off the async runtime.
+ */
+async listMarketplaces() : Promise<Result<MarketplaceInfo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_marketplaces") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Turn a marketplace's auto-update on/off (writes `~/.claude/settings.json`
+ * `extraKnownMarketplaces[name].autoUpdate` — per-marketplace is the only granularity
+ * Claude Code exposes). Atomic write; the blocking file IO runs off the async runtime.
+ */
+async setMarketplaceAutoUpdate(name: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_marketplace_auto_update", { name, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Turn auto-update on/off for EVERY registered marketplace at once (the global master
+ * toggle) — one atomic settings.json write. The blocking file IO runs off the runtime.
+ */
+async setAllMarketplacesAutoUpdate(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_all_marketplaces_auto_update", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Refresh marketplace(s) from upstream (`claude plugin marketplace update [name]`) —
+ * the network "check for updates" step that makes on-disk pins current. With `name`
+ * null, refreshes all. Shells out to the `claude` CLI off the async runtime; a
+ * refresh can take a few seconds (git fetches).
+ */
+async refreshPluginMarketplaces(name: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("refresh_plugin_marketplaces", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Update ONE plugin to its marketplace's latest version (`claude plugin update
+ * <plugin> [-s <scope>]`). `scope` is the install scope (`user`/`project`/`local`);
+ * `path` is the repo/conversation cwd the command runs in — required so project/local
+ * scope resolves the right project (the CLI selects it from the working directory). A
+ * LIVE session should follow with `reload_plugins` to hot-apply; otherwise the new
+ * version is picked up on the next session spawn. Shells out off the async runtime.
+ */
+async updatePlugin(pluginId: string, scope: string | null, path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_plugin", { pluginId, scope, path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Hot-reload a running session's plugins after an update (`reload_plugins` control
+ * request) — applies the change without a restart. Errors with "unknown session" when
+ * the conversation has no live `claude` process (then the update lands on next spawn).
+ */
+async reloadPlugins(session: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reload_plugins", { session }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -918,6 +1015,7 @@ sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionRemoteControlEvent: SessionRemoteControlEvent,
 sessionStateEvent: SessionStateEvent,
+sessionSummaryEvent: SessionSummaryEvent,
 sessionTaskEvent: SessionTaskEvent,
 sessionTitleEvent: SessionTitleEvent,
 terminalExitEvent: TerminalExitEvent,
@@ -931,6 +1029,7 @@ sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionRemoteControlEvent: "session-remote-control-event",
 sessionStateEvent: "session-state-event",
+sessionSummaryEvent: "session-summary-event",
 sessionTaskEvent: "session-task-event",
 sessionTitleEvent: "session-title-event",
 terminalExitEvent: "terminal-exit-event",
@@ -1485,6 +1584,28 @@ export type ImageContent = { path: string;
 data_base64: string; too_large: boolean; size: number }
 export type JsonValue = null | boolean | number | string | JsonValue[] | Partial<{ [key in string]: JsonValue }>
 /**
+ * One marketplace registered with Claude Code (`~/.claude/plugins/known_marketplaces.json`),
+ * with its resolved auto-update state. Auto-update is a PER-MARKETPLACE flag (the only
+ * granularity the CLI exposes — there is no per-plugin auto-update). The count of
+ * plugins with an update available is derived on the UI side by grouping [`PluginInfo`].
+ */
+export type MarketplaceInfo = { 
+/**
+ * Registry key (`tosse-plugins`, `claude-plugins-official`, …) — matches the
+ * `<marketplace>` half of a plugin id.
+ */
+name: string; 
+/**
+ * Short human source (a `owner/repo`, a URL, or the source kind) for display.
+ */
+source: string; 
+/**
+ * Resolved auto-update: `settings.json` `extraKnownMarketplaces[name].autoUpdate`
+ * (what we write, and what the CLI reads) takes precedence over the mirrored
+ * `known_marketplaces.json` flag. Absent in both = off.
+ */
+auto_update: boolean }
+/**
  * Result of an `mcp_authenticate` control request (OAuth start for an http/sse
  * server). The binary returns an `authUrl` to open in the browser; the loopback
  * redirect is handled by the CLI itself in the common case. `requires_user_action`
@@ -1633,6 +1754,19 @@ export type PluginInfo = {
  * `<plugin>@<marketplace>` — the key used in `enabledPlugins`.
  */
 id: string; name: string; marketplace: string; version: string | null; description: string | null; enabled: boolean; scope: ExtScope; 
+/**
+ * Whether the plugin's installed pin differs from its marketplace's currently
+ * downloaded pin (compared on-disk — see [`compute_update`]). Only as fresh as
+ * the last `claude plugin marketplace update`; the UI's "Vérifier" button runs
+ * that refresh then re-reads. Never a false positive: unknown pins → `false`.
+ */
+update_available: boolean; 
+/**
+ * The marketplace's human version when it is KNOWN and DIFFERS from the installed
+ * one (for a "vX → vY" badge). `None` for sha-only updates (a new commit with the
+ * same semver) — the UI falls back to a generic "Mise à jour disponible" then.
+ */
+latest_version: string | null; 
 /**
  * What the plugin provides (scanned from its cache dir), regardless of
  * enabled state — so the UI can show "5 skills" even when toggled off.
@@ -1798,6 +1932,15 @@ context_window: number | null;
  * percentage — that lives behind the `/api/oauth/usage` endpoint (separate task).
  */
 rate_limit: RateLimitSnapshot | null }
+/**
+ * A model-generated few-word summary of the user's LAST message arrived (from a
+ * `generate_session_title` control response — same wire as the title, a distinct
+ * routing). The UI maps `session` (handle) → conversation and shows it on the Flight
+ * Deck card. `seq` is the monotonic per-conversation tag the UI sent: it applies the
+ * summary only if `seq` still matches the latest message, so a stale (superseded)
+ * response can't overwrite a fresher one.
+ */
+export type SessionSummaryEvent = { session: string; summary: string; seq: number }
 /**
  * A background task (sub-agent / workflow / Monitor / background Bash) was created
  * or changed state. Emitted on every `task_*` transition, keyed (inside the
