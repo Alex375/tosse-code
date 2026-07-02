@@ -51,6 +51,7 @@ export type {
   SessionStatePayload,
   SessionTaskEvent,
   SessionTitleEvent,
+  SessionSummaryEvent,
   SkillInfo,
   SlashCommand,
   TickEvent,

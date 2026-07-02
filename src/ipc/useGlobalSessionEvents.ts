@@ -22,6 +22,7 @@ import type {
   SessionStateEvent,
   SessionTaskEvent,
   SessionTitleEvent,
+  SessionSummaryEvent,
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
 import { useBackgroundTasksStore } from "../store/backgroundTasksStore";
@@ -29,6 +30,7 @@ import { useWorkflowLiveStore } from "../store/workflowLive";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
 import { useCommandsStore } from "../store/commandsStore";
 import { useRemoteControlStore } from "../store/remoteControl";
+import { useLastMessageSummaryStore } from "../store/lastMessageSummary";
 import { setCachedWindow } from "../store/contextWindowCache";
 import { dispatchAgentNotification } from "../notifications/notify";
 import { agentEventFor } from "../notifications/transition";
@@ -313,6 +315,14 @@ export function useGlobalSessionEvents(): void {
       useConversationsStore.getState().applyAutoTitle(convId, payload.title, payload.seq);
     }
 
+    function onSummary(payload: SessionSummaryEvent) {
+      const convId = convIdForHandle(payload.session);
+      if (!convId) return; // unknown / deleted conversation
+      // Replace the optimistic truncation with the Haiku summary — applied only if its
+      // seq still matches the conversation's latest message (drops a superseded response).
+      useLastMessageSummaryStore.getState().apply(convId, payload.summary, payload.seq);
+    }
+
     // A Remote Control ("bridge") state change: the ack of a toggle, or an async
     // health downgrade (`system/bridge_state`). Routed by stable conversation id like
     // every other session event; the toggle's own optimistic write is reconciled here.
@@ -395,6 +405,10 @@ export function useGlobalSessionEvents(): void {
       .listen((e) => { if (!disposed) onTitle(e.payload); })
       .then((un) => unlisteners.push(un))
       .catch((e) => onAttachError("titres", e));
+    events.sessionSummaryEvent
+      .listen((e) => { if (!disposed) onSummary(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("résumés", e));
     events.sessionTaskEvent
       .listen((e) => { if (!disposed) onTask(e.payload); })
       .then((un) => unlisteners.push(un))

@@ -329,6 +329,33 @@ pub fn generate_session_title_request(request_id: &str, description: &str) -> Va
     )
 }
 
+/// A brevity instruction for the LAST-MESSAGE summary — the Flight Deck shows it as a
+/// glance-able "what did I last ask this agent" line, so it must be even terser than a
+/// title (≤ 6 words). Same lever as [`TITLE_BREVITY_HINT`]: the wire exposes no length
+/// knob, so we steer via the description. We pin the output language to the message and
+/// ask for the summary only, so the hint isn't echoed.
+const SUMMARY_BREVITY_HINT: &str = "\n\n[Summarize the message above in at most 6 words, \
+    in the same language as the text. Output only the summary — no quotes, no trailing \
+    punctuation, no prefix.]";
+
+/// Summarize the user's LAST message in a few words — a distinct routing over the SAME
+/// `generate_session_title` wire (its internal model rides the Max subscription, no
+/// separate API key). Unlike [`generate_session_title_request`], `text` is a SINGLE
+/// message (not the accumulated intent), and we append [`SUMMARY_BREVITY_HINT`] for a
+/// ≤6-word result. `persist:false` — the summary is Flight-Deck-only UI state, never
+/// written to the transcript. The summary comes back at `response.response.title` (same
+/// shape as the title — reuse [`parse_generate_session_title`]).
+pub fn generate_summary_request(request_id: &str, text: &str) -> Value {
+    control_request(
+        request_id,
+        json!({
+            "subtype": "generate_session_title",
+            "description": format!("{text}{SUMMARY_BREVITY_HINT}"),
+            "persist": false,
+        }),
+    )
+}
+
 /// Parse the generated title out of a `generate_session_title` control response. The
 /// title lives at `response.response.title` (the same doubly-nested shape as
 /// `get_settings`/`initialize`). Returns `None` when absent or empty — the caller

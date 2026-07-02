@@ -433,6 +433,14 @@ pub enum SessionEvent {
     /// out-of-order (stale) response. Applied as the name UNLESS the user set a
     /// custom title in the meantime.
     Title { title: String, seq: u32 },
+    /// A model-generated few-word summary of the user's LAST message (from a
+    /// `generate_session_title` control response — the same wire, a distinct routing).
+    /// The UI triggers it on each user send, passing ONLY that message (not the
+    /// accumulated intent), and shows it on the Flight Deck so the fleet's last asks are
+    /// legible at a glance. Carries the monotonic `seq` it sent so a stale (superseded
+    /// by a newer message) response is dropped. Distinct from [`SessionEvent::Title`]:
+    /// the title names the whole conversation; this summarizes only the latest message.
+    Summary { summary: String, seq: u32 },
     /// The session's Remote Control ("bridge") state changed — either the ack of a
     /// `remote_control` request we sent (→ connected, carrying the claude.ai/code
     /// `session_url`, or → disconnected), or an async `system/bridge_state` health
@@ -450,5 +458,6 @@ pub trait SessionEmitter: Send + Sync + 'static {
     fn emit_commands(&self, session: &str, commands: &[SlashCommand]);
     fn emit_task(&self, session: &str, task: &BackgroundTask);
     fn emit_title(&self, session: &str, title: &str, seq: u32);
+    fn emit_summary(&self, session: &str, summary: &str, seq: u32);
     fn emit_remote_control(&self, session: &str, state: &RemoteControlState);
 }

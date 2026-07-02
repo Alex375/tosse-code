@@ -14,6 +14,7 @@ import {
 import { noteInterrupt } from "../notifications/notify";
 import { worktreesKey } from "./useWorktrees";
 import { useRemoteControlStore } from "../store/remoteControl";
+import { triggerLastMessageSummary } from "../store/lastMessageSummary";
 
 // These hooks are keyed by a conversation's STABLE id, not its live session
 // handle. Reads (the message store) key by the stable id; commands target the
@@ -59,6 +60,11 @@ export function useSendMessage(convId: string) {
       // extension, but tracking the evolving topic. The title arrives via
       // SessionTitleEvent and replaces the optimistic placeholder name.
       useConversationsStore.getState().triggerAutoTitle(convId, text);
+      // Also (re)generate the Flight Deck's few-word summary of THIS message (the
+      // "last ask"). Instant truncation now, replaced by a ≤6-word Haiku summary that
+      // arrives via SessionSummaryEvent. Regenerated on every send (unlike the title,
+      // which settles). `handle` is the live session we just sent through.
+      triggerLastMessageSummary(convId, handle, text);
       if (worktree) {
         // The first spawn just created a worktree — refresh the repo's list so
         // the indicator/manager show it.
