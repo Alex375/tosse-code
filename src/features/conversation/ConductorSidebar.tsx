@@ -18,6 +18,7 @@ import { useSettingsUi } from "../../store/settingsUi";
 import { useSidebarFold, useRepoCollapsed } from "../../store/sidebarFold";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel, RunPulse } from "../../ui/kit";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { WorktreeBadge } from "../git/WorktreeBadge";
 import { useWorktreeUi } from "../git/worktreeUiStore";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
@@ -156,6 +157,8 @@ function RepoGroup({
   const toggleFold = useSidebarFold((s) => s.toggle);
   const openManager = useWorktreeUi((s) => s.openManager);
   const openExtensions = useExtensionsUi((s) => s.openManager);
+  const removeRepo = useConversationsStore((s) => s.removeRepo);
+  const [confirming, setConfirming] = useState(false);
 
   return (
     <div className={"cv-repo" + (collapsed ? " collapsed" : "")}>
@@ -197,6 +200,19 @@ function RepoGroup({
         >
           <Ico name="layers" className="sm" />
         </button>
+        {/* Delete the whole repo section — revealed on hover like the other secondary tools,
+            but danger-tinted and gated behind a confirm. Unlike the per-conversation × (which
+            is friction-free and ⌘Z-undoable), removing a repo drops every conversation under it
+            and is NOT undoable, so it takes a deliberate confirmation. */}
+        <button
+          type="button"
+          className="cv-repo-act cv-repo-reveal cv-repo-del"
+          title="Supprimer ce dépôt de Tosse Code"
+          aria-label="Supprimer ce dépôt"
+          onClick={() => setConfirming(true)}
+        >
+          <Ico name="trash" className="sm" />
+        </button>
         {/* New conversation (+) — always visible, pinned at the right edge. */}
         <button
           type="button"
@@ -207,6 +223,25 @@ function RepoGroup({
           <Ico name="plus" className="sm" />
         </button>
       </div>
+      <ConfirmDialog
+        open={confirming}
+        danger
+        title={`Supprimer « ${repoName(repo.path)} » ?`}
+        confirmLabel="Supprimer le dépôt"
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          removeRepo(repo.path);
+        }}
+      >
+        {items.length === 0
+          ? "Ce dépôt sera retiré de la sidebar. "
+          : items.length === 1
+            ? "Ce dépôt et sa conversation seront retirés de la sidebar. "
+            : `Ce dépôt et ses ${items.length} conversations seront retirés de la sidebar. `}
+        Le dossier et les transcripts sur le disque ne sont pas touchés. Contrairement à la
+        suppression d'une conversation, cette action n'est pas annulable (⌘Z).
+      </ConfirmDialog>
       {collapsed ? null : items.length === 0 ? (
         <div className="cv-repo-empty">Aucune conversation</div>
       ) : (
