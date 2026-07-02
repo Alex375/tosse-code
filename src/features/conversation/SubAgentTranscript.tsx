@@ -39,10 +39,11 @@ function renderSegments(segments: Segment[], results: Map<string, JoinedResult>)
   return segments.map((seg) => {
     if (seg.kind === "text") return <StreamMarkdown key={seg.key} text={seg.text} />;
     if (seg.kind === "thinking") return <ThinkingBlock key={seg.key} text={seg.text} finalized />;
-    // A nested sub-agent OR workflow in a settled transcript: one step row (no live card to
-    // drill into). `workflow` segments (dev's Workflows feature) have a `.step`, not `.steps`,
-    // so they MUST be handled here — otherwise they fall through to the run branch and crash.
-    if (seg.kind === "agent" || seg.kind === "workflow")
+    // A nested sub-agent OR workflow OR proposed plan in a settled transcript: one step row
+    // (no live card to drill into). These `.step` segments (vs the run branch's `.steps`) MUST
+    // be handled here — otherwise they fall through to the run branch and crash. A sub-agent
+    // proposing a plan is a non-case in practice, but the union requires the branch.
+    if (seg.kind === "agent" || seg.kind === "workflow" || seg.kind === "plan")
       return <StaticToolStep key={seg.key} step={seg.step} result={results.get(seg.step.id)} />;
     // A model-invoked slash-command: the same dedicated command chip as the live thread.
     if (seg.kind === "skill") return <SkillChip key={seg.key} input={seg.step.input} />;

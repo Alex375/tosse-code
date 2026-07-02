@@ -365,6 +365,64 @@
 .cv-meta-grid span:first-child { font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--wf-tx-xlo); }
 .cv-meta-grid span:last-child { font-size:12px; }
 
+/* ---- Proposed-plan card (ExitPlanMode) ------------------------------------------------
+   A prominent decision block (NOT a foldable tool step): the plan markdown, an accept/reject
+   footer while it awaits approval, and the user's inline comments. Accented with the same
+   blue as the "Plan mode" chip (--wf-perm-plan). */
+.cv-plan { border:1px solid color-mix(in srgb, var(--wf-perm-plan) 34%, var(--wf-line-2)); background:var(--wf-panel); border-radius:13px; overflow:hidden; position:relative; }
+.cv-plan.is-pending { border-color:color-mix(in srgb, var(--wf-perm-plan) 52%, transparent); box-shadow:0 0 0 3px color-mix(in srgb, var(--wf-perm-plan) 12%, transparent); }
+.cv-plan.is-rejected { border-color:color-mix(in srgb, var(--wf-err) 32%, var(--wf-line-2)); }
+
+.cv-plan-h { display:flex; align-items:center; gap:8px; padding:9px 13px; background:color-mix(in srgb, var(--wf-perm-plan) 12%, transparent); border-bottom:1px solid color-mix(in srgb, var(--wf-perm-plan) 20%, var(--wf-line)); }
+.cv-plan-ico { color:var(--wf-perm-plan); flex:none; }
+.cv-plan-t { font-size:12.5px; font-weight:600; color:var(--wf-tx-hi); flex:1; min-width:0; letter-spacing:.2px; }
+
+.cv-plan-badge { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:500; padding:3px 9px; border-radius:20px; border:1px solid transparent; }
+.cv-plan-badge .wf-ico { width:12px; height:12px; }
+.cv-plan-badge.is-approved { color:var(--wf-run); background:color-mix(in srgb, var(--wf-run) 14%, transparent); border-color:color-mix(in srgb, var(--wf-run) 32%, transparent); }
+.cv-plan-badge.is-rejected { color:var(--wf-err); background:color-mix(in srgb, var(--wf-err) 13%, transparent); border-color:color-mix(in srgb, var(--wf-err) 30%, transparent); }
+.cv-plan-badge.is-pending { color:var(--wf-perm-plan); background:color-mix(in srgb, var(--wf-perm-plan) 15%, transparent); border-color:color-mix(in srgb, var(--wf-perm-plan) 34%, transparent); }
+
+.cv-plan-body { padding:6px 15px 10px; }
+/* Only the plan text is selectable-to-comment; the affordance is the text cursor + a subtle
+   selection tint that reads as "you can mark this". */
+.cv-plan-body[data-annotatable] { cursor:text; }
+.cv-plan-body[data-annotatable]::selection,
+.cv-plan-body[data-annotatable] ::selection { background:color-mix(in srgb, var(--wf-perm-plan) 40%, transparent); }
+
+/* Annotation highlights (CSS Custom Highlight API). Limited to the properties the spec allows
+   on ::highlight (background/underline). Two layers: a SAVED comment (solid) vs the passage
+   being commented right now (DRAFT, dashed + fainter) so they read differently. */
+::highlight(tosse-plan-annotation) { background-color:color-mix(in srgb, var(--wf-perm-plan) 30%, transparent); text-decoration:underline; text-decoration-color:var(--wf-perm-plan); text-decoration-thickness:2px; }
+::highlight(tosse-plan-draft) { background-color:color-mix(in srgb, var(--wf-perm-plan) 18%, transparent); text-decoration:underline; text-decoration-style:dashed; text-decoration-color:color-mix(in srgb, var(--wf-perm-plan) 75%, transparent); }
+
+.cv-plan-notes { display:flex; flex-direction:column; gap:5px; padding:9px 13px; border-top:1px solid var(--wf-line); background:var(--wf-bg-2); }
+.cv-plan-notes-h { display:flex; align-items:center; gap:6px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--wf-tx-lo); }
+.cv-plan-notes-h .wf-ico { width:12px; height:12px; color:var(--wf-perm-plan); }
+.cv-plan-note { display:flex; align-items:baseline; gap:9px; font-size:12px; }
+.cv-plan-note-quote { flex:0 0 auto; max-width:38%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:1px 7px; border-radius:6px; border-left:2px solid var(--wf-perm-plan); background:color-mix(in srgb, var(--wf-perm-plan) 12%, transparent); color:var(--wf-tx-lo); font-style:italic; }
+.cv-plan-note-c { flex:1; min-width:0; color:var(--wf-tx-hi); line-height:1.4; }
+.cv-plan-note-empty { color:var(--wf-tx-xlo); }
+.cv-plan-note-del { flex:none; display:inline-flex; padding:2px; background:none; border:0; color:var(--wf-tx-xlo); cursor:pointer; border-radius:5px; }
+.cv-plan-note-del:hover { color:var(--wf-err); background:color-mix(in srgb, var(--wf-err) 12%, transparent); }
+.cv-plan-note-del .wf-ico { width:13px; height:13px; }
+
+.cv-plan-foot { display:flex; flex-direction:column; gap:9px; padding:11px 13px; border-top:1px solid var(--wf-line); }
+.cv-plan-noteinput { width:100%; box-sizing:border-box; resize:vertical; min-height:38px; font:inherit; font-size:12.5px; line-height:1.45; color:var(--wf-tx-hi); background:var(--wf-bg); border:1px solid var(--wf-line-2); border-radius:9px; padding:8px 10px; }
+.cv-plan-noteinput:focus { outline:none; border-color:var(--wf-perm-plan); }
+.cv-plan-noteinput::placeholder { color:var(--wf-tx-xlo); }
+.cv-plan-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
+.cv-plan-hint { font-size:11px; line-height:1.4; color:var(--wf-tx-xlo); }
+
+/* Floating comment composer anchored at the selection (viewport-fixed). */
+.cv-plan-composer { position:fixed; z-index:60; width:min(300px, 80vw); display:flex; flex-direction:column; gap:7px; padding:9px; background:var(--wf-panel); border:1px solid var(--wf-line-2); border-radius:11px; box-shadow:0 14px 34px -14px #000, 0 4px 12px -8px #000a; }
+.cv-plan-composer-input { width:100%; box-sizing:border-box; resize:vertical; min-height:44px; font:inherit; font-size:12.5px; line-height:1.45; color:var(--wf-tx-hi); background:var(--wf-bg); border:1px solid var(--wf-line-2); border-radius:8px; padding:7px 9px; }
+.cv-plan-composer-input:focus { outline:none; border-color:var(--wf-perm-plan); }
+.cv-plan-composer-input::placeholder { color:var(--wf-tx-xlo); }
+.cv-plan-composer-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.cv-plan-composer-hint { font-size:10.5px; color:var(--wf-tx-xlo); }
+.cv-plan-composer-btns { display:flex; align-items:center; gap:6px; }
+
 /* The whole composer is ONE floating rounded card — like the Claude app: the text
    row AND the controls row live inside the same elevated block, centred on the
    conversation width and lifted off the window edge with a soft shadow. */
@@ -427,8 +485,9 @@
 .cv-file-n { font-size:11.5px; color:var(--wf-tx-hi); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .cv-file-d { font-size:10.5px; color:var(--wf-tx-lo); }
 
-.cv-plan { display:flex; flex-direction:column; gap:9px; }
-.cv-plan-i { display:flex; align-items:center; gap:9px; }
+/* NB: a legacy `.cv-plan { display:flex; gap:9px }` (+ `.cv-plan-i`) used to live here for an
+   old checklist; both were dead and collided with the PlanCard's own `.cv-plan` (adding a 9px
+   gap between its abutting sections), so they were removed. Keep `.cv-check` — TodoList uses it. */
 .cv-check { width:15px; height:15px; border-radius:50%; border:1.5px solid var(--wf-line-2); display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; color:#1a0f0a; }
 .cv-check.done { background:var(--wf-run); border-color:var(--wf-run); color:#06281b; }
 .cv-check.doing { border-color:var(--wf-att); border-style:dashed; }

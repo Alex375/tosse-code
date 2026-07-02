@@ -1,5 +1,6 @@
 import {
   Bot,
+  ClipboardList,
   FilePen,
   FilePlus,
   FileText,
@@ -81,6 +82,15 @@ export function toolMeta(name: string, input: JsonValue): ToolMeta {
       return { icon: Bot, primaryArg: str(obj.description), suppressed: false, kind: "plain" };
     case "Skill":
       return { icon: Sparkles, primaryArg: str(obj.skill), suppressed: false, kind: "plain" };
+    case "ExitPlanMode":
+      // The proposed plan. NOT suppressed: it must stay visible in the thread, where it is
+      // pulled out as a dedicated <PlanCard> (see groupBlocks' `plan` segment) rather than a
+      // generic tool card.
+      return { icon: ClipboardList, primaryArg: null, suppressed: false, kind: "plain" };
+    case "EnterPlanMode":
+      // Entering plan mode carries no useful inline content — suppress the bare tool card so it
+      // doesn't clutter the thread (the mode chip already conveys the state).
+      return { icon: ClipboardList, primaryArg: null, suppressed: true, kind: "plain" };
     default:
       return {
         // MCP tools (`mcp__server__tool`) get a plug; everything else a generic wrench.

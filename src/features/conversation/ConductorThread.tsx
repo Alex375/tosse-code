@@ -32,6 +32,7 @@ import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/sub
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
 import { QuestionnaireAsk } from "./QuestionnaireAsk";
+import { PlanCard } from "./PlanCard";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { SubAgentTranscript } from "./SubAgentTranscript";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -540,6 +541,17 @@ function renderSegments(
     if (seg.kind === "skill")
       // A model-invoked slash-command renders as a dedicated command chip (never a raw tool row).
       return <SkillChip key={seg.key} input={seg.step.input} />;
+    if (seg.kind === "plan")
+      // A proposed plan (ExitPlanMode) renders as its own prominent card: the plan markdown,
+      // its accept/reject decision (hosted here, not in the bottom AskTurn), and annotations.
+      return (
+        <PlanCard
+          key={seg.key}
+          session={session}
+          toolUseId={seg.step.id}
+          input={seg.step.input}
+        />
+      );
     // A `run` of regular tools. The trailing run of the live turn renders EXPANDED so its
     // steps appear live (spinner → result), then collapses to its header on settle. Past
     // / non-trailing runs render collapsed. `active` gates the spinner so a resultless
@@ -910,9 +922,15 @@ export function ConductorThread({
                 return <TurnResultRow key={item.id} session={session} resultId={item.id} />;
               return null;
             })}
-            {pending.map((req) => (
-              <AskTurn key={req.request_id} session={session} request={req} />
-            ))}
+            {pending
+              // ExitPlanMode's approval is hosted ON its plan card (see PlanCard) — which
+              // finds this pending request by tool_use_id — so it must NOT also appear as a
+              // generic yes/no AskTurn at the bottom. A pending plan is always the trailing
+              // block (the agent pauses right after proposing it), so its card is on screen.
+              .filter((req) => req.tool_name !== "ExitPlanMode")
+              .map((req) => (
+                <AskTurn key={req.request_id} session={session} request={req} />
+              ))}
             {busy && !awaiting && <WorkingIndicator session={session} />}
           </>
         )}

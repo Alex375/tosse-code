@@ -169,6 +169,53 @@ describe("groupBlocks — Workflow", () => {
   });
 });
 
+describe("groupBlocks — ExitPlanMode (proposed plan)", () => {
+  it("emits a dedicated `plan` segment that breaks the surrounding run", () => {
+    const segs = groupBlocks([
+      tool("r", "Read", { file_path: "a.ts" }),
+      tool("p", "ExitPlanMode", { plan: "# Plan\n- do a thing" }),
+      tool("g", "Grep", { pattern: "x" }),
+    ]);
+    expect(segs.map((s) => s.kind)).toEqual(["run", "plan", "run"]);
+    const pl = segs[1];
+    if (pl.kind === "plan") expect(pl.step.id).toBe("p");
+  });
+
+  it("is NOT hidden inline (must always show), unlike a background tool", () => {
+    expect(isHiddenInline("ExitPlanMode", { plan: "x" })).toBe(false);
+  });
+
+  it("does not count the plan as a work step (it's a decision, not work)", () => {
+    const segs = groupBlocks([tool("a", "Read"), tool("p", "ExitPlanMode", { plan: "x" })]);
+    expect(countWorkSteps(segs)).toBe(1);
+    expect(workStepIds(segs)).toEqual(["a"]);
+  });
+
+  it("peels a TRAILING plan (with any closing prose) into `final` so it stays in clear", () => {
+    // A pending plan is the last block — the agent pauses right after ExitPlanMode. It must NOT
+    // fold into the work block: the user has to see it to accept/reject.
+    const { work, final } = splitFinalMessage(
+      groupBlocks([
+        tool("a", "Read"),
+        tool("b", "Edit"),
+        tool("p", "ExitPlanMode", { plan: "# Plan" }),
+      ]),
+    );
+    expect(work.map((s) => s.kind)).toEqual(["run"]);
+    expect(final.map((s) => s.kind)).toEqual(["plan"]);
+  });
+
+  it("survives a flattenWork → atomsToSegments round-trip (plan stays its own atom)", () => {
+    const work = groupBlocks([tool("a", "Read"), tool("p", "ExitPlanMode", { plan: "x" })]);
+    const atoms = flattenWork(work);
+    expect(atoms.map((a) => a.kind)).toEqual(["step", "plan"]);
+    const back = atomsToSegments(atoms, "vis");
+    expect(back.map((s) => s.kind)).toEqual(["run", "plan"]);
+    const pl = back[1];
+    if (pl.kind === "plan") expect(pl.step.id).toBe("p");
+  });
+});
+
 describe("groupBlocks — in-band markers (mid-turn separator)", () => {
   it("emits a `marker` segment that breaks the run without being a step", () => {
     const segs = groupBlocks([tool("a", "Read"), mkMarker("cc"), tool("b", "Read")]);
