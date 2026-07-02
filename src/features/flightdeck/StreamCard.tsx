@@ -2,19 +2,22 @@
 // status the sidebar shows (useAgentStatus → agentStatusToDot/rowAttention), the
 // same todo summary, context fill and worktree badge. No bespoke data, no fake
 // chrome: every element is wired to the live store.
-import { Dot, Pill, ContextMeter, TodoPips, Ico, type TodoSeg } from "../../ui/kit";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { Dot, Pill, ContextMeter, Ico } from "../../ui/kit";
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { agentStatusToDot, rowAttention } from "../../agent/status";
 import { effortLabel } from "../../agent/subagentMeta";
-import { useTodos, useTodoSummary, useSessionState } from "../../store/conversationStore";
+import { useSessionState } from "../../store/conversationStore";
 import { useContextData } from "../../store/contextData";
 import { useLastMessageSummary } from "../../store/lastMessageSummary";
 import { WorktreeIndicator } from "../git/WorktreeIndicator";
 import type { Conversation } from "../../store/conversationsStore";
-import type { TodoItem } from "../../store/types";
 import { StateBlock } from "./StateBlock";
 import { StateActions } from "./StateActions";
 import { BackgroundTaskBadge } from "./BackgroundTaskBadge";
+import { LastMessagePeek } from "./LastMessagePeek";
+import { TodoPeek } from "./TodoPeek";
+import { useFlightdeckModal } from "./flightdeckModalStore";
 
 /** Relative "last activity" stamp — "il y a 14 min" / "il y a 2 h". `now` comes from
  *  the grid's shared ticker so idle/off cards advance without a per-card timer. */
@@ -26,11 +29,6 @@ function fmtAgo(ts: number, now: number): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `il y a ${h} h`;
   return `il y a ${Math.floor(h / 24)} j`;
-}
-
-/** Map a todo's status to its pip colour (grey / amber / green). */
-function todoSeg(t: TodoItem): TodoSeg {
-  return t.status === "completed" ? "done" : t.status === "in_progress" ? "doing" : "todo";
 }
 
 export function StreamCard({
@@ -47,9 +45,8 @@ export function StreamCard({
   const status = useAgentStatus(conv.id);
   const dot = agentStatusToDot(status);
   const attn = rowAttention(status);
-  const todos = useTodos(conv.id);
-  const summary = useTodoSummary(conv.id);
   const { ctx, ready } = useContextData(conv.id);
+  const openModal = useFlightdeckModal((s) => s.open);
   // The agent's live reasoning effort (get_settings read-back) — same data the
   // conversation composer's gauge shows, surfaced read-only on the card. Null until
   // the session has reported settings (never spawned this run → no chip).
@@ -61,13 +58,32 @@ export function StreamCard({
   const lastMsg = useLastMessageSummary(conv.id);
 
   const cls =
-    "wf-card ag-card" +
+    "wf-card ag-card ag-card-clickable" +
     (attn === "input" || attn === "error" ? " att" : "") +
     (attn === "review" ? " rev" : "") +
     (status.kind === "off" ? " dim" : "");
 
+  // Clicking the card BODY opens the conversation in the reply modal — the same as
+  // the (now removed) plain "Ouvrir" button. The card TITLE stays the full-screen
+  // entry point.
+  const onCardClick = (e: ReactMouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    // Ignore a click that bubbled from a PORTAL opened within the card (the last-message
+    // / to-do peek popovers, the background-tasks popover). React bubbles portal events
+    // through the component tree, so a click-away to CLOSE such a popover would otherwise
+    // reach here and open the conversation — the portal's target isn't a DOM descendant
+    // of the card, so `contains` rejects it.
+    if (!e.currentTarget.contains(target)) return;
+    // Any interactive child (title, action buttons, worktree/bg badges, the peek
+    // triggers — all real <button>s) handles its own click.
+    if (target.closest("button, a, input, textarea, select, label")) return;
+    // A text selection isn't a click.
+    if (!window.getSelection()?.isCollapsed) return;
+    openModal(conv.id);
+  };
+
   return (
-    <div className={cls}>
+    <div className={cls} onClick={onCardClick}>
       <div className="ag-card-h">
         <Dot s={dot} pulse />
         <button className="ag-card-name" onClick={() => onOpen(conv.id)} title={conv.name}>
@@ -86,22 +102,13 @@ export function StreamCard({
         ) : null}
       </div>
 
-      {lastMsg ? (
-        <div className="ag-lastmsg" title={lastMsg}>
-          <Ico name="reply" className="sm" />
-          <span className="ag-lastmsg-txt">{lastMsg}</span>
-        </div>
-      ) : null}
+      {lastMsg ? <LastMessagePeek convId={conv.id} summary={lastMsg} /> : null}
 
       <StateBlock convId={conv.id} status={status} />
 
       <div className="ag-card-foot">
         {ready ? <ContextMeter ctx={ctx} /> : null}
-        {summary.total > 0 ? (
-          // Cap the pip count so a huge plan can't overflow the footer; the
-          // "done/total" ratio still carries the full number.
-          <TodoPips segs={todos.slice(0, 20).map(todoSeg)} done={summary.completed} total={summary.total} />
-        ) : null}
+        <TodoPeek convId={conv.id} />
         <BackgroundTaskBadge convId={conv.id} />
         <span className="wf-row" style={{ gap: 5, marginLeft: "auto" }} title="Dernière activité">
           <Ico name="clock" className="sm" />

@@ -42,6 +42,17 @@
 .ag-grid::-webkit-scrollbar-thumb { background:var(--wf-line-2); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
 .ag-grid::-webkit-scrollbar-track { background:transparent; }
 .ag-card { padding:14px; display:flex; flex-direction:column; gap:11px; }
+/* The whole card body is clickable (→ opens the reply modal); the title and every
+   action/badge inside handle their own click. Signal it with a pointer + a subtle
+   border lift on hover, without competing with the attention/review accents. */
+.ag-card-clickable { cursor:pointer; transition:border-color .12s ease, background-color .12s ease; }
+.ag-card-clickable:hover { background:var(--wf-panel-2); }
+/* The border lift is scoped AWAY from accent cards: `.wf-card.att` (attention/error) and
+   `.ag-card.rev` (review) carry a coloured border of equal (0,2,0) specificity, and this
+   file is imported after wirekit — so an unscoped hover would win the tie and neutralise
+   the amber/blue accent on exactly the cards meant to stand out. `:not(.att):not(.rev)`
+   keeps the lift for calm cards only. */
+.ag-card-clickable:not(.att):not(.rev):hover { border-color:var(--wf-line-2); }
 .ag-card.dim { opacity:.58; }
 .ag-card.rev { border-color:#314463; }
 .ag-card-h { display:flex; align-items:center; gap:9px; }
@@ -57,6 +68,12 @@
    under the tags. A small self-hugging box (not full width) with a coral "reply" arrow
    marking it as YOUR voice, distinct from the agent's activity line below. Live-only. */
 .ag-lastmsg { align-self:flex-start; display:inline-flex; align-items:flex-start; gap:7px; max-width:100%; min-width:0; padding:4px 9px; border:1px solid var(--wf-line); border-radius:var(--wf-r); color:var(--wf-tx); font-size:11.5px; line-height:1.35; }
+/* The line is a button (click → popover with the full message): reset the native
+   button chrome and add a clickable hover. */
+/* `font:inherit` also resets line-height, so re-assert the box's 1.35 (the shorthand
+   would otherwise inherit 1.5 from .wf-win and loosen the 2-line clamp). */
+.ag-lastmsg-btn { font:inherit; font-size:11.5px; line-height:1.35; text-align:left; background:transparent; cursor:pointer; transition:border-color .12s ease, background-color .12s ease; }
+.ag-lastmsg-btn:hover { border-color:var(--wf-line-2); background:var(--wf-bg-2); }
 .ag-lastmsg .wf-ico { width:13px; height:13px; margin-top:1px; color:var(--wf-accent); }
 /* The ≤6-word summary is never ellipsized: it wraps to a 2nd line rather than clip
    (a 2-line clamp is only a safety net for a misbehaving model, never a normal summary). */
@@ -101,3 +118,17 @@
 .ag-bgpop-row .wf-dot { flex:0 0 auto; }
 .ag-bgpop-label { flex:1; min-width:0; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .ag-bgpop-meta { flex:0 0 auto; font-size:10px; color:var(--wf-tx-lo); }
+
+/* --- clickable to-do pips on the card footer (→ popover with the full plan) --- */
+.ag-todo-btn { display:inline-flex; align-items:center; font:inherit; padding:2px 5px; margin:-2px -5px; border:0; border-radius:7px; background:transparent; color:inherit; cursor:pointer; transition:background .12s ease; }
+.ag-todo-btn:hover { background:var(--wf-bg-2); }
+
+/* --- generic card peek popover (last message / to-do list) --- */
+/* Transparent backdrop: catches the click-away without dimming (same as .ag-bgpop-backdrop). */
+.ag-pop-backdrop { position:fixed; inset:0; z-index:150; }
+.ag-pop { z-index:151; display:flex; flex-direction:column; overflow:hidden; background:var(--wf-panel-2); border:1px solid var(--wf-line-2); border-radius:10px; box-shadow:0 14px 36px -12px #000, 0 0 0 1px #0006; }
+.ag-pop-title { flex:0 0 auto; display:flex; align-items:center; gap:6px; padding:8px 11px; font-size:10.5px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; color:var(--wf-tx-xlo); border-bottom:1px solid var(--wf-line); }
+.ag-pop-title .wf-ico { width:12px; height:12px; }
+.ag-pop-body { flex:1 1 auto; overflow-y:auto; overscroll-behavior:contain; padding:11px; }
+/* Full last message: preserve the sender's line breaks, wrap long lines, keep it legible. */
+.ag-pop-msg { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12.5px; line-height:1.5; color:var(--wf-tx); }
