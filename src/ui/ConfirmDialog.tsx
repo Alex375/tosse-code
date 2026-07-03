@@ -39,7 +39,16 @@ export function ConfirmDialog({
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
+      // Own Escape while open: stopPropagation so an outer window-level Escape handler
+      // (e.g. the Settings panel, which closes on bare Escape) doesn't ALSO fire — one
+      // Escape closes exactly one layer (the repo's "topmost layer claims Escape"
+      // convention). We listen on `document` (bubble), so stopping here keeps the key
+      // from reaching `window`; the app-wide capture guard in App.tsx owns the
+      // fullscreen preventDefault, so we don't repeat it.
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCancel();
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

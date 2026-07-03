@@ -1,13 +1,17 @@
 // The clean render for an injected "special message" — today a `<task-notification>`
 // emitted when a background task/agent finishes. Shown in PLACE of a raw user bubble
 // (the CLI injects these AS user turns, but the human didn't type them, so no user
-// avatar). Pure: renders only its parsed props, no store reads — reused VERBATIM by
-// the live thread (MsgUser) and the disk transcript (SubAgentTranscript / history
-// preview) so both surfaces stay identical.
+// avatar). Reused VERBATIM by the live thread (MsgUser), the clean-output inline marker
+// and the disk transcript (SubAgentTranscript / history preview), so all surfaces stay
+// identical — INCLUDING visibility: `<task-notification>` is HIDDEN by default (it's
+// machine-injected noise that clutters the transcript on reload / history import). The
+// one store read here (the `showTaskNotifications` pref) is the single gate for every
+// surface; the render code below is kept intact so flipping the pref on brings it back.
 import { Expandable } from "../../ui/Expandable";
 import { Ico } from "../../ui/kit";
 import { fmtDuration } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
+import { useDisplay } from "../../store/display";
 import { StreamMarkdown } from "./StreamMarkdown";
 import { taskNotificationStyle, type SpecialMessage, type TaskNotification } from "./specialMessage";
 
@@ -62,11 +66,14 @@ function TaskNotificationCard({ n }: { n: TaskNotification }) {
 }
 
 /** Render an injected special message. One kind today; the switch keeps future
- *  injected markers (system reminders, other injections) tidy to add. */
+ *  injected markers (system reminders, other injections) tidy to add. Task
+ *  notifications are hidden unless the user opts in (Settings → Général) — the
+ *  default-off gate that keeps the transcript clean on reload / history import. */
 export function SpecialMessageCard({ data }: { data: SpecialMessage }) {
+  const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
   switch (data.type) {
     case "task-notification":
-      return <TaskNotificationCard n={data} />;
+      return showTaskNotifications ? <TaskNotificationCard n={data} /> : null;
     default:
       return null;
   }

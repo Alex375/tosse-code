@@ -1,0 +1,4 @@
+{"type":"assistant","session_id":"s","uuid":"a1","message":{"id":"msg_live_1","role":"assistant","content":[{"type":"text","text":"I'll invoke the probe skill."},{"type":"tool_use","id":"toolu_live_skill","name":"Skill","input":{"skill":"probe"}}]}}
+{"type":"user","session_id":"s","uuid":"u_ack","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_live_skill","content":"Launching skill: probe"}]}}
+{"type":"user","session_id":"s","uuid":"u_body","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /private/var/folders/2p/xxxx/T/tosse-skill-probe/.claude/skills/probe\n\n# Probe skill\n\nReply with exactly the word PROBE_OK and end your turn. Do nothing else.\n"}]}}
+{"type":"result","subtype":"success","session_id":"s","uuid":"r1","is_error":false,"result":"PROBE_OK"}

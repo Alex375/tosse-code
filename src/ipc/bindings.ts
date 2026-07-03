@@ -195,11 +195,13 @@ async getPlanUsage() : Promise<Result<PlanUsage, UsageError>> {
 }
 },
 /**
- * Send a user turn to a session.
+ * Send a user turn to a session: the typed `text` plus any joined `images` (sent as
+ * `image` blocks in the message `content` array). `images` is empty for a plain text
+ * turn.
  */
-async sendMessage(session: string, text: string) : Promise<Result<null, string>> {
+async sendMessage(session: string, text: string, images: ImageAttachment[]) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("send_message", { session, text }) };
+    return { status: "ok", data: await TAURI_INVOKE("send_message", { session, text, images }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1570,6 +1572,22 @@ unborn: boolean;
  * Changed entries (staged + unstaged + untracked), in git's order.
  */
 files: GitFileEntry[] }
+/**
+ * An image joined to a user turn: base64 bytes + their MIME type. Sent inside the
+ * message `content` array as an `image` block (spec §3.10) — verified accepted by
+ * `claude` 2.1.187, which "sees" it and answers about its content. The `data` field
+ * is raw base64 (NO `data:` URL prefix). Also an IPC command param (`send_message`),
+ * so it derives `specta::Type` for the generated TS bindings.
+ */
+export type ImageAttachment = { 
+/**
+ * MIME type, e.g. `image/png`, `image/jpeg`, `image/gif`, `image/webp`.
+ */
+media_type: string; 
+/**
+ * Base64-encoded image bytes, with NO `data:image/...;base64,` prefix.
+ */
+data: string }
 /**
  * An image file's bytes, base64-encoded for the webview to render as a `data:`
  * URL. Unlike [`read_file`], the binary content IS the payload here — images are

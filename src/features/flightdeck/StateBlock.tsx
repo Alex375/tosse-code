@@ -2,14 +2,27 @@
 // vocabulary, laid out for a card. Driven by the shared AgentStatus + the pending
 // permission, so the card and the thread always agree on what an agent is asking.
 import { Ico } from "../../ui/kit";
-import type { AgentStatus } from "../../agent/status";
+import { backgroundCount, type AgentStatus } from "../../agent/status";
 import { classifyAsk } from "../../agent/ask";
 import { usePendingPermissions } from "../../store/conversationStore";
 import { questionCount } from "../conversation/QuestionnaireAsk";
 import { ActivityLine } from "./ActivityLine";
 
+/** The violet "still working in the background" chip appended to a settled alert's
+ *  header when the finished agent has background tools running (bg > 0). */
+function BgChip({ n }: { n: number }) {
+  if (n <= 0) return null;
+  return (
+    <span className="wf-bgchip">
+      <span className="sp" />
+      {n} en fond
+    </span>
+  );
+}
+
 export function StateBlock({ convId, status }: { convId: string; status: AgentStatus }) {
   const pending = usePendingPermissions(convId);
+  const bg = backgroundCount(status);
 
   if (status.kind === "running") {
     // A live "what it's doing now" line derived from the stream (see useLiveActivity).
@@ -56,6 +69,7 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
         <div className="wf-ask-h">
           <Ico name="ask" className="sm" />
           Pose une question
+          <BgChip n={bg} />
         </div>
         {status.prompt ? <div className="wf-ask-t">{status.prompt}</div> : null}
       </div>
@@ -68,6 +82,7 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
         <div className="wf-ask-h">
           <Ico name="alert" className="sm" />
           Erreur
+          <BgChip n={bg} />
         </div>
         <div className="wf-ask-t">{status.message}</div>
       </div>
@@ -80,8 +95,13 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
         <div className="wf-review-h">
           <Ico name="check" className="sm" />
           À relire
+          <BgChip n={bg} />
         </div>
-        <div className="wf-review-t">Conversation terminée — prête à relire.</div>
+        <div className="wf-review-t">
+          {bg > 0
+            ? "Conversation terminée — une tâche de fond continue."
+            : "Conversation terminée — prête à relire."}
+        </div>
       </div>
     );
   }

@@ -25,9 +25,11 @@ import type {
   SessionSummaryEvent,
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
-import { useBackgroundTasksStore } from "../store/backgroundTasksStore";
+import { useBackgroundTasksStore, runningCountsByConv } from "../store/backgroundTasksStore";
 import { useWorkflowLiveStore } from "../store/workflowLive";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
+import { useDisplay } from "../store/display";
+import { agentStatusForEntry } from "../agent/useAgentStatus";
 import { useCommandsStore } from "../store/commandsStore";
 import { useRemoteControlStore } from "../store/remoteControl";
 import { useLastMessageSummaryStore } from "../store/lastMessageSummary";
@@ -82,6 +84,27 @@ function notifyTransition(
   const convs = useConversationsStore.getState();
   const conv = convs.conversations.find((c) => c.id === convId);
   if (!conv) return;
+
+  // Suppress the "done" ping when the finish lands the agent in `backgrounding` — i.e.
+  // it finished cleanly but a background task is still running AND the user disabled the
+  // "alert while backgrounding" preference. deriveAgentStatus already encodes that rule,
+  // so we just check the resulting status: no extra branching here keeps the visual and
+  // the notification in lock-step. An open question / error / (alert-on) review does NOT
+  // derive to `backgrounding`, so those still ping.
+  if (kind === "done") {
+    const bg = runningCountsByConv(useBackgroundTasksStore.getState().sessions)[convId] ?? 0;
+    if (bg > 0) {
+      const status = agentStatusForEntry(
+        conv.handle,
+        useConversationStore.getState().sessions[convId],
+        conv.pendingReminder,
+        bg,
+        useDisplay.getState().alertOnBackgroundWait,
+      );
+      if (status.kind === "backgrounding") return;
+    }
+  }
+
   const repo = convs.repos.find((r) => r.id === conv.repoId);
   dispatchAgentNotification({
     kind,

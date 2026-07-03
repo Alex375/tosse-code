@@ -33,6 +33,31 @@ export interface DisplayPrefs {
   /** The Markdown rendering look, applied globally to every surface that renders
    *  Markdown. See {@link MarkdownMode}. Set from Settings → Conversation. */
   markdownMode: MarkdownMode;
+
+  /** Show the "Fleet readout" banner (the adaptive "N Running · N Review · …" stage
+   *  counts across the whole fleet) at the TOP of the FlightDeck. On by default. Set
+   *  from Settings → Général. Independent of {@link fleetBannerConversation}. */
+  fleetBannerFlightDeck: boolean;
+
+  /** Show the compact "Fleet readout" box at the BOTTOM of the conversation sidebar.
+   *  On by default. Set from Settings → Général. Independent of
+   *  {@link fleetBannerFlightDeck}. */
+  fleetBannerConversation: boolean;
+
+  /** When an agent finishes its main turn CLEANLY while a background task is still
+   *  running, should it raise the "à relire" alert (with a background accent), or go
+   *  straight to the calm violet `backgrounding` state without alerting? On by default
+   *  (alert). Off → no alert while waiting on the background task; the review surfaces
+   *  only once that work also finishes. An open question / error while backgrounding
+   *  still alerts regardless. Read by {@link deriveAgentStatus} via `alertWhileBackgrounding`. */
+  alertOnBackgroundWait: boolean;
+
+  /** Show the CLI-injected `<task-notification>` messages (a background task/agent
+   *  finished) in the conversation thread. OFF by default — they're machine-injected
+   *  noise that clutters the transcript, especially on reload / history import. The
+   *  clean render (SpecialMessageCard) is kept, just gated: flip this on to see them
+   *  again. Read by {@link SpecialMessageCard}. */
+  showTaskNotifications: boolean;
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
@@ -42,6 +67,10 @@ export interface DisplayPrefs {
 const DEFAULTS: DisplayPrefs = {
   cleanOutput: false,
   markdownMode: "warm",
+  fleetBannerFlightDeck: true,
+  fleetBannerConversation: true,
+  alertOnBackgroundWait: true,
+  showTaskNotifications: false,
 };
 
 function load(): DisplayPrefs {
@@ -76,6 +105,10 @@ export const useDisplay = create<DisplayState>((set) => ({
       const next: DisplayPrefs = {
         cleanOutput: patch.cleanOutput ?? s.cleanOutput,
         markdownMode: patch.markdownMode ?? s.markdownMode,
+        fleetBannerFlightDeck: patch.fleetBannerFlightDeck ?? s.fleetBannerFlightDeck,
+        fleetBannerConversation: patch.fleetBannerConversation ?? s.fleetBannerConversation,
+        alertOnBackgroundWait: patch.alertOnBackgroundWait ?? s.alertOnBackgroundWait,
+        showTaskNotifications: patch.showTaskNotifications ?? s.showTaskNotifications,
       };
       save(next);
       return next;

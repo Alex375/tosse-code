@@ -5,9 +5,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type KeyboardEvent,
 } from "react";
 import type { PermissionMode, SlashCommand } from "../../ipc/client";
+import type { UserTurnImage } from "../../store/types";
+import { isTauri } from "../../ipc/provider";
 import { useShallow } from "zustand/react/shallow";
 import { useInterrupt, useSendMessage } from "../../ipc/useCommands";
 import { useSessionState, useUserMessageHistory } from "../../store/conversationStore";
@@ -47,6 +50,15 @@ import {
   type HistoryNav,
   type RecallResult,
 } from "./messageHistory";
+import {
+  attachmentFromBlob,
+  attachmentFromPath,
+  attachmentsFor,
+  imageDataUrl,
+  useComposerAttachments,
+  useConvAttachments,
+  wireImageMimeForPath,
+} from "./composerAttachments";
 import styles from "./ConductorComposer.module.css";
 
 // The real Claude models. Wire value = CLI alias (sent verbatim to set_model and
@@ -162,6 +174,17 @@ export const ConductorComposer = forwardRef<
     return !!c && !c.sessionId && !c.handle;
   });
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // ---- Attachments (the "+" button + paste-an-image) ----------------------
+  // Joined images for THIS conversation (in-memory, per-conv; see composerAttachments).
+  const attachments = useConvAttachments(session);
+  // Last attach failure (unreadable / too large / unsupported), shown inline in the
+  // attachment row until the next successful attach or send.
+  const [attachErr, setAttachErr] = useState<string | null>(null);
+  // In-flight pasted-image reads (FileReader is async). While > 0 the send is blocked
+  // so a fast paste-then-Enter can't fire BEFORE the image lands (which would send
+  // without it, then attach it to the NEXT message).
+  const [attaching, setAttaching] = useState(0);
 
   // ---- Shell-style ↑/↓ history recall -------------------------------------
   // The user's own previously-sent messages, oldest→newest (see selector). The
@@ -337,6 +360,104 @@ export const ConductorComposer = forwardRef<
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   };
 
+  // Make an absolute path relative to the conversation cwd when it lives under it, so
+  // an inserted file mention stays short + resolves to a clickable chip; else keep it
+  // absolute (still readable by Claude and by the mention resolver).
+  const relForCwd = (abs: string): string => {
+    const base = cwd ? cwd.replace(/\/+$/, "") : "";
+    return base && abs.startsWith(base + "/") ? abs.slice(base.length + 1) : abs;
+  };
+
+  // Append file-path mentions to the draft (space-separated), caret at the end.
+  const insertMentions = (paths: string[]) => {
+    if (!paths.length) return;
+    const joined = paths.map(relForCwd).join(" ");
+    const next = text.trim() ? `${text.replace(/\s*$/, "")} ${joined} ` : `${joined} `;
+    setText(next);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+      autoGrow();
+    });
+  };
+
+  // Route picked paths: model-attachable images → base64 attachment; anything else →
+  // a path mention Claude reads with its own tools.
+  const addPaths = async (paths: string[]) => {
+    const mentions: string[] = [];
+    const errs: string[] = [];
+    // Same send-lock as onPaste: these picked-image reads are async (disk + base64 over
+    // IPC, up to 16 MiB), so block send while they're in flight — else a fast
+    // pick-then-Enter sends BEFORE the image lands (it would ride the NEXT message).
+    setAttaching((n) => n + 1);
+    try {
+      for (const p of paths) {
+        if (wireImageMimeForPath(p)) {
+          const res = await attachmentFromPath(p);
+          if (res && "error" in res) errs.push(res.error);
+          else if (res) useComposerAttachments.getState().add(session, res);
+        } else {
+          mentions.push(p);
+        }
+      }
+    } finally {
+      setAttaching((n) => Math.max(0, n - 1));
+    }
+    // Surface every failure at once — a later failure must not silently erase earlier ones.
+    if (errs.length) setAttachErr([...new Set(errs)].join(" · "));
+    insertMentions(mentions);
+  };
+
+  // The "+" button: native multi-file picker (any file / image). In the dev/browser
+  // mock there's no native dialog, so fall back to a path prompt (mention only).
+  const pickAndAttach = async () => {
+    setAttachErr(null);
+    let paths: string[] = [];
+    if (isTauri) {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const sel = await open({ multiple: true, title: "Joindre des fichiers ou des images" });
+      paths = Array.isArray(sel) ? sel : sel ? [sel] : [];
+    } else {
+      const p = window.prompt("Chemin du fichier à joindre :", "");
+      paths = p && p.trim() ? [p.trim()] : [];
+    }
+    await addPaths(paths);
+  };
+
+  // Paste an image (screenshot / copied file) → attachment. Only preventDefault when
+  // we actually consumed image data, so plain text paste is untouched.
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const blobs: File[] = [];
+    for (const it of Array.from(items)) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) blobs.push(f);
+      }
+    }
+    if (!blobs.length) return;
+    e.preventDefault();
+    setAttachErr(null);
+    setAttaching((n) => n + 1);
+    void (async () => {
+      try {
+        for (const b of blobs) {
+          const name = b.name && b.name.trim() ? b.name : "Image collée";
+          const res = await attachmentFromBlob(b, name);
+          if (res && "error" in res) setAttachErr(res.error);
+          else if (res) useComposerAttachments.getState().add(session, res);
+          else setAttachErr("Format d'image non supporté (png, jpeg, gif, webp).");
+        }
+      } finally {
+        setAttaching((n) => Math.max(0, n - 1));
+      }
+    })();
+  };
+
   // A restored draft can be multi-line; the textarea defaults to one row, so size it
   // to the content on mount (and whenever we switch to another conversation's draft)
   // rather than leaving it scrolled. autoGrow() reads taRef, set by render time.
@@ -345,9 +466,10 @@ export const ConductorComposer = forwardRef<
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  const sendText = (raw: string) => {
-    const t = raw.trim();
-    if (!t) return;
+  // Core send: the typed text plus any joined images. Empty-empty is a no-op (the
+  // send button is gated on it too), but text-empty-with-images IS a valid send.
+  const sendMessageNow = (t: string, images: UserTurnImage[]) => {
+    if (!t && images.length === 0) return;
     // NO busy gate: sending while the agent is working is supported and desirable.
     // The `claude` CLI natively queues a user message received mid-turn and injects
     // it at the next loop boundary (after a tool_result batch, before the next model
@@ -360,12 +482,16 @@ export const ConductorComposer = forwardRef<
     // The worktree toggle only applies to the very first spawn of a conversation.
     // `queued`: busy at send time → the CLI will inject this mid-turn, so the
     // bubble shows an "en attente" badge until the turn ends.
-    send.mutate({ text: t, worktree: useWorktree && isFresh, queued: busy });
+    send.mutate({ text: t, images, worktree: useWorktree && isFresh, queued: busy });
     // `/reload-skills` makes the CLI re-scan on-disk skills; mirror that in the
     // `/` menu by re-fetching this cwd's catalogue (a fresh spawn reads disk
     // afresh), overwriting the once-per-session cache. Fire-and-forget.
     if (isReloadSkillsCommand(t)) void refetchSlashCommands(cwd);
     setText("");
+    // Joined images were consumed by this send — drop them so they don't ride the
+    // next message.
+    useComposerAttachments.getState().clear(session);
+    setAttachErr(null);
     histNav.current = IDLE_NAV;
     setSlashToken(null);
     requestAnimationFrame(autoGrow);
@@ -374,7 +500,24 @@ export const ConductorComposer = forwardRef<
     onSent?.();
   };
 
-  const doSend = () => sendText(text);
+  // Text-only send (slash-command run, `/compact`) — never carries attachments.
+  const sendText = (raw: string) => sendMessageNow(raw.trim(), []);
+
+  // The composer's primary send (button / Enter): text + this conversation's
+  // joined images, stripped of their local ids for the wire + optimistic bubble.
+  const doSend = () => {
+    // A pasted image is still being read — don't send yet, or it would go out on the
+    // NEXT message instead (the async add lands after this send's clear).
+    if (attaching > 0) return;
+    sendMessageNow(
+      text.trim(),
+      attachmentsFor(session).map((a) => ({
+        mediaType: a.mediaType,
+        dataBase64: a.dataBase64,
+        name: a.name,
+      })),
+    );
+  };
 
   /**
    * Accept a slash command from the menu. Mirrors the VS Code extension:
@@ -499,8 +642,34 @@ export const ConductorComposer = forwardRef<
           onPick={(cmd) => pickCommand(cmd, false)}
         />
       ) : null}
+      {attachments.length > 0 || attachErr ? (
+        <div className="cv-attach-row">
+          {attachments.map((a) => (
+            <div key={a.id} className="cv-attach" title={a.name}>
+              <img className="cv-attach-thumb" src={imageDataUrl(a)} alt={a.name ?? "image"} />
+              <span className="cv-attach-name">{a.name ?? "image"}</span>
+              <button
+                type="button"
+                className="cv-attach-x"
+                title="Retirer"
+                aria-label="Retirer la pièce jointe"
+                onClick={() => useComposerAttachments.getState().remove(session, a.id)}
+              >
+                <Ico name="x" className="sm" />
+              </button>
+            </div>
+          ))}
+          {attachErr ? <span className="cv-attach-err">{attachErr}</span> : null}
+        </div>
+      ) : null}
       <div className="cv-input">
-        <button className="cv-add" disabled title="Joindre — à venir">
+        <button
+          type="button"
+          className="cv-add"
+          onClick={() => void pickAndAttach()}
+          title="Joindre un fichier ou une image"
+          aria-label="Joindre un fichier ou une image"
+        >
           <Ico name="plus" className="sm" />
         </button>
         <textarea
@@ -524,12 +693,14 @@ export const ConductorComposer = forwardRef<
           }}
           onSelect={(e) => syncSlashToken(e.currentTarget)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           aria-label="Message"
         />
-        {/* While busy with an empty box, the action is "interrupt". As soon as there
-            is text to send — busy or not — it's a send button: a message sent mid-turn
-            is natively queued by the CLI and injected at the next loop boundary. */}
-        {busy && !text.trim() ? (
+        {/* While busy with an empty box (no text AND no attachments), the action is
+            "interrupt". As soon as there is something to send — text or a joined image,
+            busy or not — it's a send button: a message sent mid-turn is natively queued
+            by the CLI and injected at the next loop boundary. */}
+        {busy && !text.trim() && attachments.length === 0 && attaching === 0 ? (
           <button className="cv-send" onClick={() => interrupt.mutate()} title="Interrompre">
             <Ico name="stop" className="sm" />
           </button>
@@ -537,7 +708,7 @@ export const ConductorComposer = forwardRef<
           <button
             className="cv-send"
             onClick={doSend}
-            disabled={!text.trim()}
+            disabled={(!text.trim() && attachments.length === 0) || attaching > 0}
             title={busy ? "Envoyer — l'agent le traitera en cours de route" : "Envoyer"}
           >
             <Ico name="send" className="sm" />

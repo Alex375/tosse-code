@@ -37,6 +37,7 @@ import type {
   ToolResult,
   Turn,
   TurnResultMeta,
+  UserTurnImage,
 } from "./types";
 import { isBackgroundAgentInput, isDetachedAgentAck } from "../agent/subagentMeta";
 import { latestTodosInBlocks, todoSummary } from "./todos";
@@ -151,7 +152,7 @@ interface ConversationState {
   appendThinking: (session: string, messageId: string, text: string) => void;
   /** Append an optimistic user turn. `queued` marks it as sent mid-turn (the CLI
    *  injects it before the loop ends) → drives the "en attente" badge. */
-  addUserTurn: (session: string, text: string, queued?: boolean) => void;
+  addUserTurn: (session: string, text: string, queued?: boolean, images?: UserTurnImage[]) => void;
   /** Append a visible error bubble to the timeline (e.g. a send that failed to
    *  spawn the session). Makes an otherwise-silent command failure self-evident.
    *  `detail` (optional) is the raw technical payload, shown behind a disclosure. */
@@ -293,7 +294,7 @@ export const useConversationStore = create<ConversationState>((set) => {
     appendThinking: (session, messageId, text) =>
       appendBuffer(session, messageId, "streamingThinking", text),
 
-    addUserTurn: (session, text, queued) =>
+    addUserTurn: (session, text, queued, images) =>
       withEntry(session, (entry) => {
         const id = `user_${entry.seq}`;
         const turn: Turn = {
@@ -306,6 +307,7 @@ export const useConversationStore = create<ConversationState>((set) => {
           parentToolUseId: null,
           hasThinking: false,
           queued,
+          images: images && images.length ? images : undefined,
           // Durable twin of `queued` for clean-output grouping: never cleared, so a mid-work
           // injection stays distinguishable from a fresh prompt long after the badge clears.
           injectedMidTurn: queued,

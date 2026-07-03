@@ -32,6 +32,10 @@ import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
 import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
+import {
+  clearComposerAttachments,
+  clearAllComposerAttachments,
+} from "../features/conversation/composerAttachments";
 import { clearWorkFold, clearAllWorkFold } from "./workFold";
 import {
   clearPlanAnnotations,
@@ -400,6 +404,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       disposeTerminal(c.id);
       clearTodoBarOpen(c.id);
       clearComposerDraft(c.id);
+      clearComposerAttachments(c.id);
       clearWorkFold(c.id);
       clearPlanAnnotations(c.id);
       useGitViewStore.getState().clear(c.id);
@@ -468,6 +473,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     clearCachedWindow(id);
     clearTodoBarOpen(id);
     clearComposerDraft(id);
+    clearComposerAttachments(id);
     clearWorkFold(id);
     clearPlanAnnotations(id);
     autoTitlePending.delete(id);
@@ -1196,6 +1202,7 @@ export async function wipeAllData(): Promise<void> {
   clearAllCachedWindows();
   clearAllTodoBarOpen();
   clearAllComposerDrafts();
+  clearAllComposerAttachments();
   clearAllWorkFold();
   clearAllPlanAnnotations();
   clearAllSidebarFold();

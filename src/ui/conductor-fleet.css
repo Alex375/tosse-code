@@ -1,0 +1,109 @@
+/* Fleet readout — the adaptive "N Running · N Review · …" stage summary. One line,
+   coloured numbers, no dots/icons; every stage rendered identically. Two placements
+   share the inner line (.fr-line) and differ only in chrome: .fr-deck (FlightDeck top
+   bar) and .fr-side (compact sidebar box). See ui/FleetReadout.tsx. */
+
+.fr-line {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fr-seg {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.fr-n {
+  font-family: var(--wf-mono);
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fr-l {
+  color: var(--wf-tx-lo);
+  font-weight: 500;
+}
+
+.fr-sep {
+  color: var(--wf-tx-xlo);
+  font-weight: 400;
+}
+
+.fr-rest {
+  color: var(--wf-tx-lo);
+  font-weight: 500;
+}
+
+/* Stage colours ride the NUMBER only — the label stays quiet. Uniform across stages:
+   Need Attention gets no extra emphasis (pill / halo), by design. */
+.fr-seg.running .fr-n {
+  color: var(--wf-run);
+}
+.fr-seg.review .fr-n {
+  color: var(--wf-wait);
+}
+.fr-seg.needAttention .fr-n {
+  color: var(--wf-att);
+}
+.fr-seg.idle .fr-n {
+  color: var(--wf-done);
+}
+
+/* ── FlightDeck top bar (replaces the old .ag-attn) ── */
+.fr-deck {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--wf-line);
+  background: var(--wf-bg-2);
+  font-size: 14.5px;
+}
+.fr-deck .fr-n {
+  font-size: 1.05em;
+}
+.fr-total {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--wf-tx-xlo);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.fr-total-n {
+  font-family: var(--wf-mono);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--wf-tx-lo);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+/* ── Compact sidebar line (bottom of the conversation sidebar) ── */
+/* Deliberately discreet: a single footer-styled row (mirrors the Réglages row right
+   below it), the merged three-stage view, small type. `nowrap` + `hidden` keep it to
+   ONE line at every sidebar width rather than growing to two. The coloured numbers are
+   the only "colour" — no cap, no card. */
+.fr-side {
+  padding: 9px 12px;
+  border-top: 1px solid var(--wf-line);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.fr-side .fr-line {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+/* Tighten the number↔label gap in the narrow panel so all three stages clear the
+   190px minimum width without clipping. */
+.fr-side .fr-seg {
+  gap: 4px;
+}

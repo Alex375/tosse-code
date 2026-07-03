@@ -1,6 +1,6 @@
 // FlightDeck — the agent dashboard view ("Vue Gestion d'agents"). A grid of stream
-// cards grouped by repo, with an attention bar on top. Uses `useFleetLanes`, which
-// shares the repo-grouping skeleton with the sidebar but orders STATUS-first
+// cards grouped by repo, with the fleet readout banner on top. Uses `useFleetLanes`,
+// which shares the repo-grouping skeleton with the sidebar but orders STATUS-first
 // (action-required/error → review → running → idle → off, recency as tiebreak)
 // instead of the sidebar's pure recency — a deliberate difference, so only the
 // grouping is shared, not the order. Each card reuses the same status/todo/context
@@ -9,7 +9,8 @@ import { useEffect, useState } from "react";
 import { Ico } from "../../ui/kit";
 import { createConversationInRepo, repoName } from "../../store/conversationsStore";
 import { useFleetLanes } from "../../agent/fleet";
-import { AttentionBar } from "./AttentionBar";
+import { useDisplay } from "../../store/display";
+import { FleetReadout } from "../../ui/FleetReadout";
 import { StreamCard } from "./StreamCard";
 
 /** A coarse clock ticking every 30s so the relative "last activity" stamps on
@@ -27,6 +28,7 @@ function useNow(periodMs = 30_000): number {
 export function FlightDeck({ onOpen }: { onOpen: (id: string) => void }) {
   const groups = useFleetLanes();
   const now = useNow();
+  const showReadout = useDisplay((s) => s.fleetBannerFlightDeck);
 
   if (groups.length === 0) {
     return (
@@ -42,7 +44,7 @@ export function FlightDeck({ onOpen }: { onOpen: (id: string) => void }) {
 
   return (
     <div className="ag-page wf-col">
-      <AttentionBar />
+      {showReadout ? <FleetReadout variant="deck" /> : null}
       <div className="ag-scroll wf-fade-b">
         {groups.map(({ repo, conversations }) => (
           <div key={repo.id} className="ag-repo">

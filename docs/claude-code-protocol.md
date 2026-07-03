@@ -298,18 +298,30 @@ and a model-invoked skill expand into ordinary `user` messages (never `tool_resu
 **The MODEL invokes a skill (the `Skill` tool)** → an assistant `tool_use{name:"Skill",
 input:{skill,args?}}`, then:
 1. a `user` `tool_result` **ack** (`"Launching skill: <skill>"`), `isMeta` absent;
-2. the **same `isMeta:true` body** as above.
+2. the **same body** as above.
    There is **NO `<command-*>` header** here — the `Skill` tool_use *is* the header.
 
-**Handling (both live `assembler.rs::ingest_user` and reload `history.rs::push_user`):** an
-`isMeta:true` user line is **dropped** — it's injected boilerplate (also covers system-reminders
-and the "while you were working" wrapper), never a real turn. So the SKILL.md **body never
-renders as a user bubble**. The visible trace is: for a typed command, the header string →
-rendered as a clean `.cv-cmd` chip (`userText.tsx`); for a model invocation, the `Skill`
-tool_use → rendered as a dedicated command chip (`SkillChip`, from `input.skill`). ⚠️ The
-`isMeta` drop is what keeps the body hidden — do NOT surface `isMeta` user lines. Fixture:
-`fixtures/capture_skill.jsonl`; regression tests: `skill_body_user_line_is_dropped`,
-`skill_body_line_is_skipped_on_restore`, `skill_invocation_fixture_surfaces_tool_use_not_body`.
+**⚠️ LIVE vs ON-DISK divergence on the body's `isMeta` (task 7e69f8ee, captured via
+`live_capture_skill_body_replay`):** the body line carries `isMeta:true` **only in the
+PERSISTED transcript**. On the **LIVE stdout** stream-json the CLI **OMITS `isMeta`** (and
+`sourceToolUseID`) on that exact line — it is a *bare* `user` text line with no distinguishing
+metadata. So a guard that drops only `isMeta:true` works on reload but NOT live.
+
+**Handling:**
+- **Reload** (`history.rs::push_user`): the on-disk `isMeta:true` line is dropped like any meta
+  line (also covers system-reminders and the "while you were working" wrapper).
+- **Live** (`assembler.rs::ingest_user`): `isMeta` is absent, so we drop the body by its
+  boilerplate **prefix** `Base directory for this skill:` **while a `Skill` tool_use is armed**
+  this turn (`skill_invocation_pending`, set in `ingest_assistant`, reset on `result`). Gated on
+  BOTH so a real user turn is never swallowed.
+
+So the SKILL.md **body never renders as a user bubble** (live OR reload). The visible trace is:
+for a typed command, the header string → a clean `.cv-cmd` chip (`userText.tsx`); for a model
+invocation, the `Skill` tool_use → a dedicated `SkillChip` (from `input.skill`). Fixtures:
+`fixtures/capture_skill.jsonl` (on-disk, `isMeta:true`) + `fixtures/capture_skill_live.jsonl`
+(live shape, NO `isMeta`); regression tests: `skill_body_user_line_is_dropped`,
+`skill_body_line_is_skipped_on_restore`, `skill_invocation_fixture_surfaces_tool_use_not_body`,
+`skill_body_live_line_without_ismeta_is_dropped`, `skill_body_drop_does_not_swallow_real_next_turn`.
 
 ### 3.8 `parent_tool_use_id` = sub-agent (Task) grouping (`confirmed`)
 

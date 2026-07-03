@@ -1281,4 +1281,150 @@ mod tests {
         logln!("log written to {log_path}");
         transport.shutdown().await;
     }
+
+    /// Live capture: does a MODEL-invoked skill's SKILL.md body leak as a user turn?
+    /// The body arrives as an `isMeta:true` user line (dropped by `ingest_user` L805 +
+    /// `history.rs::push_user`). But `--replay-user-messages` (unconditional) ALSO
+    /// re-emits user lines on stdout — if the replay echo of the injected body drops
+    /// `isMeta`, the L805 guard misses it and the body surfaces as a fake user bubble.
+    /// This is LIVE-ONLY: a reload reads the on-disk `isMeta:true` line and drops it, so
+    /// the bug vanishes on restart. This probe logs every `user` line's
+    /// (uuid, isMeta, isReplay) so we can see the body's ORIGINAL vs REPLAY shape and
+    /// pick the fix (drop-by-isMeta is not enough; likely track the meta uuid like
+    /// `sent_user_uuids`). Ignored by default (spawns claude: network + auth). Run with:
+    ///   cargo test --lib --ignored live_capture_skill_body_replay -- --nocapture
+    #[tokio::test]
+    #[ignore = "spawns the real claude binary; captures the skill-body isMeta/replay wire"]
+    async fn live_capture_skill_body_replay() {
+        use crate::supervisor::protocol::CliMessage;
+        use crate::supervisor::transport::{self, SpawnConfig, Transport};
+        use std::io::Write as _;
+        use std::time::{Duration, Instant};
+
+        let log_path = std::env::var("TOSSE_SKILL_LOG")
+            .unwrap_or_else(|_| "/tmp/skill_body_capture.log".to_string());
+        let mut file = std::fs::File::create(&log_path).ok();
+        macro_rules! logln { ($($a:tt)*) => {{
+            let s = format!($($a)*);
+            eprintln!("{s}");
+            if let Some(f) = file.as_mut() { let _ = writeln!(f, "{s}"); }
+        }}; }
+
+        // A throwaway project skill in a temp cwd → zero side effects, deterministic
+        // availability. Claude discovers `.claude/skills/<name>/SKILL.md` walking up from cwd.
+        let tmp = std::env::temp_dir().join(format!("tosse-skill-probe-{}", uuid::Uuid::new_v4()));
+        let skill_dir = tmp.join(".claude/skills/probe");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: probe\ndescription: Trivial probe skill. Use when asked to run the probe skill.\n---\n\n# Probe skill\n\nReply with exactly the word PROBE_OK and end your turn. Do nothing else.\n",
+        )
+        .expect("write SKILL.md");
+
+        let mut cfg = SpawnConfig::new(tmp.clone());
+        cfg.allowed_tools = ["Skill"].iter().map(|s| s.to_string()).collect();
+        let (mut transport, mut rx) = Transport::spawn(cfg).expect("claude should spawn");
+        transport
+            .send_line(initialize_request("cap-init"))
+            .expect("send initialize");
+
+        // Concatenate a user `message` Value's text blocks (or string content).
+        fn user_text(msg: &Value) -> String {
+            match msg.get("content") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Array(a)) => a
+                    .iter()
+                    .filter_map(|b| b.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                _ => String::new(),
+            }
+        }
+
+        transport
+            .send_line(transport::user_message(
+                "Use the Skill tool to invoke the skill named \"probe\", then do exactly what it says.",
+                &uuid::Uuid::new_v4().to_string(),
+            ))
+            .expect("send prompt");
+
+        // Each time the skill-body text appears on a `user` line, record its shape.
+        let mut body_sightings: Vec<(String, Option<bool>, Option<bool>)> = Vec::new();
+        let mut skill_tool_use_id: Option<String> = None;
+        let mut body_src_matches = false;
+        let mut results_seen = 0;
+
+        let deadline = Instant::now() + Duration::from_secs(180);
+        while Instant::now() < deadline {
+            let msg = match tokio::time::timeout(Duration::from_secs(90), rx.recv()).await {
+                Ok(Some(m)) => m,
+                Ok(None) => { logln!("<stdout closed>"); break; }
+                Err(_) => { logln!("<recv timeout>"); break; }
+            };
+            match msg {
+                CliMessage::ControlRequest(v) => {
+                    if let Some((rid, body)) = parse_inbound_control(&v) {
+                        match body {
+                            Ok(InboundControl::CanUseTool(req)) => {
+                                logln!("[perm] allow {} tool_use_id={}", req.tool_name, req.tool_use_id);
+                                let _ = transport.send_line(permission_allow_response(
+                                    &rid, &req.tool_use_id, req.input.clone(),
+                                ));
+                            }
+                            _ => { let _ = transport.send_line(control_error_response(&rid, "unsupported")); }
+                        }
+                    }
+                }
+                CliMessage::Assistant(a) => {
+                    if let Some(arr) = a.message.get("content").and_then(Value::as_array) {
+                        for b in arr {
+                            if b.get("type").and_then(Value::as_str) == Some("tool_use")
+                                && b.get("name").and_then(Value::as_str) == Some("Skill")
+                            {
+                                let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                                logln!("[assistant Skill tool_use] id={id} input={}",
+                                    serde_json::to_string(&b.get("input").cloned().unwrap_or(Value::Null)).unwrap_or_default());
+                                skill_tool_use_id = Some(id);
+                            }
+                        }
+                    }
+                }
+                CliMessage::User(u) => {
+                    let txt = user_text(&u.message);
+                    let head: String = txt.chars().take(80).collect();
+                    logln!("[user] uuid={:?} isMeta={:?} isReplay={:?} sourceToolUseID={:?} text={:?}",
+                        u.uuid, u.is_meta, u.is_replay, u.source_tool_use_id, head);
+                    if txt.contains("Base directory for this skill") {
+                        let matches_skill = u.source_tool_use_id.is_some()
+                            && u.source_tool_use_id == skill_tool_use_id;
+                        logln!("   ^^^ SKILL BODY line: uuid={:?} isMeta={:?} isReplay={:?} sourceToolUseID={:?} (matches Skill tool_use = {matches_skill})",
+                            u.uuid, u.is_meta, u.is_replay, u.source_tool_use_id);
+                        body_sightings.push((u.uuid.clone().unwrap_or_default(), u.is_meta, u.is_replay));
+                        body_src_matches = body_src_matches || matches_skill;
+                    }
+                }
+                CliMessage::Result(_) => {
+                    results_seen += 1;
+                    logln!("[result] turn ended (#{results_seen})");
+                    // The replay echo may trail the turn; stop once we've seen the body twice
+                    // (original + replay) or a second result comes in.
+                    if body_sightings.len() >= 2 || results_seen >= 2 { break; }
+                }
+                _ => {}
+            }
+        }
+
+        logln!("=== CAPTURE SUMMARY ===");
+        logln!("skill-body sightings = {}", body_sightings.len());
+        for (i, (uuid, meta, replay)) in body_sightings.iter().enumerate() {
+            logln!("  [{i}] uuid={uuid} isMeta={meta:?} isReplay={replay:?}");
+        }
+        let live_leak = body_sightings.iter().any(|(_, meta, _)| *meta != Some(true));
+        logln!("LIVE-BODY-MISSING-ISMETA (leak reproduced) = {live_leak}");
+        logln!("body line's sourceToolUseID matches the Skill tool_use = {body_src_matches}  (→ live-safe drop signal)");
+        logln!("Skill tool_use id = {skill_tool_use_id:?}");
+        logln!("log written to {log_path}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        transport.shutdown().await;
+    }
 }

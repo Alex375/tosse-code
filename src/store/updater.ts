@@ -25,6 +25,31 @@ export interface AvailableUpdate {
   notes?: string;
 }
 
+/** Separator in a release body: everything AFTER it is GitHub-page-only (the
+ *  self-signed / Gatekeeper install instructions, useful for a manual .dmg download
+ *  but pointless for the in-app auto-updater). See `.github/workflows/release.yml`. */
+export const GH_ONLY_MARKER = "<!-- gh-only -->";
+
+// Legacy releases (before the CHANGELOG-driven body) shipped ONLY the Gatekeeper /
+// install boilerplate as their body, with no marker. Recognise it so those notes
+// don't leak into the app as if they were the "what's new".
+const LEGACY_INSTALL_BOILERPLATE = /non notaris|clic droit\s*→\s*ouvrir|build automatique depuis/i;
+
+/**
+ * The user-facing "what's new" to show IN-APP, extracted from a raw release body.
+ * Keeps only the part before {@link GH_ONLY_MARKER} (the changelog); drops the
+ * GitHub-only install note. Returns null when there is nothing meaningful to show —
+ * empty, or a legacy install-only body — so the UI can fall back to a neutral line.
+ */
+export function inAppReleaseNotes(notes: string | null | undefined): string | null {
+  if (!notes) return null;
+  const idx = notes.indexOf(GH_ONLY_MARKER);
+  const text = (idx >= 0 ? notes.slice(0, idx) : notes).trim();
+  // No marker + looks like the legacy install-only body → nothing worth surfacing.
+  if (idx < 0 && LEGACY_INSTALL_BOILERPLATE.test(text)) return null;
+  return text.length > 0 ? text : null;
+}
+
 interface UpdaterState {
   status: UpdaterStatus;
   update: AvailableUpdate | null;

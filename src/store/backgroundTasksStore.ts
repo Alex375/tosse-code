@@ -185,6 +185,26 @@ export const useRunningTaskCount = (session: string): number =>
     return n;
   });
 
+/** Running background-task count for EVERY conversation at once, `{ convId → n }`,
+ *  omitting the zeros so the object stays small and shallow-stable — re-renders only
+ *  when some conversation's count actually moves (a task starts/stops), not on the
+ *  frequent progress/token ticks. Feeds the fleet-wide status derivation (readout +
+ *  lanes), which must reflect background work without mounting one hook per card. */
+export function runningCountsByConv(
+  sessions: Record<string, Record<string, BackgroundTask>>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [conv, tasks] of Object.entries(sessions)) {
+    let n = 0;
+    for (const t of Object.values(tasks)) if (t.status === "running") n++;
+    if (n > 0) out[conv] = n;
+  }
+  return out;
+}
+
+export const useRunningCountsByConv = (): Record<string, number> =>
+  useBackgroundTasksStore(useShallow((s) => runningCountsByConv(s.sessions)));
+
 /**
  * The background task spawned by a given `tool_use` block (an `Agent` / `Bash` /
  * `Monitor` / `Workflow` card), matched on `tool_use_id`, or `undefined` if the

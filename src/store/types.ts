@@ -60,10 +60,24 @@ export type TurnRole = "assistant" | "user";
  * block currently being typed. Render = finalized `blocks` followed by the live
  * buffer tail, so nothing already shown is ever overwritten.
  */
+/** An image joined to a user turn, kept for the optimistic bubble (thumbnail) and
+ *  ready for the wire (base64 → `image` block). `dataBase64` is raw base64, NO
+ *  `data:` prefix; the renderer builds the data URL from `mediaType` + `dataBase64`. */
+export interface UserTurnImage {
+  mediaType: string;
+  dataBase64: string;
+  /** Display name (filename, or "Image collée") — optional, for the chip/title. */
+  name?: string;
+}
+
 export interface Turn {
   id: string;
   role: TurnRole;
   status: TurnStatus;
+  /** User turn only: images joined to this message (attached via the composer's
+   *  "+" or pasted). Rendered as thumbnails in the bubble; absent on turns hydrated
+   *  from disk (the optimistic-only path carries them). */
+  images?: UserTurnImage[];
   /** Live text of the block currently streaming (ignored once status!=="streaming"). */
   streamingText: string;
   /** Live extended-thinking of the block currently streaming. */

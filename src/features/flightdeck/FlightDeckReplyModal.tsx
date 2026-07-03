@@ -53,16 +53,16 @@ export function FlightDeckReplyModal({ onPromote }: { onPromote: (id: string) =>
 
   // Escape closes the modal, like the app's other dialogs — but ONLY if a nested
   // overlay inside the mounted ConversationPane (a drill-in TranscriptPopover /
-  // TaskOutputPopover / WorkflowDetail) hasn't already consumed it. Those popovers
-  // preventDefault() on their own Escape; since keydown bubbles document→window we
-  // see that here and bail, so one Escape dismisses only the topmost layer.
+  // TaskOutputPopover / WorkflowDetail / background-task badge) hasn't already consumed
+  // it. Those popovers sit on `document` and call stopPropagation() on their Escape;
+  // since keydown bubbles document→window, this window-level listener never fires when
+  // an inner popover owns the key — so one Escape dismisses only the topmost layer.
+  // (Fullscreen is protected globally by the capture-phase guard in App.tsx, so this no
+  // longer needs to preventDefault or gate on defaultPrevented.)
   useEffect(() => {
     if (!convId) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !e.defaultPrevented) {
-        e.preventDefault();
-        close();
-      }
+      if (e.key === "Escape") close();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

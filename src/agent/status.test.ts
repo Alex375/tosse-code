@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   agentStatusToDot,
+  backgroundCount,
   deriveAgentStatus,
   isDismissable,
   looksLikeQuestion,
+  readoutBucket,
   rowAttention,
   statusReminderKind,
   type AgentSignals,
@@ -24,6 +26,7 @@ function sig(over: Partial<AgentSignals> = {}): AgentSignals {
     lastAssistantText: null,
     persistedReminder: null,
     runningBackgroundTasks: 0,
+    alertWhileBackgrounding: true,
     ...over,
   };
 }
@@ -167,6 +170,61 @@ describe("deriveAgentStatus", () => {
         ).kind,
       ).toBe("error");
     });
+
+    describe("background accent + the alert-while-backgrounding preference", () => {
+      it("a clean finish with bg running carries the bg count (alert on = default)", () => {
+        const s = deriveAgentStatus(
+          sig({ turnSeen: false, lastTurnSubtype: "success", runningBackgroundTasks: 2 }),
+        );
+        expect(s).toEqual({ kind: "review", bg: 2 });
+        expect(backgroundCount(s)).toBe(2);
+      });
+
+      it("with the alert OFF, a clean finish + bg goes straight to backgrounding (no review)", () => {
+        const s = deriveAgentStatus(
+          sig({
+            turnSeen: false,
+            lastTurnSubtype: "success",
+            runningBackgroundTasks: 2,
+            alertWhileBackgrounding: false,
+          }),
+        );
+        expect(s).toEqual({ kind: "backgrounding", count: 2 });
+      });
+
+      it("a QUESTION with bg still alerts even when the setting is off (carries bg)", () => {
+        const s = deriveAgentStatus(
+          sig({
+            turnSeen: false,
+            lastAssistantText: "On y va ?",
+            runningBackgroundTasks: 1,
+            alertWhileBackgrounding: false,
+          }),
+        );
+        expect(s).toEqual({ kind: "needInput", via: "openQuestion", prompt: "On y va ?", bg: 1 });
+      });
+
+      it("an ERROR with bg still alerts even when the setting is off (carries bg)", () => {
+        const s = deriveAgentStatus(
+          sig({
+            turnSeen: false,
+            lastTurnIsError: true,
+            runningBackgroundTasks: 1,
+            alertWhileBackgrounding: false,
+          }),
+        );
+        expect(s.kind).toBe("error");
+        expect(backgroundCount(s)).toBe(1);
+      });
+
+      it("with no bg running, the setting is a no-op (plain review, backgroundCount 0)", () => {
+        const s = deriveAgentStatus(
+          sig({ turnSeen: false, lastTurnSubtype: "success", alertWhileBackgrounding: false }),
+        );
+        expect(s).toEqual({ kind: "review" });
+        expect(backgroundCount(s)).toBe(0);
+      });
+    });
   });
 
   it("once consumed (turnSeen=true) a finished question/review drops to idle", () => {
@@ -259,5 +317,26 @@ describe("rowAttention", () => {
     expect(rowAttention({ kind: "running", activity: null })).toBeNull();
     expect(rowAttention({ kind: "idle" })).toBeNull();
     expect(rowAttention({ kind: "off" })).toBeNull();
+  });
+});
+
+describe("readoutBucket (fleet readout stages)", () => {
+  it("folds running + backgrounding into 'running'", () => {
+    expect(readoutBucket({ kind: "running", activity: null })).toBe("running");
+    expect(readoutBucket({ kind: "backgrounding", count: 3 })).toBe("running");
+  });
+
+  it("folds all three attention states into 'needAttention'", () => {
+    expect(readoutBucket({ kind: "needInput", via: "questionnaire", prompt: null })).toBe(
+      "needAttention",
+    );
+    expect(readoutBucket({ kind: "needIntervention", tool: "Bash" })).toBe("needAttention");
+    expect(readoutBucket({ kind: "error", message: "x" })).toBe("needAttention");
+  });
+
+  it("maps review to its own stage and folds idle + off into 'idle'", () => {
+    expect(readoutBucket({ kind: "review" })).toBe("review");
+    expect(readoutBucket({ kind: "idle" })).toBe("idle");
+    expect(readoutBucket({ kind: "off" })).toBe("idle");
   });
 });

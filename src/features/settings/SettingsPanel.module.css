@@ -19,38 +19,59 @@
   max-height: 86vh;
   background: var(--wf-panel);
   border: 1px solid var(--wf-line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-overlay);
+  border-radius: 16px;
+  box-shadow: 0 30px 80px -24px #000, 0 0 0 1px #0006;
   overflow: hidden;
 }
 
 .head {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: 14px 16px;
+  gap: 11px;
+  padding: 15px 18px;
   border-bottom: 1px solid var(--wf-line);
   flex: none;
+}
+
+/* Branded cog chip in the header — a small elevated tile with the coral accent. */
+.headIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #1c1512, #141118);
+  border: 1px solid var(--border-strong);
+  color: var(--accent);
+}
+.headIcon :global(.wf-ico) {
+  width: 16px;
+  height: 16px;
 }
 
 .title {
   flex: 1;
   font-weight: 600;
   color: var(--text-primary);
+  font-size: 15px;
+  letter-spacing: -0.2px;
 }
 
 .close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: 15px;
   cursor: pointer;
+  transition: background var(--transition-hover), color var(--transition-hover);
 }
 .close:hover {
   background: var(--bg-hover);
@@ -67,23 +88,34 @@
 
 .rail {
   flex: none;
-  width: 188px;
-  padding: var(--space-3);
+  width: 210px;
+  padding: 12px 10px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   border-right: 1px solid var(--wf-line);
   overflow-y: auto;
+  background: linear-gradient(180deg, #121217, var(--wf-panel));
+}
+
+.railCap {
+  font-size: 9.5px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--wf-tx-xlo);
+  font-weight: 600;
+  padding: 6px 10px 8px;
 }
 
 .railItem {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: 11px;
   width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: 9px;
   background: transparent;
   color: var(--text-secondary);
   font-family: var(--font-ui);
@@ -91,33 +123,136 @@
   font-weight: 500;
   text-align: left;
   cursor: pointer;
-  transition: background var(--transition-hover), color var(--transition-hover);
+  transition: background var(--transition-hover), color var(--transition-hover),
+    border-color var(--transition-hover);
+}
+.railItem :global(.wf-ico) {
+  color: var(--text-muted);
+  transition: color var(--transition-hover);
 }
 .railItem:hover {
-  background: var(--bg-hover);
+  background: #ffffff06;
   color: var(--text-primary);
 }
+/* Active tab — coral-tinted fill, coral icon, and a glowing left accent bar. */
 .railItem[data-on] {
-  background: var(--bg-hover);
+  background: linear-gradient(90deg, #2a1c15, #1a1512 80%);
+  border-color: #43301f;
   color: var(--text-primary);
+}
+.railItem[data-on] :global(.wf-ico) {
+  color: var(--accent);
+}
+.railItem[data-on]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2.5px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 10px -1px var(--accent);
 }
 
 .content {
   flex: 1;
   min-width: 0;
-  padding: 20px 22px;
+  padding: 26px 30px;
   overflow-y: auto;
 }
 
-/* ---- Shared section primitives ------------------------------------------ */
+/* ---- Page heading (top of each tab) ------------------------------------- */
 
-.section {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--text-muted);
-  margin-bottom: var(--space-3);
+.pageHead {
+  margin-bottom: 24px;
 }
+.pageTitle {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+.pageSub {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  margin-top: 3px;
+  line-height: var(--lh-body);
+}
+
+/* ---- Settings group: a titled card of rows ------------------------------ */
+
+.group {
+  margin-bottom: 22px;
+}
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 9px;
+}
+.groupIco {
+  display: inline-flex;
+  color: var(--accent);
+}
+.groupIco :global(.wf-ico) {
+  width: 14px;
+  height: 14px;
+}
+.groupTitle {
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.card {
+  border: 1px solid var(--wf-line);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+/* A row inside a card — title + hint on the left, control on the right. */
+.trow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 13px 15px;
+  transition: background var(--transition-hover);
+}
+.trow + .trow {
+  border-top: 1px solid var(--wf-line);
+}
+.trow:hover {
+  background: #ffffff03;
+}
+.ttext {
+  flex: 1;
+  min-width: 0;
+}
+.ttitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.thint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 3px;
+}
+.thint code {
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+  font-size: 11px;
+  background: var(--wf-bg-2);
+  border: 1px solid var(--wf-line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text-secondary);
+}
+
+/* ---- Shared section primitives ------------------------------------------ */
 
 .desc {
   font-size: var(--fs-base);
@@ -126,54 +261,54 @@
   margin-bottom: var(--space-4);
 }
 
+/* About hero — a soft card with the app mark, name/tagline and a version pill. */
 .about {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  margin-bottom: 26px;
+  border: 1px solid var(--wf-line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--bg-elevated), #141419);
+}
+.aboutMark {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: 11px;
+  /* Dark tile so the brand mark's own coral + cyan fills read cleanly (a coral
+     background would wash out the coral "T"). */
+  background: linear-gradient(135deg, #1c1512, #131118);
+  border: 1px solid var(--border-strong);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 6px 18px -10px #000;
+}
+.aboutMark svg {
+  width: 24px;
+  height: 24px;
 }
 .appName {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
+  font-size: 15px;
+}
+.appTag {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 2px;
 }
 .version {
+  margin-left: auto;
   font-size: var(--fs-sm);
-  color: var(--text-muted);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
   font-variant-numeric: tabular-nums;
-}
-
-/* ---- Toggle rows (Notifications) ---------------------------------------- */
-
-.toggleList {
-  display: flex;
-  flex-direction: column;
-}
-
-.toggleRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) 0;
-  border-top: 1px solid var(--wf-line);
-}
-.toggleRow:last-child {
-  border-bottom: 1px solid var(--wf-line);
-}
-
-.toggleText {
-  flex: 1;
-  min-width: 0;
-}
-.toggleTitle {
-  font-size: var(--fs-base);
-  font-weight: 500;
-  color: var(--text-primary);
-}
-.toggleHint {
-  font-size: var(--fs-sm);
-  color: var(--text-muted);
-  line-height: var(--lh-body);
-  margin-top: 2px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  padding: 4px 11px;
 }
 
 /* ---- Buttons ------------------------------------------------------------ */
@@ -233,19 +368,93 @@
 
 /* ---- Update section ----------------------------------------------------- */
 
-.notes {
-  margin: 0 0 var(--space-4);
-  padding: var(--space-3);
-  max-height: 160px;
-  overflow: auto;
-  background: var(--bg-hover);
+/* Inviting header for an available update: a soft accent card with the update
+   motif and a clear current → new version jump. */
+.updateHero {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px 16px;
+  margin-bottom: var(--space-4);
+  background: var(--accent-dim, var(--bg-hover));
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+}
+.updateSpark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+}
+/* Ico renders the GLOBAL `wf-ico` class → must escape CSS-module hashing with
+   :global, otherwise this descendant rule never matches (icon stays 15px). */
+.updateSpark :global(.wf-ico) {
+  width: 18px;
+  height: 18px;
+}
+.updateHeroText {
+  min-width: 0;
+}
+.updateHeadline {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.versionJump {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.versionJump :global(.wf-ico) {
+  color: var(--text-muted);
+}
+.versionOld {
+  color: var(--text-muted);
+}
+.versionNew {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Release notes ("Nouveautés"), rendered as Markdown inside a framed card. */
+.notesCard {
+  margin-bottom: var(--space-4);
   border: 1px solid var(--wf-line);
   border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-body);
-  white-space: pre-wrap;
-  word-break: break-word;
+  overflow: hidden;
+}
+.notesTitle {
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--wf-line);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+.notesBody {
+  padding: 2px 14px;
+  max-height: 240px;
+  overflow: auto;
+  /* The Markdown container (StreamMarkdown `.root`) sets its own color / font-size /
+     line-height, so typographic props here would be inert — kept box-only on purpose. */
+}
+
+/* The update CTA: a touch bigger, icon + label, to invite the click. */
+.btnUpdate {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  font-weight: 600;
 }
 
 .progressWrap {
@@ -287,4 +496,79 @@
   color: var(--error);
   font-size: var(--fs-sm);
   word-break: break-word;
+}
+
+/* ---- Raccourcis (Shortcuts) tab ------------------------------------------- */
+
+.scGroup {
+  margin-bottom: 22px;
+}
+
+.scGroupTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin: 0 4px 9px;
+}
+
+.scList {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--wf-line);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.scRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--wf-line);
+}
+
+.scRow:last-child {
+  border-bottom: none;
+}
+.scRow:hover {
+  background: #ffffff03;
+}
+
+.scLabel {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: var(--lh-body);
+}
+
+.scKeys {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.scSep {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  padding: 0 2px;
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 2px 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 0 var(--border);
 }

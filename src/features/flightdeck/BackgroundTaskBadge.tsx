@@ -66,11 +66,17 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
   // every phase as "à venir"). The hook is unconditional, so an empty task_id is safe.
   const openedLiveActivity = useWorkflowLive(convId, openTask?.task_id ?? "");
 
-  // Close the popover on Escape while it's open.
+  // Close the popover on Escape while it's open. This popover owns Escape while open, so
+  // stopPropagation keeps an outer window-level modal (the Flight Deck reply modal) from
+  // also closing on the same keypress. Fullscreen is protected by App.tsx's capture-phase
+  // guard, which preventDefaults Escape globally.
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+      }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

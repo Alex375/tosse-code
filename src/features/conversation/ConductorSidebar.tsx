@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { pickFolder } from "../../ipc/pickFolder";
 import { Splitter } from "../editor/Splitter";
 import { useSidebar } from "../../store/sidebar";
@@ -13,9 +13,19 @@ import {
   type Conversation,
 } from "../../store/conversationsStore";
 import { useAgentStatus } from "../../agent/useAgentStatus";
-import { agentStatusToDot, isDismissable, rowAttention, type AgentStatus } from "../../agent/status";
+import { useRunningTaskCount } from "../../store/backgroundTasksStore";
+import {
+  agentStatusToDot,
+  backgroundCount,
+  isActivelyRunning,
+  isDismissable,
+  rowAttention,
+  type AgentStatus,
+} from "../../agent/status";
 import { useSettingsUi } from "../../store/settingsUi";
 import { useSidebarFold, useRepoCollapsed } from "../../store/sidebarFold";
+import { useDisplay } from "../../store/display";
+import { FleetReadout } from "../../ui/FleetReadout";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel, RunPulse } from "../../ui/kit";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
@@ -28,7 +38,7 @@ import { useHistoryUi } from "../history/historyUiStore";
  *  flight, otherwise the plain coloured status dot (review / attention / error / idle…). */
 function StatusDot({ status }: { status: AgentStatus }) {
   if (status.kind === "running") return <RunPulse />;
-  return <Dot s={agentStatusToDot(status)} pulse />;
+  return <Dot s={agentStatusToDot(status)} pulse ring={backgroundCount(status) > 0} />;
 }
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
@@ -36,16 +46,35 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   // live events back to it). Drives the dot colour, the whole-row highlight, and
   // the "Vu" acknowledge button.
   const status = useAgentStatus(conv.id);
+  // Raw count of running background tools for this conversation. We gate the delete
+  // confirm on this DIRECTLY (not just `isActivelyRunning(status)`), because a running
+  // background task can be masked by a higher-priority derived kind: when the last
+  // turn is unseen, deriveAgentStatus reports `review`/`error`/`needInput` even while
+  // background work is live (see status.ts + status.test.ts). Reading the count avoids
+  // the friction-free × silently killing that live work.
+  const runningBgTasks = useRunningTaskCount(conv.id);
   const attn = rowAttention(status);
   const select = useConversationsStore((s) => s.selectConversation);
   const rename = useConversationsStore((s) => s.renameConversation);
   const remove = useConversationsStore((s) => s.removeConversation);
   const [editing, setEditing] = useState(false);
+  // Only when the conversation is actively running (turn in flight / background
+  // tools) does the friction-free × ask first — deleting then kills live work.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [draft, setDraft] = useState(conv.name);
   // Both Enter/blur commit and Escape cancel unmount the input, which fires a
   // trailing `onBlur`. This latch makes the commit run exactly once and lets
   // Escape suppress it entirely (so a cancel never writes the edited draft).
   const settled = useRef(false);
+
+  // "Busy" for delete-safety: a turn in flight OR any background work still running.
+  const busyForDelete = isActivelyRunning(status) || runningBgTasks > 0;
+  // If the work settles while the confirm is open, its "still running / work may be
+  // lost" copy is stale and no confirm is warranted anymore — close it (the × goes
+  // back to friction-free). Guarded on `confirmingDelete` so it's a no-op otherwise.
+  useEffect(() => {
+    if (confirmingDelete && !busyForDelete) setConfirmingDelete(false);
+  }, [confirmingDelete, busyForDelete]);
 
   function startEdit() {
     settled.current = false;
@@ -121,7 +150,11 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
           confirm dialog. It's reversible with ⌘Z (undoRemoveConversation) — the on-disk
           transcript is never touched, so nothing is truly lost. Mirrors the "Vu" button
           (cv-sess-seen) — revealed on row hover, danger-tinted. The × is the row's only
-          inline affordance: rename is double-click on the name (startEdit). */}
+          inline affordance: rename is double-click on the name (startEdit).
+          EXCEPTION: while the conversation is actively running (turn in flight or
+          background tools), the click opens a confirm first — deleting then stops the
+          live session and can drop unfinished work (⌘Z restores the conversation but
+          not the killed run). Idle/settled conversations keep the one-click delete. */}
       <button
         type="button"
         className="cv-sess-del"
@@ -129,11 +162,29 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
         aria-label="Supprimer la conversation"
         onClick={(e) => {
           e.stopPropagation();
-          remove(conv.id);
+          if (busyForDelete) setConfirmingDelete(true);
+          else remove(conv.id);
         }}
       >
         <Ico name="x" className="sm" />
       </button>
+      {confirmingDelete ? (
+        <ConfirmDialog
+          open
+          danger
+          title={`Supprimer « ${conv.name} » ?`}
+          confirmLabel="Supprimer quand même"
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            remove(conv.id);
+          }}
+        >
+          Cette conversation est <strong>en cours d'exécution</strong>. La supprimer va{" "}
+          <strong>arrêter la session Claude</strong> et le travail non terminé peut être
+          perdu. La conversation reste récupérable avec ⌘Z, mais pas le run interrompu.
+        </ConfirmDialog>
+      ) : null}
     </div>
   );
 }
@@ -266,6 +317,7 @@ export function ConductorSidebar() {
   const settingsOpen = useSettingsUi((s) => s.open);
   const openSettings = useSettingsUi((s) => s.openSettings);
   const closeSettings = useSettingsUi((s) => s.closeSettings);
+  const showFleet = useDisplay((s) => s.fleetBannerConversation);
 
   // Resizable width, persisted (localStorage). The grip is an absolute handle on the
   // right edge (reusing the editor's Splitter for pointer-capture + hover accent), so
@@ -341,6 +393,11 @@ export function ConductorSidebar() {
           ))
         )}
       </div>
+
+      {/* Compact whole-fleet readout, pinned just above the Réglages footer. Counts
+          span every conversation (not just this repo), so it matches the FlightDeck
+          bar. Hidden via Settings → Général (independent of the FlightDeck toggle). */}
+      {showFleet ? <FleetReadout variant="sidebar" /> : null}
 
       <button
         type="button"
