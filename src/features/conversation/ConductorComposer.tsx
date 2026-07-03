@@ -388,15 +388,26 @@ export const ConductorComposer = forwardRef<
   // a path mention Claude reads with its own tools.
   const addPaths = async (paths: string[]) => {
     const mentions: string[] = [];
-    for (const p of paths) {
-      if (wireImageMimeForPath(p)) {
-        const res = await attachmentFromPath(p);
-        if (res && "error" in res) setAttachErr(res.error);
-        else if (res) useComposerAttachments.getState().add(session, res);
-      } else {
-        mentions.push(p);
+    const errs: string[] = [];
+    // Same send-lock as onPaste: these picked-image reads are async (disk + base64 over
+    // IPC, up to 16 MiB), so block send while they're in flight — else a fast
+    // pick-then-Enter sends BEFORE the image lands (it would ride the NEXT message).
+    setAttaching((n) => n + 1);
+    try {
+      for (const p of paths) {
+        if (wireImageMimeForPath(p)) {
+          const res = await attachmentFromPath(p);
+          if (res && "error" in res) errs.push(res.error);
+          else if (res) useComposerAttachments.getState().add(session, res);
+        } else {
+          mentions.push(p);
+        }
       }
+    } finally {
+      setAttaching((n) => Math.max(0, n - 1));
     }
+    // Surface every failure at once — a later failure must not silently erase earlier ones.
+    if (errs.length) setAttachErr([...new Set(errs)].join(" · "));
     insertMentions(mentions);
   };
 

@@ -43,13 +43,15 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
       .catch(() => setVersion(null));
   }, [open]);
 
-  // Close on Escape, but never mid-wipe, and never when a higher layer already
-  // consumed it (a ConfirmDialog mounted inside — e.g. the update relaunch confirm —
-  // calls preventDefault so its Escape doesn't ALSO tear down the whole panel).
+  // Close on Escape, but never mid-wipe. The app-wide capture guard (App.tsx) always
+  // preventDefaults Escape, so gating on `defaultPrevented` here would mean the panel
+  // NEVER closes — that signal is now the guard's, not a "higher layer consumed it"
+  // marker. One-Escape-one-layer is upheld instead by any ConfirmDialog mounted inside
+  // calling stopPropagation, so its Escape never reaches this window-level handler.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy && !e.defaultPrevented) close();
+      if (e.key === "Escape" && !busy) close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

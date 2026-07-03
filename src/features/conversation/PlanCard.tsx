@@ -496,7 +496,11 @@ export function PlanCard({
             onChange={(e) => setDraftText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
+                // stopPropagation so this Escape only cancels the comment draft — it
+                // must not also bubble to a window-level closer (e.g. the Flight Deck
+                // reply modal), per the "une touche = une couche" convention.
                 e.preventDefault();
+                e.stopPropagation();
                 clearDraft();
               } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();

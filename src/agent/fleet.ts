@@ -26,10 +26,10 @@ import { agentStatusForEntry } from "./useAgentStatus";
 // ---- Fleet readout (the "N Running · N Review · …" banner) ----------------------
 
 /**
- * The four fleet-readout stage counts, plus the fleet total. Coarser than
- * {@link FleetAttention}: it also carries `running` and `idle`, so the readout banner
- * (sidebar + FlightDeck top) can render every stage, not just the ones demanding
- * attention. Each conversation lands in exactly one bucket via {@link readoutBucket},
+ * The four fleet-readout stage counts, plus the fleet total. Carries `running` and
+ * `idle` alongside the attention stages, so the readout banner (sidebar + FlightDeck
+ * top) can render every stage, not just the ones demanding attention. Each conversation
+ * lands in exactly one bucket via {@link readoutBucket},
  * so `running + review + needAttention + idle === total`.
  */
 export interface FleetCounts {
@@ -102,7 +102,7 @@ export function isFleetCalm(c: FleetCounts): boolean {
 
 /**
  * Live readout counts across every conversation — the same derive-per-conversation
- * path as {@link useFleetAttention}, tallied into the four stages instead. `useShallow`
+ * path as {@link useFleetLanes}, tallied into the four stages instead. `useShallow`
  * over the counts means the banner only re-renders when a count actually moves.
  */
 export function useFleetCounts(): FleetCounts {
