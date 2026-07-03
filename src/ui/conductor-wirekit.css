@@ -112,9 +112,30 @@
    deliberately distinct from green "running" (and calm: no pulse) so the two are
    never confused — present, waiting on background work, but not demanding attention. */
 .wf-dot.bg   { background:#a78bfa; box-shadow: 0 0 0 3px #a78bfa2e; }
+/* "bgring" — a violet ring around the status dot, for a settled alert (review /
+   question / error) whose agent still has background work running: the review/blue (or
+   question/orange) core keeps its meaning, the violet ring adds "…and work continues".
+   Two-layer box-shadow (matches the approved option-B mock): the colour's OWN dark tint
+   as a thin separation ring first, then the violet — that separation is essential because
+   blue (#7aa2e3) and violet (#a78bfa) are close hues and would otherwise blend into one
+   indistinct blob. Per-colour rules (0,3,0 specificity) so each beats its .wf-dot.<colour>
+   base regardless of source order. */
+.wf-dot.wait.bgring { box-shadow: 0 0 0 2px var(--wf-wait-bg), 0 0 0 3.5px #a78bfa; }
+.wf-dot.att.bgring  { box-shadow: 0 0 0 2px var(--wf-att-bg),  0 0 0 3.5px #a78bfa; }
+.wf-dot.err.bgring  { box-shadow: 0 0 0 2px var(--wf-err-bg),  0 0 0 3.5px #a78bfa; }
 
 @keyframes wf-pulse { 0%,100%{ opacity:1 } 50%{ opacity:.35 } }
 .wf-dot.pulse { animation: wf-pulse 1.8s ease-in-out infinite; }
+
+/* Violet "still working in the background" chip, appended to a review/question/error
+   status header (StateBlock) when the finished agent has background tools running. */
+.wf-bgchip {
+  display:inline-flex; align-items:center; gap:5px; margin-left:auto;
+  font-size:10px; letter-spacing:.2px; text-transform:none; font-weight:600;
+  color:#c9b8ff; background:#221a3c; border:1px solid #3d2f63; border-radius:999px;
+  padding:2px 8px;
+}
+.wf-bgchip .sp { width:6px; height:6px; border-radius:50%; background:#a78bfa; flex:0 0 auto; }
 
 .wf-pill {
   display: inline-flex; align-items: center; gap: 6px;

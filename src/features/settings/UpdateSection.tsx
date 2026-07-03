@@ -10,6 +10,7 @@ import { useConversationsStore } from "../../store/conversationsStore";
 import { StreamMarkdown } from "../conversation/StreamMarkdown";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Ico } from "../../ui/kit";
+import { PageHead } from "./SettingsKit";
 import styles from "./SettingsPanel.module.css";
 
 function formatBytes(n: number): string {
@@ -46,7 +47,7 @@ export function UpdateSection() {
 
   return (
     <div>
-      <div className={styles.section}>Mise à jour</div>
+      <PageHead title="Mises à jour" subtitle="Version installée, nouveautés et installation." />
 
       {hasUpdate && update ? (
         <>

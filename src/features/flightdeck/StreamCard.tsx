@@ -5,7 +5,7 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { Dot, Pill, ContextMeter, Ico } from "../../ui/kit";
 import { useAgentStatus } from "../../agent/useAgentStatus";
-import { agentStatusToDot, rowAttention } from "../../agent/status";
+import { agentStatusToDot, backgroundCount, rowAttention } from "../../agent/status";
 import { effortLabel } from "../../agent/subagentMeta";
 import { useSessionState } from "../../store/conversationStore";
 import { useContextData } from "../../store/contextData";
@@ -85,7 +85,7 @@ export function StreamCard({
   return (
     <div className={cls} onClick={onCardClick}>
       <div className="ag-card-h">
-        <Dot s={dot} pulse />
+        <Dot s={dot} pulse ring={backgroundCount(status) > 0} />
         <button className="ag-card-name" onClick={() => onOpen(conv.id)} title={conv.name}>
           {conv.name}
         </button>

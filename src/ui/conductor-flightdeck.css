@@ -1,5 +1,5 @@
 /* conductor-flightdeck.css — the FlightDeck (agent dashboard) view.
-   Cards per stream, grouped by repo, with a top attention bar. Ported from the
+   Cards per stream, grouped by repo, with the Fleet readout banner on top. Ported from the
    Conductor design handoff's view-agents.css (V1 "par dépôt, cartes"). The leaf
    bits (.wf-card, .wf-ask, .wf-act, .wf-ctxm, .wf-todobar, status dots/pills)
    come from the shared kit (conductor-wirekit.css); only the grid/layout lives
@@ -9,10 +9,8 @@
 .ag-page { flex:1; min-height:0; background:var(--wf-bg); }
 .ag-scroll { flex:1; min-height:0; overflow-y:auto; padding:6px 20px 20px; }
 
-/* --- attention bar --- */
-.ag-attn { display:flex; align-items:center; gap:12px; padding:12px 20px; border-bottom:1px solid var(--wf-line); background:linear-gradient(90deg,var(--wf-att-bg),var(--wf-bg-2) 70%); }
-.ag-attn.calm { background:var(--wf-bg-2); }
-.ag-attn-chip { display:inline-flex; align-items:center; gap:7px; font-size:11.5px; color:var(--wf-tx); padding:5px 11px; border:1px solid var(--wf-line-2); border-radius:999px; background:var(--wf-panel); }
+/* The top-of-deck banner is the shared Fleet readout (.fr-deck, conductor-fleet.css),
+   which replaced the old bespoke attention bar. */
 
 /* --- repo group --- */
 .ag-repo { padding-top:18px; }

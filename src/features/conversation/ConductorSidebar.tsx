@@ -16,6 +16,7 @@ import { useAgentStatus } from "../../agent/useAgentStatus";
 import { useRunningTaskCount } from "../../store/backgroundTasksStore";
 import {
   agentStatusToDot,
+  backgroundCount,
   isActivelyRunning,
   isDismissable,
   rowAttention,
@@ -23,6 +24,8 @@ import {
 } from "../../agent/status";
 import { useSettingsUi } from "../../store/settingsUi";
 import { useSidebarFold, useRepoCollapsed } from "../../store/sidebarFold";
+import { useDisplay } from "../../store/display";
+import { FleetReadout } from "../../ui/FleetReadout";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Dot, Ico, Menu, MenuItem, MenuLabel, RunPulse } from "../../ui/kit";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
@@ -35,7 +38,7 @@ import { useHistoryUi } from "../history/historyUiStore";
  *  flight, otherwise the plain coloured status dot (review / attention / error / idle…). */
 function StatusDot({ status }: { status: AgentStatus }) {
   if (status.kind === "running") return <RunPulse />;
-  return <Dot s={agentStatusToDot(status)} pulse />;
+  return <Dot s={agentStatusToDot(status)} pulse ring={backgroundCount(status) > 0} />;
 }
 
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
@@ -314,6 +317,7 @@ export function ConductorSidebar() {
   const settingsOpen = useSettingsUi((s) => s.open);
   const openSettings = useSettingsUi((s) => s.openSettings);
   const closeSettings = useSettingsUi((s) => s.closeSettings);
+  const showFleet = useDisplay((s) => s.fleetBannerConversation);
 
   // Resizable width, persisted (localStorage). The grip is an absolute handle on the
   // right edge (reusing the editor's Splitter for pointer-capture + hover accent), so
@@ -389,6 +393,11 @@ export function ConductorSidebar() {
           ))
         )}
       </div>
+
+      {/* Compact whole-fleet readout, pinned just above the Réglages footer. Counts
+          span every conversation (not just this repo), so it matches the FlightDeck
+          bar. Hidden via Settings → Général (independent of the FlightDeck toggle). */}
+      {showFleet ? <FleetReadout variant="sidebar" /> : null}
 
       <button
         type="button"

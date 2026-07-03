@@ -9,11 +9,12 @@ import { wipeAllData } from "../../store/conversationsStore";
 import { useSettingsUi, type SettingsSection } from "../../store/settingsUi";
 import { useDisplay } from "../../store/display";
 import { Ico } from "../../ui/kit";
-import { Toggle } from "../../ui/Toggle";
+import { TosseMark } from "../../ui/TosseMark";
 import { UpdateSection } from "./UpdateSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { ConversationSection } from "./ConversationSection";
 import { ShortcutsSection } from "./ShortcutsSection";
+import { PageHead, SettingsGroup, ToggleRow } from "./SettingsKit";
 import styles from "./SettingsPanel.module.css";
 
 const TABS: Array<{ id: SettingsSection; label: string; icon: string }> = [
@@ -80,7 +81,9 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
     <div className={styles.scrim} onClick={close}>
       <div className={styles.panel} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal>
         <div className={styles.head}>
-          <Ico name="cog" className="sm" />
+          <span className={styles.headIcon}>
+            <Ico name="cog" className="sm" />
+          </span>
           <span className={styles.title}>Réglages</span>
           <button className={styles.close} onClick={close} title="Fermer" aria-label="Fermer">
             ✕
@@ -89,6 +92,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
 
         <div className={styles.layout}>
           <nav className={styles.rail} aria-label="Sections des réglages">
+            <div className={styles.railCap}>Réglages</div>
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -106,16 +110,24 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
           <div className={styles.content}>
             {section === "general" && (
               <div>
-                <div className={styles.section}>À propos</div>
+                <PageHead title="Général" subtitle="Apparence, flotte et alertes de l'application." />
+
                 <div className={styles.about}>
-                  <span className={styles.appName}>Tosse Code</span>
+                  <span className={styles.aboutMark}>
+                    <TosseMark />
+                  </span>
+                  <div>
+                    <div className={styles.appName}>Tosse Code</div>
+                    <div className={styles.appTag}>
+                      Application de bureau pour piloter Claude Code.
+                    </div>
+                  </div>
                   {version && <span className={styles.version}>v{version}</span>}
-                </div>
-                <div className={styles.desc}>
-                  Application de bureau pour piloter Claude Code.
                 </div>
 
                 <DisplayPrefs />
+                <FleetBannerPrefs />
+                <AgentAlertPrefs />
               </div>
             )}
 
@@ -129,7 +141,10 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
 
             {section === "data" && (
               <div>
-                <div className={styles.section}>Données</div>
+                <PageHead
+                  title="Données"
+                  subtitle="Gestion des données locales de l'application."
+                />
                 <div className={styles.desc}>
                   Supprime toutes les conversations et tous les dépôts enregistrés, et vide la base
                   locale. Les transcripts de Claude sur le disque ne sont pas touchés. Action
@@ -176,30 +191,94 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
  *  each conversation's composer chip can override it (per-conversation, persisted). */
 function DisplayPrefs() {
   const cleanOutput = useDisplay((s) => s.cleanOutput);
+  const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
   const set = useDisplay((s) => s.set);
   return (
-    <>
-      <div className={styles.section} style={{ marginTop: 22 }}>
-        Affichage
-      </div>
-      <div className={styles.toggleList}>
-        <div className={styles.toggleRow}>
-          <div className={styles.toggleText}>
-            <div className={styles.toggleTitle}>Clean output (par défaut)</div>
-            <div className={styles.toggleHint}>
-              N'affiche que le message final de chaque réponse ; les outils, la réflexion et les
-              étapes intermédiaires sont repliés derrière un bloc « Travail de Claude », dépliable
-              à la demande. Réglage <strong>par défaut</strong> : chaque conversation peut le
-              surcharger via son bouton « Clean output ».
-            </div>
-          </div>
-          <Toggle
-            checked={cleanOutput}
-            onChange={(v) => set({ cleanOutput: v })}
-            label="Clean output par défaut"
-          />
-        </div>
-      </div>
-    </>
+    <SettingsGroup title="Affichage" icon="list">
+      <ToggleRow
+        title="Clean output (par défaut)"
+        hint={
+          <>
+            N'affiche que le message final de chaque réponse ; les outils, la réflexion et les
+            étapes intermédiaires sont repliés derrière un bloc « Travail de Claude », dépliable à
+            la demande. Réglage <strong>par défaut</strong> : chaque conversation peut le surcharger
+            via son bouton « Clean output ».
+          </>
+        }
+        checked={cleanOutput}
+        onChange={(v) => set({ cleanOutput: v })}
+        label="Clean output par défaut"
+      />
+      <ToggleRow
+        title="Notifications de tâche de fond"
+        hint={
+          <>
+            Affiche les messages <code>&lt;task-notification&gt;</code> (injectés par le CLI quand
+            une tâche de fond ou un sous-agent se termine) dans le fil. <strong>Désactivé par
+            défaut</strong> : ils encombrent la conversation, surtout au rechargement ou à l'import
+            depuis l'historique.
+          </>
+        }
+        checked={showTaskNotifications}
+        onChange={(v) => set({ showTaskNotifications: v })}
+        label="Afficher les notifications de tâche de fond"
+      />
+    </SettingsGroup>
+  );
+}
+
+/** The two independent toggles for the "Fleet readout" banner — the adaptive stage
+ *  counts ("N Running · N Review · …") across the whole fleet. One controls the wide
+ *  bar at the top of the FlightDeck, the other the compact box at the bottom of the
+ *  conversation sidebar; they're deliberately separate so either surface can be hidden
+ *  on its own. Both on by default (see store/display DEFAULTS). */
+function FleetBannerPrefs() {
+  const flightDeck = useDisplay((s) => s.fleetBannerFlightDeck);
+  const conversation = useDisplay((s) => s.fleetBannerConversation);
+  const set = useDisplay((s) => s.set);
+  return (
+    <SettingsGroup title="Bandeau de flotte" icon="grid">
+      <ToggleRow
+        title="Afficher dans le Flight Deck"
+        hint="Le résumé de la flotte (Running · Review · Need Attention · Idle) en haut du Flight Deck."
+        checked={flightDeck}
+        onChange={(v) => set({ fleetBannerFlightDeck: v })}
+        label="Bandeau de flotte dans le Flight Deck"
+      />
+      <ToggleRow
+        title="Afficher dans la Conversation"
+        hint="Le même résumé, en version compacte, en bas de la barre latérale des conversations."
+        checked={conversation}
+        onChange={(v) => set({ fleetBannerConversation: v })}
+        label="Bandeau de flotte dans la Conversation"
+      />
+    </SettingsGroup>
+  );
+}
+
+/** Whether an agent that finishes its main turn while a background task is still
+ *  running raises the "à relire" alert (with a violet background accent) or goes
+ *  straight to the calm violet "backgrounding" state without alerting. On by default. */
+function AgentAlertPrefs() {
+  const alertOnBackgroundWait = useDisplay((s) => s.alertOnBackgroundWait);
+  const set = useDisplay((s) => s.set);
+  return (
+    <SettingsGroup title="Alertes d'agent" icon="alert">
+      <ToggleRow
+        title="Alerter en attendant une tâche de fond"
+        hint={
+          <>
+            Quand un agent termine sa réponse mais qu'une <strong>tâche de fond</strong> tourne
+            encore, lever l'alerte « à relire » (avec un accent violet indiquant le travail en
+            cours). <strong>Désactivé</strong> : pas d'alerte, l'agent passe directement en violet
+            (tâche de fond) ; le « à relire » n'apparaît qu'une fois la tâche de fond aussi terminée.
+            Une question ou une erreur alerte toujours.
+          </>
+        }
+        checked={alertOnBackgroundWait}
+        onChange={(v) => set({ alertOnBackgroundWait: v })}
+        label="Alerter en attendant une tâche de fond"
+      />
+    </SettingsGroup>
   );
 }

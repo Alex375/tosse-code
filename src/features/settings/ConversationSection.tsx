@@ -7,7 +7,7 @@ import { useEffect, useRef } from "react";
 import { StreamMarkdown } from "../conversation/StreamMarkdown";
 import { useDisplay, type MarkdownMode } from "../../store/display";
 import { ClaudeMark, Ico } from "../../ui/kit";
-import styles from "./SettingsPanel.module.css";
+import { PageHead } from "./SettingsKit";
 
 const MODES: Array<{ id: MarkdownMode; label: string; desc: string }> = [
   { id: "classic", label: "Classic", desc: "Le rendu historique, encadré (GitHub)." },
@@ -69,11 +69,15 @@ export function ConversationSection() {
 
   return (
     <div className="mdset">
-      <div className={styles.section}>Rendu Markdown</div>
-      <div className="mdset-intro">
-        Le style de rendu du Markdown, appliqué partout : conversations, sous-agents et
-        aperçu des fichiers <code>.md</code>. Choisis un mode — l'aperçu montre le résultat.
-      </div>
+      <PageHead
+        title="Conversation"
+        subtitle={
+          <>
+            Le style de rendu du Markdown, appliqué partout : conversations, sous-agents et aperçu
+            des fichiers <code>.md</code>. Choisis un mode — l'aperçu montre le résultat.
+          </>
+        }
+      />
       <div className="mdset-body">
         <div className="mdset-rail" role="group" aria-label="Mode de rendu Markdown">
           {MODES.map((m) => (

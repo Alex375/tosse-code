@@ -1,7 +1,8 @@
-// Fleet-level aggregation of agent statuses — the counts behind the FlightDeck
-// AttentionBar and the "Agents" nav badge. Each conversation's status is derived
-// from the SAME pure model the per-card hook uses (agentStatusForEntry), so the bar
-// and the cards never disagree.
+// Fleet-level aggregation of agent statuses — the counts behind the "Fleet readout"
+// banner (the compact box at the bottom of the conversation sidebar and the wide bar
+// at the top of the FlightDeck) and the status-ordered FlightDeck lanes. Each
+// conversation's status is derived from the SAME pure model the per-card hook uses
+// (agentStatusForEntry), so the banner and the cards never disagree.
 //
 // Perf note: this recomputes over all sessions on every message-store delta. Fine
 // at the handful-of-agents scale we target; if the fleet grows large, promote a
@@ -9,6 +10,8 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "../store/conversationStore";
+import { useRunningCountsByConv } from "../store/backgroundTasksStore";
+import { useDisplay } from "../store/display";
 import {
   groupByRepo,
   useConversations,
@@ -17,57 +20,103 @@ import {
   type Repo,
   type RepoGroup,
 } from "../store/conversationsStore";
-import { rowAttention, statusRank, type AgentStatus } from "./status";
+import { readoutBucket, statusRank, type AgentStatus } from "./status";
 import { agentStatusForEntry } from "./useAgentStatus";
 
-export interface FleetAttention {
-  /** Streams blocked on the user (permission / questionnaire / open question). */
-  needsInput: number;
-  /** Streams that finished cleanly and await a look. */
+// ---- Fleet readout (the "N Running · N Review · …" banner) ----------------------
+
+/**
+ * The four fleet-readout stage counts, plus the fleet total. Coarser than
+ * {@link FleetAttention}: it also carries `running` and `idle`, so the readout banner
+ * (sidebar + FlightDeck top) can render every stage, not just the ones demanding
+ * attention. Each conversation lands in exactly one bucket via {@link readoutBucket},
+ * so `running + review + needAttention + idle === total`.
+ */
+export interface FleetCounts {
+  running: number;
   review: number;
-  /** Streams whose last turn errored. */
-  error: number;
-  /** needsInput + review + error — the total demanding attention. */
+  needAttention: number;
+  idle: number;
   total: number;
 }
 
-const EMPTY: FleetAttention = { needsInput: 0, review: 0, error: 0, total: 0 };
+const EMPTY_COUNTS: FleetCounts = { running: 0, review: 0, needAttention: 0, idle: 0, total: 0 };
 
-/** Tally a list of statuses into the attention buckets. Pure + testable. */
-export function tallyAttention(statuses: AgentStatus[]): FleetAttention {
-  const t: FleetAttention = { needsInput: 0, review: 0, error: 0, total: 0 };
+/** Tally a list of statuses into the four readout stages. Pure + testable. */
+export function tallyFleet(statuses: AgentStatus[]): FleetCounts {
+  const t: FleetCounts = { running: 0, review: 0, needAttention: 0, idle: 0, total: 0 };
   for (const s of statuses) {
-    switch (rowAttention(s)) {
-      case "input":
-        t.needsInput++;
-        t.total++;
-        break;
-      case "review":
-        t.review++;
-        t.total++;
-        break;
-      case "error":
-        t.error++;
-        t.total++;
-        break;
-    }
+    t[readoutBucket(s)]++;
+    t.total++;
   }
   return t;
 }
 
+/** A single rendered stage of the readout line: its stage key (→ colour class), the
+ *  English label, and the count. */
+export interface FleetSegment {
+  key: "running" | "review" | "needAttention" | "idle";
+  label: string;
+  count: number;
+}
+
 /**
- * Live attention tally across every conversation. `useShallow` over the computed
- * counts means the bar/badge only re-render when a count actually moves, not on
- * every streaming delta.
+ * The stages to render, in display order (activity first: Running → Review → Need
+ * Attention → Idle), with the zero stages dropped. Pure so the "hide zeros / order"
+ * rule is locked in a test. Idle is included like any other stage when non-zero — the
+ * calm phrasing ("Fleet rests · N Idle") is a separate presentation decision the
+ * component makes via {@link isFleetCalm}, not a filtering rule here.
  */
-export function useFleetAttention(): FleetAttention {
+export function fleetSegments(c: FleetCounts): FleetSegment[] {
+  const all: FleetSegment[] = [
+    { key: "running", label: "Running", count: c.running },
+    { key: "review", label: "Review", count: c.review },
+    { key: "needAttention", label: "Need Attention", count: c.needAttention },
+    { key: "idle", label: "Idle", count: c.idle },
+  ];
+  return all.filter((s) => s.count > 0);
+}
+
+/**
+ * The COMPACT stage list for the narrow conversation sidebar: only three stages, with
+ * Review folded into a single "Attention" bucket (review + needAttention) so the full
+ * words fit on one line even at the minimum sidebar width. Same zero-drop + activity-
+ * first order as {@link fleetSegments}. The merged bucket keeps the `needAttention` key
+ * so it renders in the same (orange) colour. The FlightDeck keeps the full four-stage
+ * {@link fleetSegments}; only the sidebar merges.
+ */
+export function mergedFleetSegments(c: FleetCounts): FleetSegment[] {
+  const all: FleetSegment[] = [
+    { key: "running", label: "Running", count: c.running },
+    { key: "needAttention", label: "Attention", count: c.review + c.needAttention },
+    { key: "idle", label: "Idle", count: c.idle },
+  ];
+  return all.filter((s) => s.count > 0);
+}
+
+/** Whether nothing in the fleet is active — no running, review, or attention stage.
+ *  In this state the banner reads "Fleet rests · N Idle" instead of listing stages. */
+export function isFleetCalm(c: FleetCounts): boolean {
+  return c.running === 0 && c.review === 0 && c.needAttention === 0;
+}
+
+/**
+ * Live readout counts across every conversation — the same derive-per-conversation
+ * path as {@link useFleetAttention}, tallied into the four stages instead. `useShallow`
+ * over the counts means the banner only re-renders when a count actually moves.
+ */
+export function useFleetCounts(): FleetCounts {
   const convs = useConversations();
+  const bg = useRunningCountsByConv();
+  const alert = useDisplay((s) => s.alertOnBackgroundWait);
   return useConversationStore(
     useShallow((s) =>
       convs.length === 0
-        ? EMPTY
-        : tallyAttention(
-            convs.map((c) => agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder)),
+        ? EMPTY_COUNTS
+        : tallyFleet(
+            convs.map((c) =>
+              agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder, bg[c.id] ?? 0, alert),
+            ),
           ),
     ),
   );
@@ -155,10 +204,14 @@ export function rebuildLanes(tokens: string[], repos: Repo[], conversations: Con
 export function useFleetLanes(): FleetLane[] {
   const repos = useRepos();
   const conversations = useConversations();
+  const bg = useRunningCountsByConv();
+  const alert = useDisplay((s) => s.alertOnBackgroundWait);
   const tokens = useConversationStore(
     useShallow((s) => {
       const rank = (c: Conversation) =>
-        statusRank(agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder));
+        statusRank(
+          agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder, bg[c.id] ?? 0, alert),
+        );
       return lanesToTokens(orderLanes(repos, conversations, rank));
     }),
   );

@@ -183,10 +183,13 @@ export const WF_STATUS: Record<StreamState, { label: string; pill: string; dot: 
 };
 export const WF_ATTENTION: StreamState[] = ["ask", "err", "review"];
 
-export function Dot({ s, pulse }: { s: StreamState; pulse?: boolean }) {
+export function Dot({ s, pulse, ring }: { s: StreamState; pulse?: boolean; ring?: boolean }) {
   const st = WF_STATUS[s]?.dot || "done";
   const live = pulse && (s === "work" || s === "ask" || s === "err");
-  return <span className={"wf-dot " + st + (live ? " pulse" : "")} />;
+  // `ring` = a violet outer ring on top of the status colour, for a settled alert
+  // (review / question / error) whose agent still has BACKGROUND work running — the
+  // "finished, but work continues" accent. See conductor-wirekit .wf-dot.bgring.
+  return <span className={"wf-dot " + st + (live ? " pulse" : "") + (ring ? " bgring" : "")} />;
 }
 
 /** A dedicated "this conversation is running" indicator with more presence than a

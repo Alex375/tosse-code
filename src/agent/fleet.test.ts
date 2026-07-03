@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { lanesToTokens, orderLanes, rebuildLanes, tallyAttention } from "./fleet";
+import {
+  fleetSegments,
+  isFleetCalm,
+  lanesToTokens,
+  mergedFleetSegments,
+  orderLanes,
+  rebuildLanes,
+  tallyFleet,
+} from "./fleet";
 import { statusRank, type AgentStatus } from "./status";
 import type { Conversation, Repo } from "../store/conversationsStore";
 
@@ -10,28 +18,87 @@ function conv(id: string, repoId: string, lastActivityAt: number): Conversation 
   return { id, repoId, lastActivityAt } as unknown as Conversation;
 }
 
-describe("tallyAttention", () => {
-  it("buckets the attention states and ignores quiet ones (running/idle/off)", () => {
+describe("tallyFleet", () => {
+  it("folds every status kind into exactly one of the four readout stages", () => {
     const statuses: AgentStatus[] = [
-      { kind: "needIntervention", tool: "Bash" }, // input
-      { kind: "needInput", via: "questionnaire", prompt: "?" }, // input
-      { kind: "needInput", via: "openQuestion", prompt: "?" }, // input
+      { kind: "running", activity: null }, // running
+      { kind: "backgrounding", count: 2 }, // running (background work still counts)
       { kind: "review" }, // review
-      { kind: "error", message: "boom" }, // error
-      { kind: "running", activity: null }, // ignored
-      { kind: "idle" }, // ignored
-      { kind: "off" }, // ignored
+      { kind: "needIntervention", tool: "Bash" }, // needAttention
+      { kind: "needInput", via: "questionnaire", prompt: "?" }, // needAttention
+      { kind: "needInput", via: "openQuestion", prompt: "?" }, // needAttention
+      { kind: "error", message: "boom" }, // needAttention
+      { kind: "idle" }, // idle
+      { kind: "off" }, // idle (dormant, no process)
     ];
-    expect(tallyAttention(statuses)).toEqual({
-      needsInput: 3,
+    expect(tallyFleet(statuses)).toEqual({
+      running: 2,
       review: 1,
-      error: 1,
-      total: 5,
+      needAttention: 4,
+      idle: 2,
+      total: 9,
     });
   });
 
+  it("keeps running + review + needAttention + idle === total", () => {
+    const t = tallyFleet([
+      { kind: "running", activity: null },
+      { kind: "review" },
+      { kind: "error", message: "x" },
+      { kind: "off" },
+    ]);
+    expect(t.running + t.review + t.needAttention + t.idle).toBe(t.total);
+  });
+
   it("is all-zero for an empty fleet", () => {
-    expect(tallyAttention([])).toEqual({ needsInput: 0, review: 0, error: 0, total: 0 });
+    expect(tallyFleet([])).toEqual({
+      running: 0,
+      review: 0,
+      needAttention: 0,
+      idle: 0,
+      total: 0,
+    });
+  });
+});
+
+describe("fleetSegments", () => {
+  it("keeps only non-zero stages, in activity-first order", () => {
+    const segs = fleetSegments({ running: 3, review: 0, needAttention: 2, idle: 5, total: 10 });
+    expect(segs.map((s) => [s.key, s.count])).toEqual([
+      ["running", 3],
+      ["needAttention", 2], // review dropped (zero); order still Running → NeedAttention → Idle
+      ["idle", 5],
+    ]);
+    expect(segs.find((s) => s.key === "needAttention")!.label).toBe("Need Attention");
+  });
+
+  it("returns nothing when every stage is zero", () => {
+    expect(fleetSegments({ running: 0, review: 0, needAttention: 0, idle: 0, total: 0 })).toEqual([]);
+  });
+});
+
+describe("mergedFleetSegments (compact sidebar view)", () => {
+  it("folds review into a single 'Attention' bucket, keeping the orange key", () => {
+    const segs = mergedFleetSegments({ running: 3, review: 1, needAttention: 2, idle: 5, total: 11 });
+    expect(segs.map((s) => [s.key, s.label, s.count])).toEqual([
+      ["running", "Running", 3],
+      ["needAttention", "Attention", 3], // review (1) + needAttention (2)
+      ["idle", "Idle", 5],
+    ]);
+  });
+
+  it("drops the Attention stage when both review and needAttention are zero", () => {
+    const segs = mergedFleetSegments({ running: 3, review: 0, needAttention: 0, idle: 4, total: 7 });
+    expect(segs.map((s) => s.key)).toEqual(["running", "idle"]);
+  });
+});
+
+describe("isFleetCalm", () => {
+  it("is calm only when nothing is running, in review, or needing attention", () => {
+    expect(isFleetCalm({ running: 0, review: 0, needAttention: 0, idle: 7, total: 7 })).toBe(true);
+    expect(isFleetCalm({ running: 1, review: 0, needAttention: 0, idle: 6, total: 7 })).toBe(false);
+    expect(isFleetCalm({ running: 0, review: 1, needAttention: 0, idle: 6, total: 7 })).toBe(false);
+    expect(isFleetCalm({ running: 0, review: 0, needAttention: 1, idle: 6, total: 7 })).toBe(false);
   });
 });
 

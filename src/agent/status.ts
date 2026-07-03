@@ -23,10 +23,17 @@ export type AgentStatus =
   | { kind: "idle" } // live, nothing pending, last result already consumed
   | { kind: "running"; activity: string | null } // a turn is in flight
   | { kind: "backgrounding"; count: number } // main loop idle, but N background tools still running
-  | { kind: "needInput"; via: "questionnaire" | "openQuestion"; prompt: string | null }
+  | { kind: "needInput"; via: "questionnaire" | "openQuestion"; prompt: string | null; bg?: number }
   | { kind: "needIntervention"; tool: string } // a permission prompt is blocking
-  | { kind: "error"; message: string } // last finished turn ended in error
-  | { kind: "review" }; // turn finished cleanly, not yet seen by the user
+  | { kind: "error"; message: string; bg?: number } // last finished turn ended in error
+  | { kind: "review"; bg?: number }; // turn finished cleanly, not yet seen by the user
+
+// The `bg?` on the three SETTLED-unseen states (review / open-question / error) carries
+// how many background tools are STILL running while that settled state is surfaced —
+// i.e. "finished the main turn, but work continues in the background". It drives the
+// distinct alert (a violet accent on the blue/orange review/question), so the user can
+// tell a truly-finished agent from one that finished-but-is-waiting. Absent/0 = nothing
+// in the background. See {@link backgroundCount} and {@link deriveAgentStatus}.
 
 /**
  * The acknowledgeable, non-blocking reminders — the ONLY statuses that persist
@@ -68,6 +75,15 @@ export interface AgentSignals {
    * conversation is "backgrounding" — calm, still interactive — rather than idle.
    */
   runningBackgroundTasks: number;
+  /**
+   * User preference: when a turn finishes CLEANLY while background tools are still
+   * running, should that surface the "review" alert (with a background accent), or go
+   * straight to the calm `backgrounding` state without alerting? True (default) = alert;
+   * false = no alert, the review only surfaces once the background work also finishes.
+   * Only affects the clean-finish case — an open question or an error while backgrounding
+   * still alerts regardless (those genuinely want the user). See Settings → Général.
+   */
+  alertWhileBackgrounding: boolean;
   /**
    * A reminder persisted from a previous run (or while live), surfaced ONLY when
    * the process is off (`handle === null`): it re-displays a finished-but-unseen
@@ -155,17 +171,25 @@ export function deriveAgentStatus(s: AgentSignals): AgentStatus {
 
   // Live and idle. If the last turn just finished and the user hasn't acted on it,
   // surface it (error / open-question / review). Otherwise there's nothing to show.
+  // While a background tool is still running, that count rides along as `bg` so the
+  // settled alert can show the "…but work continues" accent.
   if (!s.turnSeen) {
+    const bg = s.runningBackgroundTasks > 0 ? s.runningBackgroundTasks : undefined;
     if (s.lastTurnIsError || (s.lastTurnSubtype?.startsWith("error") ?? false))
-      return { kind: "error", message: errorMessage(s.lastTurnSubtype) };
+      return { kind: "error", message: errorMessage(s.lastTurnSubtype), bg };
     if (looksLikeQuestion(s.lastAssistantText))
-      return { kind: "needInput", via: "openQuestion", prompt: s.lastAssistantText };
-    return { kind: "review" };
+      return { kind: "needInput", via: "openQuestion", prompt: s.lastAssistantText, bg };
+    // Clean finish. Normally this is `review`. But when background work is still running
+    // AND the user disabled the "alert while backgrounding" preference, we DON'T alert
+    // now — fall through to the calm `backgrounding` state below; the review surfaces only
+    // once the background work also completes (turn still unseen, but bg back to 0).
+    if (!(bg && !s.alertWhileBackgrounding)) return { kind: "review", bg };
   }
 
   // Settled with nothing to review — but if background tools are still running, the
   // conversation isn't truly idle: it's quietly waiting on them (and stays
-  // interactive). A calm, distinct state rather than the dormant "idle".
+  // interactive). A calm, distinct state rather than the dormant "idle". Also reached
+  // by a clean finish when the "alert while backgrounding" preference is off (above).
   if (s.runningBackgroundTasks > 0)
     return { kind: "backgrounding", count: s.runningBackgroundTasks };
 
@@ -232,6 +256,50 @@ export function rowAttention(s: AgentStatus): "input" | "review" | "error" | nul
  */
 export function isActivelyRunning(s: AgentStatus): boolean {
   return s.kind === "running" || s.kind === "backgrounding";
+}
+
+/**
+ * How many background tools are still running behind a SETTLED-unseen alert
+ * (review / open-question / error) — i.e. "finished, but work continues". 0 for every
+ * other status (including `backgrounding`, whose count is its own `count` field, and
+ * whose calm violet already conveys the background work). Drives the review/question
+ * alert's violet accent (the dot ring + the "N en fond" chip). See {@link AgentStatus}.
+ */
+export function backgroundCount(s: AgentStatus): number {
+  switch (s.kind) {
+    case "review":
+    case "needInput":
+    case "error":
+      return s.bg ?? 0;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Collapse a status onto one of the four fleet-readout STAGES the "Fleet readout"
+ * banner counts (sidebar + FlightDeck top). Coarser than {@link agentStatusToDot}:
+ * the calm background state (`backgrounding`) folds into `running` (work is still
+ * happening), the three attention states (`needInput` / `needIntervention` / `error`)
+ * all fold into `needAttention`, and the two dormant states (`idle` / `off`) fold
+ * into `idle`. Listed explicitly (not a `default`) so a new status kind is a compile
+ * error here until it's classified — same discipline as `rowAttention`/`statusRank`.
+ */
+export function readoutBucket(s: AgentStatus): "running" | "review" | "needAttention" | "idle" {
+  switch (s.kind) {
+    case "running":
+    case "backgrounding":
+      return "running";
+    case "review":
+      return "review";
+    case "needInput":
+    case "needIntervention":
+    case "error":
+      return "needAttention";
+    case "idle":
+    case "off":
+      return "idle";
+  }
 }
 
 /**

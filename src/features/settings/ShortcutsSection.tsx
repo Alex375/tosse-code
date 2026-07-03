@@ -3,6 +3,7 @@
 // — the SAME source the global handler dispatches from for the new chords — so what's
 // documented here can never drift from what's wired.
 import { SHORTCUT_GROUPS } from "../../ui/shortcuts";
+import { PageHead } from "./SettingsKit";
 import styles from "./SettingsPanel.module.css";
 
 /** Split a display chord ("⌘⌥ ↑ / ⌘⌥ ↓") into the tokens we render as separate keycaps.
@@ -15,11 +16,10 @@ function keycaps(keys: string): string[] {
 export function ShortcutsSection() {
   return (
     <div>
-      <div className={styles.section}>Raccourcis clavier</div>
-      <div className={styles.desc}>
-        Les raccourcis disponibles dans l'application. Sur macOS, ⌘ est la touche Commande ; sous
-        Windows/Linux, utilisez Ctrl à la place.
-      </div>
+      <PageHead
+        title="Raccourcis clavier"
+        subtitle="Les raccourcis disponibles dans l'application. Sur macOS, ⌘ est la touche Commande ; sous Windows/Linux, utilisez Ctrl à la place."
+      />
 
       {SHORTCUT_GROUPS.map((group) => (
         <div key={group.title} className={styles.scGroup}>
