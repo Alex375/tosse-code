@@ -301,7 +301,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder};
-                let app_menu = SubmenuBuilder::new(app, "Tosse Code")
+                let app_menu = SubmenuBuilder::new(app, "Flight Deck")
                     .hide()
                     .hide_others()
                     .show_all()

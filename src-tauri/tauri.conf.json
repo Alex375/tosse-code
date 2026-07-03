@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Tosse Code",
+  "productName": "Flight Deck",
   "version": "0.24.0",
   "identifier": "com.tosse.desktop",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Tosse Code",
+        "title": "Flight Deck",
         "width": 1200,
         "height": 800
       }

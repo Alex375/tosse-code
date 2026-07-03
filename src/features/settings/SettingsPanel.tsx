@@ -119,7 +119,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                     <TosseMark />
                   </span>
                   <div>
-                    <div className={styles.appName}>Tosse Code</div>
+                    <div className={styles.appName}>Flight Deck</div>
                     <div className={styles.appTag}>
                       Application de bureau pour piloter Claude Code.
                     </div>

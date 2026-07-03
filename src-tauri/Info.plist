@@ -13,10 +13,10 @@
 <plist version="1.0">
 <dict>
   <key>NSDesktopFolderUsageDescription</key>
-  <string>Tosse Code a besoin d'accéder à votre Bureau pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
+  <string>Flight Deck a besoin d'accéder à votre Bureau pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
   <key>NSDocumentsFolderUsageDescription</key>
-  <string>Tosse Code a besoin d'accéder à vos Documents pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
+  <string>Flight Deck a besoin d'accéder à vos Documents pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
   <key>NSDownloadsFolderUsageDescription</key>
-  <string>Tosse Code a besoin d'accéder à vos Téléchargements pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
+  <string>Flight Deck a besoin d'accéder à vos Téléchargements pour ouvrir et éditer les fichiers des projets que vous y placez.</string>
 </dict>
 </plist>

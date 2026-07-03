@@ -43,7 +43,7 @@ export function NotificationsSection() {
         />
         <ToggleRow
           title="Rebond du Dock"
-          hint="L'icône de Tosse Code rebondit dans le Dock."
+          hint="L'icône de Flight Deck rebondit dans le Dock."
           checked={dockBounce}
           onChange={(v) => set({ dockBounce: v })}
         />
