@@ -264,7 +264,7 @@ function RepoGroup({
         <button
           type="button"
           className="cv-repo-act cv-repo-reveal cv-repo-del"
-          title="Supprimer ce dépôt de Tosse Code"
+          title="Supprimer ce dépôt de Flight Deck"
           aria-label="Supprimer ce dépôt"
           onClick={() => setConfirming(true)}
         >
@@ -347,7 +347,7 @@ export function ConductorSidebar() {
         <span className="wf-row" style={{ gap: 8 }}>
           <TosseMark className="cv-brand-mark" />
           <span className="wf-hi" style={{ fontWeight: 600 }}>
-            Tosse Code
+            Flight Deck
           </span>
         </span>
         <Menu

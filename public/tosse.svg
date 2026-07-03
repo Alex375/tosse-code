@@ -1,13 +1,19 @@
-<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tosse Code">
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Flight Deck">
   <defs>
-    <linearGradient id="prompt-coral" gradientUnits="userSpaceOnUse" x1="256" y1="76" x2="256" y2="436">
-      <stop offset="0" stop-color="#e8906f"/><stop offset="1" stop-color="#cd6640"/>
+    <linearGradient id="fd-coral" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#cd6640" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#d9744f"/><stop offset="1" stop-color="#e8906f"/>
     </linearGradient>
-    <linearGradient id="prompt-cursor" gradientUnits="userSpaceOnUse" x1="388" y1="320" x2="388" y2="436">
+    <linearGradient id="fd-core" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f0a988" stop-opacity="0"/><stop offset="1" stop-color="#f6c1a6"/>
+    </linearGradient>
+    <linearGradient id="fd-cyan" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#54d8ff"/><stop offset="1" stop-color="#2bc6f0"/>
     </linearGradient>
   </defs>
-  <rect x="68" y="76" width="368" height="76" rx="18" fill="url(#prompt-coral)"/>
-  <rect x="214" y="76" width="76" height="360" rx="18" fill="url(#prompt-coral)"/>
-  <rect x="340" y="320" width="96" height="116" rx="18" fill="url(#prompt-cursor)"/>
+  <g transform="translate(256 256) rotate(-40) scale(14) translate(-5.5 -12)">
+    <path d="M2 7 L-12 12 L2 17 Z" fill="url(#fd-coral)"/>
+    <path d="M2 9.5 L-5.5 12 L2 14.5 Z" fill="url(#fd-core)"/>
+    <path d="M2 21 L23 12 L2 3 L2 10 L17 12 L2 14 Z" fill="url(#fd-cyan)"/>
+  </g>
 </svg>

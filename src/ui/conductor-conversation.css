@@ -1,7 +1,7 @@
 /* view-conversation.css */
 .cv-side-h { display:flex; align-items:center; justify-content:space-between; padding:12px 12px 10px; }
-/* Brand mark (the "Prompt T" app logo) — standalone, no tile: it carries its own
-   coral/cyan identity. Sized to sit level with the "Tosse Code" wordmark. */
+/* Brand mark (the plane + engine-thrust app logo) — standalone, no tile: it carries
+   its own coral/cyan identity. Sized to sit level with the "Flight Deck" wordmark. */
 .cv-brand-mark { width:19px; height:19px; flex:0 0 auto; display:block; }
 /* Resize grip: a thin handle straddling the sidebar's right border. Absolute so the
    parent flex row is untouched; a flex box so the reused Splitter stretches full

@@ -148,7 +148,7 @@ export function UpdateSection() {
       <ConfirmDialog
         open={confirmingInstall}
         danger={liveSessions > 0}
-        title="Mettre à jour Tosse Code ?"
+        title="Mettre à jour Flight Deck ?"
         confirmLabel={liveSessions > 0 ? "Mettre à jour maintenant" : "Mettre à jour et redémarrer"}
         cancelLabel={liveSessions > 0 ? "Attendre" : "Annuler"}
         onCancel={() => setConfirmingInstall(false)}
