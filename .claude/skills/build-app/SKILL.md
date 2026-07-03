@@ -82,4 +82,5 @@ Indique à l'utilisateur :
 - Modifier `tauri.conf.json` (config de prod intouchée)
 - Générer des artefacts de mise à jour
 - Fusionner sur `dev` ou nettoyer le worktree (→ `/land`)
+- **Purger l'identité Library `com.tosse.desktop.<slug>`** qu'il crée (données/caches/prefs isolés) : c'est `/land` (étape 7b) qui la supprime en même temps que le worktree, pour ne pas laisser d'identités mortes s'accumuler dans `~/Library`. Tant que la feature n'est pas landée, ces données restent (normal : tu peux relancer le build).
 - Signer / notariser le bundle
