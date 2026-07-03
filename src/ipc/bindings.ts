@@ -75,6 +75,40 @@ async loadSessionContext(sessionId: string) : Promise<Result<ContextFill, string
 }
 },
 /**
+ * Rewind a conversation IN PLACE by truncating its on-disk transcript at `target_id`,
+ * dropping that message (USER target) or everything after its response (ASSISTANT
+ * target). Destructive by design ("reprendre à partir d'ici"): the removed turns are
+ * gone from the transcript, so a `--resume` re-spawn reads the shortened history fresh
+ * (VERIFIED: resume honours the truncation — see [`history::rewind_transcript`]).
+ * 
+ * The caller MUST stop the conversation's live session first (so no `claude` process
+ * re-writes the transcript from its in-memory state), then reload history from the
+ * truncated file. Pure file IO, run off the async runtime via `spawn_blocking`.
+ */
+async rewindConversation(sessionId: string, targetId: string, targetIsUser: boolean, targetText: string | null, occurrence: number | null) : Promise<Result<RewindOutcome, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("rewind_conversation", { sessionId, targetId, targetIsUser, targetText, occurrence }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Fork a NEW conversation branched at `target_id`, NON-destructively (the original
+ * transcript is left intact). Writes the kept history to a fresh transcript beside the
+ * original and returns it as a [`history::DiskConversation`] (inside [`history::ForkOutcome`])
+ * the front turns into a real conversation via `reactivateDiskConversation`. No live session
+ * is touched — the branch is lazy like any other conversation. Pure file IO off the runtime.
+ */
+async forkConversation(sessionId: string, targetId: string, targetIsUser: boolean, targetText: string | null, occurrence: number | null) : Promise<Result<ForkOutcome, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("fork_conversation", { sessionId, targetId, targetIsUser, targetText, occurrence }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Load a sub-agent's (`Agent` tool, or a workflow agent) full transcript,
  * normalized into the same items the live conversation renders. Empty if absent.
  */
@@ -1458,6 +1492,12 @@ warnings: string[] }
  */
 export type FileContent = { path: string; content: string; too_large: boolean; binary: boolean; size: number }
 /**
+ * The result of a fork ("brancher une nouvelle conversation ici"): the freshly-written
+ * branch conversation (ready to bring into the app via `reactivateDiskConversation`) and,
+ * for a USER-message fork, the removed prompt text to seed the new conversation's composer.
+ */
+export type ForkOutcome = { conversation: DiskConversation; removed_prompt: string | null }
+/**
  * Coalesced filesystem change notification for the editor panel: the (de-noised,
  * debounced) set of paths that changed under the watched working directory. The
  * UI reloads any open file in this set and refreshes any expanded tree dirs it
@@ -1849,6 +1889,21 @@ export type RepoRecord = { id: string; path: string;
  * Unix ms timestamp the repo was first added.
  */
 added_at: number }
+/**
+ * What a rewind removed, returned to the UI.
+ */
+export type RewindOutcome = { 
+/**
+ * For a USER-message rewind, the text of the removed prompt so the composer can be
+ * re-seeded with it ("revenir à ce prompt"). `None` for an assistant-message rewind
+ * (its response is kept; the user just continues with a new message).
+ */
+removed_prompt: string | null; 
+/**
+ * How many transcript lines were dropped. `0` means nothing followed the target —
+ * a no-op (the conversation already ended there), and the file is left untouched.
+ */
+removed_lines: number }
 /**
  * A search result: which conversation matched, its relevance score, and a short
  * snippet around the first body hit (empty when only title/excerpt matched).

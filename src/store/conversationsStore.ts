@@ -21,7 +21,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { uid } from "../util/id";
 import { commands } from "../ipc/client";
-import type { ConversationItem, ConversationRecord, DiskConversation, PermissionMode, RepoRecord } from "../ipc/client";
+import type { ConversationItem, ConversationRecord, DiskConversation, ForkOutcome, PermissionMode, RepoRecord, RewindOutcome } from "../ipc/client";
 import type { ReminderKind } from "../agent/status";
 import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
@@ -31,7 +31,7 @@ import { useLastMessageSummaryStore } from "./lastMessageSummary";
 import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
-import { clearComposerDraft, clearAllComposerDrafts } from "./composerDrafts";
+import { clearComposerDraft, clearAllComposerDrafts, useComposerDrafts } from "./composerDrafts";
 import {
   clearComposerAttachments,
   clearAllComposerAttachments,
@@ -1179,6 +1179,87 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
     });
   else console.error("loadSessionContext failed:", ctx.error);
   historyLoaded.add(convId); // the select-time loader is now satisfied for this run
+}
+
+/**
+ * Rewind a conversation IN PLACE to a chosen message ("reprendre à partir d'ici") —
+ * destructive: everything after the cut is dropped from Claude's on-disk transcript.
+ *
+ * `targetIsUser` selects the semantics (see `rewind_conversation` in the core):
+ *  - a USER message → that prompt and everything after it are removed, and the prompt
+ *    text is put back in the composer draft so it can be edited and re-sent;
+ *  - a CLAUDE message → its whole response is kept and everything AFTER it is removed.
+ *
+ * Order matters: the live `claude` process is stopped FIRST (it holds the full history
+ * in memory and would rewrite the transcript on its next turn, undoing the cut), THEN
+ * the transcript is truncated, THEN the timeline is rebuilt from the shortened file. The
+ * next message re-spawns `--resume` on the truncated transcript (VERIFIED: resume honours
+ * the truncation). Returns the outcome, or `null` if the conversation has no session yet.
+ */
+export async function rewindConversation(
+  convId: string,
+  targetId: string,
+  targetIsUser: boolean,
+  targetText: string | null,
+  occurrence: number | null,
+): Promise<RewindOutcome | null> {
+  const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+  if (!conv?.sessionId) return null;
+  // 1. Kill the live process AND WAIT for it to be fully reaped (stopConversationSession →
+  //    stop_session → shutdown_and_wait) so nothing re-writes the transcript from its
+  //    in-memory state while / after we truncate.
+  await stopConversationSession(convId);
+  // 2. Truncate the on-disk transcript at the target. `targetText` + `occurrence` are the
+  //    fallback locator for a LIVE turn (its synthetic front id isn't on disk — resolve_cut),
+  //    occurrence disambiguating identical repeated prompts.
+  const res = await commands.rewindConversation(conv.sessionId, targetId, targetIsUser, targetText, occurrence);
+  if (res.status !== "ok") {
+    useAppErrors.getState().pushError("Impossible de rembobiner la conversation.", res.error);
+    throw new Error(res.error);
+  }
+  // 3. Rebuild the timeline from the (now shorter) transcript.
+  await reloadConversationHistory(convId);
+  // 4. A user rewind hands the removed prompt back to the composer so it can be edited
+  //    and re-sent ("revenir à ce prompt, la main repart à Claude").
+  if (res.data.removed_prompt) {
+    useComposerDrafts.getState().setDraft(convId, res.data.removed_prompt);
+  }
+  return res.data;
+}
+
+/**
+ * Fork a NEW conversation branched at a message ("forker à partir d'ici") — NON-destructive:
+ * the original conversation is left untouched. The core copies the transcript up to the cut
+ * into a fresh session file; we bring it into the app as a real conversation (which selects
+ * it and loads its history), and seed its composer with the removed prompt for a user fork.
+ * Returns the new conversation's stable id, or `null` if the source has no session yet.
+ */
+export async function forkConversation(
+  convId: string,
+  targetId: string,
+  targetIsUser: boolean,
+  targetText: string | null,
+  occurrence: number | null,
+): Promise<string | null> {
+  const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+  if (!conv?.sessionId) return null;
+  const res = await commands.forkConversation(conv.sessionId, targetId, targetIsUser, targetText, occurrence);
+  if (res.status !== "ok") {
+    useAppErrors.getState().pushError("Impossible de forker la conversation.", res.error);
+    throw new Error(res.error);
+  }
+  const outcome: ForkOutcome = res.data;
+  // Reuse the disk-conversation import path (creates the row, auto-selects it → its history
+  // loads via ConductorConversation's effect). Name it after the source, marked as a branch.
+  const branch: DiskConversation = {
+    ...outcome.conversation,
+    title: `${conv.name} (fork)`,
+  };
+  const newId = reactivateDiskConversation(branch);
+  if (outcome.removed_prompt) {
+    useComposerDrafts.getState().setDraft(newId, outcome.removed_prompt);
+  }
+  return newId;
 }
 
 /**

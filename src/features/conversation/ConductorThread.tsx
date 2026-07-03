@@ -27,8 +27,9 @@ import {
 } from "../../store/conversationStore";
 import type { RoundMarker, UserTurnImage } from "../../store/types";
 import { imageDataUrl } from "./composerAttachments";
-import { useConversationsStore } from "../../store/conversationsStore";
-import { useBackgroundTasksStore, useTaskByToolUse } from "../../store/backgroundTasksStore";
+import { useConversationsStore, rewindConversation, forkConversation } from "../../store/conversationsStore";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { useBackgroundTasksStore, useTaskByToolUse, useRunningTaskCount } from "../../store/backgroundTasksStore";
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
@@ -52,7 +53,7 @@ import {
   type Segment,
   type ToolStep,
 } from "./toolGroup";
-import { useEffectiveCleanOutput } from "../../store/display";
+import { useEffectiveCleanOutput, useDisplay } from "../../store/display";
 import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
 import { SkillChip, UserText } from "./userText";
 import { parseSpecialMessage } from "./specialMessage";
@@ -67,14 +68,88 @@ import styles from "./ConductorThread.module.css";
 
 const EMPTY_BLOCKS: NormalizedBlock[] = [];
 
+/**
+ * A stable key for matching a LIVE user turn's text against an on-disk human prompt when
+ * locating a rewind/fork target by text (a live turn's front id isn't on disk). MUST mirror
+ * the Rust `prompt_match_key` (supervisor/history.rs): a slash command reduces to its command
+ * token (so the raw "/foo bar" typed live and the persisted "…<command-name>/foo…" header
+ * agree), the image placeholder stays itself, a plain prompt maps to itself. Used both to
+ * find the target and to count identical prior prompts (the occurrence disambiguator).
+ */
+function promptMatchKey(text: string): string {
+  const t = text.trim();
+  const m = t.match(/<command-name>([\s\S]*?)<\/command-name>/);
+  if (m) return m[1].trim();
+  if (t.startsWith("/")) return t.split(/\s+/)[0];
+  return t;
+}
+
+/**
+ * Discreet hover controls at the BOTTOM of a conversation message — bare icons (no frame,
+ * no background), on both the user's and Claude's messages. Revealed on hover of the parent
+ * `.cv-msg` (see conductor-conversation.css). Two actions, each gated INDEPENDENTLY by the
+ * caller (the handler is `undefined` → its icon doesn't render):
+ *  - rewind ("reprendre ici"): rewind the conversation IN PLACE (destructive, confirmed);
+ *  - fork ("forker ici"): branch a NEW conversation at this message (non-destructive).
+ * Both are hidden entirely when the `messageControls` pref is off or the agent is busy.
+ */
+function MessageActions({
+  onRewind,
+  onFork,
+  forkBusy,
+}: {
+  onRewind?: () => void;
+  onFork?: () => void;
+  /** The fork for this message is in flight — spin its icon and block re-clicks. */
+  forkBusy?: boolean;
+}) {
+  if (!onRewind && !onFork) return null;
+  return (
+    <div className="cv-msg-actions">
+      {onRewind && (
+        <button
+          type="button"
+          className="cv-msg-action"
+          title="Reprendre la conversation à partir d'ici (rembobiner)"
+          aria-label="Reprendre la conversation à partir d'ici"
+          onClick={onRewind}
+        >
+          <Ico name="restart" />
+        </button>
+      )}
+      {onFork && (
+        <button
+          type="button"
+          className={"cv-msg-action" + (forkBusy ? " is-busy" : "")}
+          title="Forker une nouvelle conversation à partir d'ici"
+          aria-label="Forker une nouvelle conversation à partir d'ici"
+          onClick={onFork}
+          disabled={forkBusy}
+        >
+          <Ico name={forkBusy ? "refresh" : "pr"} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function MsgUser({
   text,
   queued,
   images,
+  onRewind,
+  onFork,
+  forkBusy,
 }: {
   text: string;
   queued?: boolean;
   images?: UserTurnImage[];
+  /** When set, show the rewind hover control on this message. */
+  onRewind?: () => void;
+  /** When set, show the fork hover control on this message. */
+  onFork?: () => void;
+  /** The fork on this message is in flight (spin its icon). */
+  forkBusy?: boolean;
 }) {
   // A `<task-notification>` (and other CLI-injected markers) reaches us AS a user turn,
   // but the human didn't type it — render the clean card instead of a raw user bubble.
@@ -104,6 +179,7 @@ export function MsgUser({
           </div>
         ) : null}
         {text.trim() ? <UserText text={text} /> : null}
+        <MessageActions onRewind={onRewind} onFork={onFork} forkBusy={forkBusy} />
       </div>
     </div>
   );
@@ -843,12 +919,21 @@ function MsgAIGroup({
   markers,
   busy,
   awaiting,
+  onRewind,
+  onFork,
+  forkBusy,
 }: {
   session: string;
   turnIds: string[];
   markers?: RoundMarker[];
   busy: boolean;
   awaiting: boolean;
+  /** When set, show the rewind hover control on this response. */
+  onRewind?: () => void;
+  /** When set, show the fork hover control on this response. */
+  onFork?: () => void;
+  /** The fork on this response is in flight (spin its icon). */
+  forkBusy?: boolean;
 }) {
   // Per-turn blocks (shallow-compared: each turn's `blocks` is a stable ref) so we can splice
   // the markers back at their turn boundaries. With no markers this is just the concatenated
@@ -879,6 +964,7 @@ function MsgAIGroup({
           <ThinkingBlock text={lastTurn.streamingThinking} finalized={false} />
         )}
         {lastTurn?.streamingText && <StreamMarkdown text={lastTurn.streamingText} streaming />}
+        <MessageActions onRewind={onRewind} onFork={onFork} forkBusy={forkBusy} />
       </div>
     </div>
   );
@@ -930,12 +1016,16 @@ export function ConductorThread({
   session,
   scrollRef,
   onRender,
+  disableControls = false,
 }: {
   session: string;
   // The stick-to-bottom instance is owned by the parent pane so the composer can
   // snap the thread to the bottom on send (see ConductorConversation).
   scrollRef: StickToBottom["scrollRef"];
   onRender: StickToBottom["onRender"];
+  /** Suppress the per-message rewind/fork hover controls (set by the Flight Deck reply
+   *  modal — a destructive rewind or a background-switching fork is never meant there). */
+  disableControls?: boolean;
 }) {
   const rawPlan = useTimelineRender(session);
   // In clean output, a mid-turn marker (control-change bar / injected message) split the
@@ -967,6 +1057,100 @@ export function ConductorThread({
   const awaiting = state?.awaiting_permission ?? false;
   const empty = plan.length === 0 && pending.length === 0;
 
+  // ── Message hover controls: rewind (in place) + fork (new conversation) ──
+  // Gated by the display pref, and only on a SETTLED conversation (both operate on the
+  // on-disk transcript and rewind kills the live process — racing a live turn is unsafe),
+  // and never in a lightweight surface (the reply modal). `session` is the STABLE conv id.
+  const messageControls = useDisplay((s) => s.messageControls);
+  const runningBgTasks = useRunningTaskCount(session);
+  const showControls = messageControls && !busy && !awaiting && !disableControls;
+  // { target message id, is-user, its clean composer text, occurrence } — set on click; the
+  // rewind opens a confirm. `text`/`occurrence` are the fallback locator for a LIVE turn
+  // (synthetic front id not on disk); occurrence disambiguates identical repeated prompts.
+  const [rewindTarget, setRewindTarget] = useState<
+    { id: string; isUser: boolean; text: string | null; occurrence: number | null } | null
+  >(null);
+  const [rewinding, setRewinding] = useState(false);
+  // The message whose fork is in flight (spins its icon; blocks a re-click). The thread
+  // usually unmounts on success (the branch becomes active), so this mostly matters on error.
+  const [forkingId, setForkingId] = useState<string | null>(null);
+  // The FIRST user prompt is never a cut point — it would empty the branch/conversation
+  // (the core refuses it too). A user prompt is rewindable/forkable when it's not first.
+  const firstUserIdx = useMemo(() => plan.findIndex((i) => i.kind === "user"), [plan]);
+  // A REWIND of a response is a no-op unless a later prompt follows it (nothing to remove);
+  // a FORK is always valid on a response (it branches everything up to & including it).
+  const hasUserAfter = useCallback(
+    (k: number) => plan.slice(k + 1).some((i) => i.kind === "user"),
+    [plan],
+  );
+  // Whether a user turn was INJECTED mid-work (queued while the agent ran). Such a turn is
+  // NOT a clean round boundary — cutting there can land mid-response — and clean-output
+  // already treats it as an in-band marker, so it must not be a rewind/fork target.
+  const isInjected = useCallback(
+    (id: string): boolean =>
+      useConversationStore.getState().sessions[session]?.turns[id]?.injectedMidTurn ?? false,
+    [session],
+  );
+  // The locator for a USER target: its clean text (the image placeholder for an image-only
+  // turn so the on-disk "[image]" line still matches) plus the occurrence — how many prior
+  // user turns share its match-key — so an identical repeated prompt cuts at the right one.
+  const userTarget = useCallback(
+    (id: string): { text: string; occurrence: number } => {
+      const s = useConversationStore.getState().sessions[session];
+      const turnOf = (tid: string) => {
+        const t = s?.turns[tid];
+        const raw = t?.streamingText ?? "";
+        const hasImg = !!(t?.images && t.images.length);
+        return raw.trim() === "" && hasImg ? "[image]" : raw;
+      };
+      const text = turnOf(id);
+      const key = promptMatchKey(text);
+      let occurrence = 0;
+      for (const e of s?.timeline ?? []) {
+        if (e.id === id) break;
+        const t = s?.turns[e.id];
+        if (t?.role !== "user") continue;
+        if (promptMatchKey(turnOf(e.id)) === key) occurrence++;
+      }
+      return { text, occurrence };
+    },
+    [session],
+  );
+  const doRewind = useCallback(async () => {
+    const target = rewindTarget;
+    if (!target) return;
+    setRewinding(true);
+    try {
+      await rewindConversation(session, target.id, target.isUser, target.text, target.occurrence);
+    } catch {
+      /* the failure was already surfaced as an app error by rewindConversation */
+    } finally {
+      setRewinding(false);
+      setRewindTarget(null);
+    }
+  }, [rewindTarget, session]);
+  const doFork = useCallback(
+    async (id: string, isUser: boolean) => {
+      if (forkingId) return; // guard a double-click (the thread unmounts on switch)
+      setForkingId(id);
+      const loc = isUser ? userTarget(id) : null;
+      try {
+        await forkConversation(session, id, isUser, loc ? loc.text : null, loc ? loc.occurrence : null);
+      } catch {
+        /* already surfaced as an app error by forkConversation */
+      } finally {
+        setForkingId(null);
+      }
+    },
+    [session, userTarget, forkingId],
+  );
+  // Re-gate the OPEN confirm dialog: if the session goes active (a turn started out-of-band —
+  // a remote/mobile message, a native injection) after the dialog opened, cancel the pending
+  // rewind so we never truncate against a live writer / discard the just-arrived turn.
+  useEffect(() => {
+    if (rewindTarget && (busy || awaiting)) setRewindTarget(null);
+  }, [busy, awaiting, rewindTarget]);
+
   return (
     <div className="cv-thread" ref={scrollRef}>
       <StreamFollow session={session} onRender={onRender} />
@@ -980,8 +1164,9 @@ export function ConductorThread({
               aujourd'hui
               <span className="wf-line" />
             </div>
-            {plan.map((item) => {
-              if (item.kind === "ai")
+            {plan.map((item, idx) => {
+              if (item.kind === "ai") {
+                const aiId = item.ids[item.ids.length - 1];
                 return (
                   <MsgAIGroup
                     key={item.ids[0]}
@@ -990,10 +1175,37 @@ export function ConductorThread({
                     markers={item.markers}
                     busy={busy}
                     awaiting={awaiting}
+                    onRewind={
+                      showControls && hasUserAfter(idx)
+                        ? () => setRewindTarget({ id: aiId, isUser: false, text: null, occurrence: null })
+                        : undefined
+                    }
+                    onFork={showControls ? () => doFork(aiId, false) : undefined}
+                    forkBusy={forkingId === aiId}
                   />
                 );
-              if (item.kind === "user")
-                return <TurnRow key={item.id} session={session} turnId={item.id} />;
+              }
+              if (item.kind === "user") {
+                // Not the first prompt, and not a mid-work injection (not a clean boundary).
+                const usable = showControls && idx !== firstUserIdx && !isInjected(item.id);
+                return (
+                  <TurnRow
+                    key={item.id}
+                    session={session}
+                    turnId={item.id}
+                    onRewind={
+                      usable
+                        ? () => {
+                            const loc = userTarget(item.id);
+                            setRewindTarget({ id: item.id, isUser: true, text: loc.text, occurrence: loc.occurrence });
+                          }
+                        : undefined
+                    }
+                    onFork={usable ? () => doFork(item.id, true) : undefined}
+                    forkBusy={forkingId === item.id}
+                  />
+                );
+              }
               if (item.kind === "error")
                 return <MsgError key={item.id} session={session} errorId={item.id} />;
               if (item.kind === "notice")
@@ -1015,6 +1227,37 @@ export function ConductorThread({
           </>
         )}
       </div>
+      <ConfirmDialog
+        open={!!rewindTarget}
+        danger
+        busy={rewinding}
+        title="Reprendre la conversation à partir d'ici ?"
+        confirmLabel="Rembobiner"
+        onCancel={() => setRewindTarget(null)}
+        onConfirm={doRewind}
+      >
+        {rewindTarget?.isUser ? (
+          <>
+            Ce message et tout ce qui suit seront <strong>définitivement supprimés</strong> de la
+            conversation. Son texte revient dans la zone de saisie pour que tu puisses le renvoyer.
+          </>
+        ) : (
+          <>
+            Tout ce qui suit cette réponse sera <strong>définitivement supprimé</strong> de la
+            conversation. La réponse elle-même est conservée.
+          </>
+        )}
+        {runningBgTasks > 0 ? (
+          <div className="cv-rewind-warn">
+            <Ico name="alert" />
+            <span>
+              {runningBgTasks === 1
+                ? "Une tâche de fond en cours sera arrêtée."
+                : `${runningBgTasks} tâches de fond en cours seront arrêtées.`}
+            </span>
+          </div>
+        ) : null}
+      </ConfirmDialog>
     </div>
   );
 }
@@ -1072,16 +1315,32 @@ export function TurnRow({
   turnId,
   busy = false,
   awaiting = false,
+  onRewind,
+  onFork,
+  forkBusy,
 }: {
   session: string;
   turnId: string;
   /** Session-level flags; MsgAI derives `live` from them + the turn's own status. */
   busy?: boolean;
   awaiting?: boolean;
+  /** Rewind/fork handlers for a USER turn (passed through to MsgUser's hover controls). */
+  onRewind?: () => void;
+  onFork?: () => void;
+  forkBusy?: boolean;
 }) {
   const turn = useTurn(session, turnId);
   if (!turn) return null;
   if (turn.role === "user")
-    return <MsgUser text={turn.streamingText} queued={turn.queued} images={turn.images} />;
+    return (
+      <MsgUser
+        text={turn.streamingText}
+        queued={turn.queued}
+        images={turn.images}
+        onRewind={onRewind}
+        onFork={onFork}
+        forkBusy={forkBusy}
+      />
+    );
   return <MsgAI session={session} turnId={turnId} busy={busy} awaiting={awaiting} />;
 }

@@ -28,6 +28,7 @@ export function ConversationPane({
   composerRef,
   onBackgroundClick,
   inertMentions = false,
+  disableMessageControls = false,
 }: {
   session: string;
   cwd: string;
@@ -37,6 +38,10 @@ export function ConversationPane({
    *  reply modal, which mounts the pane WITHOUT an editor host, so a mention click
    *  would be a dead link that silently flips the persisted editorOpen flag. */
   inertMentions?: boolean;
+  /** Hide the per-message rewind/fork hover controls. Set by the Flight Deck reply
+   *  modal: a destructive rewind or a background conversation-switching fork is never
+   *  intended from that lightweight surface (and fork's switch is invisible there). */
+  disableMessageControls?: boolean;
 }) {
   // Toggling "clean output" folds/unfolds every round → big height change. Pass the
   // EFFECTIVE per-conversation value as the preserve key so the thread re-anchors instead
@@ -48,7 +53,12 @@ export function ConversationPane({
       {/* Provide the conversation id + live cwd so file mentions in the thread
           resolve + open in this conversation's editor. */}
       <FileMentionProvider convId={session} cwd={cwd} inert={inertMentions}>
-        <ConductorThread session={session} scrollRef={scrollRef} onRender={onRender} />
+        <ConductorThread
+          session={session}
+          scrollRef={scrollRef}
+          onRender={onRender}
+          disableControls={disableMessageControls}
+        />
       </FileMentionProvider>
       <AgentBar session={session} />
       <WorkflowBar session={session} />
