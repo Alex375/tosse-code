@@ -133,6 +133,10 @@
    (flex:1) fills the rest to its left. */
 .cv-user { flex-direction:row-reverse; }
 .cv-user .cv-bubble { background:var(--wf-panel-2); border:1px solid var(--wf-line); border-radius:10px; padding:12px 14px; flex:1; min-width:0; overflow-wrap:anywhere; }
+/* A plain user prompt keeps its line breaks + multiple spaces (HTML would otherwise collapse
+   them). Shared by the live bubble, the inline "while you were working" marker, and the disk
+   transcript, since all three funnel their text through UserText. */
+.cv-user-text { white-space:pre-wrap; overflow-wrap:anywhere; }
 /* A slash-command user message rendered as a clean chip (the raw <command-*> wrapper is dropped). */
 .cv-cmd { display:inline-flex; align-items:center; gap:6px; font-family:var(--wf-mono); font-size:12.5px; }
 .cv-cmd .wf-ico { color:var(--wf-accent); flex:none; }

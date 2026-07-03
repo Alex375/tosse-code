@@ -32,7 +32,10 @@ export function parseSlashCommand(text: string): { command: string; args: string
  *  is dropped), everything else renders as-is. */
 export function UserText({ text }: { text: string }) {
   const cmd = parseSlashCommand(text);
-  if (!cmd) return <>{text}</>;
+  // A plain prompt keeps its line breaks: the raw text carries `\n`, but HTML collapses
+  // whitespace by default, so we render it in a `white-space: pre-wrap` span (the fix for
+  // "my newlines vanish once I hit send"). A slash-command shows as a chip instead.
+  if (!cmd) return <span className="cv-user-text">{text}</span>;
   return (
     <span className="cv-cmd">
       <Ico name="wand" className="sm" />
