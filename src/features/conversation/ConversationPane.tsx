@@ -1,7 +1,8 @@
-import { type MouseEvent as ReactMouseEvent, type RefObject } from "react";
+import { useRef, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 import { TodoBar } from "../todos/TodoBar";
 import { ConductorComposer, type ComposerHandle } from "./ConductorComposer";
 import { ConductorThread } from "./ConductorThread";
+import { LastMessagePin } from "./LastMessagePin";
 import { FileMentionProvider } from "./FileMention";
 import { ReviewBar } from "./ReviewBar";
 import { AgentBar } from "./AgentBar";
@@ -43,8 +44,18 @@ export function ConversationPane({
   // of jumping when the user flips it (via the chip or the global default).
   const cleanOutput = useEffectiveCleanOutput(session);
   const { scrollRef, onRender, scrollToBottom } = useStickToBottom(session, cleanOutput);
+  // The pane is the positioning context (position:relative in CSS) AND the scope for the
+  // pin's "scroll to my last message" lookup — see LastMessagePin.
+  const paneRef = useRef<HTMLDivElement>(null);
   return (
-    <div className="wf-col cv-pane" style={{ flex: 1, minWidth: 0 }} onClick={onBackgroundClick}>
+    <div
+      ref={paneRef}
+      className="wf-col cv-pane"
+      style={{ flex: 1, minWidth: 0 }}
+      onClick={onBackgroundClick}
+    >
+      {/* Floating "last message you sent" pin, pinned over the top of the thread. */}
+      <LastMessagePin session={session} paneRef={paneRef} />
       {/* Provide the conversation id + live cwd so file mentions in the thread
           resolve + open in this conversation's editor. */}
       <FileMentionProvider convId={session} cwd={cwd} inert={inertMentions}>
