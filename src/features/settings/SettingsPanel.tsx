@@ -194,6 +194,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
 function DisplayPrefs() {
   const cleanOutput = useDisplay((s) => s.cleanOutput);
   const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
+  const showLastMessagePreview = useDisplay((s) => s.showLastMessagePreview);
   const set = useDisplay((s) => s.set);
   return (
     <SettingsGroup title="Affichage" icon="list">
@@ -224,6 +225,20 @@ function DisplayPrefs() {
         checked={showTaskNotifications}
         onChange={(v) => set({ showTaskNotifications: v })}
         label="Afficher les notifications de tâche de fond"
+      />
+      <ToggleRow
+        title="Aperçu du dernier message envoyé"
+        hint={
+          <>
+            Épingle en haut de la conversation un aperçu <strong>flottant</strong> du dernier
+            message que tu as envoyé (le message en clair s'il est court, sinon un court résumé) —
+            le même que sur le Flight Deck. Un clic dessus <strong>fait défiler</strong> jusqu'au
+            message. <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showLastMessagePreview}
+        onChange={(v) => set({ showLastMessagePreview: v })}
+        label="Aperçu du dernier message envoyé"
       />
     </SettingsGroup>
   );
