@@ -195,6 +195,7 @@ function DisplayPrefs() {
   const cleanOutput = useDisplay((s) => s.cleanOutput);
   const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
   const showLastMessagePreview = useDisplay((s) => s.showLastMessagePreview);
+  const messageControls = useDisplay((s) => s.messageControls);
   const set = useDisplay((s) => s.set);
   return (
     <SettingsGroup title="Affichage" icon="list">
@@ -239,6 +240,20 @@ function DisplayPrefs() {
         checked={showLastMessagePreview}
         onChange={(v) => set({ showLastMessagePreview: v })}
         label="Aperçu du dernier message envoyé"
+      />
+      <ToggleRow
+        title="Contrôles sur les messages"
+        hint={
+          <>
+            Affiche les contrôles au survol des messages (les tiens et ceux de Claude) :
+            <strong> « reprendre ici »</strong> (rembobine la conversation à ce point) et
+            <strong> « forker »</strong> (branche une nouvelle conversation à ce point).{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={messageControls}
+        onChange={(v) => set({ messageControls: v })}
+        label="Afficher les contrôles sur les messages"
       />
     </SettingsGroup>
   );

@@ -93,7 +93,12 @@ pub enum SessionCommand {
     /// enable / disable), so a running conversation applies it without a restart.
     /// Fire-and-correlate (bare-success ack; rejection surfaces as a control error).
     ReloadPlugins,
-    Shutdown,
+    /// Tear the session down. `ack`, when present, is fired by the actor ONLY after the
+    /// process is fully reaped (the graceful EOF→SIGTERM→SIGKILL ladder has run), so a
+    /// caller can wait for the `claude` process to ACTUALLY be gone — required before any
+    /// operation that mutates the on-disk transcript (a rewind), which must NOT race a
+    /// still-alive writer. `None` = fire-and-forget (the quit path polls `is_empty`).
+    Shutdown { ack: Option<oneshot::Sender<()>> },
 }
 
 /// The controls a session starts with, threaded from the spawn config so the core
@@ -320,8 +325,22 @@ impl SessionHandle {
         self.send(SessionCommand::ReloadPlugins).await
     }
 
+    /// Request teardown WITHOUT waiting for the process to be reaped (the quit path uses
+    /// this and then polls [`Sessions::is_empty`]).
     pub async fn shutdown(&self) -> Result<(), SessionError> {
-        self.send(SessionCommand::Shutdown).await
+        self.send(SessionCommand::Shutdown { ack: None }).await
+    }
+
+    /// Request teardown AND wait until the `claude` process is actually gone (the actor
+    /// fires the ack after `transport.shutdown()` completes). Bounded so a wedged teardown
+    /// can't hang the caller. This is the stop a REWIND must use before truncating the
+    /// transcript — otherwise the still-alive process can re-write the file after the cut.
+    pub async fn shutdown_and_wait(&self) -> Result<(), SessionError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(SessionCommand::Shutdown { ack: Some(tx) }).await?;
+        // The teardown ladder is bounded (~4s worst case); 8s leaves comfortable headroom.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(8), rx).await;
+        Ok(())
     }
 
     async fn send(&self, cmd: SessionCommand) -> Result<(), SessionError> {
@@ -360,6 +379,9 @@ async fn run_actor(
     on_exit: Box<dyn FnOnce() + Send + 'static>,
 ) {
     core.initialize();
+    // A caller that wants to WAIT for the process to be reaped passes a oneshot on the
+    // Shutdown command; we fire it only after `transport.shutdown()` below has run.
+    let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
     // Why the loop ended: a spontaneous transport close (the process died on its own)
     // must be EXPLAINED in the conversation, while a requested Shutdown is expected.
     let process_gone = loop {
@@ -369,7 +391,8 @@ async fn run_actor(
                 None => break true, // transport closed: the process exited on its own
             },
             maybe_cmd = cmd_rx.recv() => match maybe_cmd {
-                Some(SessionCommand::Shutdown) | None => break false, // requested stop
+                Some(SessionCommand::Shutdown { ack }) => { shutdown_ack = ack; break false; }
+                None => break false, // command channel closed: requested stop
                 Some(cmd) => core.on_command(cmd),
             },
         }
@@ -393,6 +416,12 @@ async fn run_actor(
     transport.shutdown().await;
     // Let the owner (e.g. the IPC registry) evict this dead session.
     on_exit();
+    // The process is now fully reaped: release any caller waiting on `shutdown_and_wait`
+    // (a rewind about to truncate this session's transcript). A dropped receiver (caller
+    // timed out / gave up) is fine — the send just fails silently.
+    if let Some(ack) = shutdown_ack {
+        let _ = ack.send(());
+    }
 }
 
 /// A `can_use_tool` request we have surfaced and are waiting to answer.
@@ -1019,7 +1048,7 @@ impl SessionCore {
                 self.send_tracked(PendingControl::ReloadPlugins, control::reload_plugins_request);
             }
             // Shutdown is handled in the run loop (breaks before reaching here).
-            SessionCommand::Shutdown => {}
+            SessionCommand::Shutdown { .. } => {}
         }
     }
 }

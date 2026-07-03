@@ -64,6 +64,12 @@ export interface DisplayPrefs {
    *  its ≤6-word Haiku summary). Clicking it scrolls the thread to that message. On by
    *  default. Read by {@link LastMessagePin}. */
   showLastMessagePreview: boolean;
+
+  /** Show the hover controls on conversation messages — "reprendre à partir d'ici" (rewind
+   *  the conversation in place) and "forker" (branch a new conversation at this message),
+   *  offered on both the user's and Claude's messages. ON by default. Off → messages have no
+   *  hover controls. Read by {@link MessageActions} (via the conversation thread). */
+  messageControls: boolean;
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
@@ -78,6 +84,7 @@ const DEFAULTS: DisplayPrefs = {
   alertOnBackgroundWait: true,
   showTaskNotifications: false,
   showLastMessagePreview: true,
+  messageControls: true,
 };
 
 function load(): DisplayPrefs {
@@ -117,6 +124,7 @@ export const useDisplay = create<DisplayState>((set) => ({
         alertOnBackgroundWait: patch.alertOnBackgroundWait ?? s.alertOnBackgroundWait,
         showTaskNotifications: patch.showTaskNotifications ?? s.showTaskNotifications,
         showLastMessagePreview: patch.showLastMessagePreview ?? s.showLastMessagePreview,
+        messageControls: patch.messageControls ?? s.messageControls,
       };
       save(next);
       return next;

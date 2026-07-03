@@ -201,6 +201,64 @@ pub async fn load_session_context(session_id: String) -> Result<ContextFill, Str
         .map_err(|e| e.to_string())
 }
 
+/// Rewind a conversation IN PLACE by truncating its on-disk transcript at `target_id`,
+/// dropping that message (USER target) or everything after its response (ASSISTANT
+/// target). Destructive by design ("reprendre à partir d'ici"): the removed turns are
+/// gone from the transcript, so a `--resume` re-spawn reads the shortened history fresh
+/// (VERIFIED: resume honours the truncation — see [`history::rewind_transcript`]).
+///
+/// The caller MUST stop the conversation's live session first (so no `claude` process
+/// re-writes the transcript from its in-memory state), then reload history from the
+/// truncated file. Pure file IO, run off the async runtime via `spawn_blocking`.
+#[tauri::command]
+#[specta::specta]
+pub async fn rewind_conversation(
+    session_id: String,
+    target_id: String,
+    target_is_user: bool,
+    target_text: Option<String>,
+    occurrence: Option<u32>,
+) -> Result<history::RewindOutcome, String> {
+    tokio::task::spawn_blocking(move || {
+        history::rewind_transcript(
+            &session_id,
+            &target_id,
+            target_is_user,
+            target_text.as_deref(),
+            occurrence.map(|o| o as usize),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Fork a NEW conversation branched at `target_id`, NON-destructively (the original
+/// transcript is left intact). Writes the kept history to a fresh transcript beside the
+/// original and returns it as a [`history::DiskConversation`] (inside [`history::ForkOutcome`])
+/// the front turns into a real conversation via `reactivateDiskConversation`. No live session
+/// is touched — the branch is lazy like any other conversation. Pure file IO off the runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn fork_conversation(
+    session_id: String,
+    target_id: String,
+    target_is_user: bool,
+    target_text: Option<String>,
+    occurrence: Option<u32>,
+) -> Result<history::ForkOutcome, String> {
+    tokio::task::spawn_blocking(move || {
+        history::fork_transcript(
+            &session_id,
+            &target_id,
+            target_is_user,
+            target_text.as_deref(),
+            occurrence.map(|o| o as usize),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---- Background-task artifacts (disk readers) -----------------------------
 //
 // The front's read-only boundary to a session's on-disk background-task artifacts:
@@ -643,9 +701,11 @@ pub async fn stop_session(
     session: String,
 ) -> Result<(), String> {
     if let Some(handle) = sessions.remove(&session) {
-        // Ignore a closed channel: the actor may have already exited on its own,
-        // in which case the session is stopped anyway.
-        let _ = handle.shutdown().await;
+        // Wait for the process to be FULLY reaped (not just for the Shutdown command to be
+        // enqueued): a rewind truncates the transcript right after stopping the session and
+        // must not race a still-alive `claude` writer. Ignore a closed channel / timeout —
+        // the actor may have already exited on its own, in which case it's stopped anyway.
+        let _ = handle.shutdown_and_wait().await;
     }
     Ok(())
 }

@@ -28,9 +28,11 @@ import type {
   PersistedState,
   PlanUsage,
   Pong,
+  ForkOutcome,
   RemoteControlState,
   RepoRecord,
   Result,
+  RewindOutcome,
   SearchHit,
   SessionCommandsEvent,
   SessionMessageEvent,
@@ -407,6 +409,39 @@ export const mockCommands = {
     // No transcript in the browser mock; the scenario's baseState already carries a
     // context fill, so nothing to seed here.
     return ok({ context_tokens: null, context_window: null });
+  },
+
+  async rewindConversation(
+    _sessionId: string,
+    _targetId: string,
+    _targetIsUser: boolean,
+    _targetText: string | null,
+    _occurrence: number | null,
+  ): Promise<Result<RewindOutcome, string>> {
+    // No on-disk transcript in the browser mock — a benign no-op outcome.
+    return ok({ removed_prompt: null, removed_lines: 0 });
+  },
+
+  async forkConversation(
+    _sessionId: string,
+    _targetId: string,
+    _targetIsUser: boolean,
+    _targetText: string | null,
+    _occurrence: number | null,
+  ): Promise<Result<ForkOutcome, string>> {
+    // No on-disk transcript in the browser mock — echo a placeholder branch row.
+    return ok({
+      conversation: {
+        session_id: "mock-fork",
+        cwd: "/mock",
+        repo_root: "/mock",
+        git_branch: null,
+        title: null,
+        excerpt: "fork (mock)",
+        mtime_ms: 0,
+      },
+      removed_prompt: null,
+    });
   },
 
   async listDiskConversations(): Promise<Result<DiskConversation[], string>> {

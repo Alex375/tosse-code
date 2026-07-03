@@ -348,6 +348,297 @@ fn push_assistant(entry: &Value, items: &mut Vec<ConversationItem>) {
 }
 
 // ============================================================================
+// Rewind — truncate a conversation's transcript at a chosen message.
+//
+// "Reprendre à partir d'ici" cuts the on-disk transcript so the conversation ends
+// just before a genuine human-prompt boundary, then the app re-spawns
+// `claude --resume` on the shortened file. VERIFIED (live probe, binary 2.1.187):
+// resume HONOURS a truncated transcript — the dropped turns do not survive in the
+// resumed context, and there is no hidden cache; the file is resolved by the
+// cwd→slug mapping, so the same `session_id` file under the conversation's cwd is
+// read fresh. Cutting ONLY at a genuine human-prompt boundary guarantees the kept
+// history always ends on a COMPLETE assistant response — never a dangling `tool_use`
+// whose `tool_result` (delivered as a later `user` line) was dropped.
+// ============================================================================
+
+/// What a rewind removed, returned to the UI.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct RewindOutcome {
+    /// For a USER-message rewind, the text of the removed prompt so the composer can be
+    /// re-seeded with it ("revenir à ce prompt"). `None` for an assistant-message rewind
+    /// (its response is kept; the user just continues with a new message).
+    pub removed_prompt: Option<String>,
+    /// How many transcript lines were dropped. `0` means nothing followed the target —
+    /// a no-op (the conversation already ended there), and the file is left untouched.
+    pub removed_lines: usize,
+}
+
+/// The result of a fork ("brancher une nouvelle conversation ici"): the freshly-written
+/// branch conversation (ready to bring into the app via `reactivateDiskConversation`) and,
+/// for a USER-message fork, the removed prompt text to seed the new conversation's composer.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ForkOutcome {
+    pub conversation: DiskConversation,
+    pub removed_prompt: Option<String>,
+}
+
+/// The prompt text of a GENUINE human turn at line `i` (a real bubble the user sees) —
+/// `None` for a tool_result delivery, a meta/sidechain line, or an assistant line.
+/// Reuses [`first_user_text`] so a cut boundary matches exactly what the history excerpt
+/// treats as a prompt. Gating on `type == "user"` is required: `first_user_text` alone
+/// would also return an assistant line's text blocks.
+fn human_prompt_at(parsed: &[Option<Value>], i: usize) -> Option<String> {
+    let v = parsed.get(i)?.as_ref()?;
+    if v.get("type").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    first_user_text(v)
+}
+
+/// A stable comparison key for matching a LIVE user turn's text (from the front) against an
+/// on-disk human-prompt line, tolerant of the two shapes the SAME action takes on each side:
+/// - a slash command typed live ("/foo bar") vs its persisted header
+///   ("&lt;command-name&gt;/foo&lt;/command-name&gt;…") — both reduce to the command token "/foo";
+/// - the image placeholder ("[image]") stays itself;
+/// - a plain prompt maps to itself.
+/// MUST mirror the front's `promptMatchKey` (ConductorThread) so occurrence counting agrees.
+fn prompt_match_key(text: &str) -> String {
+    let t = text.trim();
+    // Persisted slash-command header → the command name only.
+    if let Some(name) = extract_tag(t, "command-name") {
+        return name.trim().to_string();
+    }
+    // Raw slash command typed live → its command token (drop args so "/foo a" ≡ the header).
+    if t.starts_with('/') {
+        return t.split_whitespace().next().unwrap_or(t).to_string();
+    }
+    t.to_string()
+}
+
+/// Text between `<tag>` and `</tag>`, if present.
+fn extract_tag(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let rest = &text[start..];
+    let end = rest.find(&close)?;
+    Some(rest[..end].to_string())
+}
+
+/// The removed prompt as USABLE composer text: `None` for the image placeholder (nothing to
+/// re-type), the reconstructed "/cmd args" for a persisted slash-command header, else the
+/// text verbatim. Keeps the composer re-seed clean instead of dumping raw &lt;command-*&gt; XML.
+fn clean_prompt_for_composer(text: &str) -> Option<String> {
+    if text.trim() == "[image]" {
+        return None;
+    }
+    if let Some(name) = extract_tag(text, "command-name") {
+        let args = extract_tag(text, "command-args").unwrap_or_default();
+        let args = args.trim();
+        let name = name.trim();
+        return Some(if args.is_empty() { name.to_string() } else { format!("{name} {args}") });
+    }
+    Some(text.to_string())
+}
+
+/// Resolve where to cut the transcript for a rewind/fork at `target_id`, returning the cut
+/// line index (keep `[0, cut)`, drop the rest) and, for a USER target, the removed prompt as
+/// clean composer text.
+///
+/// - USER target: located by its top-level `uuid` (= the front's user `Turn.id` for a
+///   RESUMED conversation). A LIVE turn instead carries a synthetic front id (`user_N`) that
+///   never appears on disk, so we FALL BACK to matching by [`prompt_match_key`] over
+///   `target_text` (tolerant of slash/image shapes). `occurrence` (the front's index among
+///   identical-key prompts) disambiguates repeats — critical since short prompts ("ok",
+///   "continue") recur; without it the fallback would silently cut at the LAST repeat. The
+///   cut lands ON the prompt (it and everything after are dropped). Refused on the first
+///   prompt (would leave an unresumable, turn-less file).
+/// - ASSISTANT target: located by `message.id` (stable both live and on disk). The cut lands
+///   at the NEXT genuine human prompt, keeping the whole response + its tool_results intact.
+fn resolve_cut(
+    raw: &[&str],
+    parsed: &[Option<Value>],
+    target_id: &str,
+    target_is_user: bool,
+    target_text: Option<&str>,
+    occurrence: Option<usize>,
+) -> Result<(usize, Option<String>), String> {
+    if target_is_user {
+        // 1. Exact top-level `uuid` match (a resumed conversation's real transcript id).
+        let mut ti = (0..raw.len()).find(|&i| {
+            parsed[i].as_ref().and_then(|v| v.get("uuid").and_then(Value::as_str)) == Some(target_id)
+                && human_prompt_at(parsed, i).is_some()
+        });
+        // 2. Fallback for a LIVE turn (synthetic id): match by key, disambiguated by the
+        //    front's occurrence index; fall back to the LAST match only if unspecified.
+        if ti.is_none() {
+            if let Some(text) = target_text {
+                let key = prompt_match_key(text);
+                let matches: Vec<usize> = (0..raw.len())
+                    .filter(|&i| human_prompt_at(parsed, i).map(|t| prompt_match_key(&t)) == Some(key.clone()))
+                    .collect();
+                ti = occurrence
+                    .and_then(|o| matches.get(o).copied())
+                    .or_else(|| matches.last().copied());
+            }
+        }
+        let ti = ti.ok_or_else(|| "message ciblé introuvable dans le transcript".to_string())?;
+        let has_prior_turn = (0..ti).any(|i| human_prompt_at(parsed, i).is_some());
+        if !has_prior_turn {
+            return Err(
+                "Impossible de reprendre avant le premier message de la conversation.".to_string(),
+            );
+        }
+        let removed = human_prompt_at(parsed, ti).and_then(|t| clean_prompt_for_composer(&t));
+        Ok((ti, removed))
+    } else {
+        // An assistant turn may span several lines sharing one `message.id` — take its
+        // LAST line, then cut at the NEXT genuine human prompt after it.
+        let mut ai = None;
+        for i in (0..raw.len()).rev() {
+            let is_target = parsed[i]
+                .as_ref()
+                .and_then(|v| v.get("message").and_then(|m| m.get("id")).and_then(Value::as_str))
+                == Some(target_id);
+            if is_target {
+                ai = Some(i);
+                break;
+            }
+        }
+        let ai = ai.ok_or_else(|| "réponse ciblée introuvable dans le transcript".to_string())?;
+        let next_human = (ai + 1..raw.len()).find(|&i| human_prompt_at(parsed, i).is_some());
+        Ok((next_human.unwrap_or(raw.len()), None))
+    }
+}
+
+/// Read a transcript and split it into raw (verbatim) lines + their parsed values, kept
+/// index-aligned. Shared by rewind and fork.
+fn read_transcript_lines(path: &Path) -> Result<(String, Vec<Option<Value>>), String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("lecture du transcript impossible : {e}"))?;
+    let parsed: Vec<Option<Value>> =
+        content.lines().map(|l| serde_json::from_str::<Value>(l.trim()).ok()).collect();
+    Ok((content, parsed))
+}
+
+/// Truncate `session_id`'s transcript at `target_id` (rewind the conversation IN PLACE).
+/// Env wrapper around the testable [`rewind_transcript_in`] core. See [`resolve_cut`].
+pub fn rewind_transcript(
+    session_id: &str,
+    target_id: &str,
+    target_is_user: bool,
+    target_text: Option<&str>,
+    occurrence: Option<usize>,
+) -> Result<RewindOutcome, String> {
+    let config_dir = claude_config_dir()
+        .ok_or_else(|| "répertoire de configuration Claude introuvable".to_string())?;
+    rewind_transcript_in(&config_dir, session_id, target_id, target_is_user, target_text, occurrence)
+}
+
+fn rewind_transcript_in(
+    config_dir: &Path,
+    session_id: &str,
+    target_id: &str,
+    target_is_user: bool,
+    target_text: Option<&str>,
+    occurrence: Option<usize>,
+) -> Result<RewindOutcome, String> {
+    let path = find_transcript(config_dir, session_id)
+        .ok_or_else(|| "transcript de la conversation introuvable".to_string())?;
+    let (content, parsed) = read_transcript_lines(&path)?;
+    let raw: Vec<&str> = content.lines().collect();
+
+    let (cut_index, removed_prompt) =
+        resolve_cut(&raw, &parsed, target_id, target_is_user, target_text, occurrence)?;
+
+    let removed_lines = raw.len() - cut_index;
+    if removed_lines == 0 {
+        // Nothing after the target — the conversation already ends here. Leave the file
+        // untouched (a no-op the UI can surface as "rien à rembobiner").
+        return Ok(RewindOutcome { removed_prompt, removed_lines: 0 });
+    }
+
+    // Rewrite the kept lines verbatim via a temp file + atomic rename, so a crash
+    // mid-write can never leave a half-truncated (corrupt) transcript in place.
+    let kept = &raw[..cut_index];
+    let body = if kept.is_empty() { String::new() } else { format!("{}\n", kept.join("\n")) };
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("transcript");
+    let tmp = path.with_file_name(format!(".{file_name}.rewind-tmp"));
+    std::fs::write(&tmp, &body)
+        .map_err(|e| format!("écriture du transcript tronqué impossible : {e}"))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("remplacement du transcript impossible : {e}"))?;
+
+    Ok(RewindOutcome { removed_prompt, removed_lines })
+}
+
+/// Fork a NEW conversation branched at `target_id` (NON-destructive: the original
+/// transcript is untouched). Writes the kept history to a fresh `<new_uuid>.jsonl` in the
+/// SAME project dir (so `--resume` resolves it under the same cwd slug), rewriting each
+/// line's `sessionId` to the new id, then head-reads it back into a [`DiskConversation`]
+/// the UI turns into a real conversation. Env wrapper around [`fork_transcript_in`].
+pub fn fork_transcript(
+    session_id: &str,
+    target_id: &str,
+    target_is_user: bool,
+    target_text: Option<&str>,
+    occurrence: Option<usize>,
+) -> Result<ForkOutcome, String> {
+    let config_dir = claude_config_dir()
+        .ok_or_else(|| "répertoire de configuration Claude introuvable".to_string())?;
+    fork_transcript_in(&config_dir, session_id, target_id, target_is_user, target_text, occurrence)
+}
+
+fn fork_transcript_in(
+    config_dir: &Path,
+    session_id: &str,
+    target_id: &str,
+    target_is_user: bool,
+    target_text: Option<&str>,
+    occurrence: Option<usize>,
+) -> Result<ForkOutcome, String> {
+    let path = find_transcript(config_dir, session_id)
+        .ok_or_else(|| "transcript de la conversation introuvable".to_string())?;
+    let (content, parsed) = read_transcript_lines(&path)?;
+    let raw: Vec<&str> = content.lines().collect();
+
+    let (cut_index, removed_prompt) =
+        resolve_cut(&raw, &parsed, target_id, target_is_user, target_text, occurrence)?;
+
+    // The branch needs a fresh session id AND filename (a session id IS its file stem). Write
+    // it beside the original so the cwd→slug resolution that `--resume` relies on still holds.
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let new_path = path.with_file_name(format!("{new_id}.jsonl"));
+
+    // Rewrite each kept line's `sessionId` to the new id (parsed, not verbatim, since the id
+    // is embedded per line); a rare unparseable line is copied through as-is.
+    let mut out = String::new();
+    for (i, line) in raw[..cut_index].iter().enumerate() {
+        match &parsed[i] {
+            Some(v) => {
+                let mut v = v.clone();
+                if v.get("sessionId").is_some() {
+                    v["sessionId"] = Value::String(new_id.clone());
+                }
+                out.push_str(&v.to_string());
+                out.push('\n');
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    std::fs::write(&new_path, &out)
+        .map_err(|e| format!("écriture de la conversation forkée impossible : {e}"))?;
+
+    // Head-read the new file back into the same row shape the history panel uses.
+    let conversation = scan_disk_conversation(&new_path)
+        .ok_or_else(|| "la conversation forkée n'a pas pu être relue".to_string())?;
+    Ok(ForkOutcome { conversation, removed_prompt })
+}
+
+// ============================================================================
 // On-disk conversation HISTORY (the search-history panel).
 //
 // Lists EVERY conversation transcript on disk — including ones the app has
@@ -1207,6 +1498,263 @@ mod tests {
         // The worktree cwd rolled up to the repo root for grouping/reactivation.
         assert_eq!(orphan.repo_root, "/Users/me/Repos/app");
         assert_eq!(orphan.cwd, "/Users/me/Repos/app/.claude/worktrees/feat-x");
+    }
+
+    /// A two-exchange transcript: bookkeeping line, prompt P1 + its assistant reply
+    /// (split across two same-id lines with a tool_use/result), prompt P2 + its reply.
+    /// Shared by the rewind tests.
+    fn rewind_fixture(base: &Path, session_id: &str) {
+        write_transcript(
+            base,
+            "-p",
+            session_id,
+            &[
+                r#"{"type":"queue-operation","cwd":"/p"}"#,
+                r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"first prompt"}}"#,
+                r#"{"type":"assistant","uuid":"a1","message":{"id":"msg_1","content":[{"type":"tool_use","id":"tool_1","name":"Bash","input":{"command":"ls"}}]}}"#,
+                r#"{"type":"user","uuid":"tr1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_1","content":"a.txt"}]}}"#,
+                r#"{"type":"assistant","uuid":"a2","message":{"id":"msg_1","content":[{"type":"text","text":"first answer"}]}}"#,
+                r#"{"type":"user","uuid":"u2","message":{"role":"user","content":"second prompt"}}"#,
+                r#"{"type":"assistant","uuid":"a3","message":{"id":"msg_2","content":[{"type":"text","text":"second answer"}]}}"#,
+            ],
+        );
+    }
+
+    /// A USER rewind on the SECOND prompt drops it and everything after, returns the
+    /// removed prompt text (to re-seed the composer), and keeps the first full exchange
+    /// (including the tool_result) — the truncated file ends on a complete response.
+    #[test]
+    fn rewind_user_message_drops_it_and_everything_after() {
+        let base = std::env::temp_dir().join(format!("tosse-rw-user-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "11111111-1111-1111-1111-111111111111";
+        rewind_fixture(&base, sid);
+
+        let outcome = rewind_transcript_in(&base, sid, "u2", true, None, None).expect("rewind ok");
+        assert_eq!(outcome.removed_prompt.as_deref(), Some("second prompt"));
+        assert_eq!(outcome.removed_lines, 2, "drop P2 + its answer");
+
+        // The truncated transcript restores to exactly the first exchange.
+        let items = load_history_in(&base, sid);
+        std::fs::remove_dir_all(&base).ok();
+        let user_texts: Vec<_> = items
+            .iter()
+            .filter_map(|i| match i {
+                ConversationItem::UserMessage { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, vec!["first prompt"], "second prompt is gone");
+        assert!(
+            items
+                .iter()
+                .any(|i| matches!(i, ConversationItem::AssistantMessage { id, .. } if id == "msg_1")),
+            "the first answer (and its tool_result) are kept"
+        );
+        assert!(
+            !items
+                .iter()
+                .any(|i| matches!(i, ConversationItem::AssistantMessage { id, .. } if id == "msg_2")),
+            "the second answer is gone"
+        );
+    }
+
+    /// An ASSISTANT rewind keeps the whole targeted response (cutting at the NEXT human
+    /// prompt), so the first answer + its tool_result survive and the second exchange is
+    /// dropped; nothing is re-seeded into the composer.
+    #[test]
+    fn rewind_assistant_message_keeps_the_response_cuts_at_next_prompt() {
+        let base = std::env::temp_dir().join(format!("tosse-rw-ai-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "22222222-2222-2222-2222-222222222222";
+        rewind_fixture(&base, sid);
+
+        // Target the first response by its message id; the cut lands at "second prompt".
+        let outcome = rewind_transcript_in(&base, sid, "msg_1", false, None, None).expect("rewind ok");
+        assert_eq!(outcome.removed_prompt, None);
+        assert_eq!(outcome.removed_lines, 2, "drop P2 + its answer");
+
+        let items = load_history_in(&base, sid);
+        std::fs::remove_dir_all(&base).ok();
+        assert!(
+            items
+                .iter()
+                .any(|i| matches!(i, ConversationItem::AssistantMessage { id, .. } if id == "msg_1")),
+            "the targeted response is kept whole"
+        );
+        assert!(
+            !items
+                .iter()
+                .any(|i| matches!(i, ConversationItem::UserMessage { text, .. } if text == "second prompt")),
+            "the next prompt (and beyond) is dropped"
+        );
+    }
+
+    /// Rewinding the FIRST prompt is refused (it would leave an unresumable, turn-less
+    /// transcript) — the defensive backstop behind the UI's own gating.
+    #[test]
+    fn rewind_first_user_message_is_refused() {
+        let base = std::env::temp_dir().join(format!("tosse-rw-first-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "33333333-3333-3333-3333-333333333333";
+        rewind_fixture(&base, sid);
+        let err = rewind_transcript_in(&base, sid, "u1", true, None, None).unwrap_err();
+        std::fs::remove_dir_all(&base).ok();
+        assert!(err.contains("premier message"), "got: {err}");
+    }
+
+    /// A rewind whose target has nothing after it is a no-op: 0 lines removed and the
+    /// transcript is left byte-for-byte untouched.
+    #[test]
+    fn rewind_last_response_is_a_noop() {
+        let base = std::env::temp_dir().join(format!("tosse-rw-noop-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "44444444-4444-4444-4444-444444444444";
+        rewind_fixture(&base, sid);
+        let path = base.join("projects").join("-p").join(format!("{sid}.jsonl"));
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        // "msg_2" is the last response — nothing follows it.
+        let outcome = rewind_transcript_in(&base, sid, "msg_2", false, None, None).expect("rewind ok");
+        assert_eq!(outcome.removed_lines, 0);
+        let after = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&base).ok();
+        assert_eq!(before, after, "a no-op rewind must not touch the file");
+    }
+
+    /// An unknown target id surfaces an error rather than silently truncating.
+    #[test]
+    fn rewind_unknown_target_errors() {
+        let base = std::env::temp_dir().join(format!("tosse-rw-unk-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "55555555-5555-5555-5555-555555555555";
+        rewind_fixture(&base, sid);
+        let err = rewind_transcript_in(&base, sid, "does-not-exist", true, None, None).unwrap_err();
+        std::fs::remove_dir_all(&base).ok();
+        assert!(err.contains("introuvable"), "got: {err}");
+    }
+
+    /// A LIVE user turn carries a synthetic front id (`user_N`) that is NOT on disk, so the
+    /// exact-uuid match fails — the rewind must FALL BACK to matching the prompt TEXT.
+    #[test]
+    fn rewind_user_falls_back_to_text_when_id_is_synthetic() {
+        let base = std::env::temp_dir().join(format!("tosse-rw-txt-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "66666666-6666-6666-6666-666666666666";
+        rewind_fixture(&base, sid);
+        // Front id "user_3" doesn't exist on disk; the text "second prompt" does.
+        let outcome = rewind_transcript_in(&base, sid, "user_3", true, Some("second prompt"), None)
+            .expect("rewind ok via text fallback");
+        assert_eq!(outcome.removed_prompt.as_deref(), Some("second prompt"));
+        assert_eq!(outcome.removed_lines, 2);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Two IDENTICAL live prompts: the `occurrence` index disambiguates so a rewind targets
+    /// the one the user clicked (the EARLIER "ok"), not the last text match.
+    #[test]
+    fn rewind_user_uses_occurrence_to_pick_the_right_duplicate() {
+        let base = std::env::temp_dir().join(format!("tosse-rw-occ-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "88888888-8888-8888-8888-888888888888";
+        write_transcript(
+            &base,
+            "-p",
+            sid,
+            &[
+                r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"start"}}"#,
+                r#"{"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"text","text":"r1"}]}}"#,
+                r#"{"type":"user","uuid":"u2","message":{"role":"user","content":"ok"}}"#,
+                r#"{"type":"assistant","uuid":"a2","message":{"id":"m2","content":[{"type":"text","text":"r2"}]}}"#,
+                r#"{"type":"user","uuid":"u3","message":{"role":"user","content":"ok"}}"#,
+                r#"{"type":"assistant","uuid":"a3","message":{"id":"m3","content":[{"type":"text","text":"r3"}]}}"#,
+            ],
+        );
+        // Live ids are synthetic → text fallback. occurrence=1 = the SECOND "ok" (u3): drop
+        // it + its answer only (2 lines). occurrence=0 = the FIRST "ok" (u2): drop 4 lines.
+        let later = rewind_transcript_in(&base, sid, "user_x", true, Some("ok"), Some(1)).unwrap();
+        assert_eq!(later.removed_lines, 2, "occurrence 1 targets the later duplicate");
+
+        // Re-seed the fixture (the first rewind truncated it) and target the FIRST "ok".
+        write_transcript(
+            &base,
+            "-p",
+            sid,
+            &[
+                r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"start"}}"#,
+                r#"{"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"text","text":"r1"}]}}"#,
+                r#"{"type":"user","uuid":"u2","message":{"role":"user","content":"ok"}}"#,
+                r#"{"type":"assistant","uuid":"a2","message":{"id":"m2","content":[{"type":"text","text":"r2"}]}}"#,
+                r#"{"type":"user","uuid":"u3","message":{"role":"user","content":"ok"}}"#,
+                r#"{"type":"assistant","uuid":"a3","message":{"id":"m3","content":[{"type":"text","text":"r3"}]}}"#,
+            ],
+        );
+        let earlier = rewind_transcript_in(&base, sid, "user_x", true, Some("ok"), Some(0)).unwrap();
+        std::fs::remove_dir_all(&base).ok();
+        assert_eq!(earlier.removed_lines, 4, "occurrence 0 targets the earlier duplicate");
+    }
+
+    /// A live slash-command turn (front sends "/done"; disk holds the <command-name> header)
+    /// resolves via prompt_match_key, and the composer re-seed is the clean command, not XML.
+    #[test]
+    fn rewind_user_matches_slash_command_across_wrapper_and_cleans_the_reseed() {
+        let base = std::env::temp_dir().join(format!("tosse-rw-slash-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "99999999-9999-9999-9999-999999999999";
+        write_transcript(
+            &base,
+            "-p",
+            sid,
+            &[
+                r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"hello"}}"#,
+                r#"{"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"text","text":"hi"}]}}"#,
+                r#"{"type":"user","uuid":"u2","message":{"role":"user","content":"<command-message>compact</command-message>\n<command-name>/compact</command-name>\n<command-args>keep tests</command-args>"}}"#,
+                r#"{"type":"assistant","uuid":"a2","message":{"id":"m2","content":[{"type":"text","text":"done"}]}}"#,
+            ],
+        );
+        // Front live text is the raw "/compact keep tests"; must still match the header line.
+        let outcome = rewind_transcript_in(&base, sid, "user_9", true, Some("/compact keep tests"), None)
+            .expect("slash match ok");
+        std::fs::remove_dir_all(&base).ok();
+        // The re-seed is the reconstructed clean command, never the raw <command-*> wrapper.
+        assert_eq!(outcome.removed_prompt.as_deref(), Some("/compact keep tests"));
+        assert_eq!(outcome.removed_lines, 2);
+    }
+
+    /// A fork writes a NEW transcript (leaving the original intact) that head-reads back into
+    /// a DiskConversation, and keeps history up to the cut (user target → before the prompt).
+    #[test]
+    fn fork_writes_a_new_branch_leaving_the_original_intact() {
+        let base = std::env::temp_dir().join(format!("tosse-fork-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "77777777-7777-7777-7777-777777777777";
+        rewind_fixture(&base, sid);
+        let orig_path = base.join("projects").join("-p").join(format!("{sid}.jsonl"));
+        let orig_before = std::fs::read_to_string(&orig_path).unwrap();
+
+        // Fork at the second prompt (branch keeps only the first exchange).
+        let outcome = fork_transcript_in(&base, sid, "u2", true, None, None).expect("fork ok");
+        assert_eq!(outcome.removed_prompt.as_deref(), Some("second prompt"));
+        // The new session id differs and its file exists under the same project dir.
+        assert_ne!(outcome.conversation.session_id, sid);
+        let new_path = base
+            .join("projects")
+            .join("-p")
+            .join(format!("{}.jsonl", outcome.conversation.session_id));
+        assert!(new_path.is_file(), "the branch transcript must exist");
+        // The ORIGINAL is untouched (non-destructive).
+        assert_eq!(std::fs::read_to_string(&orig_path).unwrap(), orig_before);
+        // The branch restores to exactly the first exchange (second prompt dropped).
+        let items = load_history_in(&base, &outcome.conversation.session_id);
+        std::fs::remove_dir_all(&base).ok();
+        let user_texts: Vec<_> = items
+            .iter()
+            .filter_map(|i| match i {
+                ConversationItem::UserMessage { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, vec!["first prompt"], "branch keeps only up to the cut");
     }
 
     #[test]
