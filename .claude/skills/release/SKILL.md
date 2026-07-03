@@ -122,6 +122,22 @@ gh pr merge <pr-number> --merge
 
 (En tant qu'admin avec `enforce_admins=false`, Alexandre peut finaliser le merge même si une protection résiste.)
 
+⚠️ **TOUJOURS `--merge` (merge commit à deux parents). JAMAIS `--squash` ni `--rebase`, et JAMAIS le bouton « Squash »/« Rebase » de l'UI GitHub.** `dev` est une branche **permanente** re-mergée dans `main` à chaque release : un squash/rebase crée sur `main` un commit orphelin sans lien avec l'historique de `dev` → la base de merge reste figée à la release précédente → **la release SUIVANTE se retrouve avec des conflits sur tout le changeset** (le même diff vu « des deux côtés »). Un vrai merge commit fait avancer la base de merge et évite définitivement ce piège. (Idéalement le repo n'autorise QUE `allow_merge_commit` — `allow_squash_merge`/`allow_rebase_merge` à `false`.)
+
+## Étape 9b — Re-synchroniser `main → dev` (anti-divergence)
+
+Le merge commit de l'étape 9 vit sur `main` mais pas encore sur `dev` → ceinture-et-bretelles, on le ramène tout de suite pour que les deux branches restent alignées :
+
+```bash
+git checkout dev
+git fetch origin
+git merge --ff-only origin/dev      # dev local à jour
+git merge origin/main               # ramène le merge commit de release ; doit être propre
+git push origin dev
+```
+
+Ce merge doit être **propre** (aucun conflit) puisque `main` ne contient que ce que `dev` a produit. S'il y a le moindre conflit, c'est le symptôme du piège squash décrit à l'étape 9 : **arrête-toi et analyse** (probable squash/rebase antérieur à réconcilier via `git merge -s ours origin/main`) plutôt que de résoudre à l'aveugle.
+
 ## Étape 10 — Déclencher la release
 
 ```bash
