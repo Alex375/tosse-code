@@ -1,7 +1,7 @@
 ---
 name: build-app
 description: |
-  Build et lance l'app Tosse Code depuis le worktree courant pour la tester comme une vraie app, AVEC SES DONNÉES ISOLÉES de la prod. Utilise ce skill quand :
+  Build et lance l'app Flight Deck depuis le worktree courant pour la tester comme une vraie app, AVEC SES DONNÉES ISOLÉES de la prod. Utilise ce skill quand :
   - L'utilisateur tape `/build-app`
   - L'utilisateur dit « build l'app », « compile l'app pour tester », « lance-moi l'app de cette feature », « je veux tester l'app »
   - Tu as fini (ou veux essayer) une feature et tu veux la voir tourner dans une vraie fenêtre, pas juste en tests unitaires
@@ -10,7 +10,7 @@ description: |
 
 # Build-app — Builder et lancer une app de test isolée
 
-Ce skill produit un bundle macOS de l'app **propre à la feature courante**, nommé `TosseCode <slug>`, et le lance. Il garantit que ce build **ne touche jamais les données de la prod**.
+Ce skill produit un bundle macOS de l'app **propre à la feature courante**, nommé `FlightDeck <slug>`, et le lance. Il garantit que ce build **ne touche jamais les données de la prod**.
 
 ## ⚠️ L'invariant à ne jamais casser : identifiant distinct
 
@@ -45,7 +45,7 @@ Crée un fichier de config **temporaire** qui sera fusionné par-dessus `tauri.c
 ```json
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TosseCode <slug>",
+  "productName": "FlightDeck <slug>",
   "identifier": "com.tosse.desktop.<slug>",
   "bundle": { "createUpdaterArtifacts": false }
 }
@@ -66,7 +66,7 @@ pnpm tauri build --config src-tauri/target/build-overlay-<slug>.json
 Le bundle sort dans `src-tauri/target/release/bundle/macos/` sous le `productName` :
 
 ```bash
-open "src-tauri/target/release/bundle/macos/TosseCode <slug>.app"
+open "src-tauri/target/release/bundle/macos/FlightDeck <slug>.app"
 ```
 
 Comme chaque feature a un `productName` distinct, les bundles ne s'écrasent pas entre eux.

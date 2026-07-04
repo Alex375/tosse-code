@@ -1,16 +1,16 @@
 ---
 name: build-dev
 description: |
-  Build et lance l'app **Tosse Code dev build** depuis le worktree PRINCIPAL sur la branche `dev`, avec ses données ISOLÉES de la prod. Utilise ce skill quand :
+  Build et lance l'app **Flight Deck dev build** depuis le worktree PRINCIPAL sur la branche `dev`, avec ses données ISOLÉES de la prod. Utilise ce skill quand :
   - L'utilisateur tape `/build-dev`
   - L'utilisateur dit « build la dev », « build l'app sur dev », « compile dev pour tester », « je veux tester la dev »
   - Tu veux voir tourner l'état courant de `dev` (p. ex. juste après un `/land`) dans une vraie fenêtre, pas seulement en tests unitaires
-  À la différence de `/build-app` (qui build UNE feature dans SON worktree, avec un identifiant par feature), ce skill build le **worktree principal** sur `dev` sous une identité FIXE `Tosse Code dev build` (`com.tosse.desktop.dev`) — jamais l'app de prod `/Applications/Tosse Code.app`.
+  À la différence de `/build-app` (qui build UNE feature dans SON worktree, avec un identifiant par feature), ce skill build le **worktree principal** sur `dev` sous une identité FIXE `Flight Deck dev build` (`com.tosse.desktop.dev`) — jamais l'app de prod `/Applications/Tosse Code.app`.
 ---
 
 # Build-dev — Builder et lancer l'app de test « dev »
 
-Ce skill produit un bundle macOS de l'app depuis le **worktree principal, sur la branche `dev`** (l'état intégré du projet, pas une feature isolée), nommé **`Tosse Code dev build`**, et le lance. Il garantit que ce build **ne touche jamais les données de la prod**.
+Ce skill produit un bundle macOS de l'app depuis le **worktree principal, sur la branche `dev`** (l'état intégré du projet, pas une feature isolée), nommé **`Flight Deck dev build`**, et le lance. Il garantit que ce build **ne touche jamais les données de la prod**.
 
 C'est l'équivalent de `/build-app` mais pour l'**arbre de travail principal** : on teste `dev` tel qu'il est (typiquement après avoir posé une ou plusieurs features via `/land`), pas une branche de feature dans un worktree.
 
@@ -20,7 +20,7 @@ Alexandre **dogfoode** : son app de prod est `/Applications/Tosse Code.app` (`id
 
 `tauri build` réutilise par défaut **le même `identifier`** → la **même base SQLite** → un build lancé tel quel **écrase / pollue les conversations réelles**.
 
-La parade est déjà versionnée : le fichier **`src-tauri/dev-build.conf.json`** fixe `productName: "Tosse Code dev build"` et `identifier: "com.tosse.desktop.dev"`. Les données de ce build vivent donc dans `~/Library/Application Support/com.tosse.desktop.dev/` — un dossier séparé, partagé par tous les builds « dev » (c'est voulu : un environnement de test « dev » persistant). **Zéro risque pour la prod.**
+La parade est déjà versionnée : le fichier **`src-tauri/dev-build.conf.json`** fixe `productName: "Flight Deck dev build"` et `identifier: "com.tosse.desktop.dev"`. Les données de ce build vivent donc dans `~/Library/Application Support/com.tosse.desktop.dev/` — un dossier séparé, partagé par tous les builds « dev » (c'est voulu : un environnement de test « dev » persistant). **Zéro risque pour la prod.**
 
 ## Étape 1 — Vérifier qu'on est bien sur le worktree principal, sur `dev`
 
@@ -57,7 +57,7 @@ pnpm tauri build --config src-tauri/dev-build.conf.json
 Le bundle sort dans `src-tauri/target/release/bundle/macos/` sous le `productName` :
 
 ```bash
-open "src-tauri/target/release/bundle/macos/Tosse Code dev build.app"
+open "src-tauri/target/release/bundle/macos/Flight Deck dev build.app"
 ```
 
 ## Étape 5 — Rapporter

@@ -155,25 +155,29 @@
 /* min-width:0 lets these flex items shrink below their content size, so wide
    children (diffs, code blocks) scroll INTERNALLY instead of forcing the whole
    thread wider than its max-width (horizontal overflow / runaway scrollbar). */
-.cv-msg { display:flex; gap:11px; min-width:0; position:relative; }
+/* padding-bottom reserves a full-width strip BELOW the message content that is still PART of
+   `.cv-msg` — so hovering that strip (where the controls sit) triggers `.cv-msg:hover` and
+   there is NO dead gap between the block and the button row when moving down to click them
+   (the reveal was previously lost the moment the cursor left the block into the inter-message
+   gap). Also gives the thread a touch more air. */
+.cv-msg { display:flex; gap:11px; min-width:0; position:relative; padding-bottom:8px; }
 
-/* Hover controls on a message — bare icons (no frame, no background), sitting just BELOW
-   the message, that fade in on hover. Anchored inside the bubble/body (position:relative
-   on those), bottom-left, so they align with the message content. Reveal-on-hover pattern
-   (opacity + pointer-events), also shown on keyboard focus so they're reachable without a
-   pointer. Icons are dim by default and brighten on hover — nothing but the glyphs on the
-   dark thread. */
+/* Hover controls on a message — bare icons (no frame, no background), sitting just BELOW the
+   message, revealed on hover. Anchored FLUSH at the message bottom (`top:100%`, no gap) inside
+   the bubble/body (position:relative on those), bottom-left, aligned with the message content
+   — so the reserved `.cv-msg` bottom strip and the buttons form one continuous hover zone.
+   Icons are dim by default and brighten on hover — nothing but the glyphs on the dark thread. */
 .cv-bubble, .cv-aibody { position:relative; }
 .cv-msg-actions {
-  position:absolute; left:0; bottom:-20px; z-index:4;
-  display:inline-flex; gap:5px;
+  position:absolute; left:0; top:100%; z-index:4;
+  display:inline-flex; gap:10px; padding-top:2px;
   opacity:0; pointer-events:none; transition:opacity .12s ease;
 }
 .cv-msg:hover .cv-msg-actions,
 .cv-msg-actions:focus-within { opacity:1; pointer-events:auto; }
 .cv-msg-action {
   display:inline-flex; align-items:center; justify-content:center;
-  width:22px; height:22px; padding:0;
+  width:24px; height:24px; padding:0;
   border:none; background:transparent; color:var(--wf-tx-xlo);
   cursor:pointer; border-radius:5px; transition:color .12s ease;
 }
@@ -181,7 +185,7 @@
 /* Visible keyboard focus ring (not colour-only): these are real, keyboard-reachable actions. */
 .cv-msg-action:focus-visible { outline:2px solid var(--wf-accent); outline-offset:1px; color:var(--wf-tx-hi); }
 .cv-msg-action[disabled] { cursor:default; }
-.cv-msg-action .wf-ico { width:15px; height:15px; }
+.cv-msg-action .wf-ico { width:16px; height:16px; }
 /* Fork in flight: spin the icon so a slow branch copy isn't a dead click. */
 .cv-msg-action.is-busy { color:var(--wf-accent); }
 .cv-msg-action.is-busy .wf-ico { animation:cv-spin .8s linear infinite; }

@@ -28,6 +28,17 @@ export function parseSlashCommand(text: string): { command: string; args: string
   return { command, args };
 }
 
+/** The clean one-line form of a user message for previews (pin / Flight Deck peek): a
+ *  slash-command collapses to `/command args`, dropping the CLI's `<command-message>…
+ *  </command-name>` wrapper that would otherwise leak into the preview as raw tags. Any
+ *  other message is returned unchanged. Twin of `UserText`'s chip, for the plain-text
+ *  surfaces that can't render a chip. */
+export function userMessagePreviewText(text: string): string {
+  const cmd = parseSlashCommand(text);
+  if (!cmd) return text;
+  return cmd.args ? `${cmd.command} ${cmd.args}` : cmd.command;
+}
+
 /** A user message's text: a slash-command shows as a clean chip (the `<command-*>` wrapper
  *  is dropped), everything else renders as-is. */
 export function UserText({ text }: { text: string }) {

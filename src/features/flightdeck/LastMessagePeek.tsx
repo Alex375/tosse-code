@@ -11,13 +11,16 @@
 import { useRef, useState } from "react";
 import { Ico } from "../../ui/kit";
 import { useUserMessageHistory } from "../../store/conversationStore";
+import { userMessagePreviewText } from "../conversation/userText";
 import { CardPopover } from "./CardPopover";
 
 export function LastMessagePeek({ convId, summary }: { convId: string; summary: string }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const history = useUserMessageHistory(convId);
-  const full = history.length ? history[history.length - 1] : summary;
+  // Clean the raw last message: a slash-command's `<command-*>` wrapper must not leak
+  // into the peek as raw tags.
+  const full = history.length ? userMessagePreviewText(history[history.length - 1]) : summary;
 
   return (
     <>

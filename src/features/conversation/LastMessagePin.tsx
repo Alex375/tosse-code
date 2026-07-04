@@ -15,6 +15,7 @@ import { Ico } from "../../ui/kit";
 import { useDisplay } from "../../store/display";
 import { useLastMessageSummary, summaryPreview } from "../../store/lastMessageSummary";
 import { useUserMessageHistory } from "../../store/conversationStore";
+import { userMessagePreviewText } from "./userText";
 
 export function LastMessagePin({
   session,
@@ -29,7 +30,8 @@ export function LastMessagePin({
   const enabled = useDisplay((s) => s.showLastMessagePreview);
   const summary = useLastMessageSummary(session);
   const history = useUserMessageHistory(session);
-  const last = history.length ? history[history.length - 1] : undefined;
+  // Clean the raw last message (a slash-command's `<command-*>` wrapper) before truncating.
+  const last = history.length ? userMessagePreviewText(history[history.length - 1]) : undefined;
   // Prefer the (nicer) live summary; fall back to a truncation of the persisted last
   // message so the pin survives a reload where the live summary is gone.
   const text = summary ?? (last ? summaryPreview(last) : undefined);

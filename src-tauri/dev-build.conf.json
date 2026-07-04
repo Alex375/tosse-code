@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Tosse Code dev build",
+  "productName": "Flight Deck dev build",
   "identifier": "com.tosse.desktop.dev",
   "bundle": {
     "createUpdaterArtifacts": false
