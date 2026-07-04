@@ -118,6 +118,7 @@ export function FlightDeckReplyModal({ onPromote }: { onPromote: (id: string) =>
             composerRef={composerRef}
             onBackgroundClick={focusComposerOnClick}
             inertMentions
+            disableMessageControls
           />
         </div>
       </div>

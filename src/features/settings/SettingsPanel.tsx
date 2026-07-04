@@ -119,7 +119,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                     <TosseMark />
                   </span>
                   <div>
-                    <div className={styles.appName}>Tosse Code</div>
+                    <div className={styles.appName}>Flight Deck</div>
                     <div className={styles.appTag}>
                       Application de bureau pour piloter Claude Code.
                     </div>
@@ -194,6 +194,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
 function DisplayPrefs() {
   const cleanOutput = useDisplay((s) => s.cleanOutput);
   const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
+  const showLastMessagePreview = useDisplay((s) => s.showLastMessagePreview);
+  const messageControls = useDisplay((s) => s.messageControls);
   const set = useDisplay((s) => s.set);
   return (
     <SettingsGroup title="Affichage" icon="list">
@@ -224,6 +226,34 @@ function DisplayPrefs() {
         checked={showTaskNotifications}
         onChange={(v) => set({ showTaskNotifications: v })}
         label="Afficher les notifications de tâche de fond"
+      />
+      <ToggleRow
+        title="Aperçu du dernier message envoyé"
+        hint={
+          <>
+            Épingle en haut de la conversation un aperçu <strong>flottant</strong> du dernier
+            message que tu as envoyé (le message en clair s'il est court, sinon un court résumé) —
+            le même que sur le Flight Deck. Un clic dessus <strong>fait défiler</strong> jusqu'au
+            message. <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showLastMessagePreview}
+        onChange={(v) => set({ showLastMessagePreview: v })}
+        label="Aperçu du dernier message envoyé"
+      />
+      <ToggleRow
+        title="Contrôles sur les messages"
+        hint={
+          <>
+            Affiche les contrôles au survol des messages (les tiens et ceux de Claude) :
+            <strong> « reprendre ici »</strong> (rembobine la conversation à ce point) et
+            <strong> « forker »</strong> (branche une nouvelle conversation à ce point).{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={messageControls}
+        onChange={(v) => set({ messageControls: v })}
+        label="Afficher les contrôles sur les messages"
       />
     </SettingsGroup>
   );

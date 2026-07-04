@@ -458,13 +458,15 @@ export const ConductorComposer = forwardRef<
     })();
   };
 
-  // A restored draft can be multi-line; the textarea defaults to one row, so size it
-  // to the content on mount (and whenever we switch to another conversation's draft)
-  // rather than leaving it scrolled. autoGrow() reads taRef, set by render time.
+  // A restored/re-seeded draft can be multi-line; the textarea defaults to one row, so size
+  // it to the content on mount, on conversation switch, AND whenever the draft text changes
+  // out-of-band (a rewind re-seeds this same conversation's composer via the store, with no
+  // DOM change event to trigger autoGrow) rather than leaving it clipped/scrolled. Typing
+  // already calls autoGrow in onChange, so the extra run per keystroke is a harmless re-measure.
   useEffect(() => {
     autoGrow();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [session, text]);
 
   // Core send: the typed text plus any joined images. Empty-empty is a no-op (the
   // send button is gated on it too), but text-empty-with-images IS a valid send.

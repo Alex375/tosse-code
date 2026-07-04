@@ -41,6 +41,7 @@ import type {
 } from "./types";
 import { isBackgroundAgentInput, isDetachedAgentAck } from "../agent/subagentMeta";
 import { latestTodosInBlocks, todoSummary } from "./todos";
+import { parseSpecialMessage } from "../features/conversation/specialMessage";
 
 const connectingState: SessionStatePayload = {
   busy: false,
@@ -850,8 +851,10 @@ export const useTodoSummary = (session: string): TodoSummary =>
  * The user's OWN messages in a session, chronological — the root-level `role:"user"`
  * turns in timeline order. Blank messages are dropped and consecutive duplicates
  * collapsed (like a shell history); sub-agent (Task) user turns
- * (`parentToolUseId !== null`) are excluded. Pure (no hook, no memo) so it is
- * unit-testable; the hook below memoises it. */
+ * (`parentToolUseId !== null`) are excluded, as are CLI-injected special messages
+ * (`<task-notification>` &c. — Claude talking to itself, not the human), which arrive
+ * as `role:"user"` turns but are NOT something the user sent. Pure (no hook, no memo)
+ * so it is unit-testable; the hook below memoises it. */
 export function selectUserMessageHistory(entry: SessionEntry | undefined): string[] {
   if (!entry) return EMPTY_STRINGS;
   const out: string[] = [];
@@ -861,6 +864,10 @@ export function selectUserMessageHistory(entry: SessionEntry | undefined): strin
     if (!turn || turn.role !== "user" || turn.parentToolUseId !== null) continue;
     const text = turn.streamingText;
     if (!text.trim()) continue;
+    // Skip CLI-injected markers (task-notification…): they're rendered as a dedicated
+    // card, never a user bubble — so they must not count as "the user's last message"
+    // in the preview/pin or the composer's recall history.
+    if (parseSpecialMessage(text)) continue;
     if (out.length && out[out.length - 1] === text) continue; // collapse consecutive dups
     out.push(text);
   }

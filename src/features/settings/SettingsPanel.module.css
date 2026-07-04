@@ -134,7 +134,7 @@
   background: #ffffff06;
   color: var(--text-primary);
 }
-/* Active tab — coral-tinted fill, coral icon, and a glowing left accent bar. */
+/* Active tab — coral-tinted fill and coral icon. */
 .railItem[data-on] {
   background: linear-gradient(90deg, #2a1c15, #1a1512 80%);
   border-color: #43301f;
@@ -142,17 +142,6 @@
 }
 .railItem[data-on] :global(.wf-ico) {
   color: var(--accent);
-}
-.railItem[data-on]::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 2.5px;
-  border-radius: 2px;
-  background: var(--accent);
-  box-shadow: 0 0 10px -1px var(--accent);
 }
 
 .content {

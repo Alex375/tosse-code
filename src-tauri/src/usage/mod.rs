@@ -21,11 +21,18 @@
 //!   `resets_at` through as a string for the JS `Date` parser on the frontend.
 //!
 //! ## Policy (validated with the user)
-//! - **Token source**: `~/.claude/.credentials.json` FIRST (no Keychain prompt; absent
-//!   on macOS where the token lives in the Keychain), then the Keychain item
-//!   `Claude Code-credentials` via `/usr/bin/security` (found by service name alone).
-//!   The Keychain read may surface a macOS access prompt because this (unsigned) app
-//!   isn't in the item's ACL — clicking "Always Allow" persists it for `/usr/bin/security`.
+//! - **Token source**: `~/.claude/.credentials.json` FIRST *when its token is still valid*
+//!   (no Keychain prompt; the file is normally absent on macOS, where the token lives in
+//!   the Keychain), then the Keychain item `Claude Code-credentials` via `/usr/bin/security`
+//!   (found by service name alone). The Keychain read may surface a macOS access prompt
+//!   because this (unsigned) app isn't in the item's ACL — clicking "Always Allow" persists
+//!   it for `/usr/bin/security`.
+//!   ⚠️ An **expired** file token must NOT shadow the Keychain: on macOS the CLI refreshes
+//!   the token in the Keychain only — a stale `~/.claude/.credentials.json` left behind (it
+//!   is never rewritten there) would otherwise be returned as-is forever → a perpetual 401.
+//!   So we skip an expired file token and fall through to the Keychain (the live source of
+//!   truth), keeping the expired file token only as a last resort so the endpoint can still
+//!   speak a truthful 401 instead of a misleading `NoToken`.
 //! - **Read-only**: token used as-is, never refreshed nor written back — the `claude`
 //!   process this app keeps alive refreshes it for us. On any failure we return a
 //!   typed [`UsageError`] so the UI can tell the user exactly what to do.
@@ -168,24 +175,67 @@ fn ensure_crypto_provider() {
     }
 }
 
-/// Resolve the OAuth access token: config file first (no Keychain prompt), then the
-/// macOS Keychain (cause-aware error). Returns a typed [`UsageError`] when no usable
-/// token is found.
+/// Clock-skew margin: treat a file token as expired this many ms BEFORE its stated
+/// `expiresAt`, so one that would lapse mid-request isn't trusted (the endpoint call has a
+/// 10s timeout — 60s of slack covers it comfortably).
+const EXPIRY_SKEW_MS: i64 = 60_000;
+
+/// Resolve the OAuth access token: config file first *when valid* (no Keychain prompt),
+/// then the macOS Keychain (cause-aware error). Returns a typed [`UsageError`] when no
+/// usable token is found.
 fn read_oauth_token() -> Result<String, UsageError> {
-    if let Some(blob) = read_credentials_file() {
-        match parse_access_token(&blob) {
-            Some(tok) => return Ok(tok),
+    let file_creds = read_credentials_file().and_then(|blob| {
+        parse_credentials(&blob).or_else(|| {
             // The file is PRESENT but carries no usable token (truncated mid-write, a
             // renamed field, …). That is a real failure, NOT the normal "absent" state —
             // surface it loudly before falling back to the Keychain (the "never silently
             // equate broken with missing" policy), so a corrupt file doesn't masquerade
             // as a misleading NoToken/KeychainDenied.
-            None => eprintln!(
+            eprintln!(
                 "[usage] ~/.claude/.credentials.json is present but has no usable accessToken; falling back to Keychain"
-            ),
+            );
+            None
+        })
+    });
+    resolve_token(file_creds, now_unix_ms(), read_keychain_token)
+}
+
+/// Pure token-selection policy (I/O injected → unit-testable). Prefer a **non-expired**
+/// file token (avoids a Keychain prompt in the common case); otherwise consult the Keychain
+/// (the macOS source of truth, refreshed by the live `claude` process). If the Keychain
+/// yields nothing usable but we still hold a file token (merely expired), fall back to it so
+/// the endpoint returns a truthful 401 (`Unauthorized` → "relaunch claude") rather than a
+/// misleading `NoToken`/`KeychainDenied` that hides the real cause.
+fn resolve_token(
+    file_creds: Option<Credentials>,
+    now_ms: i64,
+    keychain: impl FnOnce() -> Result<String, UsageError>,
+) -> Result<String, UsageError> {
+    if let Some(creds) = &file_creds {
+        if !creds.is_expired(now_ms) {
+            return Ok(creds.access_token.clone());
         }
+        eprintln!(
+            "[usage] ~/.claude/.credentials.json token is expired; consulting the Keychain for a fresher one"
+        );
     }
-    read_keychain_token()
+    match keychain() {
+        Ok(tok) => Ok(tok),
+        Err(kc_err) => match file_creds {
+            Some(creds) => Ok(creds.access_token),
+            None => Err(kc_err),
+        },
+    }
+}
+
+/// Current wall-clock time in ms since the Unix epoch. A pre-epoch clock (impossible in
+/// practice) collapses to `i64::MAX` → every known expiry reads as expired, which merely
+/// forces the Keychain path (safe, never a false "valid").
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(i64::MAX)
 }
 
 /// Read `~/.claude/.credentials.json` if present. An ABSENT file → `None` silently (the
@@ -249,16 +299,53 @@ fn read_keychain_token() -> Result<String, UsageError> {
     Err(UsageError::NoToken)
 }
 
-/// Extract the OAuth access token from the credentials blob (same JSON shape in the
-/// file and the Keychain): `{ "claudeAiOauth": { "accessToken": "..." } }`. Falls
-/// back to a top-level `accessToken` in case the shape ever flattens.
-fn parse_access_token(blob: &str) -> Option<String> {
+/// OAuth credentials parsed from the blob: the access token plus its optional expiry, so
+/// the caller can tell a fresh file token from a stale one (see [`resolve_token`]).
+struct Credentials {
+    access_token: String,
+    /// `expiresAt` as ms since the Unix epoch, when the blob carries it. `None` for older
+    /// shapes with no expiry field.
+    expires_at_ms: Option<i64>,
+}
+
+impl Credentials {
+    /// True ONLY when the expiry is known and already reached (minus [`EXPIRY_SKEW_MS`]).
+    /// An unknown expiry returns `false`: we can't prove it stale, so we keep the prior
+    /// "use it" behavior rather than regress a working token to the Keychain.
+    fn is_expired(&self, now_ms: i64) -> bool {
+        match self.expires_at_ms {
+            Some(exp) => exp <= now_ms.saturating_add(EXPIRY_SKEW_MS),
+            None => false,
+        }
+    }
+}
+
+/// Parse the OAuth credentials from the blob (same JSON shape in the file and the
+/// Keychain): `{ "claudeAiOauth": { "accessToken": "...", "expiresAt": <ms> } }`. Falls
+/// back to top-level fields in case the shape ever flattens. `expiresAt` is tolerated as
+/// either an integer or a float (ms since epoch).
+fn parse_credentials(blob: &str) -> Option<Credentials> {
     let v: Value = serde_json::from_str(blob).ok()?;
-    v.get("claudeAiOauth")
-        .and_then(|o| o.get("accessToken"))
-        .and_then(Value::as_str)
-        .or_else(|| v.get("accessToken").and_then(Value::as_str))
-        .map(str::to_string)
+    let oauth = v.get("claudeAiOauth").unwrap_or(&v);
+    let access_token = oauth
+        .get("accessToken")
+        .or_else(|| v.get("accessToken"))
+        .and_then(Value::as_str)?
+        .to_string();
+    let expires_at_ms = oauth
+        .get("expiresAt")
+        .or_else(|| v.get("expiresAt"))
+        .and_then(|e| e.as_i64().or_else(|| e.as_f64().map(|f| f as i64)));
+    Some(Credentials {
+        access_token,
+        expires_at_ms,
+    })
+}
+
+/// Just the access token — used by the Keychain path, which has no expiry policy to apply
+/// (the Keychain is already the refreshed source of truth).
+fn parse_access_token(blob: &str) -> Option<String> {
+    parse_credentials(blob).map(|c| c.access_token)
 }
 
 /// Parse the usage endpoint payload. The windows (`five_hour`, `seven_day`) sit at the
@@ -379,5 +466,81 @@ mod tests {
         let u = parse_usage(body).expect("should parse");
         assert!(u.five_hour.is_some());
         assert!(u.seven_day.is_none());
+    }
+
+    #[test]
+    fn parse_credentials_reads_expiry_nested_and_flat() {
+        let nested = r#"{"claudeAiOauth":{"accessToken":"a","expiresAt":1751000000000}}"#;
+        let c = parse_credentials(nested).expect("nested");
+        assert_eq!(c.access_token, "a");
+        assert_eq!(c.expires_at_ms, Some(1751000000000));
+
+        let flat = r#"{"accessToken":"b","expiresAt":1751000000000.0}"#;
+        let c = parse_credentials(flat).expect("flat");
+        assert_eq!(c.access_token, "b");
+        assert_eq!(c.expires_at_ms, Some(1751000000000)); // float tolerated
+
+        // No expiry field → token still parses, expiry unknown.
+        let no_exp = r#"{"claudeAiOauth":{"accessToken":"c"}}"#;
+        let c = parse_credentials(no_exp).expect("no expiry");
+        assert_eq!(c.expires_at_ms, None);
+    }
+
+    fn creds(token: &str, expires_at_ms: Option<i64>) -> Credentials {
+        Credentials {
+            access_token: token.to_string(),
+            expires_at_ms,
+        }
+    }
+
+    #[test]
+    fn is_expired_honors_expiry_and_skew() {
+        let now = 1_000_000_000_000;
+        // Well in the past → expired.
+        assert!(creds("t", Some(now - 10_000)).is_expired(now));
+        // Well in the future → valid.
+        assert!(!creds("t", Some(now + 10 * 60_000)).is_expired(now));
+        // Inside the skew margin (expires in 30s < 60s slack) → treated as expired.
+        assert!(creds("t", Some(now + 30_000)).is_expired(now));
+        // Unknown expiry → NOT expired (can't prove it; keep using it).
+        assert!(!creds("t", None).is_expired(now));
+    }
+
+    #[test]
+    fn resolve_prefers_valid_file_token_without_touching_keychain() {
+        let now = 1_000_000_000_000;
+        let file = Some(creds("file-fresh", Some(now + 3_600_000)));
+        let tok = resolve_token(file, now, || panic!("keychain must not be consulted"))
+            .expect("valid file token");
+        assert_eq!(tok, "file-fresh");
+    }
+
+    #[test]
+    fn resolve_expired_file_falls_through_to_keychain() {
+        let now = 1_000_000_000_000;
+        let file = Some(creds("file-stale", Some(now - 3_600_000)));
+        let tok = resolve_token(file, now, || Ok("keychain-fresh".to_string()))
+            .expect("keychain token");
+        assert_eq!(tok, "keychain-fresh"); // the reported bug: stale file no longer wins
+    }
+
+    #[test]
+    fn resolve_expired_file_used_as_last_resort_when_keychain_empty() {
+        let now = 1_000_000_000_000;
+        let file = Some(creds("file-stale", Some(now - 3_600_000)));
+        // Keychain has nothing → fall back to the (expired) file token so the endpoint can
+        // answer a truthful 401 instead of masking the cause as NoToken.
+        let tok = resolve_token(file, now, || Err(UsageError::NoToken)).expect("file fallback");
+        assert_eq!(tok, "file-stale");
+    }
+
+    #[test]
+    fn resolve_no_file_uses_keychain_and_propagates_its_error() {
+        let now = 1_000_000_000_000;
+        let tok = resolve_token(None, now, || Ok("keychain-only".to_string())).expect("keychain");
+        assert_eq!(tok, "keychain-only");
+
+        let err = resolve_token(None, now, || Err(UsageError::NoToken)).unwrap_err();
+        assert!(matches!(err, UsageError::NoToken));
     }
 }

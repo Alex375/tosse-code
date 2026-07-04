@@ -1,4 +1,4 @@
-# Release de Tosse Code.
+# Release de Flight Deck.
 #
 # Déclenchement : MANUEL uniquement (workflow_dispatch). Pas de trigger sur push
 # pour l'instant — on verra plus tard. La release est construite depuis l'état
@@ -211,7 +211,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         with:
           tagName: v${{ steps.version.outputs.version }}
-          releaseName: "Tosse Code v${{ steps.version.outputs.version }}"
+          releaseName: "Flight Deck v${{ steps.version.outputs.version }}"
           # Composé à l'étape « Composer les notes de release » : nouveautés (CHANGELOG,
           # affichées in-app) + marqueur `<!-- gh-only -->` + note d'installation (GitHub only).
           releaseBody: ${{ steps.notes.outputs.body }}

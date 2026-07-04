@@ -10,6 +10,14 @@ GitHub, que l'app affiche telle quelle. Le bloc d'instructions d'installation (a
 le marqueur `<!-- gh-only -->`) est ajouté par `release.yml` et reste **seulement**
 sur la page GitHub — il n'apparaît pas dans l'app.
 
+## v0.25.0
+
+- L'app s'appelle désormais **Flight Deck** et arbore un nouveau logo.
+- Nouveaux contrôles au survol des messages : reprendre la conversation à partir d'un message (rewind) ou repartir dans une nouvelle branche (fork).
+- Un pin flottant affiche votre dernier message envoyé en haut du fil.
+- Les messages conservent leurs retours à la ligne, et l'aperçu du dernier message ignore les notifications internes.
+- Correction : un jeton d'usage périmé ne masque plus le solde issu du Keychain.
+
 ## v0.24.0
 
 - Flight Deck : cartes cliquables avec pop-ups (conversation, dernier message, to-do) et vue d'ensemble enrichie de la flotte d'agents.

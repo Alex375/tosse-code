@@ -71,6 +71,19 @@ describe("selectUserMessageHistory", () => {
     expect(selectUserMessageHistory(e)).toEqual(["real"]);
   });
 
+  it("excludes CLI-injected <task-notification> markers but keeps prose that only mentions the tag", () => {
+    // A real injection OPENS on the tag → dropped (it's Claude talking to itself).
+    const notif = "<task-notification>\n<status>completed</status>\n</task-notification>";
+    // Prose that merely references the tag never opens on it → a genuine user message, kept.
+    const mention = "how do I read a <task-notification> block?";
+    const e = entry([turnLine("u1"), turnLine("tn"), turnLine("u2")], {
+      u1: userTurn("u1", "real ask"),
+      tn: userTurn("tn", notif),
+      u2: userTurn("u2", mention),
+    });
+    expect(selectUserMessageHistory(e)).toEqual(["real ask", mention]);
+  });
+
   it("ignores non-turn timeline entries and assistant turns", () => {
     const e = entry(
       [turnLine("u1"), { kind: "notice", id: "n1" } as TimelineEntry, turnLine("a1")],

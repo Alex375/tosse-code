@@ -21,7 +21,8 @@ use ipc::commands::{
     mcp_authenticate, mcp_clear_auth, mcp_reconnect, mcp_status, mcp_toggle, open_in_terminal,
     path_exists, ping, prime_history_index, read_dir, read_file, read_image, read_task_output_file,
     refresh_plugin_marketplaces, reload_plugins,
-    remove_worktree, rename_entry, reveal_in_finder, request_user_attention, search_conversations,
+    fork_conversation, remove_worktree, rename_entry, reveal_in_finder, request_user_attention,
+    rewind_conversation, search_conversations,
     send_message, set_active_conversation, set_all_marketplaces_auto_update, set_effort_level,
     set_marketplace_auto_update, set_model,
     set_permission_mode, set_plugin_enabled, set_remote_control, set_ultracode, spawn_session,
@@ -46,6 +47,8 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             fetch_slash_commands,
             load_session_history,
             load_session_context,
+            rewind_conversation,
+            fork_conversation,
             load_subagent_transcript,
             load_workflow_run,
             load_workflow_journal,
@@ -301,7 +304,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder};
-                let app_menu = SubmenuBuilder::new(app, "Tosse Code")
+                let app_menu = SubmenuBuilder::new(app, "Flight Deck")
                     .hide()
                     .hide_others()
                     .show_all()

@@ -119,10 +119,14 @@
    as a thin separation ring first, then the violet — that separation is essential because
    blue (#7aa2e3) and violet (#a78bfa) are close hues and would otherwise blend into one
    indistinct blob. Per-colour rules (0,3,0 specificity) so each beats its .wf-dot.<colour>
-   base regardless of source order. */
-.wf-dot.wait.bgring { box-shadow: 0 0 0 2px var(--wf-wait-bg), 0 0 0 3.5px #a78bfa; }
-.wf-dot.att.bgring  { box-shadow: 0 0 0 2px var(--wf-att-bg),  0 0 0 3.5px #a78bfa; }
-.wf-dot.err.bgring  { box-shadow: 0 0 0 2px var(--wf-err-bg),  0 0 0 3.5px #a78bfa; }
+   base regardless of source order.
+   Spreads are WHOLE pixels (2px + 4px, not the old 2px + 3.5px): a fractional spread on
+   the odd 7px core rasterised the violet ring thicker on one side than the other at some
+   zoom/DPI levels, so the blue core looked off-centre inside the violet. Integer spreads
+   round identically on every edge → the ring stays perfectly concentric. */
+.wf-dot.wait.bgring { box-shadow: 0 0 0 2px var(--wf-wait-bg), 0 0 0 4px #a78bfa; }
+.wf-dot.att.bgring  { box-shadow: 0 0 0 2px var(--wf-att-bg),  0 0 0 4px #a78bfa; }
+.wf-dot.err.bgring  { box-shadow: 0 0 0 2px var(--wf-err-bg),  0 0 0 4px #a78bfa; }
 
 @keyframes wf-pulse { 0%,100%{ opacity:1 } 50%{ opacity:.35 } }
 .wf-dot.pulse { animation: wf-pulse 1.8s ease-in-out infinite; }

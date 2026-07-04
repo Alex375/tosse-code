@@ -123,6 +123,32 @@ git branch -d feat/<slug>
 
 L'ordre compte : on retire d'abord le worktree (qui avait `feat/<slug>` checké out), ce qui libère la branche, puis on la supprime. `git branch -d` (minuscule) ne réussit que si la branche est bien fusionnée — c'est une sécurité voulue ; si ça refuse, c'est que le merge n'a pas pris, ne force pas, enquête.
 
+## Étape 7b — Purger les données de test isolées du build (`/build-app`)
+
+Si la feature a été buildée via `/build-app`, ce build a créé une **identité macOS isolée** `com.tosse.desktop.<slug>` (données, caches, prefs, storage) — dérivée du slug du worktree. Une fois le worktree supprimé, ces données deviennent **orphelines** et polluent `~/Library` au fil des features (App Support, Caches, Preferences, WebKit…). Purge-les maintenant.
+
+⚠️ **Cible le slug EXACT, jamais un glob.** Un glob du genre `com.tosse.desktop.*` attraperait aussi la **prod** `com.tosse.desktop` et le plist prod `com.tosse.desktop.plist` — les détruire ferait perdre des préférences à l'app de prod d'Alexandre. On construit donc l'identifiant complet depuis le slug et on ne supprime que celui-là.
+
+**Garde-fou** : refuse de purger si l'identifiant dérivé est une identité protégée — la prod `com.tosse.desktop` ou l'identité fixe de `/build-dev` `com.tosse.desktop.dev`. Le slug d'un worktree `/start` ne vaut jamais l'un de ces deux, mais vérifie quand même.
+
+```bash
+ID="com.tosse.desktop.<slug>"                       # <slug> = basename du worktree
+if [ "$ID" = "com.tosse.desktop" ] || [ "$ID" = "com.tosse.desktop.dev" ]; then
+  echo "REFUS : $ID est une identité protégée (prod/dev) — pas de purge."
+else
+  rm -rf \
+    "$HOME/Library/Application Support/$ID" \
+    "$HOME/Library/Caches/$ID" \
+    "$HOME/Library/Preferences/$ID.plist" \
+    "$HOME/Library/WebKit/$ID" \
+    "$HOME/Library/HTTPStorages/$ID" \
+    "$HOME/Library/Saved Application State/$ID.savedState"
+  echo "Données de test isolées purgées : $ID"
+fi
+```
+
+Si `/build-app` n'a jamais tourné pour ce slug, ces chemins n'existent pas — le `rm -rf` est un no-op inoffensif. Lance-le quand même : c'est le **point unique** qui garantit que `~/Library` ne se remplit pas d'identités mortes. (Note ce résultat pour la ligne optionnelle du tableau final.)
+
 ## Étape 8 — Clôturer la tâche
 
 Lance le skill `/done` (outil Skill). Il résume le travail, met à jour le contexte de la tâche et la passe en **Review**. Ce repo n'a pas de `/deploy`, donc `/done` ne déclenchera rien d'autre — c'est `/land` qui a joué le rôle de mise en intégration.
@@ -146,7 +172,7 @@ Règles de ce tableau :
 - **Reflète la réalité, pas l'intention.** Chaque statut décrit ce qui s'est *effectivement* passé (push réellement effectué, worktree réellement supprimé), pas ce qui aurait dû arriver. Si une étape a échoué ou a été sautée, dis-le franchement (❌ + raison) plutôt que de cocher ✅.
 - **Si un conflit a eu lieu** (⚠️), ajoute **sous le tableau** un court récap : quels fichiers, et comment tu as tranché (surtout les conflits complexes) — cohérent avec ce que tu as déjà expliqué à l'étape 5.
 - **Ligne « modif de contexte »** : c'est une **recommandation**, pas un fait mécanique. Réponds `💡 Oui` seulement si le travail a révélé quelque chose qui mérite d'être écrit dans un contexte TOSSE — nouvelle décision structurante, changement de stack/pattern, info durable — en respectant la règle d'or (une info à UN SEUL niveau, pas de redondance avec un contexte parent). Sinon `✅ Non`. Si `/done` (étape 8) a déjà proposé ou appliqué une mise à jour de contexte via `tosse-manager`, reprends-la ici (contexte visé + ce qui change) plutôt que de la réinventer. En cas de doute, cite ta suggestion et laisse l'utilisateur trancher — n'édite pas un contexte de ta propre initiative dans cette ligne.
-- **Tu peux ajouter d'autres lignes** utiles au-dessus ou en dessous des quatre obligatoires (ex : `typecheck + tests` verts, `cargo test --lib` lancé, build vérifié via `/build-dev`, tâche passée en **Review** par `/done`…). Elles enrichissent le rapport mais ne remplacent jamais les quatre lignes cœur.
+- **Tu peux ajouter d'autres lignes** utiles au-dessus ou en dessous des quatre obligatoires (ex : `typecheck + tests` verts, `cargo test --lib` lancé, build vérifié via `/build-dev`, données de test isolées purgées (`com.tosse.desktop.<slug>`, étape 7b), tâche passée en **Review** par `/done`…). Elles enrichissent le rapport mais ne remplacent jamais les quatre lignes cœur.
 - Marqueurs visuels : `✅` ok / rien à signaler · `⚠️` a nécessité une intervention · `❌` échec/non fait · `➖` sans objet · `💡` suggestion à valider. But : l'état se lit en un clin d'œil.
 
 ## Ce que ce skill ne fait PAS
