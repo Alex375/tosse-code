@@ -327,8 +327,16 @@ fn migrate_legacy_bundle_name() {
     .status();
 
     // Hand off to the renamed bundle (the Dock tile / aliases still point at the old
-    // path until the process restarts) and exit this instance.
-    let _ = std::process::Command::new("/usr/bin/open").arg(&target).spawn();
+    // path until the process restarts) and exit this instance. `-n` is REQUIRED: the
+    // in-place rename keeps this live process registered under the same identifier
+    // (`com.tosse.desktop`), so a bare `open` would just re-activate this dying
+    // instance instead of launching a fresh copy — and the `exit(0)` right below
+    // would then leave the app quit with nothing relaunched. `-n` forces a new
+    // instance deterministically, independent of that race.
+    let _ = std::process::Command::new("/usr/bin/open")
+        .arg("-n")
+        .arg(&target)
+        .spawn();
     std::process::exit(0);
 }
 

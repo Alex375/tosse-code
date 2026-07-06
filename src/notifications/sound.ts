@@ -30,15 +30,20 @@ function contextCtor(): typeof AudioContext | null {
   );
 }
 
-// Contexts we've opened and not yet closed. Each play self-closes after its
-// chime decays, but we also cap the set: a burst of plays must never exhaust
-// WKWebView's per-document AudioContext limit (~4–6), after which construction
-// throws. When at the cap, the oldest still-open context is closed first.
-const live: AudioContext[] = [];
+// Contexts we've opened and not yet closed, each tagged with the wall-clock time
+// (performance.now()) its chime is expected to have fully decayed. Each play
+// self-closes after its chime decays, but we also cap the set: a burst of plays
+// must never exhaust WKWebView's per-document AudioContext limit (~4–6), after
+// which construction throws. When at the cap we evict the context CLOSEST TO DONE
+// (smallest endsAt) — an already-silent or nearly-decayed one — so a chime that is
+// still audibly ringing is never cut off (a fleet burst of ≥5 near-simultaneous
+// completions used to truncate the oldest-OPENED one, which may still be sounding).
+type LiveContext = { ac: AudioContext; endsAt: number };
+const live: LiveContext[] = [];
 const MAX_LIVE = 4;
 
 function closeContext(ac: AudioContext): void {
-  const i = live.indexOf(ac);
+  const i = live.findIndex((l) => l.ac === ac);
   if (i !== -1) live.splice(i, 1);
   try {
     if (ac.state === "closed") return;
@@ -51,18 +56,29 @@ function closeContext(ac: AudioContext): void {
   }
 }
 
-/** Build a fresh AudioContext, evicting the oldest if we've hit the cap. */
+/** Evict the live context closest to finishing, so a still-ringing chime is never cut. */
+function evictClosestToDone(): void {
+  let idx = 0;
+  for (let i = 1; i < live.length; i++) {
+    if (live[i].endsAt < live[idx].endsAt) idx = i;
+  }
+  closeContext(live[idx].ac);
+}
+
+/** Build a fresh AudioContext, evicting the one closest to done if we've hit the cap. */
 function newContext(): AudioContext | null {
   const Ctor = contextCtor();
   if (!Ctor) return null;
-  while (live.length >= MAX_LIVE) closeContext(live[0]);
+  while (live.length >= MAX_LIVE) evictClosestToDone();
   let ac: AudioContext;
   try {
     ac = new Ctor();
   } catch {
     return null; // construction can throw if the limit is somehow still hit
   }
-  live.push(ac);
+  // endsAt is set once scheduleChime knows the decay time; until then treat it as
+  // far-off so a not-yet-playing context isn't evicted ahead of a decaying one.
+  live.push({ ac, endsAt: Number.POSITIVE_INFINITY });
   return ac;
 }
 
@@ -143,7 +159,14 @@ export function playChime(kind: ChimeKind): void {
   const ac = newContext();
   if (!ac) return;
   if (ac.state === "running") {
-    scheduleChime(ac, kind);
+    // Guard symmetrically with the suspended branch below: if node construction
+    // throws on a context that reads "running" but whose audio unit was just
+    // reconfigured, free it rather than leak it + throw out of playChime.
+    try {
+      scheduleChime(ac, kind);
+    } catch {
+      closeContext(ac);
+    }
     return;
   }
   // Suspended or "interrupted": wait for the resume to land, then schedule on the
@@ -198,5 +221,9 @@ function scheduleChime(ac: AudioContext, kind: ChimeKind): void {
   // tears down the master + filter + oscillators in one shot, so no dangling
   // node accumulates and the audio unit is handed back to the OS.
   const ms = Math.max(0, (end + 0.15 - ac.currentTime) * 1000);
+  // Record when this context goes silent so eviction can prefer the one closest
+  // to done (see evictClosestToDone) rather than cutting off a still-ringing chime.
+  const entry = live.find((l) => l.ac === ac);
+  if (entry) entry.endsAt = performance.now() + ms;
   setTimeout(() => closeContext(ac), ms);
 }
