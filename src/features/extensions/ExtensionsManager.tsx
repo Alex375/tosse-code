@@ -16,9 +16,11 @@
 // sub-agent opens a clean markdown view of its SKILL.md / .md; a PLUGIN opens a
 // 3-pane explorer (rail / list / detail) of its own skills / MCP / sub-agents,
 // modelled on Claude.ai's Customize panel. See memory "extensions-two-distinct-views".
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Ico } from "../../ui/kit";
 import { Toggle } from "../../ui/Toggle";
+import { commands } from "../../ipc/client";
+import { refetchSlashCommands } from "../../store/commandsStore";
 import {
   useCheckPluginUpdates,
   useExtensions,
@@ -33,6 +35,7 @@ import {
   useUpdatePlugin,
 } from "../../ipc/useExtensions";
 import { useConversationsStore } from "../../store/conversationsStore";
+import type { Conversation } from "../../store/conversationsStore";
 import { StreamMarkdown } from "../conversation/StreamMarkdown";
 import type {
   AgentInfo,
@@ -43,6 +46,7 @@ import type {
   SkillInfo,
 } from "../../ipc/client";
 import { useExtensionsUi } from "./extensionsUiStore";
+import { distinctCwds, resolveReloadTargets } from "./pluginReload";
 import {
   allMarketplacesAuto,
   cliScope,
@@ -283,6 +287,59 @@ export function ExtensionsManager() {
   const openPlugin = (p: PluginInfo, section: ExplorerSectionKey = "skills") =>
     setPluginView({ plugin: p, section });
 
+  // ---- Live plugin-reload bar --------------------------------------------------
+  // Toggling a plugin only writes settings.json (USER-GLOBAL). A RUNNING session
+  // reads `enabledPlugins` at spawn, so the change would otherwise take effect only
+  // on restart — and the `/` command menu never refreshes. So we collect the toggles
+  // made while the manager is open and offer to hot-apply them to the repo's LIVE
+  // conversations: `reload_plugins` re-scans the plugin ON the live session (its
+  // skills included — VERIFIED live against the binary), and `refetchSlashCommands`
+  // re-reads the disk so the `/` menu (dis)appears the plugin's commands. Grouped:
+  // N toggles → one reload. The bar shows only when ≥1 live conversation exists.
+  const [touched, setTouched] = useState<Set<string>>(new Set());
+  const [reloading, setReloading] = useState(false);
+  const allConvs = useConversationsStore((s) => s.conversations);
+  const allRepos = useConversationsStore((s) => s.repos);
+  const { liveConvs, currentConv } = useMemo(
+    () => resolveReloadTargets(target, allConvs, allRepos),
+    [target, allConvs, allRepos],
+  );
+
+  // The toggle's settings.json write is async (a mutation). Track those writes so a
+  // reload can wait for them to land before the live sessions re-read disk — else a
+  // fast click on the bar could race the toggle's own write.
+  const pendingWrites = useRef<Promise<unknown>[]>([]);
+  const onPluginToggle = (pluginId: string, enabled: boolean) => {
+    pendingWrites.current.push(setPluginEnabled.mutateAsync({ pluginId, enabled }).catch(() => {}));
+    setTouched((prev) => (prev.has(pluginId) ? prev : new Set(prev).add(pluginId)));
+  };
+  const applyReload = async (convs: Conversation[]) => {
+    setReloading(true);
+    try {
+      // 1. Make sure every pending settings.json write has landed on disk.
+      await Promise.allSettled(pendingWrites.current);
+      pendingWrites.current = [];
+      // 2. Couche 1 (capacité live): hot-reload plugins on each live session. Best-effort
+      //    — a dead session ("unknown session") is harmless (reads it on its next spawn).
+      await Promise.all(
+        convs.map(async (c) => {
+          if (!c.handle) return;
+          try {
+            await commands.reloadPlugins(c.handle);
+          } catch {
+            /* applies on next spawn */
+          }
+        }),
+      );
+      // 3. Couche 2 (menu `/`): refresh the catalogue once per DISTINCT effective cwd
+      //    (worktree-aware) — several sessions can share a cwd.
+      await Promise.all(distinctCwds(convs).map((cwd) => refetchSlashCommands(cwd)));
+    } finally {
+      setReloading(false);
+      setTouched(new Set());
+    }
+  };
+
   // Force a fresh read every time the manager OPENS (target set / changed). Without
   // this, reopening within the query's staleTime shows the cached snapshot — the
   // user expects an up-to-date picture on each open. The live MCP status also polls
@@ -294,6 +351,9 @@ export function ExtensionsManager() {
     if (!openKey) return;
     void refetchExt();
     if (handle) void refetchLive();
+    // A fresh open starts with no pending plugin toggles.
+    setTouched(new Set());
+    pendingWrites.current = [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openKey]);
 
@@ -332,6 +392,18 @@ export function ExtensionsManager() {
           </button>
         </div>
 
+        {touched.size > 0 && liveConvs.length > 0 ? (
+          <PluginReloadBar
+            count={touched.size}
+            liveCount={liveConvs.length}
+            hasCurrent={currentConv != null}
+            busy={reloading}
+            onReloadCurrent={() => currentConv && void applyReload([currentConv])}
+            onReloadAll={() => void applyReload(liveConvs)}
+            onDismiss={() => setTouched(new Set())}
+          />
+        ) : null}
+
         {isConversation ? (
           <ConversationBody
             ext={ext}
@@ -339,6 +411,7 @@ export function ExtensionsManager() {
             handle={handle}
             path={target.path}
             setPluginEnabled={setPluginEnabled}
+            onPluginToggle={onPluginToggle}
             onOpenDoc={setDoc}
             onOpenPlugin={openPlugin}
             onOpenMarketplaces={() => setMktOpen(true)}
@@ -349,6 +422,7 @@ export function ExtensionsManager() {
             ext={ext}
             path={target.path}
             setPluginEnabled={setPluginEnabled}
+            onPluginToggle={onPluginToggle}
             onOpenDoc={setDoc}
             onOpenPlugin={openPlugin}
             onOpenMarketplaces={() => setMktOpen(true)}
@@ -382,6 +456,7 @@ function ProjectBody({
   ext,
   path,
   setPluginEnabled,
+  onPluginToggle,
   onOpenDoc,
   onOpenPlugin,
   onOpenMarketplaces,
@@ -389,6 +464,7 @@ function ProjectBody({
   ext: ReturnType<typeof useExtensions>;
   path: string;
   setPluginEnabled: ReturnType<typeof useSetPluginEnabled>;
+  onPluginToggle: (pluginId: string, enabled: boolean) => void;
   onOpenDoc: (d: OpenDoc) => void;
   onOpenPlugin: (p: PluginInfo) => void;
   onOpenMarketplaces: () => void;
@@ -446,7 +522,7 @@ function ProjectBody({
                 key={p.id}
                 plugin={p}
                 busy={setPluginEnabled.isPending}
-                onToggle={(enabled) => setPluginEnabled.mutate({ pluginId: p.id, enabled })}
+                onToggle={(enabled) => onPluginToggle(p.id, enabled)}
                 onOpen={() => onOpenPlugin(p)}
                 onUpdate={() => updatePlugin.mutate({ pluginId: p.id, scope: cliScope(p.scope) })}
                 updating={updatePlugin.isPending && updatePlugin.variables?.pluginId === p.id}
@@ -468,6 +544,7 @@ function ConversationBody({
   handle,
   path,
   setPluginEnabled,
+  onPluginToggle,
   onOpenDoc,
   onOpenPlugin,
   onOpenMarketplaces,
@@ -478,6 +555,7 @@ function ConversationBody({
   handle: string | null;
   path: string;
   setPluginEnabled: ReturnType<typeof useSetPluginEnabled>;
+  onPluginToggle: (pluginId: string, enabled: boolean) => void;
   onOpenDoc: (d: OpenDoc) => void;
   onOpenPlugin: (p: PluginInfo, section?: ExplorerSectionKey) => void;
   onOpenMarketplaces: () => void;
@@ -611,7 +689,7 @@ function ConversationBody({
             key={p.id}
             plugin={p}
             busy={setPluginEnabled.isPending}
-            onToggle={(enabled) => setPluginEnabled.mutate({ pluginId: p.id, enabled })}
+            onToggle={(enabled) => onPluginToggle(p.id, enabled)}
             onOpen={() => onOpenPlugin(p)}
             onUpdate={() => updatePlugin.mutate({ pluginId: p.id, scope: cliScope(p.scope) })}
             updating={updatePlugin.isPending && updatePlugin.variables?.pluginId === p.id}
@@ -619,6 +697,65 @@ function ConversationBody({
           />
         ))}
       </Section>
+    </div>
+  );
+}
+
+// ---- Live plugin-reload bar ----------------------------------------------------
+
+/** Inline bar (not a popup): after toggling plugin(s) with live conversations open,
+ *  offer to hot-apply the change to the running session(s). "This conversation" shows
+ *  only in the conversation lens when its session is live; "all live conversations of
+ *  the repo" always shows (it is the sole option in the repo lens or when the current
+ *  conversation is off). Hidden entirely when no conversation of the repo is live. */
+function PluginReloadBar({
+  count,
+  liveCount,
+  hasCurrent,
+  busy,
+  onReloadCurrent,
+  onReloadAll,
+  onDismiss,
+}: {
+  count: number;
+  liveCount: number;
+  hasCurrent: boolean;
+  busy: boolean;
+  onReloadCurrent: () => void;
+  onReloadAll: () => void;
+  onDismiss: () => void;
+}) {
+  const s = count > 1 ? "s" : "";
+  return (
+    <div className={styles.reloadBar}>
+      <Ico name="refresh" className={"sm" + (busy ? " " + styles.spin : "")} />
+      <span className={styles.reloadBarText}>
+        {count} plugin{s} modifié{s} — appliquer aux conversations en cours&nbsp;?
+      </span>
+      <span className={styles.reloadBarSpacer} />
+      {hasCurrent ? (
+        <button className={styles.reloadBtnPrimary} onClick={onReloadCurrent} disabled={busy}>
+          Cette conversation
+        </button>
+      ) : null}
+      {!hasCurrent || liveCount > 1 ? (
+        <button
+          className={hasCurrent ? styles.reloadBtnGhost : styles.reloadBtnPrimary}
+          onClick={onReloadAll}
+          disabled={busy}
+        >
+          {hasCurrent ? `Toutes (${liveCount})` : `Toutes les conversations allumées (${liveCount})`}
+        </button>
+      ) : null}
+      <button
+        className={styles.reloadDismiss}
+        onClick={onDismiss}
+        disabled={busy}
+        title="Ignorer"
+        aria-label="Ignorer"
+      >
+        ✕
+      </button>
     </div>
   );
 }
@@ -1107,7 +1244,7 @@ function PluginRow({
           disabled={busy}
           onChange={onToggle}
           label={`${plugin.enabled ? "Désactiver" : "Activer"} ${plugin.name}`}
-          title="Réglage global (tous les dépôts) · prend effet au prochain démarrage de la session"
+          title="Réglage global (tous les dépôts) · une barre propose de l'appliquer aux conversations en cours"
         />
       ) : (
         <span className={styles.statusWord + " " + (plugin.enabled ? styles.sOk : styles.sOff)}>

@@ -29,6 +29,84 @@
   border-bottom: 1px solid var(--wf-line);
   flex: 0 0 auto;
 }
+
+/* Inline bar below the head: pending plugin toggle(s) → offer to hot-reload the
+   repo's live conversations (reload_plugins + slash-command menu refresh). */
+.reloadBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--wf-line);
+  background: rgba(240, 177, 90, 0.06);
+  flex: 0 0 auto;
+}
+.reloadBar .wf-ico {
+  color: var(--wf-accent);
+  flex: 0 0 auto;
+}
+.reloadBarText {
+  font-size: 12px;
+  color: var(--wf-tx);
+}
+.reloadBarSpacer {
+  flex: 1 1 auto;
+}
+.reloadBtnPrimary,
+.reloadBtnGhost {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+.reloadBtnPrimary {
+  color: #1a0f0a;
+  background: var(--wf-accent);
+  border: 1px solid var(--wf-accent);
+}
+.reloadBtnPrimary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.reloadBtnGhost {
+  color: var(--wf-tx-lo);
+  background: transparent;
+  border: 1px solid var(--wf-line-2);
+}
+.reloadBtnGhost:hover:not(:disabled) {
+  color: var(--wf-tx-hi);
+  border-color: var(--wf-tx-xlo);
+  background: var(--wf-panel-3);
+}
+.reloadBtnPrimary:disabled,
+.reloadBtnGhost:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.reloadDismiss {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wf-tx-xlo);
+  cursor: pointer;
+  font-size: 12px;
+}
+.reloadDismiss:hover:not(:disabled) {
+  background: var(--wf-panel-3);
+  color: var(--wf-tx-hi);
+}
 .head .wf-ico {
   color: var(--wf-tx-lo);
 }
