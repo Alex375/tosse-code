@@ -63,12 +63,25 @@ export interface DisplayPrefs {
    *  hover controls. Read by {@link MessageActions} (via the conversation thread). */
   messageControls: boolean;
 
-  /** Show turn timing in the conversation thread. Gates BOTH surfaces (one setting, two
-   *  displays): the small footer under each FINISHED turn with the wall-clock time it took
-   *  (`result.duration_ms`, formatted by {@link fmtDuration}) — read by {@link TurnResultRow};
-   *  AND the LIVE elapsed counter shown on a running turn once it passes the threshold —
-   *  read by {@link LiveElapsed}. ON by default. Off → neither is rendered. */
+  /** Show the TURN's own timing in the conversation thread. Gates two surfaces: the total
+   *  wall-clock in the FINISHED-turn footer (`result.duration_ms`) — {@link TurnResultRow};
+   *  AND the LIVE elapsed counter on a running turn past the threshold — {@link LiveElapsed}.
+   *  ON by default. Off → neither is rendered. */
   showTurnDuration: boolean;
+
+  /** Show the "· N s de modèle" breakdown (`result.duration_api_ms`) next to the turn's
+   *  total in the footer. Rides the footer, so only visible when {@link showTurnDuration} is
+   *  also on. ON by default. Read by {@link TurnResultRow}. */
+  showModelTime: boolean;
+
+  /** Show the reflection time on each thinking block — a live counter while thinking, frozen
+   *  once settled. ON by default. Off → thinking blocks render without a duration. */
+  showThinkingTime: boolean;
+
+  /** Show the per-tool duration on each tool row — a live counter while the tool runs, frozen
+   *  once its result lands. ON by default. Off → tool rows render without a duration. Read by
+   *  {@link LiveToolStep}. */
+  showToolTime: boolean;
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
@@ -84,6 +97,9 @@ const DEFAULTS: DisplayPrefs = {
   showLastMessagePreview: true,
   messageControls: true,
   showTurnDuration: true,
+  showModelTime: true,
+  showThinkingTime: true,
+  showToolTime: true,
 };
 
 function load(): DisplayPrefs {
@@ -124,6 +140,9 @@ export const useDisplay = create<DisplayState>((set) => ({
         showLastMessagePreview: patch.showLastMessagePreview ?? s.showLastMessagePreview,
         messageControls: patch.messageControls ?? s.messageControls,
         showTurnDuration: patch.showTurnDuration ?? s.showTurnDuration,
+        showModelTime: patch.showModelTime ?? s.showModelTime,
+        showThinkingTime: patch.showThinkingTime ?? s.showThinkingTime,
+        showToolTime: patch.showToolTime ?? s.showToolTime,
       };
       save(next);
       return next;

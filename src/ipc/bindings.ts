@@ -1330,7 +1330,7 @@ export type ConversationItem =
 /**
  * End of a turn (`result`).
  */
-{ kind: "turn_result"; subtype: string; is_error: boolean; result: JsonValue | null; api_error_status: string | null; total_cost_usd: number | null; num_turns: number | null; duration_ms: number | null } | 
+{ kind: "turn_result"; subtype: string; is_error: boolean; result: JsonValue | null; api_error_status: string | null; total_cost_usd: number | null; num_turns: number | null; duration_ms: number | null; duration_api_ms: number | null; ttft_ms: number | null } | 
 /**
  * A non-conversational notice surfaced in the timeline. Two families:
  * - informational: `control_change` (a confirmed model/effort/mode move),

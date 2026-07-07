@@ -329,6 +329,7 @@
 .cv-step-add { color:var(--wf-run); }
 .cv-step-del { color:var(--wf-err); }
 .cv-step-end { margin-left:auto; display:inline-flex; align-items:center; gap:5px; flex:none; }
+.cv-step-time { font-size:10.5px; color:var(--wf-tx-lo); opacity:.75; }
 .cv-step-okico { color:var(--wf-run); }
 .cv-step-errico { color:var(--wf-err); }
 .cv-step-run { width:7px; height:7px; border-radius:50%; background:var(--wf-run); animation:cv-step-pulse 1.1s ease-in-out infinite; }

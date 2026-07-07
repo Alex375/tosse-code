@@ -25,6 +25,8 @@ import {
   useTurn,
   useTurnResult,
   useTurnStartedAt,
+  useThinkingStartedAt,
+  useThinkingDuration,
 } from "../../store/conversationStore";
 import type { RoundMarker, UserTurnImage } from "../../store/types";
 import { imageDataUrl } from "./composerAttachments";
@@ -34,6 +36,7 @@ import { useBackgroundTasksStore, useTaskByToolUse, useRunningTaskCount } from "
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
 import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
+import { useNow } from "../../ui/useNow";
 import { QuestionnaireAsk } from "./QuestionnaireAsk";
 import { PlanCard } from "./PlanCard";
 import { StreamMarkdown } from "./StreamMarkdown";
@@ -387,6 +390,7 @@ function resultToText(result: JsonValue | null): string | null {
 function TurnResultRow({ session, resultId }: { session: string; resultId: string }) {
   const meta = useTurnResult(session, resultId);
   const showTurnDuration = useDisplay((s) => s.showTurnDuration);
+  const showModelTime = useDisplay((s) => s.showModelTime);
   if (!meta) return null;
   const isError = meta.isError || meta.subtype.startsWith("error");
   if (isError) {
@@ -394,12 +398,15 @@ function TurnResultRow({ session, resultId }: { session: string; resultId: strin
     return <ErrorBlock heading={turnErrorHeading(meta)}>{text}</ErrorBlock>;
   }
   // Success / interrupted: optionally surface the wall-clock time the turn took
-  // (result.duration_ms). No cost — deliberately excluded.
+  // (duration_ms) plus the model-time breakdown (duration_api_ms). No cost/TTFT shown.
   if (!showTurnDuration || meta.durationMs == null) return null;
   return (
-    <div className={styles.turnMeta + " wf-mono"} title="Durée de ce tour">
+    <div className={styles.turnMeta + " wf-mono"} title="Durée de ce tour · dont temps de modèle">
       <Ico name="clock" className="sm" />
       <span>{fmtDuration(meta.durationMs)}</span>
+      {showModelTime && meta.durationApiMs != null && meta.durationApiMs > 0 && (
+        <span className={styles.turnMetaModel}>{fmtDuration(meta.durationApiMs)} modèle</span>
+      )}
     </div>
   );
 }
@@ -621,6 +628,26 @@ function LiveRunSection({
   );
 }
 
+/** A FINALIZED thinking block with its frozen reflection time (looked up by text). Its own
+ *  leaf so the lookup subscribes narrowly. No duration shown for disk-hydrated blocks. */
+function FrozenThinkingBlock({ session, text }: { session: string; text: string }) {
+  const show = useDisplay((s) => s.showThinkingTime);
+  const durationMs = useThinkingDuration(session, text);
+  return <ThinkingBlock text={text} finalized durationMs={show ? durationMs : null} />;
+}
+
+/** The thinking block currently STREAMING, with a live counter that ticks each second once
+ *  it passes ~1s (floored, à la {@link LiveElapsed}). Its own leaf so the 1 Hz tick doesn't
+ *  re-render the rest of the response. */
+function LiveThinkingBlock({ session, text }: { session: string; text: string }) {
+  const show = useDisplay((s) => s.showThinkingTime);
+  const startedAt = useThinkingStartedAt(session);
+  const now = useNow(1000);
+  const elapsed = startedAt != null ? now - startedAt : 0;
+  const durationMs = show && elapsed >= 1000 ? Math.floor(elapsed / 1000) * 1000 : null;
+  return <ThinkingBlock text={text} finalized={false} durationMs={durationMs} />;
+}
+
 /** Render a list of segments as the grouped transcript nodes. `active` marks segments
  *  belonging to the live turn (gates the running spinner); `liveIdx` is the index of the
  *  one run that should render EXPANDED & live (its steps appear as they stream), or -1.
@@ -634,7 +661,7 @@ function renderSegments(
   return segs.map((seg, i) => {
     if (seg.kind === "text") return <StreamMarkdown key={seg.key} text={seg.text} />;
     if (seg.kind === "thinking")
-      return <ThinkingBlock key={seg.key} text={seg.text} finalized />;
+      return <FrozenThinkingBlock key={seg.key} session={session} text={seg.text} />;
     if (seg.kind === "marker")
       // An in-band marker absorbed into this round: a control-change bar (NoticeRow) or a
       // message injected mid-work (InlineUserMarker), rendered in place — never cuts the work.
@@ -906,7 +933,7 @@ function MsgAI({
         {turn.blocks.length > 0 && (
           <AssistantBlocks session={session} blocks={turn.blocks} live={live} roundKey={turnId} />
         )}
-        {turn.streamingThinking && <ThinkingBlock text={turn.streamingThinking} finalized={false} />}
+        {turn.streamingThinking && <LiveThinkingBlock session={session} text={turn.streamingThinking} />}
         {turn.streamingText && <StreamMarkdown text={turn.streamingText} streaming />}
       </div>
     </div>
@@ -973,7 +1000,7 @@ function MsgAIGroup({
           <AssistantBlocks session={session} blocks={blocks} live={live} roundKey={turnIds[0]} />
         )}
         {lastTurn?.streamingThinking && (
-          <ThinkingBlock text={lastTurn.streamingThinking} finalized={false} />
+          <LiveThinkingBlock session={session} text={lastTurn.streamingThinking} />
         )}
         {lastTurn?.streamingText && <StreamMarkdown text={lastTurn.streamingText} streaming />}
         <MessageActions onRewind={onRewind} onFork={onFork} forkBusy={forkBusy} />
@@ -1278,18 +1305,6 @@ export function ConductorThread({
  *  turns don't need a stopwatch. Once a turn runs past it, the counter appears and ticks
  *  each second (à la CLI, which starts showing elapsed time on long-running turns). */
 const TURN_ELAPSED_MIN_MS = 40_000;
-
-/** Re-render every `periodMs` so a derived elapsed label stays fresh. Only mounted where
- *  needed (the working indicator, which lives only while a turn is in flight), so the
- *  interval is torn down as soon as the turn ends. */
-function useNow(periodMs: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), periodMs);
-    return () => clearInterval(t);
-  }, [periodMs]);
-  return now;
-}
 
 /** The live elapsed counter (🕐 40s → 1m 04s) shown at the right of the working line once
  *  the turn passes {@link TURN_ELAPSED_MIN_MS}. Gated on the same `showTurnDuration` pref
