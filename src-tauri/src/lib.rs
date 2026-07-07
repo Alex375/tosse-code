@@ -257,10 +257,99 @@ fn repair_env_path() {
     }
 }
 
+/// The bundle filename legacy installs still carry: they predate the "Flight Deck"
+/// rebrand and the auto-updater replaces the bundle IN PLACE, keeping its old name.
+#[cfg(target_os = "macos")]
+const LEGACY_BUNDLE_NAME: &str = "Tosse Code.app";
+/// The bundle filename matching the current display name ("Flight Deck").
+#[cfg(target_os = "macos")]
+const CURRENT_BUNDLE_NAME: &str = "Flight Deck.app";
+
+/// Pure decision for the one-time bundle rename: the path the running `.app` should
+/// be renamed to, or `None` when no migration is needed. Split from the filesystem
+/// work so the guard is unit-tested.
+///
+/// Fires ONLY when the bundle is EXACTLY `Tosse Code.app`; after the rename the name
+/// no longer matches, so it can never fire twice (no relaunch loop). Dev builds and
+/// the `/build-*` test bundles carry other names and are left untouched.
+#[cfg(target_os = "macos")]
+fn legacy_bundle_rename_target(bundle_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    (bundle_path.file_name()?.to_str()? == LEGACY_BUNDLE_NAME)
+        .then(|| bundle_path.with_file_name(CURRENT_BUNDLE_NAME))
+}
+
+/// The running `.app` bundle path, derived from the executable
+/// (`…/Foo.app/Contents/MacOS/<bin>` → `…/Foo.app`). `None` when the layout doesn't
+/// match — e.g. `cargo run` / `tauri dev` from `target/`, where there is no bundle.
+#[cfg(target_os = "macos")]
+fn running_bundle_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bundle = exe.parent()?.parent()?.parent()?; // pop MacOS/, Contents/ → Foo.app
+    (bundle.extension()?.to_str()? == "app").then(|| bundle.to_path_buf())
+}
+
+/// One-time self-heal for installs that predate the "Flight Deck" rebrand.
+///
+/// The display name is "Flight Deck" (productName), but the auto-updater replaces the
+/// bundle IN PLACE, so an install first set up as `Tosse Code.app` keeps that
+/// FILENAME forever. macOS derives the Spotlight/Finder name from the filename
+/// (verified: `kMDItemDisplayName` tracks `kMDItemFSName`, NOT `CFBundleDisplayName`)
+/// → such installs still surface as "Tosse Code" in Spotlight though the Dock/menus
+/// read "Flight Deck". We can't rename users' bundles from the release side, so the
+/// app renames ITSELF on launch, re-registers with LaunchServices, and relaunches.
+///
+/// The IDENTIFIER (`com.tosse.desktop`) is untouched → data dir, TCC grants and the
+/// signing DR are all preserved (they key on identifier + certificate, never the
+/// filename). Fail-safe: any failure (not a bundle, unwritable `/Applications`,
+/// target already present, rename error) leaves the app running normally under its
+/// old name — we relaunch ONLY after a successful rename, so a failure never loops.
+#[cfg(target_os = "macos")]
+fn migrate_legacy_bundle_name() {
+    let Some(bundle) = running_bundle_path() else {
+        return;
+    };
+    let Some(target) = legacy_bundle_rename_target(&bundle) else {
+        return;
+    };
+    if target.exists() {
+        return; // never clobber a `Flight Deck.app` already sitting alongside.
+    }
+    if std::fs::rename(&bundle, &target).is_err() {
+        return; // unwritable (admin-owned /Applications, read-only DMG) → keep old name.
+    }
+
+    // Refresh LaunchServices so Spotlight/Finder pick up the new filename immediately.
+    let _ = std::process::Command::new(
+        "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+    )
+    .arg("-f")
+    .arg(&target)
+    .status();
+
+    // Hand off to the renamed bundle (the Dock tile / aliases still point at the old
+    // path until the process restarts) and exit this instance. `-n` is REQUIRED: the
+    // in-place rename keeps this live process registered under the same identifier
+    // (`com.tosse.desktop`), so a bare `open` would just re-activate this dying
+    // instance instead of launching a fresh copy — and the `exit(0)` right below
+    // would then leave the app quit with nothing relaunched. `-n` forces a new
+    // instance deterministically, independent of that race.
+    let _ = std::process::Command::new("/usr/bin/open")
+        .arg("-n")
+        .arg(&target)
+        .spawn();
+    std::process::exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Restore the user's PATH before anything can spawn a child process (the lazy
-    // `claude` session, any tool it runs). Must run first — see fn doc.
+    // Legacy installs first set up as `Tosse Code.app` rename themselves to
+    // `Flight Deck.app` and relaunch — before any other startup work, so the hand-off
+    // is immediate. No-op on fresh installs and in dev (not a `.app` bundle).
+    #[cfg(target_os = "macos")]
+    migrate_legacy_bundle_name();
+
+    // Restore the user's PATH before we spawn any child process (the lazy `claude`
+    // session, any tool it runs). See fn doc.
     #[cfg(target_os = "macos")]
     repair_env_path();
 
@@ -465,5 +554,58 @@ mod path_repair_tests {
     #[test]
     fn extract_returns_none_when_markers_absent() {
         assert_eq!(extract_sentinel_path("/usr/bin:/bin no markers here"), None);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod bundle_migration_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn renames_the_exact_legacy_bundle() {
+        assert_eq!(
+            legacy_bundle_rename_target(Path::new("/Applications/Tosse Code.app")),
+            Some(PathBuf::from("/Applications/Flight Deck.app")),
+        );
+    }
+
+    #[test]
+    fn renames_in_place_wherever_the_bundle_lives() {
+        // Self-heal works from any location the user put it (as long as it's writable
+        // at runtime) — only the filename is swapped, the parent dir is preserved.
+        assert_eq!(
+            legacy_bundle_rename_target(Path::new("/Users/me/Desktop/Tosse Code.app")),
+            Some(PathBuf::from("/Users/me/Desktop/Flight Deck.app")),
+        );
+    }
+
+    #[test]
+    fn already_renamed_is_a_noop() {
+        // After the rename the name no longer matches → the migration never fires
+        // twice, so a successful rename can't produce a relaunch loop.
+        assert_eq!(
+            legacy_bundle_rename_target(Path::new("/Applications/Flight Deck.app")),
+            None,
+        );
+    }
+
+    #[test]
+    fn leaves_dev_and_test_bundles_alone() {
+        // Only the EXACT legacy name migrates; everything else is left untouched.
+        for name in [
+            "Flight Deck dev build.app", // /build-dev
+            "FlightDeck feat-x.app",     // /build-app
+            "Tosse Code Test State.app", // test-state overlay
+            "Tosse Code.app.bak",        // not exactly the legacy name
+            "Tosse Code",                // no .app at all
+        ] {
+            let p = PathBuf::from("/Applications").join(name);
+            assert_eq!(
+                legacy_bundle_rename_target(&p),
+                None,
+                "should not migrate {name}",
+            );
+        }
     }
 }

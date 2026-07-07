@@ -8,30 +8,78 @@
 //
 // Kept deliberately tiny and self-contained; this fits the project's "fast and
 // very optimized" principle better than shipping and decoding an audio file.
+//
+// ── Reliability: a FRESH AudioContext per play ──────────────────────────────
+// WKWebView (Tauri's macOS webview) shares the system audio unit. When another
+// app or an HTML5 <video> grabs and reconfigures audio — the user "launches a
+// video on the side" — a LONG-LIVED AudioContext can become permanently silent:
+// its `state` keeps reading "running" while nothing reaches the speakers, and
+// resume() does NOT revive it. There is no JS signal for "running but silent",
+// so a stale context can't be detected and repaired in place. The robust fix is
+// to never keep one around: every chime builds a NEW AudioContext (binding to
+// whatever audio configuration is current), plays, then close()s it to release
+// the audio unit. This is what makes the chime — and the Settings "Tester"
+// button — work every time, even after other audio has played.
 
-// One shared AudioContext, created lazily on first use. WKWebView (Tauri's macOS
-// webview) may start it suspended until a user gesture; we resume() on every play
-// so the "Tester" button (a gesture) always works, and background plays resume a
-// context that an earlier gesture already unlocked.
-let ctx: AudioContext | null = null;
-
-function audio(): AudioContext | null {
+function contextCtor(): typeof AudioContext | null {
   if (typeof window === "undefined") return null;
-  const Ctor: typeof AudioContext | undefined =
+  return (
     window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext ??
+    null
+  );
+}
+
+// Contexts we've opened and not yet closed, each tagged with the wall-clock time
+// (performance.now()) its chime is expected to have fully decayed. Each play
+// self-closes after its chime decays, but we also cap the set: a burst of plays
+// must never exhaust WKWebView's per-document AudioContext limit (~4–6), after
+// which construction throws. When at the cap we evict the context CLOSEST TO DONE
+// (smallest endsAt) — an already-silent or nearly-decayed one — so a chime that is
+// still audibly ringing is never cut off (a fleet burst of ≥5 near-simultaneous
+// completions used to truncate the oldest-OPENED one, which may still be sounding).
+type LiveContext = { ac: AudioContext; endsAt: number };
+const live: LiveContext[] = [];
+const MAX_LIVE = 4;
+
+function closeContext(ac: AudioContext): void {
+  const i = live.findIndex((l) => l.ac === ac);
+  if (i !== -1) live.splice(i, 1);
+  try {
+    if (ac.state === "closed") return;
+    // Spec: close() returns a Promise. Older WebKit returns undefined. Handle
+    // both, and swallow any rejection so a failed close never bubbles up.
+    const r = ac.close() as Promise<void> | undefined;
+    if (r && typeof r.then === "function") r.catch(() => {});
+  } catch {
+    /* already closing/closed, or a fake context in tests — nothing to free */
+  }
+}
+
+/** Evict the live context closest to finishing, so a still-ringing chime is never cut. */
+function evictClosestToDone(): void {
+  let idx = 0;
+  for (let i = 1; i < live.length; i++) {
+    if (live[i].endsAt < live[idx].endsAt) idx = i;
+  }
+  closeContext(live[idx].ac);
+}
+
+/** Build a fresh AudioContext, evicting the one closest to done if we've hit the cap. */
+function newContext(): AudioContext | null {
+  const Ctor = contextCtor();
   if (!Ctor) return null;
-  if (!ctx) {
-    try {
-      ctx = new Ctor();
-    } catch {
-      return null;
-    }
+  while (live.length >= MAX_LIVE) evictClosestToDone();
+  let ac: AudioContext;
+  try {
+    ac = new Ctor();
+  } catch {
+    return null; // construction can throw if the limit is somehow still hit
   }
-  if (ctx.state === "suspended") {
-    ctx.resume().catch((e) => console.error("audio resume failed:", e));
-  }
-  return ctx;
+  // endsAt is set once scheduleChime knows the decay time; until then treat it as
+  // far-off so a not-yet-playing context isn't evicted ahead of a decaying one.
+  live.push({ ac, endsAt: Number.POSITIVE_INFINITY });
+  return ac;
 }
 
 /** A single soft bell-like voice at `freq`, starting at `start`s for `dur`s. */
@@ -44,7 +92,7 @@ function bell(
   gain: number,
 ): void {
   // Near-harmonic partials, kept quiet, for a round/woody tone rather than a
-  // bright clang. The lowpass on the master (see playChime) tames them further.
+  // bright clang. The lowpass on the master (see scheduleChime) tames them further.
   const partials: Array<[mult: number, g: number]> = [
     [1, 1],
     [2, 0.18],
@@ -65,26 +113,34 @@ function bell(
   }
 }
 
-// Whether the first-gesture unlock listener has been installed (idempotent).
+// Whether the first-gesture warm-up listener has been installed (idempotent).
 let primed = false;
 
 /**
- * Unlock the AudioContext on the first user gesture. Desktop webviews can start
- * it "suspended"; a chime triggered while the app is in the background (an agent
- * finishing unfocused) has no gesture of its own to resume it, so we create and
- * resume the context eagerly on the first click/keypress. Idempotent; safe to
- * call from a React effect that may run twice.
+ * Warm up audio permission on the first user gesture. WebKit forbids audio until
+ * the document has seen a gesture; a chime fired while the app is in the
+ * background (an agent finishing unfocused) has no gesture of its own. So on the
+ * first click/keypress we build a throwaway context, resume it (which flips the
+ * document to "audio allowed" for the rest of its life), then close it — the
+ * per-play contexts created later are then free to run without a gesture.
+ * Idempotent; safe to call from a React effect that may run twice.
  */
 export function primeAudioUnlock(): void {
   if (primed || typeof window === "undefined") return;
   primed = true;
-  const unlock = () => {
-    audio(); // creates + resume()s the context within the gesture
-    window.removeEventListener("pointerdown", unlock);
-    window.removeEventListener("keydown", unlock);
+  const warm = () => {
+    window.removeEventListener("pointerdown", warm);
+    window.removeEventListener("keydown", warm);
+    const ac = newContext();
+    if (!ac) return;
+    // Resume within the gesture to satisfy the autoplay policy, then release the
+    // unit — the "audio allowed" grant survives the close().
+    Promise.resolve(ac.state === "running" ? undefined : ac.resume())
+      .catch(() => {})
+      .finally(() => closeContext(ac));
   };
-  window.addEventListener("pointerdown", unlock);
-  window.addEventListener("keydown", unlock);
+  window.addEventListener("pointerdown", warm);
+  window.addEventListener("keydown", warm);
 }
 
 export type ChimeKind = "done" | "attention";
@@ -92,41 +148,47 @@ export type ChimeKind = "done" | "attention";
 /**
  * Play the notification chime for `kind`. No-op when Web Audio is unavailable.
  *
- * Reliability: WKWebView (Tauri's macOS webview) can leave the AudioContext
- * `suspended` — before the first user gesture, and again after the app has been
- * backgrounded — and `resume()` is ASYNC. Scheduling oscillators on a context
- * that isn't running yet silently drops the sound (its clock isn't advancing),
- * which was the root cause of the "chime often doesn't fire" bug. So we resume
- * FIRST and only lay down the notes once the context is actually running, on a
- * fresh `currentTime`. If the context is already running we schedule inline.
+ * A fresh AudioContext is built for every call (see the file header) so a stale,
+ * silently-broken context from an earlier audio-session change can never carry
+ * over. WKWebView can hand back that fresh context `suspended` (before any
+ * gesture) or `interrupted` (iOS/Safari), and `resume()` is ASYNC — scheduling
+ * oscillators on a context whose clock isn't advancing silently drops the sound.
+ * So we resume FIRST and lay the notes down only once the context is running.
  */
 export function playChime(kind: ChimeKind): void {
-  const ac = audio();
+  const ac = newContext();
   if (!ac) return;
   if (ac.state === "running") {
-    scheduleChime(ac, kind);
+    // Guard symmetrically with the suspended branch below: if node construction
+    // throws on a context that reads "running" but whose audio unit was just
+    // reconfigured, free it rather than leak it + throw out of playChime.
+    try {
+      scheduleChime(ac, kind);
+    } catch {
+      closeContext(ac);
+    }
     return;
   }
-  // Suspended (or "interrupted" on iOS/Safari): wait for the resume to land, then
-  // schedule on the now-advancing clock. If resume rejects (e.g. no user gesture
-  // yet) we still attempt to schedule — worst case a no-op, never a throw.
+  // Suspended or "interrupted": wait for the resume to land, then schedule on the
+  // now-advancing clock. If resume rejects (e.g. no user gesture yet) we still
+  // attempt to schedule — worst case a no-op, never a throw.
   ac.resume()
     .then(() => scheduleChime(ac, kind))
     .catch((e) => {
       // resume() rejected (e.g. no user gesture yet) OR scheduling threw because the
-      // context became unusable (`closed` → createGain throws InvalidStateError).
-      // Retry best-effort, then swallow: a dropped chime must NEVER surface as an
-      // unhandled promise rejection (this runs in a microtask, past the caller's guard).
+      // context became unusable. Retry best-effort, then swallow: a dropped chime
+      // must NEVER surface as an unhandled promise rejection (this runs in a
+      // microtask, past the caller's guard). Close the dead context either way.
       console.error("audio chime failed:", e);
       try {
         scheduleChime(ac, kind);
       } catch {
-        /* context unusable — give up silently */
+        closeContext(ac); // context unusable — free it and give up silently
       }
     });
 }
 
-/** Lay down the two-note chime for `kind` on an (assumed running) context. */
+/** Lay down the two-note chime for `kind`, then close the context once it decays. */
 function scheduleChime(ac: AudioContext, kind: ChimeKind): void {
   // Soft master level + a lowpass filter that rolls off the highs, so the chime
   // is warm and gentle rather than sharp. A short fade-in on the cutoff keeps
@@ -154,13 +216,14 @@ function scheduleChime(ac: AudioContext, kind: ChimeKind): void {
     end = t + 0.18 + 1.15;
   }
 
-  // Tear the per-play master + filter down once the sound has fully decayed —
-  // otherwise each chime leaves a dangling node connected to `destination`,
-  // accumulating over a long session. The oscillators self-stop; disconnecting
-  // the chain's head lets the whole subgraph be GC'd.
+  // Once the sound has fully decayed, close the whole context — this is the
+  // single-use lifecycle that keeps every play on a fresh audio unit. Closing
+  // tears down the master + filter + oscillators in one shot, so no dangling
+  // node accumulates and the audio unit is handed back to the OS.
   const ms = Math.max(0, (end + 0.15 - ac.currentTime) * 1000);
-  setTimeout(() => {
-    master.disconnect();
-    lp.disconnect();
-  }, ms);
+  // Record when this context goes silent so eviction can prefer the one closest
+  // to done (see evictClosestToDone) rather than cutting off a still-ringing chime.
+  const entry = live.find((l) => l.ac === ac);
+  if (entry) entry.endsAt = performance.now() + ms;
+  setTimeout(() => closeContext(ac), ms);
 }

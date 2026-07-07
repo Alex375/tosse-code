@@ -10,6 +10,11 @@ GitHub, que l'app affiche telle quelle. Le bloc d'instructions d'installation (a
 le marqueur `<!-- gh-only -->`) est ajouté par `release.yml` et reste **seulement**
 sur la page GitHub — il n'apparaît pas dans l'app.
 
+## v0.26.0
+
+- Notifications sonores plus fiables : le son de fin d'agent se déclenche à nouveau même après avoir regardé une vidéo ou changé la sortie audio du Mac.
+- Un nouvel installeur renomme le bundle en **Flight Deck.app** au premier lancement.
+
 ## v0.25.0
 
 - L'app s'appelle désormais **Flight Deck** et arbore un nouveau logo.
