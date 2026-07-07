@@ -10,6 +10,13 @@ GitHub, que l'app affiche telle quelle. Le bloc d'instructions d'installation (a
 le marqueur `<!-- gh-only -->`) est ajouté par `release.yml` et reste **seulement**
 sur la page GitHub — il n'apparaît pas dans l'app.
 
+## v0.27.0
+
+- Durée des tours affichée dans la conversation, avec un compteur en direct pendant que l'agent travaille et le détail par poste (modèle, réflexion, outils).
+- Cartes du Flight Deck interactives : liste des tâches, contexte, effort et piles de to-do consultables directement.
+- Les plugins et slash-commands des conversations actives se rechargent automatiquement quand vous les activez/désactivez.
+- Un agent qui termine pendant qu'une tâche de fond tourne passe désormais en vert (« tâche de fond en cours ») au lieu d'un état « à relire » trompeur.
+
 ## v0.26.0
 
 - Notifications sonores plus fiables : le son de fin d'agent se déclenche à nouveau même après avoir regardé une vidéo ou changé la sortie audio du Mac.
