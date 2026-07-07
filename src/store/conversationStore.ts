@@ -79,6 +79,7 @@ function emptyEntry(session: string): SessionEntry {
     turnSeen: true,
     seq: 0,
     replayAnchor: 0,
+    turnStartedAt: null,
   };
 }
 
@@ -261,15 +262,25 @@ export const useConversationStore = create<ConversationState>((set) => {
       // full → empty → full at the start of every (re)engaged conversation. The
       // assembler's real (non-null) values always win; only nulls defer to what we
       // already hold.
-      withEntry(session, (entry) => ({
-        ...entry,
-        state: {
-          ...state,
-          context_tokens: state.context_tokens ?? entry.state.context_tokens,
-          context_window: state.context_window ?? entry.state.context_window,
-          rate_limit: state.rate_limit ?? entry.state.rate_limit,
-        },
-      })),
+      withEntry(session, (entry) => {
+        // Stamp the turn's wall-clock start on the false→true busy edge, clear it on
+        // true→false. Gated on the EDGE (not every state event) so the LIVE elapsed
+        // counter doesn't reset each time `system/init`/`status` re-emits busy:true
+        // mid-turn. Left untouched while busy stays the same.
+        let turnStartedAt = entry.turnStartedAt;
+        if (state.busy && !entry.state.busy) turnStartedAt = Date.now();
+        else if (!state.busy && entry.state.busy) turnStartedAt = null;
+        return {
+          ...entry,
+          turnStartedAt,
+          state: {
+            ...state,
+            context_tokens: state.context_tokens ?? entry.state.context_tokens,
+            context_window: state.context_window ?? entry.state.context_window,
+            rate_limit: state.rate_limit ?? entry.state.rate_limit,
+          },
+        };
+      }),
 
     applyContextFill: (session, fill) =>
       withEntry(session, (entry) => {
@@ -286,7 +297,7 @@ export const useConversationStore = create<ConversationState>((set) => {
       // arrive to clear it otherwise (the terminal `ended` event is routed by the
       // now-stale handle and dropped).
       withEntry(session, (entry) =>
-        clearQueuedBadges({ ...entry, state: { ...connectingState } }),
+        clearQueuedBadges({ ...entry, state: { ...connectingState }, turnStartedAt: null }),
       ),
 
     appendText: (session, messageId, text) =>
@@ -607,6 +618,11 @@ const EMPTY_STRINGS: string[] = [];
 
 export const useSessionState = (session: string): SessionStatePayload | undefined =>
   useConversationStore((s) => s.sessions[session]?.state);
+
+/** Wall-clock start of the in-flight turn (`Date.now()`), or `null` when idle. Drives
+ *  the live elapsed counter in the working indicator. See {@link SessionEntry.turnStartedAt}. */
+export const useTurnStartedAt = (session: string): number | null =>
+  useConversationStore((s) => s.sessions[session]?.turnStartedAt ?? null);
 
 export const useTimeline = (session: string): TimelineEntry[] =>
   useConversationStore(

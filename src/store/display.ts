@@ -62,6 +62,13 @@ export interface DisplayPrefs {
    *  offered on both the user's and Claude's messages. ON by default. Off → messages have no
    *  hover controls. Read by {@link MessageActions} (via the conversation thread). */
   messageControls: boolean;
+
+  /** Show turn timing in the conversation thread. Gates BOTH surfaces (one setting, two
+   *  displays): the small footer under each FINISHED turn with the wall-clock time it took
+   *  (`result.duration_ms`, formatted by {@link fmtDuration}) — read by {@link TurnResultRow};
+   *  AND the LIVE elapsed counter shown on a running turn once it passes the threshold —
+   *  read by {@link LiveElapsed}. ON by default. Off → neither is rendered. */
+  showTurnDuration: boolean;
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
@@ -76,6 +83,7 @@ const DEFAULTS: DisplayPrefs = {
   showTaskNotifications: false,
   showLastMessagePreview: true,
   messageControls: true,
+  showTurnDuration: true,
 };
 
 function load(): DisplayPrefs {
@@ -115,6 +123,7 @@ export const useDisplay = create<DisplayState>((set) => ({
         showTaskNotifications: patch.showTaskNotifications ?? s.showTaskNotifications,
         showLastMessagePreview: patch.showLastMessagePreview ?? s.showLastMessagePreview,
         messageControls: patch.messageControls ?? s.messageControls,
+        showTurnDuration: patch.showTurnDuration ?? s.showTurnDuration,
       };
       save(next);
       return next;

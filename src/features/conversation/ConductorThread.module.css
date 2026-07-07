@@ -208,6 +208,36 @@
   color: var(--wf-tx-lo);
 }
 
+/* Discreet timing line at a finished turn's boundary (result.duration_ms). Sits just
+   under the turn's concluding message, dimmed and small so it reads as chrome. */
+.turnMeta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 12px 8px;
+  font-size: 10.5px;
+  color: var(--wf-tx-lo);
+  opacity: 0.75;
+}
+.turnMeta svg {
+  opacity: 0.7;
+}
+
+/* Live elapsed counter at the right of the working indicator (shown on long turns). */
+.elapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--wf-tx-lo);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.elapsed svg {
+  opacity: 0.7;
+}
+
 /* Placeholder line inside the expanded body (loading / empty / running). */
 .subEmpty {
   padding: 8px 4px;

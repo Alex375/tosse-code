@@ -195,6 +195,7 @@ function DisplayPrefs() {
   const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
   const showLastMessagePreview = useDisplay((s) => s.showLastMessagePreview);
   const messageControls = useDisplay((s) => s.messageControls);
+  const showTurnDuration = useDisplay((s) => s.showTurnDuration);
   const set = useDisplay((s) => s.set);
   return (
     <SettingsGroup title="Affichage" icon="list">
@@ -253,6 +254,19 @@ function DisplayPrefs() {
         checked={messageControls}
         onChange={(v) => set({ messageControls: v })}
         label="Afficher les contrôles sur les messages"
+      />
+      <ToggleRow
+        title="Durée des tours"
+        hint={
+          <>
+            Affiche sous chaque tour terminé le <strong>temps qu'il a pris</strong> (durée
+            réelle du tour), et un <strong>compteur en direct</strong> lorsqu'un tour dépasse
+            40&nbsp;s. <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showTurnDuration}
+        onChange={(v) => set({ showTurnDuration: v })}
+        label="Afficher la durée des tours"
       />
     </SettingsGroup>
   );

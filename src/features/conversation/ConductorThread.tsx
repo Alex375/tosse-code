@@ -24,6 +24,7 @@ import {
   useToolResult,
   useTurn,
   useTurnResult,
+  useTurnStartedAt,
 } from "../../store/conversationStore";
 import type { RoundMarker, UserTurnImage } from "../../store/types";
 import { imageDataUrl } from "./composerAttachments";
@@ -385,11 +386,22 @@ function resultToText(result: JsonValue | null): string | null {
 
 function TurnResultRow({ session, resultId }: { session: string; resultId: string }) {
   const meta = useTurnResult(session, resultId);
+  const showTurnDuration = useDisplay((s) => s.showTurnDuration);
   if (!meta) return null;
   const isError = meta.isError || meta.subtype.startsWith("error");
-  if (!isError) return null; // success / interrupted: nothing to surface here
-  const text = resultToText(meta.result);
-  return <ErrorBlock heading={turnErrorHeading(meta)}>{text}</ErrorBlock>;
+  if (isError) {
+    const text = resultToText(meta.result);
+    return <ErrorBlock heading={turnErrorHeading(meta)}>{text}</ErrorBlock>;
+  }
+  // Success / interrupted: optionally surface the wall-clock time the turn took
+  // (result.duration_ms). No cost — deliberately excluded.
+  if (!showTurnDuration || meta.durationMs == null) return null;
+  return (
+    <div className={styles.turnMeta + " wf-mono"} title="Durée de ce tour">
+      <Ico name="clock" className="sm" />
+      <span>{fmtDuration(meta.durationMs)}</span>
+    </div>
+  );
 }
 
 
@@ -1262,6 +1274,42 @@ export function ConductorThread({
   );
 }
 
+/** Below this many ms of a turn running, the live elapsed counter stays hidden — short
+ *  turns don't need a stopwatch. Once a turn runs past it, the counter appears and ticks
+ *  each second (à la CLI, which starts showing elapsed time on long-running turns). */
+const TURN_ELAPSED_MIN_MS = 40_000;
+
+/** Re-render every `periodMs` so a derived elapsed label stays fresh. Only mounted where
+ *  needed (the working indicator, which lives only while a turn is in flight), so the
+ *  interval is torn down as soon as the turn ends. */
+function useNow(periodMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), periodMs);
+    return () => clearInterval(t);
+  }, [periodMs]);
+  return now;
+}
+
+/** The live elapsed counter (🕐 40s → 1m 04s) shown at the right of the working line once
+ *  the turn passes {@link TURN_ELAPSED_MIN_MS}. Gated on the same `showTurnDuration` pref
+ *  as the finished-turn footer, and its own leaf so its 1 Hz tick doesn't re-render the
+ *  activity text. Whole seconds only (floored) so the number climbs smoothly. */
+function LiveElapsed({ session }: { session: string }) {
+  const show = useDisplay((s) => s.showTurnDuration);
+  const startedAt = useTurnStartedAt(session);
+  const now = useNow(1000);
+  if (!show || startedAt == null) return null;
+  const elapsed = now - startedAt;
+  if (elapsed < TURN_ELAPSED_MIN_MS) return null;
+  return (
+    <span className={styles.elapsed + " wf-mono"} title="Durée du tour en cours">
+      <Ico name="clock" className="sm" />
+      {fmtDuration(Math.floor(elapsed / 1000) * 1000)}
+    </span>
+  );
+}
+
 /**
  * The live "what's happening now" line shown under the timeline while the agent
  * works. Its own leaf so the per-token activity recompute (`useLiveActivity`
@@ -1290,6 +1338,7 @@ function WorkingIndicator({ session }: { session: string }) {
       ) : (
         <span>{activity}</span>
       )}
+      <LiveElapsed session={session} />
     </div>
   );
 }
