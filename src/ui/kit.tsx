@@ -2,14 +2,16 @@
 // handoff's wirekit.jsx. Uses the global class-based stylesheet (conductor-wirekit.css).
 import {
   cloneElement,
-  useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ButtonHTMLAttributes,
+  type CSSProperties,
   type ReactElement,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 
 const WF_PATHS: Record<string, string> = {
   chat: "M3 11.5a6.5 6 0 0 1 6.5-6h1A6.5 6 0 0 1 17 11.5 6.5 6 0 0 1 10.5 17H6l-2.5 2v-3.2A6.4 6.4 0 0 1 3 11.5Z",
@@ -270,12 +272,54 @@ export function useClickAway(onAway: () => void) {
   return ref;
 }
 
+/** Fixed-position placement for a portaled popover — every side is set explicitly
+ *  ("auto" for the ones we don't anchor) so the stylesheet's absolute `top/left`
+ *  never leaks through the inline `position:fixed`. */
+interface MenuPortalPos {
+  left: number | "auto";
+  right: number | "auto";
+  top: number | "auto";
+  bottom: number | "auto";
+  maxHeight: number;
+}
+
+/** Margin kept between a portaled popover and the viewport edges. */
+const MENU_M = 8;
+
+/** Compute a collision-aware fixed placement from the trigger's rect, honouring
+ *  `align`/`up` as the PREFERRED sides and flipping when a side lacks room. Mirrors
+ *  CardPopover's approach so portaled menus behave like the other card popovers. */
+function menuPortalPlacement(r: DOMRect, align?: "right", up?: boolean): MenuPortalPos {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // Enough to hold the tallest menu body (the usage card); used only for the flip test.
+  const FLIP = 220;
+  const above = r.top - MENU_M;
+  const below = vh - r.bottom - MENU_M;
+  // Keep the preferred vertical side unless it's clearly too small and the other is bigger.
+  const useUp = up ? !(above < FLIP && below > above) : below < FLIP && above > below;
+  const pos: MenuPortalPos = {
+    left: "auto",
+    right: "auto",
+    top: "auto",
+    bottom: "auto",
+    maxHeight: (useUp ? above : below) - 6,
+  };
+  if (useUp) pos.bottom = vh - r.top + 6;
+  else pos.top = r.bottom + 6;
+  // Anchor horizontally to the trigger's matching edge, clamped on-screen.
+  if (align === "right") pos.right = Math.max(MENU_M, vw - r.right);
+  else pos.left = Math.min(Math.max(MENU_M, r.left), Math.max(MENU_M, vw - 240 - MENU_M));
+  return pos;
+}
+
 export function Menu({
   trigger,
   children,
   align,
   up,
   onOpen,
+  portal,
 }: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   trigger: ReactElement<any>;
@@ -284,27 +328,106 @@ export function Menu({
   up?: boolean;
   /** Fired once each time the menu transitions closed → open (e.g. to refresh data). */
   onOpen?: () => void;
+  /** Render the popover in a fixed-position PORTAL anchored to the trigger, so it
+   *  escapes an ancestor's `overflow` clip (e.g. a FlightDeck card inside the swimlane,
+   *  which has `overflow-y:hidden`). Placement stays collision-aware and honours
+   *  `align`/`up` as the preferred side. Default off → every existing in-flow usage is
+   *  untouched. */
+  portal?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useClickAway(useCallback(() => setOpen(false), []));
+  // The trigger span doubles as the click-away root AND the portal anchor rect.
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<MenuPortalPos | null>(null);
+
+  // Click-away + Escape while open. Portaled or not, "inside" tests BOTH the trigger and
+  // the popover — in portal mode the popover lives outside the trigger span, so a click
+  // in it (e.g. dragging the effort slider) must NOT close the menu. In-flow, the popover
+  // is inside the span already, so the extra check is a harmless no-op.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t)) return;
+      if (popRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // Compute (and keep fresh on scroll/resize) the portal placement from the trigger's
+  // live rect. Recomputing on scroll keeps the popover glued while the swimlane scrolls.
+  useLayoutEffect(() => {
+    if (!open || !portal) {
+      setPos(null);
+      return;
+    }
+    const measure = () => {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (r) setPos(menuPortalPlacement(r, align, up));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [open, portal, align, up]);
+
+  const clonedTrigger = cloneElement(trigger, {
+    onClick: (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!open) onOpen?.();
+      setOpen((o) => !o);
+    },
+    "data-open": open ? "" : undefined,
+  });
+
+  if (!open) return <span className="wf-menu" ref={triggerRef}>{clonedTrigger}</span>;
+
+  // In-flow popover: absolutely positioned relative to the .wf-menu span (unchanged).
+  // Portaled popover: fixed-positioned at `pos`, mounted on document.body so no ancestor
+  // `overflow` can clip it. `.up`/`.right` positioning classes are dropped in portal mode
+  // (the inline `pos` owns every side); `.portaled` adds z-index + scroll clamp.
+  const popStyle: CSSProperties | undefined =
+    portal && pos
+      ? {
+          position: "fixed",
+          left: pos.left,
+          right: pos.right,
+          top: pos.top,
+          bottom: pos.bottom,
+          maxHeight: pos.maxHeight,
+        }
+      : undefined;
+  const popover = (
+    <div
+      ref={popRef}
+      className={
+        "wf-pop" +
+        (portal ? " portaled" : (align === "right" ? " right" : "") + (up ? " up" : ""))
+      }
+      style={popStyle}
+      onClick={() => setOpen(false)}
+    >
+      {children}
+    </div>
+  );
+
   return (
-    <span className="wf-menu" ref={ref}>
-      {cloneElement(trigger, {
-        onClick: (e: React.MouseEvent) => {
-          e.stopPropagation();
-          if (!open) onOpen?.();
-          setOpen((o) => !o);
-        },
-        "data-open": open ? "" : undefined,
-      })}
-      {open ? (
-        <div
-          className={"wf-pop" + (align === "right" ? " right" : "") + (up ? " up" : "")}
-          onClick={() => setOpen(false)}
-        >
-          {children}
-        </div>
-      ) : null}
+    <span className="wf-menu" ref={triggerRef}>
+      {clonedTrigger}
+      {portal ? (pos ? createPortal(popover, document.body) : null) : popover}
     </span>
   );
 }
@@ -648,23 +771,12 @@ function fmtAgo(ts: number | null | undefined): string | null {
   return `il y a ${d} j`;
 }
 
-export function ContextRing({
-  ctx,
-  plan,
-  label,
-  disabled,
-  onCompact,
-  usage,
-  usageLoading,
-  usageError,
-  usageUpdatedAt,
-  onOpenUsage,
-  onRefreshUsage,
-}: {
+/** The context-window + real-usage data feeding both the ring and the meter popovers.
+ *  Shared so the ring (conversation composer) and the clickable card meter render the
+ *  EXACT same popover body from one source. */
+export interface ContextUsageData {
   ctx: Ctx;
   plan?: PlanInfo | null;
-  label?: boolean;
-  disabled?: boolean;
   onCompact?: () => void;
   /** Real usage % (5h + weekly), from `GET /api/oauth/usage`. Null/absent → the
    *  popover falls back to the coarse `plan` status. */
@@ -676,13 +788,120 @@ export function ContextRing({
    *  figures. Stays put when a later refresh fails (e.g. the endpoint rate-limits us),
    *  so the "mis à jour …" line tells the truth about how old the numbers are. */
   usageUpdatedAt?: number | null;
-  /** Fired when the popover opens — caller throttles (e.g. only if data is stale).
-   *  The popover refetches on open, so there's no manual refresh button. */
-  onOpenUsage?: () => void;
   /** Deliberate retry, wired only to the error card's « Réessayer » (recovery after a
    *  failure) — there is no general refresh button (opening the popover refetches). */
   onRefreshUsage?: () => void;
+}
+
+/** The popover BODY (context window + forfait usage + « Compacter le contexte »),
+ *  factored out so the ring and the card's clickable meter show an identical panel. */
+function ContextUsageBody({
+  ctx,
+  plan,
+  onCompact,
+  usage,
+  usageLoading,
+  usageError,
+  usageUpdatedAt,
+  onRefreshUsage,
+}: ContextUsageData) {
+  const warn = ctx.pct >= 70;
+  const st = plan ? planStatus(plan.status) : null;
+  const hasForfait = !!(plan || usage || usageLoading || usageError);
+  return (
+    <div className="wf-pop-ctx" onClick={(e) => e.stopPropagation()}>
+      <div className="wf-pop-h">Fenêtre de contexte</div>
+      <div className="wf-pop-ctx-line wf-mono">
+        {ctx.used}/{ctx.max} tokens <span className={warn ? "warn" : "wf-pop-ctx-pct"}>({ctx.pct}%)</span>
+      </div>
+      <div className="wf-pop-bar">
+        <i className={warn ? "warn" : ""} style={{ width: ctx.pct + "%" }} />
+      </div>
+      {hasForfait ? (
+        <>
+          <div className="wf-pop-sep" />
+          <div className="wf-pop-h wf-pop-h-row">
+            <span>Forfait</span>
+            {/* Freshness of the shown figures (replaces the manual refresh button —
+                the popover already refetches on open). Reflects the last SUCCESS, so a
+                rate-limited refresh doesn't fake-bump it. */}
+            {fmtAgo(usageUpdatedAt) ? (
+              <span className="wf-pop-updated">
+                {usageLoading ? "rafraîchissement…" : `mis à jour ${fmtAgo(usageUpdatedAt)}`}
+              </span>
+            ) : null}
+          </div>
+          {/* Real usage bars (precise %), when the endpoint reported them. */}
+          {usage?.five_hour ? (
+            <UsageRow
+              label="5h"
+              w={usage.five_hour}
+              fallbackReset={plan?.limitType === "five_hour" ? plan.resetsAt : null}
+            />
+          ) : null}
+          {usage?.seven_day ? (
+            <UsageRow
+              label="7j"
+              w={usage.seven_day}
+              fallbackReset={plan?.limitType === "seven_day" ? plan.resetsAt : null}
+            />
+          ) : null}
+          {/* Coarse status pill (warning / rejected) — always informative. */}
+          {st && plan ? (
+            <div className="wf-pop-row">
+              <span>Statut{!usage && planWindow(plan.limitType) ? ` · ${planWindow(plan.limitType)}` : ""}</span>
+              <span className="wf-pop-pill">
+                <i style={{ background: st.color }} />
+                {st.label}
+              </span>
+            </div>
+          ) : null}
+          {/* No precise %: keep the coarse reset line (from the stream). */}
+          {!usage && plan ? (
+            <div className="wf-pop-row">
+              <span>Réinitialisation</span>
+              <span className="wf-mono">{fmtReset(plan.resetsAt)}</span>
+            </div>
+          ) : null}
+          {/* A real error: actionable guidance (full card if no data, or a compact
+              non-destructive "stale" warning if bars are already shown above). Never
+              silent — a failed refresh after a prior success still surfaces here. */}
+          {usageError ? (
+            <UsageErrorCard error={usageError} loading={usageLoading} onRetry={onRefreshUsage} stale={!!usage} />
+          ) : null}
+          {!usage && !usageError && usageLoading ? (
+            <div className="wf-pop-sub">Chargement de l'usage…</div>
+          ) : null}
+          {plan?.usingOverage ? <div className="wf-pop-sub">Overage actif</div> : null}
+        </>
+      ) : null}
+      <div
+        className="wf-pop-act"
+        role="button"
+        tabIndex={0}
+        onClick={() => onCompact?.()}
+        title="Envoyer /compact pour réduire le contexte"
+      >
+        <Ico name="spark" className="sm" />
+        Compacter le contexte
+      </div>
+    </div>
+  );
+}
+
+export function ContextRing({
+  label,
+  disabled,
+  onOpenUsage,
+  ...usage
+}: ContextUsageData & {
+  label?: boolean;
+  disabled?: boolean;
+  /** Fired when the popover opens — caller throttles (e.g. only if data is stale).
+   *  The popover refetches on open, so there's no manual refresh button. */
+  onOpenUsage?: () => void;
 }) {
+  const { ctx } = usage;
   const sz = 16;
   const r = sz / 2 - 1.6;
   const c = 2 * Math.PI * r;
@@ -697,8 +916,6 @@ export function ContextRing({
       </button>
     );
   }
-  const st = plan ? planStatus(plan.status) : null;
-  const hasForfait = !!(plan || usage || usageLoading || usageError);
   return (
     <Menu
       align="right"
@@ -721,89 +938,24 @@ export function ContextRing({
         </button>
       }
     >
-      <div className="wf-pop-ctx" onClick={(e) => e.stopPropagation()}>
-        <div className="wf-pop-h">Fenêtre de contexte</div>
-        <div className="wf-pop-ctx-line wf-mono">
-          {ctx.used}/{ctx.max} tokens <span className={warn ? "warn" : "wf-pop-ctx-pct"}>({ctx.pct}%)</span>
-        </div>
-        <div className="wf-pop-bar">
-          <i className={warn ? "warn" : ""} style={{ width: ctx.pct + "%" }} />
-        </div>
-        {hasForfait ? (
-          <>
-            <div className="wf-pop-sep" />
-            <div className="wf-pop-h wf-pop-h-row">
-              <span>Forfait</span>
-              {/* Freshness of the shown figures (replaces the manual refresh button —
-                  the popover already refetches on open). Reflects the last SUCCESS, so a
-                  rate-limited refresh doesn't fake-bump it. */}
-              {fmtAgo(usageUpdatedAt) ? (
-                <span className="wf-pop-updated">
-                  {usageLoading ? "rafraîchissement…" : `mis à jour ${fmtAgo(usageUpdatedAt)}`}
-                </span>
-              ) : null}
-            </div>
-            {/* Real usage bars (precise %), when the endpoint reported them. */}
-            {usage?.five_hour ? (
-              <UsageRow
-                label="5h"
-                w={usage.five_hour}
-                fallbackReset={plan?.limitType === "five_hour" ? plan.resetsAt : null}
-              />
-            ) : null}
-            {usage?.seven_day ? (
-              <UsageRow
-                label="7j"
-                w={usage.seven_day}
-                fallbackReset={plan?.limitType === "seven_day" ? plan.resetsAt : null}
-              />
-            ) : null}
-            {/* Coarse status pill (warning / rejected) — always informative. */}
-            {st && plan ? (
-              <div className="wf-pop-row">
-                <span>Statut{!usage && planWindow(plan.limitType) ? ` · ${planWindow(plan.limitType)}` : ""}</span>
-                <span className="wf-pop-pill">
-                  <i style={{ background: st.color }} />
-                  {st.label}
-                </span>
-              </div>
-            ) : null}
-            {/* No precise %: keep the coarse reset line (from the stream). */}
-            {!usage && plan ? (
-              <div className="wf-pop-row">
-                <span>Réinitialisation</span>
-                <span className="wf-mono">{fmtReset(plan.resetsAt)}</span>
-              </div>
-            ) : null}
-            {/* A real error: actionable guidance (full card if no data, or a compact
-                non-destructive "stale" warning if bars are already shown above). Never
-                silent — a failed refresh after a prior success still surfaces here. */}
-            {usageError ? (
-              <UsageErrorCard
-                error={usageError}
-                loading={usageLoading}
-                onRetry={onRefreshUsage}
-                stale={!!usage}
-              />
-            ) : null}
-            {!usage && !usageError && usageLoading ? (
-              <div className="wf-pop-sub">Chargement de l'usage…</div>
-            ) : null}
-            {plan?.usingOverage ? <div className="wf-pop-sub">Overage actif</div> : null}
-          </>
-        ) : null}
-        <div
-          className="wf-pop-act"
-          role="button"
-          tabIndex={0}
-          onClick={() => onCompact?.()}
-          title="Envoyer /compact pour réduire le contexte"
-        >
-          <Ico name="spark" className="sm" />
-          Compacter le contexte
-        </div>
-      </div>
+      <ContextUsageBody {...usage} />
     </Menu>
+  );
+}
+
+/** The gauge icon + fill bar + percentage — shared by the read-only {@link ContextMeter}
+ *  and the clickable {@link ContextMeterMenu} trigger, so both read identically. */
+function meterBody(ctx: Ctx) {
+  return (
+    <>
+      <Ico name="gauge" className="sm" />
+      <span className="wf-ctx">
+        <i style={{ width: ctx.pct + "%" }} />
+      </span>
+      <span className="wf-mono" style={{ fontSize: 10.5 }}>
+        {ctx.pct}%
+      </span>
+    </>
   );
 }
 
@@ -813,14 +965,39 @@ export function ContextMeter({ ctx }: { ctx: Ctx }) {
   const warn = ctx.pct >= 70;
   return (
     <span className={"wf-ctxm" + (warn ? " warn" : "")} title={`Contexte ${ctx.used} / ${ctx.max}`}>
-      <Ico name="gauge" className="sm" />
-      <span className="wf-ctx">
-        <i style={{ width: ctx.pct + "%" }} />
-      </span>
-      <span className="wf-mono" style={{ fontSize: 10.5 }}>
-        {ctx.pct}%
-      </span>
+      {meterBody(ctx)}
     </span>
+  );
+}
+
+/** The card's clickable context meter: the same tiny bar, now a button that opens the
+ *  SAME context/usage popover as the composer's ContextRing (portaled so the swimlane's
+ *  `overflow` can't clip it). */
+export function ContextMeterMenu({
+  onOpenUsage,
+  ...usage
+}: ContextUsageData & { onOpenUsage?: () => void }) {
+  const { ctx } = usage;
+  const warn = ctx.pct >= 70;
+  return (
+    // No `align="right"`: the meter sits at the card footer's LEFT, so the popover
+    // anchors its left edge to it and opens rightward (staying within the card), and
+    // `up` opens it above the footer.
+    <Menu
+      up
+      portal
+      onOpen={onOpenUsage}
+      trigger={
+        <button
+          className={"wf-ctxm wf-ctxm-btn" + (warn ? " warn" : "")}
+          title={`Contexte ${ctx.used} / ${ctx.max}`}
+        >
+          {meterBody(ctx)}
+        </button>
+      }
+    >
+      <ContextUsageBody {...usage} />
+    </Menu>
   );
 }
 

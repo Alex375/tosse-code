@@ -90,17 +90,31 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
   }
 
   if (status.kind === "review") {
+    // A clean finish with background work still running is NOT `review` (it routes to
+    // `backgrounding` below), so `review` always means "genuinely ready to relire" — no bg.
     return (
       <div className="wf-review compact">
         <div className="wf-review-h">
           <Ico name="check" className="sm" />
           À relire
-          <BgChip n={bg} />
+        </div>
+        <div className="wf-review-t">Conversation terminée — prête à relire.</div>
+      </div>
+    );
+  }
+
+  if (status.kind === "backgrounding") {
+    // Main turn done, a background task (workflow / sub-agent) still running. GREEN, calm —
+    // work continues, nothing to review yet (the agent resumes on its own).
+    const n = status.count;
+    return (
+      <div className="wf-review bg compact">
+        <div className="wf-review-h">
+          <Ico name="layers" className="sm" />
+          Tâche de fond
         </div>
         <div className="wf-review-t">
-          {bg > 0
-            ? "Conversation terminée — une tâche de fond continue."
-            : "Conversation terminée — prête à relire."}
+          {n > 1 ? `${n} tâches de fond en cours…` : "Tâche de fond en cours…"}
         </div>
       </div>
     );

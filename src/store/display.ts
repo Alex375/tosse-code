@@ -44,14 +44,6 @@ export interface DisplayPrefs {
    *  {@link fleetBannerFlightDeck}. */
   fleetBannerConversation: boolean;
 
-  /** When an agent finishes its main turn CLEANLY while a background task is still
-   *  running, should it raise the "à relire" alert (with a background accent), or go
-   *  straight to the calm violet `backgrounding` state without alerting? On by default
-   *  (alert). Off → no alert while waiting on the background task; the review surfaces
-   *  only once that work also finishes. An open question / error while backgrounding
-   *  still alerts regardless. Read by {@link deriveAgentStatus} via `alertWhileBackgrounding`. */
-  alertOnBackgroundWait: boolean;
-
   /** Show the CLI-injected `<task-notification>` messages (a background task/agent
    *  finished) in the conversation thread. OFF by default — they're machine-injected
    *  noise that clutters the transcript, especially on reload / history import. The
@@ -70,6 +62,26 @@ export interface DisplayPrefs {
    *  offered on both the user's and Claude's messages. ON by default. Off → messages have no
    *  hover controls. Read by {@link MessageActions} (via the conversation thread). */
   messageControls: boolean;
+
+  /** Show the TURN's own timing in the conversation thread. Gates two surfaces: the total
+   *  wall-clock in the FINISHED-turn footer (`result.duration_ms`) — {@link TurnResultRow};
+   *  AND the LIVE elapsed counter on a running turn past the threshold — {@link LiveElapsed}.
+   *  ON by default. Off → neither is rendered. */
+  showTurnDuration: boolean;
+
+  /** Show the "· N s de modèle" breakdown (`result.duration_api_ms`) next to the turn's
+   *  total in the footer. Rides the footer, so only visible when {@link showTurnDuration} is
+   *  also on. ON by default. Read by {@link TurnResultRow}. */
+  showModelTime: boolean;
+
+  /** Show the reflection time on each thinking block — a live counter while thinking, frozen
+   *  once settled. ON by default. Off → thinking blocks render without a duration. */
+  showThinkingTime: boolean;
+
+  /** Show the per-tool duration on each tool row — a live counter while the tool runs, frozen
+   *  once its result lands. ON by default. Off → tool rows render without a duration. Read by
+   *  {@link LiveToolStep}. */
+  showToolTime: boolean;
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
@@ -81,10 +93,13 @@ const DEFAULTS: DisplayPrefs = {
   markdownMode: "warm",
   fleetBannerFlightDeck: true,
   fleetBannerConversation: true,
-  alertOnBackgroundWait: true,
   showTaskNotifications: false,
   showLastMessagePreview: true,
   messageControls: true,
+  showTurnDuration: true,
+  showModelTime: true,
+  showThinkingTime: true,
+  showToolTime: true,
 };
 
 function load(): DisplayPrefs {
@@ -121,10 +136,13 @@ export const useDisplay = create<DisplayState>((set) => ({
         markdownMode: patch.markdownMode ?? s.markdownMode,
         fleetBannerFlightDeck: patch.fleetBannerFlightDeck ?? s.fleetBannerFlightDeck,
         fleetBannerConversation: patch.fleetBannerConversation ?? s.fleetBannerConversation,
-        alertOnBackgroundWait: patch.alertOnBackgroundWait ?? s.alertOnBackgroundWait,
         showTaskNotifications: patch.showTaskNotifications ?? s.showTaskNotifications,
         showLastMessagePreview: patch.showLastMessagePreview ?? s.showLastMessagePreview,
         messageControls: patch.messageControls ?? s.messageControls,
+        showTurnDuration: patch.showTurnDuration ?? s.showTurnDuration,
+        showModelTime: patch.showModelTime ?? s.showModelTime,
+        showThinkingTime: patch.showThinkingTime ?? s.showThinkingTime,
+        showToolTime: patch.showToolTime ?? s.showToolTime,
       };
       save(next);
       return next;

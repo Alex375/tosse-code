@@ -128,8 +128,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 </div>
 
                 <DisplayPrefs />
+                <TimingPrefs />
                 <FleetBannerPrefs />
-                <AgentAlertPrefs />
               </div>
             )}
 
@@ -259,6 +259,72 @@ function DisplayPrefs() {
   );
 }
 
+/** The timing toggles — one per family of time shown in the conversation, so each can be
+ *  hidden on its own. All on by default (see store/display DEFAULTS). */
+function TimingPrefs() {
+  const showTurnDuration = useDisplay((s) => s.showTurnDuration);
+  const showModelTime = useDisplay((s) => s.showModelTime);
+  const showThinkingTime = useDisplay((s) => s.showThinkingTime);
+  const showToolTime = useDisplay((s) => s.showToolTime);
+  const set = useDisplay((s) => s.set);
+  return (
+    <SettingsGroup title="Durées & temps" icon="clock">
+      <ToggleRow
+        title="Durée des tours"
+        hint={
+          <>
+            Sous chaque tour terminé, le <strong>temps total</strong> qu'il a pris ; et un{" "}
+            <strong>compteur en direct</strong> lorsqu'un tour dépasse 40&nbsp;s.{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showTurnDuration}
+        onChange={(v) => set({ showTurnDuration: v })}
+        label="Afficher la durée des tours"
+      />
+      <ToggleRow
+        title="Temps de modèle"
+        hint={
+          <>
+            À côté de la durée du tour, le <strong>temps passé côté modèle</strong>{" "}
+            (« · 18s modèle »). Visible seulement si « Durée des tours » est activé.{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showModelTime}
+        onChange={(v) => set({ showModelTime: v })}
+        label="Afficher le temps de modèle"
+      />
+      <ToggleRow
+        title="Temps de réflexion"
+        hint={
+          <>
+            Sur chaque bloc de réflexion, le temps passé à réfléchir — un{" "}
+            <strong>compteur en direct</strong> pendant la réflexion, puis figé.{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showThinkingTime}
+        onChange={(v) => set({ showThinkingTime: v })}
+        label="Afficher le temps de réflexion"
+      />
+      <ToggleRow
+        title="Temps par outil"
+        hint={
+          <>
+            Sur chaque outil (Read, Bash, Edit…), sa <strong>durée d'exécution</strong> — un
+            compteur en direct pendant qu'il tourne, puis figé.{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showToolTime}
+        onChange={(v) => set({ showToolTime: v })}
+        label="Afficher le temps par outil"
+      />
+    </SettingsGroup>
+  );
+}
+
 /** The two independent toggles for the "Fleet readout" banner — the adaptive stage
  *  counts ("N Running · N Review · …") across the whole fleet. One controls the wide
  *  bar at the top of the FlightDeck, the other the compact box at the bottom of the
@@ -283,33 +349,6 @@ function FleetBannerPrefs() {
         checked={conversation}
         onChange={(v) => set({ fleetBannerConversation: v })}
         label="Bandeau de flotte dans la Conversation"
-      />
-    </SettingsGroup>
-  );
-}
-
-/** Whether an agent that finishes its main turn while a background task is still
- *  running raises the "à relire" alert (with a violet background accent) or goes
- *  straight to the calm violet "backgrounding" state without alerting. On by default. */
-function AgentAlertPrefs() {
-  const alertOnBackgroundWait = useDisplay((s) => s.alertOnBackgroundWait);
-  const set = useDisplay((s) => s.set);
-  return (
-    <SettingsGroup title="Alertes d'agent" icon="alert">
-      <ToggleRow
-        title="Alerter en attendant une tâche de fond"
-        hint={
-          <>
-            Quand un agent termine sa réponse mais qu'une <strong>tâche de fond</strong> tourne
-            encore, lever l'alerte « à relire » (avec un accent violet indiquant le travail en
-            cours). <strong>Désactivé</strong> : pas d'alerte, l'agent passe directement en violet
-            (tâche de fond) ; le « à relire » n'apparaît qu'une fois la tâche de fond aussi terminée.
-            Une question ou une erreur alerte toujours.
-          </>
-        }
-        checked={alertOnBackgroundWait}
-        onChange={(v) => set({ alertOnBackgroundWait: v })}
-        label="Alerter en attendant une tâche de fond"
       />
     </SettingsGroup>
   );

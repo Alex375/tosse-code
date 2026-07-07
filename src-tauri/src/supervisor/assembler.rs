@@ -896,7 +896,21 @@ impl Assembler {
             // Only surface a bubble for a genuine remote turn WITH text — the UI already
             // shows our own turns optimistically, and image-only content isn't rendered on
             // the live/replay path (an accepted limit).
-            if !was_ours && !text.trim().is_empty() {
+            //
+            // ⚠️ A `user` line carrying `parent_tool_use_id` is a SUB-AGENT (sidechain) turn:
+            // the prompt Claude sends INTO a `Task`/`Agent` tool, streamed live under the
+            // spawning tool_use's id. It is NOT a human turn and must never render as a
+            // main-conversation user bubble (the "messages Claude sends to sub-agents appear
+            // as if I sent them" bug). VERIFIED on the live wire (claude 2.1.203): a sub-agent
+            // prompt arrives with a FRESH uuid (so `was_ours` is false), `parent_tool_use_id`
+            // = the Task tool_use, `isReplay` absent, and `isSidechain`/`isMeta` OMITTED (disk-
+            // only, like `sourceToolUseID` — the skill-body lesson). `parent_tool_use_id` is a
+            // top-level field that SURVIVES the live stream, so it is the live-safe
+            // distinguisher — mirroring `history.rs` skipping `isSidechain:true` on disk and
+            // the context-meter guard in `ingest_stream_event`. The `tool_result` blocks above
+            // are still surfaced (a sub-agent's internal results carry the same parent and are
+            // routed to its own card downstream).
+            if !was_ours && !text.trim().is_empty() && u.parent_tool_use_id.is_none() {
                 out.push(SessionEvent::Item(ConversationItem::UserMessage {
                     id: uuid,
                     text,
@@ -947,6 +961,8 @@ impl Assembler {
             total_cost_usd: r.total_cost_usd,
             num_turns: r.num_turns,
             duration_ms: r.duration_ms,
+            duration_api_ms: r.duration_api_ms,
+            ttft_ms: r.ttft_ms,
         }));
         out.push(SessionEvent::State(self.state.clone()));
     }
@@ -1262,9 +1278,13 @@ mod tests {
                         streamed_text.push_str(&text);
                     }
                     SessionEvent::Item(ConversationItem::TurnResult {
-                        subtype, is_error, ..
+                        subtype,
+                        is_error,
+                        duration_api_ms,
+                        ttft_ms,
+                        ..
                     }) => {
-                        turn = Some((subtype, is_error));
+                        turn = Some((subtype, is_error, duration_api_ms, ttft_ms));
                     }
                     _ => {}
                 }
@@ -1277,7 +1297,15 @@ mod tests {
             streamed_text.to_lowercase().contains("hello world"),
             "streamed text deltas should reconstruct the reply, got {streamed_text:?}"
         );
-        assert_eq!(turn, Some(("success".to_string(), false)));
+        // The result's timing breakdown must survive normalization by VALUE (not just
+        // parse): a renamed/typo'd wire field would silently deserialize to None and drop
+        // the "N s de modèle" footer with no other failing test. The fixture's final
+        // `result` line carries duration_api_ms:6605 and ttft_ms:5586.
+        assert_eq!(
+            turn,
+            Some(("success".to_string(), false, Some(6605), Some(5586))),
+            "the turn result must carry subtype/is_error AND the duration_api_ms/ttft_ms breakdown"
+        );
         assert_eq!(ended_idle, Some(false), "session should be idle after the result");
     }
 
@@ -2153,6 +2181,62 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(e, SessionEvent::Item(ConversationItem::ToolResult { .. }))),
             "the tool_result must still be surfaced"
+        );
+    }
+
+    /// A SUB-AGENT (sidechain) prompt — the text Claude sends INTO a `Task`/`Agent`
+    /// tool — arrives live as a `user` line with a FRESH uuid (not ours) and
+    /// `parent_tool_use_id` = the spawning tool_use. It must NOT surface as a
+    /// main-conversation user bubble (the "sub-agent prompts appear as if I sent them"
+    /// bug). Wire shape VERIFIED against claude 2.1.203 (fresh uuid, parent set,
+    /// `isReplay`/`isSidechain` absent). A remote turn, by contrast, is a ROOT turn
+    /// (`parent_tool_use_id` absent) and still surfaces — see the test above.
+    #[test]
+    fn subagent_prompt_with_parent_is_not_surfaced_as_user_message() {
+        let mut asm = seeded();
+        // Exact shape captured on the live wire: sub-agent prompt with a parent id.
+        let m: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "text", "text": "Output the single word PINEAPPLE and nothing else." }
+            ] },
+            "uuid": "abea97c6-8ddf-4004-b25e-0e88fb2a1507",
+            "parent_tool_use_id": "toolu_01AhBhoo496zXkuW9TxSVMU5"
+        }))
+        .unwrap();
+        assert!(
+            asm.ingest(&m).iter().all(|e| !matches!(
+                e,
+                SessionEvent::Item(ConversationItem::UserMessage { .. })
+            )),
+            "a sub-agent prompt (parent_tool_use_id set) must never surface as a user bubble"
+        );
+        // A sub-agent's INTERNAL tool_result (same parent) is still surfaced (routed to
+        // its own card downstream) — the parent guard only gates the text bubble.
+        let tr: CliMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "toolu_inner", "content": "done" }
+            ] },
+            "uuid": "78c31232-8c9b-427e-9251-1e3b58598387",
+            "parent_tool_use_id": "toolu_01AhBhoo496zXkuW9TxSVMU5"
+        }))
+        .unwrap();
+        let events = asm.ingest(&tr);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                SessionEvent::Item(ConversationItem::ToolResult { parent_tool_use_id: Some(p), .. })
+                    if p == "toolu_01AhBhoo496zXkuW9TxSVMU5"
+            )),
+            "a sub-agent's internal tool_result must still be surfaced with its parent"
+        );
+        assert!(
+            events.iter().all(|e| !matches!(
+                e,
+                SessionEvent::Item(ConversationItem::UserMessage { .. })
+            )),
+            "the tool_result-only sidechain line still emits no user bubble"
         );
     }
 

@@ -75,10 +75,14 @@ export function EffortGauge({
   model,
   value,
   onChange,
+  portal,
 }: {
   model: string | null | undefined;
   value: EffortLevel;
   onChange: (level: EffortLevel) => void;
+  /** Render the popover in a portal — for triggers inside an `overflow`-clipping
+   *  container (e.g. a FlightDeck card). See {@link Menu}. */
+  portal?: boolean;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
@@ -108,7 +112,7 @@ export function EffortGauge({
   );
 
   return (
-    <Menu up trigger={chip}>
+    <Menu up portal={portal} trigger={chip}>
       <div className="wf-eff" onClick={(e) => e.stopPropagation()}>
         <div className="wf-eff-top">
           <span className="wf-eff-lbl">Effort de réflexion</span>

@@ -1107,7 +1107,9 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   const { ensureSession, applyItem, applyContextFill, markSeen, reanchorReplay } =
     useConversationStore.getState();
   ensureSession(convId);
-  for (const item of res.data) applyItem(convId, item);
+  // `hydrating: true` — replayed history has no wall-clock meaning, so suppress the
+  // live tool/thinking duration stamps (else every reloaded tool shows a bogus "0ms").
+  for (const item of res.data) applyItem(convId, item, true);
   // The transcript carries NO `turn_result`, so the remote-replay anchor was never
   // re-armed during hydration — pin it to the end now, so the FIRST live remote turn
   // splices at the tail of the restored history, not above it.
@@ -1159,7 +1161,8 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
   const { resetSession, applyItem, applyContextFill, markSeen, reanchorReplay } =
     useConversationStore.getState();
   resetSession(convId);
-  for (const item of res.data) applyItem(convId, item);
+  // `hydrating: true` — see loadConversationHistory: suppress live duration stamps on replay.
+  for (const item of res.data) applyItem(convId, item, true);
   // Transcript carries no `turn_result` → pin the remote-replay anchor to the tail so
   // a later live remote turn splices at the end, not above the restored history.
   reanchorReplay(convId);

@@ -128,6 +128,10 @@ export interface TurnResultMeta {
   totalCostUsd: number | null;
   numTurns: number | null;
   durationMs: number | null;
+  /** Cumulative model/API time this turn (the "N s de modèle" breakdown of durationMs). */
+  durationApiMs: number | null;
+  /** Time-to-first-token this turn. Captured but not surfaced in the UI yet. */
+  ttftMs: number | null;
 }
 
 /** A surfaced system notice (compact boundary, sub-agent lifecycle, …). */
@@ -233,4 +237,38 @@ export interface SessionEntry {
    * echo by uuid — so this only orders remote turns and history replays.)
    */
   replayAnchor: number;
+  /**
+   * Wall-clock start (`Date.now()`) of the turn currently in flight, or `null` when no
+   * turn is running. Stamped when `state.busy` goes false→true and cleared on true→false
+   * (and on `clearState`). Drives the LIVE elapsed counter in the working indicator (shown
+   * once a turn runs past a threshold, à la CLI). NOT the finished turn's duration — that
+   * is `TurnResultMeta.durationMs`, measured by the binary and delivered in `turn_result`.
+   */
+  turnStartedAt: number | null;
+  /**
+   * Wall-clock start of the thinking block currently streaming, or `null` when no thinking
+   * is in flight. Stamped on the `streamingThinking` empty→non-empty edge (a new block —
+   * the buffer is reset and this cleared each time a thinking block finalizes), cleared on
+   * finalize / turn-end / `clearState`. Drives the LIVE counter on a streaming ThinkingBlock.
+   */
+  thinkingStartedAt: number | null;
+  /**
+   * Frozen duration (ms) of each FINALIZED thinking block, keyed by the block's text (which
+   * is unique per block and is exactly what the renderer receives). Front-only, never wiped
+   * mid-session so a settled block keeps its number. Absent on blocks hydrated from disk
+   * (no deltas → no start stamp) → the renderer shows no duration there.
+   */
+  thinkingDurations: Record<string, number>;
+  /**
+   * Wall-clock start of each tool call in flight, keyed by tool_use_id. Stamped when the
+   * tool_use block appears (`assistant_message`), consumed when its `tool_result` lands.
+   * Drives the LIVE counter on a running tool row. Front-only.
+   */
+  toolStartedAt: Record<string, number>;
+  /**
+   * Frozen duration (ms) of each finished tool call (tool_use → tool_result), keyed by
+   * tool_use_id. Front-measured (≈ execution time as seen by the client), never wiped
+   * mid-session. Absent on tools hydrated from disk → no duration shown there.
+   */
+  toolDurations: Record<string, number>;
 }

@@ -329,6 +329,7 @@
 .cv-step-add { color:var(--wf-run); }
 .cv-step-del { color:var(--wf-err); }
 .cv-step-end { margin-left:auto; display:inline-flex; align-items:center; gap:5px; flex:none; }
+.cv-step-time { font-size:10.5px; color:var(--wf-tx-lo); opacity:.75; }
 .cv-step-okico { color:var(--wf-run); }
 .cv-step-errico { color:var(--wf-err); }
 .cv-step-run { width:7px; height:7px; border-radius:50%; background:var(--wf-run); animation:cv-step-pulse 1.1s ease-in-out infinite; }
@@ -605,6 +606,10 @@
 .cv-reviewbar[data-tone="review"] { background:var(--wf-wait-bg); border-color:#314463; color:var(--wf-wait); }
 .cv-reviewbar[data-tone="input"]  { background:var(--wf-att-bg);  border-color:#5a4527; color:var(--wf-att); }
 .cv-reviewbar[data-tone="error"]  { background:var(--wf-err-bg);  border-color:#5c3036; color:var(--wf-err); }
+/* "backgrounding" — main turn done, a background task (workflow / sub-agent) still runs.
+   GREEN (running family), NOT the blue "à relire" tone: there is nothing to review yet.
+   Non-dismissable (no "Marquer comme vu" button), calm. */
+.cv-reviewbar[data-tone="backgrounding"] { background:var(--wf-run-bg); border-color:#27513f; color:var(--wf-run); }
 .cv-reviewbar-dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex:0 0 auto; box-shadow:0 0 0 3px color-mix(in srgb, currentColor 22%, transparent); }
 .cv-reviewbar-label { min-width:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .cv-reviewbar-btn { margin-left:auto; flex:0 0 auto; display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border-radius:8px; border:1px solid currentColor; background:transparent; color:inherit; font:inherit; font-size:12px; font-weight:600; cursor:pointer; transition:background .12s ease; }

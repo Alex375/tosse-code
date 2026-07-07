@@ -3,12 +3,9 @@
 // same todo summary, context fill and worktree badge. No bespoke data, no fake
 // chrome: every element is wired to the live store.
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Dot, Pill, ContextMeter, Ico } from "../../ui/kit";
+import { Dot, Pill, Ico } from "../../ui/kit";
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { agentStatusToDot, backgroundCount, rowAttention } from "../../agent/status";
-import { effortLabel } from "../../agent/subagentMeta";
-import { useSessionState } from "../../store/conversationStore";
-import { useContextData } from "../../store/contextData";
 import { useLastMessageSummary } from "../../store/lastMessageSummary";
 import { WorktreeIndicator } from "../git/WorktreeIndicator";
 import type { Conversation } from "../../store/conversationsStore";
@@ -17,6 +14,8 @@ import { StateActions } from "./StateActions";
 import { BackgroundTaskBadge } from "./BackgroundTaskBadge";
 import { LastMessagePeek } from "./LastMessagePeek";
 import { TodoPeek } from "./TodoPeek";
+import { CardEffort } from "./CardEffort";
+import { CardContext } from "./CardContext";
 import { useFlightdeckModal } from "./flightdeckModalStore";
 
 /** Relative "last activity" stamp — "il y a 14 min" / "il y a 2 h". `now` comes from
@@ -45,14 +44,7 @@ export function StreamCard({
   const status = useAgentStatus(conv.id);
   const dot = agentStatusToDot(status);
   const attn = rowAttention(status);
-  const { ctx, ready } = useContextData(conv.id);
   const openModal = useFlightdeckModal((s) => s.open);
-  // The agent's live reasoning effort (get_settings read-back) — same data the
-  // conversation composer's gauge shows, surfaced read-only on the card. Null until
-  // the session has reported settings (never spawned this run → no chip).
-  const state = useSessionState(conv.id);
-  const effort = effortLabel(state?.effort, state?.ultracode);
-  const ultra = !!state?.ultracode;
   // A few-word summary of the user's LAST message (live-only, this run). Complements
   // the activity line: it says what YOU last asked, not what the agent is doing now.
   const lastMsg = useLastMessageSummary(conv.id);
@@ -94,12 +86,9 @@ export function StreamCard({
 
       <div className="ag-card-tags">
         <WorktreeIndicator conv={conv} repoPath={repoPath} />
-        {effort ? (
-          <span className={"wf-tag ag-eff" + (ultra ? " ultra" : "")} title={`Effort de réflexion : ${effort}`}>
-            <Ico name="bolt" className="sm" />
-            {effort}
-          </span>
-        ) : null}
+        {/* Reasoning effort — now a real, clickable slider (the composer's EffortGauge),
+            set live per conversation. Renders nothing until an effort is known. */}
+        <CardEffort convId={conv.id} />
       </div>
 
       {lastMsg ? <LastMessagePeek convId={conv.id} summary={lastMsg} /> : null}
@@ -107,7 +96,9 @@ export function StreamCard({
       <StateBlock convId={conv.id} status={status} />
 
       <div className="ag-card-foot">
-        {ready ? <ContextMeter ctx={ctx} /> : null}
+        {/* Context meter — clickable, opening the same context/usage popover as the
+            composer's ContextRing (renders nothing until usage is reported). */}
+        <CardContext convId={conv.id} />
         <TodoPeek convId={conv.id} />
         <BackgroundTaskBadge convId={conv.id} />
         <span className="wf-row" style={{ gap: 5, marginLeft: "auto" }} title="Dernière activité">

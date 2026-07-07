@@ -26,14 +26,16 @@ export type AgentStatus =
   | { kind: "needInput"; via: "questionnaire" | "openQuestion"; prompt: string | null; bg?: number }
   | { kind: "needIntervention"; tool: string } // a permission prompt is blocking
   | { kind: "error"; message: string; bg?: number } // last finished turn ended in error
-  | { kind: "review"; bg?: number }; // turn finished cleanly, not yet seen by the user
+  | { kind: "review" }; // turn finished cleanly, not yet seen by the user
 
-// The `bg?` on the three SETTLED-unseen states (review / open-question / error) carries
-// how many background tools are STILL running while that settled state is surfaced —
-// i.e. "finished the main turn, but work continues in the background". It drives the
-// distinct alert (a violet accent on the blue/orange review/question), so the user can
-// tell a truly-finished agent from one that finished-but-is-waiting. Absent/0 = nothing
-// in the background. See {@link backgroundCount} and {@link deriveAgentStatus}.
+// The `bg?` on the two SETTLED-unseen ALERT states (open-question / error) carries how
+// many background tools are STILL running while that alert is surfaced — i.e. "the agent
+// wants you (a question / an error) AND work continues in the background". It drives the
+// distinct violet accent, so the user can tell a lone alert from one raised while the
+// background is still busy. A CLEAN finish while background work runs is NOT an alert and
+// has nothing to review: it routes to the green `backgrounding` state instead (see
+// {@link deriveAgentStatus}), so `review` never carries `bg`. Absent/0 = nothing in the
+// background. See {@link backgroundCount}.
 
 /**
  * The acknowledgeable, non-blocking reminders — the ONLY statuses that persist
@@ -75,15 +77,6 @@ export interface AgentSignals {
    * conversation is "backgrounding" — calm, still interactive — rather than idle.
    */
   runningBackgroundTasks: number;
-  /**
-   * User preference: when a turn finishes CLEANLY while background tools are still
-   * running, should that surface the "review" alert (with a background accent), or go
-   * straight to the calm `backgrounding` state without alerting? True (default) = alert;
-   * false = no alert, the review only surfaces once the background work also finishes.
-   * Only affects the clean-finish case — an open question or an error while backgrounding
-   * still alerts regardless (those genuinely want the user). See Settings → Général.
-   */
-  alertWhileBackgrounding: boolean;
   /**
    * A reminder persisted from a previous run (or while live), surfaced ONLY when
    * the process is off (`handle === null`): it re-displays a finished-but-unseen
@@ -171,25 +164,26 @@ export function deriveAgentStatus(s: AgentSignals): AgentStatus {
 
   // Live and idle. If the last turn just finished and the user hasn't acted on it,
   // surface it (error / open-question / review). Otherwise there's nothing to show.
-  // While a background tool is still running, that count rides along as `bg` so the
-  // settled alert can show the "…but work continues" accent.
+  // An ALERT (error / open-question) genuinely wants the user, so it fires even while
+  // background work runs — carrying that count as `bg` for the "…but work continues"
+  // violet accent.
   if (!s.turnSeen) {
     const bg = s.runningBackgroundTasks > 0 ? s.runningBackgroundTasks : undefined;
     if (s.lastTurnIsError || (s.lastTurnSubtype?.startsWith("error") ?? false))
       return { kind: "error", message: errorMessage(s.lastTurnSubtype), bg };
     if (looksLikeQuestion(s.lastAssistantText))
       return { kind: "needInput", via: "openQuestion", prompt: s.lastAssistantText, bg };
-    // Clean finish. Normally this is `review`. But when background work is still running
-    // AND the user disabled the "alert while backgrounding" preference, we DON'T alert
-    // now — fall through to the calm `backgrounding` state below; the review surfaces only
-    // once the background work also completes (turn still unseen, but bg back to 0).
-    if (!(bg && !s.alertWhileBackgrounding)) return { kind: "review", bg };
+    // Clean finish. If background work is STILL running there is NOTHING to review yet —
+    // the workflow / sub-agents are churning and the agent will resume on its own — so this
+    // is NOT a blue "review". Fall through to the green `backgrounding` state below; the
+    // blue review surfaces only once the background work also completes (bg back to 0).
+    if (!bg) return { kind: "review" };
   }
 
   // Settled with nothing to review — but if background tools are still running, the
-  // conversation isn't truly idle: it's quietly waiting on them (and stays
-  // interactive). A calm, distinct state rather than the dormant "idle". Also reached
-  // by a clean finish when the "alert while backgrounding" preference is off (above).
+  // conversation isn't truly idle: it's quietly waiting on them (and stays interactive).
+  // A calm, distinct GREEN "running-family" state rather than the dormant "idle" — reached
+  // both when nothing was unseen and when a clean finish had background work still running.
   if (s.runningBackgroundTasks > 0)
     return { kind: "backgrounding", count: s.runningBackgroundTasks };
 
@@ -210,7 +204,7 @@ export function agentStatusToDot(s: AgentStatus): StreamState {
     case "running":
       return "work"; // green
     case "backgrounding":
-      return "bg"; // soft — quietly waiting on background tools
+      return "bg"; // green (running-family) — main turn done, background work still running
     case "needInput":
     case "needIntervention":
       return "ask"; // orange
@@ -259,15 +253,15 @@ export function isActivelyRunning(s: AgentStatus): boolean {
 }
 
 /**
- * How many background tools are still running behind a SETTLED-unseen alert
- * (review / open-question / error) — i.e. "finished, but work continues". 0 for every
- * other status (including `backgrounding`, whose count is its own `count` field, and
- * whose calm violet already conveys the background work). Drives the review/question
- * alert's violet accent (the dot ring + the "N en fond" chip). See {@link AgentStatus}.
+ * How many background tools are still running behind a SETTLED-unseen ALERT
+ * (open-question / error) — i.e. "the agent wants you, but work also continues". 0 for
+ * every other status, including `review` (a clean finish with background work running is
+ * never `review` — it routes to `backgrounding`) and `backgrounding` itself (whose count
+ * is its own `count` field, and whose green dot already conveys the running work). Drives
+ * the alert's violet accent (the dot ring + the "N en fond" chip). See {@link AgentStatus}.
  */
 export function backgroundCount(s: AgentStatus): number {
   switch (s.kind) {
-    case "review":
     case "needInput":
     case "error":
       return s.bg ?? 0;

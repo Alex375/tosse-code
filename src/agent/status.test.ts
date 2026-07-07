@@ -26,7 +26,6 @@ function sig(over: Partial<AgentSignals> = {}): AgentSignals {
     lastAssistantText: null,
     persistedReminder: null,
     runningBackgroundTasks: 0,
-    alertWhileBackgrounding: true,
     ...over,
   };
 }
@@ -81,7 +80,7 @@ describe("deriveAgentStatus", () => {
       kind: "backgrounding",
       count: 2,
     });
-    // It maps to the soft 'bg' dot, and never demands attention.
+    // It maps to the green (running-family) 'bg' dot, and never demands attention.
     expect(agentStatusToDot({ kind: "backgrounding", count: 2 })).toBe("bg");
     expect(rowAttention({ kind: "backgrounding", count: 2 })).toBeNull();
   });
@@ -90,10 +89,21 @@ describe("deriveAgentStatus", () => {
     expect(deriveAgentStatus(sig({ busy: true, runningBackgroundTasks: 3 })).kind).toBe("running");
   });
 
-  it("a pending review/question wins over backgrounding (look at it first)", () => {
+  it("an unseen ALERT surfaces over backgrounding, but a clean finish IS backgrounding", () => {
+    // A question the agent is waiting on genuinely wants the user → it wins over the calm
+    // background state even while background work runs.
     expect(
-      deriveAgentStatus(sig({ turnSeen: false, runningBackgroundTasks: 1 })).kind,
-    ).toBe("review");
+      deriveAgentStatus(
+        sig({ turnSeen: false, lastAssistantText: "On continue ?", runningBackgroundTasks: 1 }),
+      ).kind,
+    ).toBe("needInput");
+    // But a CLEAN finish with background work still running is NOT "review" (nothing to
+    // relire yet) — it is the green `backgrounding` state.
+    expect(
+      deriveAgentStatus(
+        sig({ turnSeen: false, lastTurnSubtype: "success", runningBackgroundTasks: 1 }),
+      ).kind,
+    ).toBe("backgrounding");
   });
 
   it("is running while busy", () => {
@@ -171,56 +181,36 @@ describe("deriveAgentStatus", () => {
       ).toBe("error");
     });
 
-    describe("background accent + the alert-while-backgrounding preference", () => {
-      it("a clean finish with bg running carries the bg count (alert on = default)", () => {
+    describe("background work still running behind a just-finished turn", () => {
+      it("a CLEAN finish with bg running is 'backgrounding' (green), NOT review", () => {
+        // The workflow / sub-agent is still churning and the agent will resume on its own —
+        // there is nothing to relire yet, so this is the calm green running-family state.
         const s = deriveAgentStatus(
           sig({ turnSeen: false, lastTurnSubtype: "success", runningBackgroundTasks: 2 }),
         );
-        expect(s).toEqual({ kind: "review", bg: 2 });
-        expect(backgroundCount(s)).toBe(2);
-      });
-
-      it("with the alert OFF, a clean finish + bg goes straight to backgrounding (no review)", () => {
-        const s = deriveAgentStatus(
-          sig({
-            turnSeen: false,
-            lastTurnSubtype: "success",
-            runningBackgroundTasks: 2,
-            alertWhileBackgrounding: false,
-          }),
-        );
         expect(s).toEqual({ kind: "backgrounding", count: 2 });
+        // review never carries a background count anymore.
+        expect(backgroundCount(s)).toBe(0);
       });
 
-      it("a QUESTION with bg still alerts even when the setting is off (carries bg)", () => {
+      it("a QUESTION with bg still alerts and carries bg (for the violet accent)", () => {
         const s = deriveAgentStatus(
-          sig({
-            turnSeen: false,
-            lastAssistantText: "On y va ?",
-            runningBackgroundTasks: 1,
-            alertWhileBackgrounding: false,
-          }),
+          sig({ turnSeen: false, lastAssistantText: "On y va ?", runningBackgroundTasks: 1 }),
         );
         expect(s).toEqual({ kind: "needInput", via: "openQuestion", prompt: "On y va ?", bg: 1 });
+        expect(backgroundCount(s)).toBe(1);
       });
 
-      it("an ERROR with bg still alerts even when the setting is off (carries bg)", () => {
+      it("an ERROR with bg still alerts and carries bg (for the violet accent)", () => {
         const s = deriveAgentStatus(
-          sig({
-            turnSeen: false,
-            lastTurnIsError: true,
-            runningBackgroundTasks: 1,
-            alertWhileBackgrounding: false,
-          }),
+          sig({ turnSeen: false, lastTurnIsError: true, runningBackgroundTasks: 1 }),
         );
         expect(s.kind).toBe("error");
         expect(backgroundCount(s)).toBe(1);
       });
 
-      it("with no bg running, the setting is a no-op (plain review, backgroundCount 0)", () => {
-        const s = deriveAgentStatus(
-          sig({ turnSeen: false, lastTurnSubtype: "success", alertWhileBackgrounding: false }),
-        );
+      it("with no bg running, a clean finish is plain review (backgroundCount 0)", () => {
+        const s = deriveAgentStatus(sig({ turnSeen: false, lastTurnSubtype: "success" }));
         expect(s).toEqual({ kind: "review" });
         expect(backgroundCount(s)).toBe(0);
       });
@@ -267,6 +257,8 @@ describe("agentStatusToDot (4-colour grouping)", () => {
     expect(agentStatusToDot({ kind: "needIntervention", tool: "Bash" })).toBe("ask");
     expect(agentStatusToDot({ kind: "review" })).toBe("review");
     expect(agentStatusToDot({ kind: "error", message: "x" })).toBe("err");
+    // backgrounding shares the green running-family 'bg' token (recoloured in CSS).
+    expect(agentStatusToDot({ kind: "backgrounding", count: 1 })).toBe("bg");
   });
 });
 

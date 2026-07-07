@@ -57,11 +57,8 @@
 .ag-card-name { font:inherit; font-size:13px; font-weight:600; flex:1; min-width:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--wf-tx-hi); background:transparent; border:0; cursor:pointer; padding:0; }
 .ag-card-name:hover { text-decoration:underline; }
 .ag-card-tags { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
-/* Reasoning-effort tag on a card, next to the worktree chip.
-   The bolt is tinted; the ultracode tier flips the whole tag to the coral accent. */
-.ag-eff .wf-ico { width:12px; height:12px; color:var(--wf-tx-lo); }
-.ag-eff.ultra { color:var(--wf-accent); border-color:color-mix(in srgb, var(--wf-accent) 40%, var(--wf-line)); }
-.ag-eff.ultra .wf-ico { color:var(--wf-accent); }
+/* The reasoning-effort chip (now the interactive EffortGauge, ChipBtn) sits here next
+   to the worktree chip; it carries its own .wf-chip styling. */
 /* "Last message you sent" — a few-word summary (≤6 words) of the user's latest message,
    under the tags. A small self-hugging box (not full width) with a coral "reply" arrow
    marking it as YOUR voice, distinct from the agent's activity line below. Live-only. */
@@ -118,7 +115,9 @@
 .ag-bgpop-meta { flex:0 0 auto; font-size:10px; color:var(--wf-tx-lo); }
 
 /* --- clickable to-do pips on the card footer (→ popover with the full plan) --- */
-.ag-todo-btn { display:inline-flex; align-items:center; font:inherit; padding:2px 5px; margin:-2px -5px; border:0; border-radius:7px; background:transparent; color:inherit; cursor:pointer; transition:background .12s ease; }
+/* Hit-area enlarged ~10% (padding up from 2/5 → 3/7); the matching negative margin
+   cancels it so the visual position is unchanged and neighbours don't shift. */
+.ag-todo-btn { display:inline-flex; align-items:center; font:inherit; padding:3px 7px; margin:-3px -7px; border:0; border-radius:7px; background:transparent; color:inherit; cursor:pointer; transition:background .12s ease; }
 .ag-todo-btn:hover { background:var(--wf-bg-2); }
 
 /* --- generic card peek popover (last message / to-do list) --- */

@@ -218,6 +218,10 @@ pub enum ConversationItem {
         total_cost_usd: Option<f64>,
         num_turns: Option<u64>,
         duration_ms: Option<u64>,
+        /// Cumulative model/API time this turn (the "N s de modèle" breakdown).
+        duration_api_ms: Option<u64>,
+        /// Time-to-first-token this turn; captured but not yet surfaced in the UI.
+        ttft_ms: Option<u64>,
     },
     /// A non-conversational notice surfaced in the timeline. Two families:
     ///  - informational: `control_change` (a confirmed model/effort/mode move),
