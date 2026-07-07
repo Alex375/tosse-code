@@ -233,4 +233,12 @@ export interface SessionEntry {
    * echo by uuid — so this only orders remote turns and history replays.)
    */
   replayAnchor: number;
+  /**
+   * Wall-clock start (`Date.now()`) of the turn currently in flight, or `null` when no
+   * turn is running. Stamped when `state.busy` goes false→true and cleared on true→false
+   * (and on `clearState`). Drives the LIVE elapsed counter in the working indicator (shown
+   * once a turn runs past a threshold, à la CLI). NOT the finished turn's duration — that
+   * is `TurnResultMeta.durationMs`, measured by the binary and delivered in `turn_result`.
+   */
+  turnStartedAt: number | null;
 }
