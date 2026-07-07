@@ -129,7 +129,6 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
 
                 <DisplayPrefs />
                 <FleetBannerPrefs />
-                <AgentAlertPrefs />
               </div>
             )}
 
@@ -283,33 +282,6 @@ function FleetBannerPrefs() {
         checked={conversation}
         onChange={(v) => set({ fleetBannerConversation: v })}
         label="Bandeau de flotte dans la Conversation"
-      />
-    </SettingsGroup>
-  );
-}
-
-/** Whether an agent that finishes its main turn while a background task is still
- *  running raises the "à relire" alert (with a violet background accent) or goes
- *  straight to the calm violet "backgrounding" state without alerting. On by default. */
-function AgentAlertPrefs() {
-  const alertOnBackgroundWait = useDisplay((s) => s.alertOnBackgroundWait);
-  const set = useDisplay((s) => s.set);
-  return (
-    <SettingsGroup title="Alertes d'agent" icon="alert">
-      <ToggleRow
-        title="Alerter en attendant une tâche de fond"
-        hint={
-          <>
-            Quand un agent termine sa réponse mais qu'une <strong>tâche de fond</strong> tourne
-            encore, lever l'alerte « à relire » (avec un accent violet indiquant le travail en
-            cours). <strong>Désactivé</strong> : pas d'alerte, l'agent passe directement en violet
-            (tâche de fond) ; le « à relire » n'apparaît qu'une fois la tâche de fond aussi terminée.
-            Une question ou une erreur alerte toujours.
-          </>
-        }
-        checked={alertOnBackgroundWait}
-        onChange={(v) => set({ alertOnBackgroundWait: v })}
-        label="Alerter en attendant une tâche de fond"
       />
     </SettingsGroup>
   );

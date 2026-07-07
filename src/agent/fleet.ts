@@ -11,7 +11,6 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "../store/conversationStore";
 import { useRunningCountsByConv } from "../store/backgroundTasksStore";
-import { useDisplay } from "../store/display";
 import {
   groupByRepo,
   useConversations,
@@ -108,14 +107,13 @@ export function isFleetCalm(c: FleetCounts): boolean {
 export function useFleetCounts(): FleetCounts {
   const convs = useConversations();
   const bg = useRunningCountsByConv();
-  const alert = useDisplay((s) => s.alertOnBackgroundWait);
   return useConversationStore(
     useShallow((s) =>
       convs.length === 0
         ? EMPTY_COUNTS
         : tallyFleet(
             convs.map((c) =>
-              agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder, bg[c.id] ?? 0, alert),
+              agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder, bg[c.id] ?? 0),
             ),
           ),
     ),
@@ -205,12 +203,11 @@ export function useFleetLanes(): FleetLane[] {
   const repos = useRepos();
   const conversations = useConversations();
   const bg = useRunningCountsByConv();
-  const alert = useDisplay((s) => s.alertOnBackgroundWait);
   const tokens = useConversationStore(
     useShallow((s) => {
       const rank = (c: Conversation) =>
         statusRank(
-          agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder, bg[c.id] ?? 0, alert),
+          agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder, bg[c.id] ?? 0),
         );
       return lanesToTokens(orderLanes(repos, conversations, rank));
     }),
