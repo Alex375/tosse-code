@@ -280,14 +280,22 @@
 .wf-act.att .wf-act-t, .wf-act.err .wf-act-t { color:inherit; }
 
 /* ---- to-do ratio (mini) ------------------------------------ */
-.wf-todobar { display:inline-flex; gap:2px; max-width:128px; min-width:0; overflow:hidden; }
-.wf-todoseg { flex:0 1 10px; min-width:3px; height:4px; border-radius:2px; background:var(--wf-panel-3); display:block; }
+/* Each task is one dash. The dash's flex-basis is its width when there's room, so a
+   short plan gets comfortably WIDE pips (there's space in the footer); a long plan
+   shrinks them down to `min-width` to still fit the capped bar. */
+.wf-todobar { display:inline-flex; gap:3px; max-width:150px; min-width:0; overflow:hidden; }
+.wf-todoseg { flex:0 1 16px; min-width:4px; height:5px; border-radius:2.5px; background:var(--wf-panel-3); display:block; }
 .wf-todoseg.done { background:var(--wf-run); }
 .wf-todoseg.doing { background:var(--wf-att); }
 
 /* ---- context meter (taille du contexte, pas une progression) */
 .wf-ctxm { display:inline-flex; align-items:center; gap:6px; color:var(--wf-tx-lo); }
 .wf-ctxm.warn { color:var(--wf-att); }
+/* Clickable variant (FlightDeck card): a button that opens the context/usage popover.
+   Button reset + a slightly enlarged, self-cancelling hit-area (negative margin keeps
+   the visual position put) + a subtle hover; colour stays inherited so `.warn` holds. */
+.wf-ctxm-btn { font:inherit; border:0; background:transparent; cursor:pointer; padding:3px 6px; margin:-3px -6px; border-radius:7px; transition:background .12s ease; }
+.wf-ctxm-btn:hover, .wf-ctxm-btn[data-open] { background:var(--wf-bg-2); }
 .wf-ctx { width:38px; height:4px; border-radius:999px; background:var(--wf-panel-3); overflow:hidden; display:inline-block; flex:0 0 auto; }
 .wf-ctx > i { display:block; height:100%; background:currentColor; border-radius:999px; opacity:.85; }
 
@@ -316,6 +324,10 @@
 .wf-pop { position:absolute; top:calc(100% + 6px); left:0; z-index:40; min-width:180px; background:var(--wf-panel-2); border:1px solid var(--wf-line-2); border-radius:9px; padding:5px; box-shadow:0 12px 32px -10px #000, 0 0 0 1px #0006; display:flex; flex-direction:column; gap:1px; }
 .wf-pop.right { left:auto; right:0; }
 .wf-pop.up { top:auto; bottom:calc(100% + 6px); }
+/* Portaled to document.body (fixed-positioned inline) to escape an ancestor's overflow
+   clip — e.g. a FlightDeck card inside the swimlane. Sits above the grid; scrolls inside
+   the placement's maxHeight if the viewport is short. */
+.wf-pop.portaled { z-index:200; overflow-y:auto; overscroll-behavior:contain; }
 .wf-mi { font:inherit; cursor:default; display:flex; align-items:center; gap:8px; padding:6px 8px 6px 6px; border-radius:6px; border:0; background:transparent; color:var(--wf-tx); text-align:left; width:100%; }
 .wf-mi:hover { background:var(--wf-panel-3); }
 .wf-mi.on { color:var(--wf-tx-hi); }
@@ -388,7 +400,10 @@
 .wf-ring-bg { fill:none; stroke:var(--wf-panel-3); stroke-width:2.6; }
 .wf-ring-fg { fill:none; stroke:var(--wf-tx-lo); stroke-width:2.6; stroke-linecap:round; transition:stroke-dashoffset .4s ease; }
 .wf-ring.warn .wf-ring-fg { stroke:var(--wf-att); }
-.wf-pop-ctx { min-width:206px; padding:11px 12px; display:flex; flex-direction:column; gap:8px; }
+/* max-width: without it, a long line (e.g. a verbose usage-error message/action) sets
+   the flex column's width and the popover stretches very wide. Bounded → the text wraps
+   instead. `min(…, 100vw − gutter)` keeps it on-screen on a narrow window too. */
+.wf-pop-ctx { min-width:206px; max-width:min(300px, calc(100vw - 24px)); padding:11px 12px; display:flex; flex-direction:column; gap:8px; }
 .wf-pop-h { font-size:11px; font-weight:600; color:var(--wf-tx-hi); }
 .wf-pop-row { display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--wf-tx-lo); }
 .wf-pop-bar { height:5px; border-radius:999px; background:var(--wf-panel-3); overflow:hidden; }
