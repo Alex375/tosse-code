@@ -58,6 +58,21 @@ export function ReviewBar({ session }: { session: string }) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [dismissable, session]);
 
+  // Background work still running while the main turn is done: a calm GREEN (running-family)
+  // bar, NOT the blue "à relire" — there is nothing to review yet, the agent resumes on its
+  // own when the workflow / sub-agent finishes. Non-dismissable (no acknowledge button).
+  if (status.kind === "backgrounding") {
+    const n = status.count;
+    return (
+      <div className="cv-reviewbar" data-tone="backgrounding">
+        <span className="cv-reviewbar-dot" />
+        <span className="cv-reviewbar-label">
+          {n > 1 ? `${n} tâches de fond en cours…` : "Tâche de fond en cours…"}
+        </span>
+      </div>
+    );
+  }
+
   if (!dismissable) return null;
   // "Continue" only makes sense after an ERROR — send a "continue" message so Claude
   // retries from where it broke. NOT on `review` (a turn that finished cleanly has

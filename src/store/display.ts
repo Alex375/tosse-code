@@ -44,14 +44,6 @@ export interface DisplayPrefs {
    *  {@link fleetBannerFlightDeck}. */
   fleetBannerConversation: boolean;
 
-  /** When an agent finishes its main turn CLEANLY while a background task is still
-   *  running, should it raise the "à relire" alert (with a background accent), or go
-   *  straight to the calm violet `backgrounding` state without alerting? On by default
-   *  (alert). Off → no alert while waiting on the background task; the review surfaces
-   *  only once that work also finishes. An open question / error while backgrounding
-   *  still alerts regardless. Read by {@link deriveAgentStatus} via `alertWhileBackgrounding`. */
-  alertOnBackgroundWait: boolean;
-
   /** Show the CLI-injected `<task-notification>` messages (a background task/agent
    *  finished) in the conversation thread. OFF by default — they're machine-injected
    *  noise that clutters the transcript, especially on reload / history import. The
@@ -81,7 +73,6 @@ const DEFAULTS: DisplayPrefs = {
   markdownMode: "warm",
   fleetBannerFlightDeck: true,
   fleetBannerConversation: true,
-  alertOnBackgroundWait: true,
   showTaskNotifications: false,
   showLastMessagePreview: true,
   messageControls: true,
@@ -121,7 +112,6 @@ export const useDisplay = create<DisplayState>((set) => ({
         markdownMode: patch.markdownMode ?? s.markdownMode,
         fleetBannerFlightDeck: patch.fleetBannerFlightDeck ?? s.fleetBannerFlightDeck,
         fleetBannerConversation: patch.fleetBannerConversation ?? s.fleetBannerConversation,
-        alertOnBackgroundWait: patch.alertOnBackgroundWait ?? s.alertOnBackgroundWait,
         showTaskNotifications: patch.showTaskNotifications ?? s.showTaskNotifications,
         showLastMessagePreview: patch.showLastMessagePreview ?? s.showLastMessagePreview,
         messageControls: patch.messageControls ?? s.messageControls,

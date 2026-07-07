@@ -108,10 +108,14 @@
 .wf-dot.arch { background: var(--wf-tx-xlo); }
 .wf-dot.off  { background: transparent; box-shadow: inset 0 0 0 1.5px var(--wf-tx-lo); }
 .wf-dot.err  { background: var(--wf-err);  box-shadow: 0 0 0 3px var(--wf-err-bg); }
-/* "backgrounding" — idle main loop, background tools still running. A soft VIOLET,
-   deliberately distinct from green "running" (and calm: no pulse) so the two are
-   never confused — present, waiting on background work, but not demanding attention. */
-.wf-dot.bg   { background:#a78bfa; box-shadow: 0 0 0 3px #a78bfa2e; }
+/* "backgrounding" — main turn done, background tools (workflows / sub-agents) still
+   running. GREEN, the running-family colour: this is work continuing, NOT a blue "à
+   relire" (there is nothing to review yet — the agent resumes on its own). It is the
+   SOLID green core WITHOUT the pulse (the "Vert calme" variant): the pulse is reserved
+   for an in-flight turn (`.wf-dot.run.pulse` / the sidebar sonar `RunPulse`), so a static
+   green = "finished the turn, background still churning", a pulsing/sonar green = "actively
+   generating". Calm by design — present and waiting, never demanding attention. */
+.wf-dot.bg   { background: var(--wf-run); box-shadow: 0 0 0 3px var(--wf-run-bg); }
 /* "bgring" — a violet ring around the status dot, for a settled alert (review /
    question / error) whose agent still has background work running: the review/blue (or
    question/orange) core keeps its meaning, the violet ring adds "…and work continues".
@@ -155,7 +159,7 @@
 .wf-pill.arch { color:#787e8a; background: transparent; border-color:#2c2c34; }
 .wf-pill.off  { color:#787e8a; background: transparent; border-color:#2c2c34; }
 .wf-pill.err  { color:#f0a9af; background: var(--wf-err-bg);  border-color:#5c3036; }
-.wf-pill.bg   { color:#c9b8ff; background:#221a3c; border-color:#3d2f63; }
+.wf-pill.bg   { color:#9fe0c0; background: var(--wf-run-bg);  border-color:#27513f; }
 
 .wf-badge {
   display: inline-flex; align-items: center; justify-content: center;
@@ -429,3 +433,7 @@
 .wf-review-h { display:flex; align-items:center; gap:7px; font-size:10.5px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; color:#9fc0f5; }
 .wf-review-t { font-size:12.5px; line-height:1.5; color:var(--wf-tx-hi); }
 .wf-review.compact .wf-review-t { font-size:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+/* "backgrounding" variant of the review card — main turn done, a background task still
+   runs. GREEN (running family), NOT the blue review: nothing to relire yet. */
+.wf-review.bg { border-color:#27513f; background:var(--wf-run-bg); }
+.wf-review.bg .wf-review-h { color:#9fe0c0; }

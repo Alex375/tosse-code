@@ -10,7 +10,6 @@ import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore } from "../store/conversationsStore";
 import { useRunningTaskCount } from "../store/backgroundTasksStore";
-import { useDisplay } from "../store/display";
 import type { SessionEntry } from "../store/types";
 import {
   deriveAgentStatus,
@@ -22,10 +21,10 @@ import {
 // The signals carried by the LIVE message-store entry — everything in AgentSignals
 // except the ones sourced elsewhere: the live `handle` and `persistedReminder` (the
 // conversations/metadata store), `runningBackgroundTasks` (the background-task
-// registry) and `alertWhileBackgrounding` (the display-prefs store).
+// registry).
 type InnerSignals = Omit<
   AgentSignals,
-  "handle" | "persistedReminder" | "runningBackgroundTasks" | "alertWhileBackgrounding"
+  "handle" | "persistedReminder" | "runningBackgroundTasks"
 >;
 
 const NEUTRAL: InnerSignals = {
@@ -104,13 +103,11 @@ export function agentStatusForEntry(
   entry: SessionEntry | undefined,
   persistedReminder: ReminderKind | null = null,
   runningBackgroundTasks = 0,
-  alertWhileBackgrounding = true,
 ): AgentStatus {
   return deriveAgentStatus({
     handle,
     persistedReminder,
     runningBackgroundTasks,
-    alertWhileBackgrounding,
     ...gather(entry),
   });
 }
@@ -132,16 +129,14 @@ export function useAgentStatus(convId: string): AgentStatus {
   );
   const inner = useConversationStore(useShallow((s) => gather(s.sessions[convId])));
   const runningBackgroundTasks = useRunningTaskCount(convId);
-  const alertWhileBackgrounding = useDisplay((s) => s.alertOnBackgroundWait);
   return useMemo(
     () =>
       deriveAgentStatus({
         handle,
         persistedReminder,
         runningBackgroundTasks,
-        alertWhileBackgrounding,
         ...inner,
       }),
-    [handle, persistedReminder, runningBackgroundTasks, alertWhileBackgrounding, inner],
+    [handle, persistedReminder, runningBackgroundTasks, inner],
   );
 }
