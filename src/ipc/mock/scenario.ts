@@ -568,7 +568,7 @@ export class ScenarioDriver {
       ),
     );
     this.step(220, () =>
-      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.021, num_turns: 2, duration_ms: 26000 }),
+      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.021, num_turns: 2, duration_ms: 26000, duration_api_ms: 18600, ttft_ms: 900 }),
     );
     // Idle main loop, but tk_bg keeps running → conversation goes "backgrounding".
     this.step(40, () => this.emit.state(idleState()));
@@ -685,7 +685,7 @@ export class ScenarioDriver {
     );
 
     this.step(220, () =>
-      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.014, num_turns: 2, duration_ms: 8200 }),
+      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.014, num_turns: 2, duration_ms: 8200, duration_api_ms: 6100, ttft_ms: 700 }),
     );
     // Idle main loop, but the two bg commands keep running → conversation "backgrounding".
     this.step(40, () => this.emit.state(idleState()));
@@ -774,7 +774,7 @@ export class ScenarioDriver {
     );
 
     this.step(220, () =>
-      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.009, num_turns: 1, duration_ms: 5200 }),
+      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.009, num_turns: 1, duration_ms: 5200, duration_api_ms: 3800, ttft_ms: 600 }),
     );
     // Idle main loop, but the watches keep running → conversation "backgrounding".
     this.step(40, () => this.emit.state(idleState()));
@@ -844,7 +844,7 @@ export class ScenarioDriver {
     );
 
     this.step(220, () =>
-      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.052, num_turns: 1, duration_ms: 6200 }),
+      this.emit.item({ kind: "turn_result", subtype: "success", is_error: false, result: null, api_error_status: null, total_cost_usd: 0.052, num_turns: 1, duration_ms: 6200, duration_api_ms: 4500, ttft_ms: 650 }),
     );
     // Idle main loop, but the workflow keeps running → conversation "backgrounding".
     this.step(40, () => this.emit.state(idleState()));
@@ -955,6 +955,8 @@ export class ScenarioDriver {
           total_cost_usd: 0.0061,
           num_turns: 1,
           duration_ms: 4200,
+          duration_api_ms: 3100,
+          ttft_ms: 550,
         }),
       );
       this.step(40, () => this.emit.state(idleState()));
@@ -997,6 +999,8 @@ export class ScenarioDriver {
         total_cost_usd: 0.0142,
         num_turns: 3,
         duration_ms: 9300,
+        duration_api_ms: 6800,
+        ttft_ms: 800,
       }),
     );
     this.step(40, () => this.emit.state(idleState()));
@@ -1015,6 +1019,8 @@ export class ScenarioDriver {
       total_cost_usd: null,
       num_turns: null,
       duration_ms: null,
+      duration_api_ms: null,
+      ttft_ms: null,
     });
     this.emit.state(idleState());
   }

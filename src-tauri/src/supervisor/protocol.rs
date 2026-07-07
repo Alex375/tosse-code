@@ -289,6 +289,11 @@ pub struct ResultMsg {
     pub uuid: Option<String>,
     pub num_turns: Option<u64>,
     pub duration_ms: Option<u64>,
+    /// Wall-clock time spent in model/API calls this turn (cumulative — can exceed
+    /// `duration_ms` when calls overlap). Surfaced as the "model time" breakdown.
+    pub duration_api_ms: Option<u64>,
+    /// Time-to-first-token this turn (ms). Captured for future use; not yet displayed.
+    pub ttft_ms: Option<u64>,
     pub total_cost_usd: Option<f64>,
     /// Aggregate usage; shape varies per message kind, kept raw.
     #[serde(default)]

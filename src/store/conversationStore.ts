@@ -80,6 +80,10 @@ function emptyEntry(session: string): SessionEntry {
     seq: 0,
     replayAnchor: 0,
     turnStartedAt: null,
+    thinkingStartedAt: null,
+    thinkingDurations: {},
+    toolStartedAt: {},
+    toolDurations: {},
   };
 }
 
@@ -236,12 +240,20 @@ export const useConversationStore = create<ConversationState>((set) => {
         turn = base.turns[messageId];
       }
       if (turn.status !== "streaming") return entry; // finalized: ignore late deltas
+      // Stamp the start of a thinking block on the buffer's empty→non-empty edge: a NEW
+      // block, since assistant_message resets streamingThinking + clears thinkingStartedAt
+      // each time it finalizes one. Non-edge deltas leave the stamp untouched.
+      const thinkStart = field === "streamingThinking" && turn.streamingThinking === "";
       const nextTurn: Turn = {
         ...turn,
         [field]: turn[field] + text,
         hasThinking: field === "streamingThinking" ? true : turn.hasThinking,
       };
-      return { ...base, turns: { ...base.turns, [messageId]: nextTurn } };
+      return {
+        ...base,
+        thinkingStartedAt: thinkStart ? Date.now() : base.thinkingStartedAt,
+        turns: { ...base.turns, [messageId]: nextTurn },
+      };
     });
 
   return {
@@ -268,11 +280,16 @@ export const useConversationStore = create<ConversationState>((set) => {
         // counter doesn't reset each time `system/init`/`status` re-emits busy:true
         // mid-turn. Left untouched while busy stays the same.
         let turnStartedAt = entry.turnStartedAt;
+        let thinkingStartedAt = entry.thinkingStartedAt;
         if (state.busy && !entry.state.busy) turnStartedAt = Date.now();
-        else if (!state.busy && entry.state.busy) turnStartedAt = null;
+        else if (!state.busy && entry.state.busy) {
+          turnStartedAt = null;
+          thinkingStartedAt = null; // a turn ending also ends any in-flight thinking
+        }
         return {
           ...entry,
           turnStartedAt,
+          thinkingStartedAt,
           state: {
             ...state,
             context_tokens: state.context_tokens ?? entry.state.context_tokens,
@@ -297,7 +314,13 @@ export const useConversationStore = create<ConversationState>((set) => {
       // arrive to clear it otherwise (the terminal `ended` event is routed by the
       // now-stale handle and dropped).
       withEntry(session, (entry) =>
-        clearQueuedBadges({ ...entry, state: { ...connectingState }, turnStartedAt: null }),
+        clearQueuedBadges({
+          ...entry,
+          state: { ...connectingState },
+          turnStartedAt: null,
+          thinkingStartedAt: null,
+          toolStartedAt: {},
+        }),
       ),
 
     appendText: (session, messageId, text) =>
@@ -420,13 +443,20 @@ export const useConversationStore = create<ConversationState>((set) => {
             if (!messageId) return entry;
             const turn = entry.turns[messageId];
             if (!turn || turn.status !== "streaming") return entry;
+            // Same thinking-start stamp as appendBuffer (this is the out-of-band path).
+            const thinkStart =
+              field === "streamingThinking" && turn.streamingThinking === "";
             const nextTurn: Turn = {
               ...turn,
               [field]: turn[field] + item.text,
               hasThinking:
                 field === "streamingThinking" ? true : turn.hasThinking,
             };
-            return { ...entry, turns: { ...entry.turns, [messageId]: nextTurn } };
+            return {
+              ...entry,
+              thinkingStartedAt: thinkStart ? Date.now() : entry.thinkingStartedAt,
+              turns: { ...entry.turns, [messageId]: nextTurn },
+            };
           }
 
           case "user_message": {
@@ -492,7 +522,42 @@ export const useConversationStore = create<ConversationState>((set) => {
               streamingThinking: "",
               hasThinking: blocks.some((b) => b.type === "thinking"),
             };
-            let next = { ...base, turns: { ...base.turns, [item.id]: turn } };
+            // Freeze the elapsed of any thinking block finalized here, keyed by its text
+            // (what the renderer receives). Clear the live start so the next block re-stamps.
+            let thinkingStartedAt = base.thinkingStartedAt;
+            let thinkingDurations = base.thinkingDurations;
+            if (thinkingStartedAt != null) {
+              const finalized = item.blocks.filter(
+                (b): b is Extract<NormalizedBlock, { type: "thinking" }> =>
+                  b.type === "thinking" && !!b.text,
+              );
+              if (finalized.length > 0) {
+                const dur = Date.now() - thinkingStartedAt;
+                thinkingDurations = { ...thinkingDurations };
+                for (const b of finalized) thinkingDurations[b.text] = dur;
+                thinkingStartedAt = null;
+              }
+            }
+            // Stamp the start of each tool call appearing here (keyed by tool_use_id), so a
+            // running tool row can show a live counter and its tool_result can freeze the
+            // duration. Only the first sighting stamps (an assistant_message can't re-open a
+            // tool). Sub-agent (Task) tool_uses are included — they get durations too.
+            let toolStartedAt = base.toolStartedAt;
+            const toolUses = item.blocks.filter(
+              (b): b is Extract<NormalizedBlock, { type: "tool_use" }> => b.type === "tool_use",
+            );
+            if (toolUses.length > 0) {
+              const t = Date.now();
+              toolStartedAt = { ...toolStartedAt };
+              for (const b of toolUses) if (toolStartedAt[b.id] == null) toolStartedAt[b.id] = t;
+            }
+            let next = {
+              ...base,
+              turns: { ...base.turns, [item.id]: turn },
+              thinkingStartedAt,
+              thinkingDurations,
+              toolStartedAt,
+            };
             // Record any detached sub-agent (`Agent` with run_in_background) launched in
             // this message, so the pinned AgentBar can list it WITHOUT re-scanning every
             // block on each streamed token. Done once per assistant_message.
@@ -519,9 +584,16 @@ export const useConversationStore = create<ConversationState>((set) => {
               isError: item.is_error,
               parentToolUseId: item.parent_tool_use_id,
             };
+            // Freeze the tool's duration (tool_use → tool_result) if we stamped its start.
+            let toolDurations = entry.toolDurations;
+            const startedAt = entry.toolStartedAt[item.tool_use_id];
+            if (startedAt != null && toolDurations[item.tool_use_id] == null) {
+              toolDurations = { ...toolDurations, [item.tool_use_id]: Date.now() - startedAt };
+            }
             const next: SessionEntry = {
               ...entry,
               toolResults: { ...entry.toolResults, [item.tool_use_id]: result },
+              toolDurations,
             };
             // Robustness: a DETACHED sub-agent whose live `Agent` block arrived WITHOUT
             // `run_in_background` (a transient wire drop) would otherwise render inline as a
@@ -547,6 +619,8 @@ export const useConversationStore = create<ConversationState>((set) => {
               totalCostUsd: item.total_cost_usd,
               numTurns: item.num_turns,
               durationMs: item.duration_ms,
+              durationApiMs: item.duration_api_ms,
+              ttftMs: item.ttft_ms,
             };
             // finalize any still-streaming turns
             const turns = { ...entry.turns };
@@ -623,6 +697,26 @@ export const useSessionState = (session: string): SessionStatePayload | undefine
  *  the live elapsed counter in the working indicator. See {@link SessionEntry.turnStartedAt}. */
 export const useTurnStartedAt = (session: string): number | null =>
   useConversationStore((s) => s.sessions[session]?.turnStartedAt ?? null);
+
+/** Wall-clock start of the thinking block currently streaming, or `null`. Drives the live
+ *  counter on a streaming ThinkingBlock. See {@link SessionEntry.thinkingStartedAt}. */
+export const useThinkingStartedAt = (session: string): number | null =>
+  useConversationStore((s) => s.sessions[session]?.thinkingStartedAt ?? null);
+
+/** Frozen duration (ms) of a finalized thinking block, looked up by its text, or `null`
+ *  when unknown (still live, or hydrated from disk). See {@link SessionEntry.thinkingDurations}. */
+export const useThinkingDuration = (session: string, text: string): number | null =>
+  useConversationStore((s) => s.sessions[session]?.thinkingDurations[text] ?? null);
+
+/** Wall-clock start of a tool call in flight (by tool_use_id), or `null`. Drives the live
+ *  counter on a running tool row. See {@link SessionEntry.toolStartedAt}. */
+export const useToolStartedAt = (session: string, toolUseId: string): number | null =>
+  useConversationStore((s) => s.sessions[session]?.toolStartedAt[toolUseId] ?? null);
+
+/** Frozen duration (ms) of a finished tool call (by tool_use_id), or `null` when unknown
+ *  (still running, or hydrated from disk). See {@link SessionEntry.toolDurations}. */
+export const useToolDuration = (session: string, toolUseId: string): number | null =>
+  useConversationStore((s) => s.sessions[session]?.toolDurations[toolUseId] ?? null);
 
 export const useTimeline = (session: string): TimelineEntry[] =>
   useConversationStore(

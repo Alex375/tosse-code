@@ -10,7 +10,15 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { JsonValue } from "../../ipc/client";
 import { field } from "../../agent/ask";
-import { useSessionState, useToolResult } from "../../store/conversationStore";
+import {
+  useSessionState,
+  useToolResult,
+  useToolDuration,
+  useToolStartedAt,
+} from "../../store/conversationStore";
+import { useDisplay } from "../../store/display";
+import { fmtDuration } from "../../agent/subagentMeta";
+import { useNow } from "../../ui/useNow";
 import { useWorkFold } from "../../store/workFold";
 import { Ico } from "../../ui/kit";
 import { DiffView } from "./DiffView";
@@ -134,6 +142,7 @@ export function ToolStepRow({
   isError,
   running,
   hasDetail,
+  time,
   children,
 }: {
   icon: string;
@@ -144,6 +153,9 @@ export function ToolStepRow({
   isError: boolean;
   running: boolean;
   hasDetail: boolean;
+  /** Optional timing chip (live counter while running, frozen once done) shown at the row's
+   *  right, before the status glyph. Omitted on disk transcripts / when the pref is off. */
+  time?: ReactNode;
   children: ReactNode;
 }) {
   // An error is NOT auto-expanded and NOT reddened — it's flagged only by the small alert
@@ -182,6 +194,7 @@ export function ToolStepRow({
         })()}
         <SummaryBadge summary={summary} />
         <span className="cv-step-end">
+          {time}
           {running ? (
             <span className="cv-step-run" aria-label="en cours" />
           ) : isError ? (
@@ -198,6 +211,19 @@ export function ToolStepRow({
       </div>
       {open && hasDetail ? <div className="cv-step-b">{children}</div> : null}
     </div>
+  );
+}
+
+/** The live counter on a RUNNING tool row (its own leaf so the 1 Hz tick doesn't re-render
+ *  the row). Ticks once past ~1s (floored) so fast tools don't flash a 0s. */
+function RunningToolTime({ session, toolUseId }: { session: string; toolUseId: string }) {
+  const startedAt = useToolStartedAt(session, toolUseId);
+  const now = useNow(1000);
+  if (startedAt == null) return null;
+  const elapsed = now - startedAt;
+  if (elapsed < 1000) return null;
+  return (
+    <span className="cv-step-time wf-mono">{fmtDuration(Math.floor(elapsed / 1000) * 1000)}</span>
   );
 }
 
@@ -219,12 +245,21 @@ export function LiveToolStep({
 }) {
   const result = useToolResult(session, step.id);
   const state = useSessionState(session);
+  const showToolTime = useDisplay((s) => s.showToolTime);
+  const frozen = useToolDuration(session, step.id);
   const joined: StepResult | undefined = result
     ? { content: result.content, isError: result.isError }
     : undefined;
   const running = active && !result && (state?.busy ?? false);
   const isError = result?.isError ?? false;
   const summary = stepSummary(step.name, step.input, joined ? resultContentText(joined.content) : null);
+  // Timing chip: live counter while running, frozen value once the result lands. Gated on
+  // the pref; nothing for a resultless past step (no result, not running → unknown).
+  const time = !showToolTime ? null : running ? (
+    <RunningToolTime session={session} toolUseId={step.id} />
+  ) : frozen != null ? (
+    <span className="cv-step-time wf-mono">{fmtDuration(frozen)}</span>
+  ) : null;
   return (
     <ToolStepRow
       icon={stepIcon(step.name)}
@@ -234,6 +269,7 @@ export function LiveToolStep({
       isError={isError}
       running={running}
       hasDetail={hasDetailFor(step.name, step.input, joined)}
+      time={time}
     >
       <ToolDetail name={step.name} input={step.input} result={joined} />
     </ToolStepRow>

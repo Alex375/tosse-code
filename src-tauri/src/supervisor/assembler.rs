@@ -947,6 +947,8 @@ impl Assembler {
             total_cost_usd: r.total_cost_usd,
             num_turns: r.num_turns,
             duration_ms: r.duration_ms,
+            duration_api_ms: r.duration_api_ms,
+            ttft_ms: r.ttft_ms,
         }));
         out.push(SessionEvent::State(self.state.clone()));
     }

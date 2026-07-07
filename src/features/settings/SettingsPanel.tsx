@@ -128,6 +128,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 </div>
 
                 <DisplayPrefs />
+                <TimingPrefs />
                 <FleetBannerPrefs />
               </div>
             )}
@@ -195,7 +196,6 @@ function DisplayPrefs() {
   const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
   const showLastMessagePreview = useDisplay((s) => s.showLastMessagePreview);
   const messageControls = useDisplay((s) => s.messageControls);
-  const showTurnDuration = useDisplay((s) => s.showTurnDuration);
   const set = useDisplay((s) => s.set);
   return (
     <SettingsGroup title="Affichage" icon="list">
@@ -255,18 +255,71 @@ function DisplayPrefs() {
         onChange={(v) => set({ messageControls: v })}
         label="Afficher les contrôles sur les messages"
       />
+    </SettingsGroup>
+  );
+}
+
+/** The timing toggles — one per family of time shown in the conversation, so each can be
+ *  hidden on its own. All on by default (see store/display DEFAULTS). */
+function TimingPrefs() {
+  const showTurnDuration = useDisplay((s) => s.showTurnDuration);
+  const showModelTime = useDisplay((s) => s.showModelTime);
+  const showThinkingTime = useDisplay((s) => s.showThinkingTime);
+  const showToolTime = useDisplay((s) => s.showToolTime);
+  const set = useDisplay((s) => s.set);
+  return (
+    <SettingsGroup title="Durées & temps" icon="clock">
       <ToggleRow
         title="Durée des tours"
         hint={
           <>
-            Affiche sous chaque tour terminé le <strong>temps qu'il a pris</strong> (durée
-            réelle du tour), et un <strong>compteur en direct</strong> lorsqu'un tour dépasse
-            40&nbsp;s. <strong>Activé par défaut.</strong>
+            Sous chaque tour terminé, le <strong>temps total</strong> qu'il a pris ; et un{" "}
+            <strong>compteur en direct</strong> lorsqu'un tour dépasse 40&nbsp;s.{" "}
+            <strong>Activé par défaut.</strong>
           </>
         }
         checked={showTurnDuration}
         onChange={(v) => set({ showTurnDuration: v })}
         label="Afficher la durée des tours"
+      />
+      <ToggleRow
+        title="Temps de modèle"
+        hint={
+          <>
+            À côté de la durée du tour, le <strong>temps passé côté modèle</strong>{" "}
+            (« · 18s modèle »). Visible seulement si « Durée des tours » est activé.{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showModelTime}
+        onChange={(v) => set({ showModelTime: v })}
+        label="Afficher le temps de modèle"
+      />
+      <ToggleRow
+        title="Temps de réflexion"
+        hint={
+          <>
+            Sur chaque bloc de réflexion, le temps passé à réfléchir — un{" "}
+            <strong>compteur en direct</strong> pendant la réflexion, puis figé.{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showThinkingTime}
+        onChange={(v) => set({ showThinkingTime: v })}
+        label="Afficher le temps de réflexion"
+      />
+      <ToggleRow
+        title="Temps par outil"
+        hint={
+          <>
+            Sur chaque outil (Read, Bash, Edit…), sa <strong>durée d'exécution</strong> — un
+            compteur en direct pendant qu'il tourne, puis figé.{" "}
+            <strong>Activé par défaut.</strong>
+          </>
+        }
+        checked={showToolTime}
+        onChange={(v) => set({ showToolTime: v })}
+        label="Afficher le temps par outil"
       />
     </SettingsGroup>
   );
