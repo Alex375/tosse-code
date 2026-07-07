@@ -16,6 +16,7 @@ sur la page GitHub — il n'apparaît pas dans l'app.
 - Cartes du Flight Deck interactives : liste des tâches, contexte, effort et piles de to-do consultables directement.
 - Les plugins et slash-commands des conversations actives se rechargent automatiquement quand vous les activez/désactivez.
 - Un agent qui termine pendant qu'une tâche de fond tourne passe désormais en vert (« tâche de fond en cours ») au lieu d'un état « à relire » trompeur.
+- Correction : les prompts internes des sous-agents ne s'affichent plus comme vos propres messages dans le fil.
 
 ## v0.26.0
 
