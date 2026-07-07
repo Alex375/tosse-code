@@ -153,7 +153,13 @@ interface ConversationState {
    *  last live state (e.g. busy=true) would otherwise linger and block the
    *  composer. Clears it so the conversation reads as off/idle (a send re-spawns). */
   clearState: (session: string) => void;
-  applyItem: (session: string, item: ConversationItem) => void;
+  /** Apply one normalized item. `hydrating` marks a call that REPLAYS on-disk
+   *  history (the `loadConversationHistory`/`reloadConversationHistory` loops) as
+   *  opposed to a live stream event: it suppresses the wall-clock timing stamps
+   *  (tool start / freeze, thinking freeze), which measure real elapsed time and
+   *  would otherwise record a bogus ~0ms for every replayed tool. Live calls omit
+   *  it (default false). */
+  applyItem: (session: string, item: ConversationItem, hydrating?: boolean) => void;
   appendText: (session: string, messageId: string, text: string) => void;
   appendThinking: (session: string, messageId: string, text: string) => void;
   /** Append an optimistic user turn. `queued` marks it as sent mid-turn (the CLI
@@ -418,7 +424,7 @@ export const useConversationStore = create<ConversationState>((set) => {
         return { sessions: next };
       }),
 
-    applyItem: (session, item) =>
+    applyItem: (session, item, hydrating = false) =>
       withEntry(session, (entry) => {
         switch (item.kind) {
           case "message_started": {
@@ -524,9 +530,11 @@ export const useConversationStore = create<ConversationState>((set) => {
             };
             // Freeze the elapsed of any thinking block finalized here, keyed by its text
             // (what the renderer receives). Clear the live start so the next block re-stamps.
+            // Skipped during hydration: a replayed assistant_message carries no live delta,
+            // so `thinkingStartedAt` is already null there — the guard is belt-and-suspenders.
             let thinkingStartedAt = base.thinkingStartedAt;
             let thinkingDurations = base.thinkingDurations;
-            if (thinkingStartedAt != null) {
+            if (!hydrating && thinkingStartedAt != null) {
               const finalized = item.blocks.filter(
                 (b): b is Extract<NormalizedBlock, { type: "thinking" }> =>
                   b.type === "thinking" && !!b.text,
@@ -542,11 +550,14 @@ export const useConversationStore = create<ConversationState>((set) => {
             // running tool row can show a live counter and its tool_result can freeze the
             // duration. Only the first sighting stamps (an assistant_message can't re-open a
             // tool). Sub-agent (Task) tool_uses are included — they get durations too.
+            // NEVER stamp during hydration: replayed history has no wall-clock meaning, and
+            // its tool_result lands in the SAME synchronous loop, freezing ~0ms → every tool
+            // of a reloaded conversation would show a bogus "0ms" chip. Live only.
             let toolStartedAt = base.toolStartedAt;
             const toolUses = item.blocks.filter(
               (b): b is Extract<NormalizedBlock, { type: "tool_use" }> => b.type === "tool_use",
             );
-            if (toolUses.length > 0) {
+            if (!hydrating && toolUses.length > 0) {
               const t = Date.now();
               toolStartedAt = { ...toolStartedAt };
               for (const b of toolUses) if (toolStartedAt[b.id] == null) toolStartedAt[b.id] = t;
@@ -585,9 +596,11 @@ export const useConversationStore = create<ConversationState>((set) => {
               parentToolUseId: item.parent_tool_use_id,
             };
             // Freeze the tool's duration (tool_use → tool_result) if we stamped its start.
+            // Skipped during hydration (belt-and-suspenders: a replayed tool_use never gets a
+            // stamp, so `startedAt` is already null here — but make the intent explicit).
             let toolDurations = entry.toolDurations;
             const startedAt = entry.toolStartedAt[item.tool_use_id];
-            if (startedAt != null && toolDurations[item.tool_use_id] == null) {
+            if (!hydrating && startedAt != null && toolDurations[item.tool_use_id] == null) {
               toolDurations = { ...toolDurations, [item.tool_use_id]: Date.now() - startedAt };
             }
             const next: SessionEntry = {

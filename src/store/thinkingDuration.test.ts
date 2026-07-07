@@ -84,6 +84,69 @@ describe("thinking reflection time", () => {
     store().applyState(s, baseState(false));
     expect(startedAt(s)).toBeNull();
   });
+
+  it("records NO duration for a block finalized without a preceding delta (hydrated from disk)", () => {
+    // Symmetric to toolDuration's disk-reload test: a resumed/merged transcript delivers
+    // the thinking block straight as an `assistant_message`, with no streaming delta, so
+    // `thinkingStartedAt` stays null and the freeze guard (`thinkingStartedAt != null`)
+    // must record NOTHING — never `Date.now() - null`.
+    const s = "think-nostart";
+    store().ensureSession(s);
+    vi.setSystemTime(new Date(1_000_000));
+    assistantThinking(s, "m1", "hydrated thought");
+    expect(durations(s)["hydrated thought"]).toBeUndefined();
+    expect(startedAt(s)).toBeNull();
+  });
+
+  it("two blocks with IDENTICAL text collide (known lossy limit of text-keying)", () => {
+    // `thinkingDurations` is keyed by the block's TEXT (the only stable handle the renderer
+    // has — a block id is deliberately NOT threaded through grouping). Two blocks whose text
+    // is byte-identical therefore share the key: the second freeze overwrites the first, and
+    // BOTH rendered blocks read the second duration. This pins that accepted behavior so a
+    // future change to the keying is a conscious decision, not a silent regression.
+    const s = "think-collide";
+    store().ensureSession(s);
+    vi.setSystemTime(new Date(1_000_000));
+    store().appendThinking(s, "m1", "Let me check.");
+    vi.setSystemTime(new Date(1_002_000)); // first block: 2s
+    assistantThinking(s, "m1", "Let me check.");
+    expect(durations(s)["Let me check."]).toBe(2_000);
+    vi.setSystemTime(new Date(1_010_000));
+    store().appendThinking(s, "m2", "Let me check.");
+    vi.setSystemTime(new Date(1_017_000)); // second block: 7s → overwrites the 2s
+    assistantThinking(s, "m2", "Let me check.");
+    expect(durations(s)["Let me check."]).toBe(7_000);
+  });
+
+  it("stamps the start via the out-of-band thinking_delta path in applyItem", () => {
+    // Deltas normally arrive rAF-coalesced through appendThinking; applyItem carries a
+    // SECOND copy of the empty→non-empty stamp for out-of-band delivery. Exercise it
+    // directly so the duplicated edge guard can't silently drift.
+    const s = "think-oob";
+    store().ensureSession(s);
+    store().applyItem(s, {
+      kind: "message_started",
+      id: "m1",
+      role: "assistant",
+      parent_tool_use_id: null,
+    } as ConversationItem);
+    expect(startedAt(s)).toBeNull(); // opening the turn does not stamp
+    vi.setSystemTime(new Date(1_000_000));
+    store().applyItem(s, {
+      kind: "thinking_delta",
+      message_id: "m1",
+      text: "out of band",
+    } as ConversationItem);
+    expect(startedAt(s)).toBe(1_000_000);
+    // A later delta of the SAME block does not re-stamp.
+    vi.setSystemTime(new Date(1_004_000));
+    store().applyItem(s, {
+      kind: "thinking_delta",
+      message_id: "m1",
+      text: " more",
+    } as ConversationItem);
+    expect(startedAt(s)).toBe(1_000_000);
+  });
 });
 
 function baseState(busy: boolean) {

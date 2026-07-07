@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useConversationStore } from "./conversationStore";
+import type { ConversationItem } from "../ipc/client";
 import type { SessionStatePayload } from "./types";
 
 // `turnStartedAt` stamps the wall-clock start of the in-flight turn so the working
@@ -29,6 +30,9 @@ function state(busy: boolean): SessionStatePayload {
 }
 
 const startedAt = (session: string) => store().sessions[session]?.turnStartedAt ?? null;
+const thinkingStartedAt = (session: string) =>
+  store().sessions[session]?.thinkingStartedAt ?? null;
+const toolStartedAt = (session: string) => store().sessions[session]?.toolStartedAt ?? {};
 
 describe("turnStartedAt", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -74,12 +78,27 @@ describe("turnStartedAt", () => {
     expect(startedAt(s)).toBe(2_000_000);
   });
 
-  it("clearState drops the stamp", () => {
+  it("clearState drops ALL three timing stamps (turn, thinking, tool)", () => {
+    // Turning the stream off must not leak a stale start into the next spawn — a live
+    // counter would otherwise resume from an old timestamp. clearState resets all three:
+    // turnStartedAt, thinkingStartedAt and toolStartedAt.
     const s = "tsa-clearstate";
     store().ensureSession(s);
     vi.setSystemTime(new Date(1_000_000));
-    store().applyState(s, state(true));
+    store().applyState(s, state(true)); // turnStartedAt
+    store().appendThinking(s, "m1", "mid-thought"); // thinkingStartedAt
+    store().applyItem(s, {
+      kind: "assistant_message",
+      id: "m1",
+      parent_tool_use_id: null,
+      blocks: [{ type: "tool_use", id: "toolu_x", name: "Bash", input: {} }],
+    } as ConversationItem); // toolStartedAt["toolu_x"]
+    expect(startedAt(s)).toBe(1_000_000);
+    expect(thinkingStartedAt(s)).not.toBeNull();
+    expect(toolStartedAt(s)["toolu_x"]).toBeDefined();
     store().clearState(s);
     expect(startedAt(s)).toBeNull();
+    expect(thinkingStartedAt(s)).toBeNull();
+    expect(toolStartedAt(s)).toEqual({});
   });
 });

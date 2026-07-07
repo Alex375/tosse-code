@@ -74,4 +74,40 @@ describe("per-tool duration", () => {
     toolResult(s, "toolu_orphan");
     expect(durations(s)["toolu_orphan"]).toBeUndefined();
   });
+
+  it("records NO stamp or duration for a full pair REPLAYED from disk (hydrating)", () => {
+    // Regression: the tool start is stamped inside the `assistant_message` reducer,
+    // which also runs when `loadConversationHistory`/`reloadConversationHistory` replay
+    // the transcript. Its tool_result then lands in the SAME synchronous loop, freezing
+    // ~0ms → every reloaded tool showed a bogus "0ms" chip. Passing `hydrating: true`
+    // suppresses both the stamp and the freeze.
+    const s = "tool-hydrate";
+    store().ensureSession(s);
+    vi.setSystemTime(new Date(1_000_000));
+    store().applyItem(
+      s,
+      {
+        kind: "assistant_message",
+        id: "m1",
+        parent_tool_use_id: null,
+        blocks: [{ type: "tool_use", id: "toolu_a", name: "Bash", input: {} }],
+      } as ConversationItem,
+      true, // hydrating
+    );
+    // No live start recorded during replay.
+    expect(startedAt(s)["toolu_a"]).toBeUndefined();
+    store().applyItem(
+      s,
+      {
+        kind: "tool_result",
+        tool_use_id: "toolu_a",
+        content: "ok",
+        is_error: false,
+        parent_tool_use_id: null,
+      } as ConversationItem,
+      true, // hydrating
+    );
+    // …so no bogus duration is frozen either.
+    expect(durations(s)["toolu_a"]).toBeUndefined();
+  });
 });

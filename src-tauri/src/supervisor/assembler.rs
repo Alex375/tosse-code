@@ -1278,9 +1278,13 @@ mod tests {
                         streamed_text.push_str(&text);
                     }
                     SessionEvent::Item(ConversationItem::TurnResult {
-                        subtype, is_error, ..
+                        subtype,
+                        is_error,
+                        duration_api_ms,
+                        ttft_ms,
+                        ..
                     }) => {
-                        turn = Some((subtype, is_error));
+                        turn = Some((subtype, is_error, duration_api_ms, ttft_ms));
                     }
                     _ => {}
                 }
@@ -1293,7 +1297,15 @@ mod tests {
             streamed_text.to_lowercase().contains("hello world"),
             "streamed text deltas should reconstruct the reply, got {streamed_text:?}"
         );
-        assert_eq!(turn, Some(("success".to_string(), false)));
+        // The result's timing breakdown must survive normalization by VALUE (not just
+        // parse): a renamed/typo'd wire field would silently deserialize to None and drop
+        // the "N s de modèle" footer with no other failing test. The fixture's final
+        // `result` line carries duration_api_ms:6605 and ttft_ms:5586.
+        assert_eq!(
+            turn,
+            Some(("success".to_string(), false, Some(6605), Some(5586))),
+            "the turn result must carry subtype/is_error AND the duration_api_ms/ttft_ms breakdown"
+        );
         assert_eq!(ended_idle, Some(false), "session should be idle after the result");
     }
 
