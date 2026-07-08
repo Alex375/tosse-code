@@ -18,7 +18,7 @@ import { useShallow } from "zustand/react/shallow";
 import { commands } from "../../ipc/client";
 import type { FsEntry } from "../../ipc/client";
 import { useAppErrors } from "../../store/appErrors";
-import { baseName, dirName, imageMimeForPath, isImagePath, languageForPath } from "./language";
+import { baseName, dirName, imageMimeForPath, isImagePath, isPdfPath, languageForPath } from "./language";
 import { isWithin, joinPath, uniqueDest, validateName } from "./fileOps";
 
 /** Debounce before an edited buffer is autosaved to disk (ms). */
@@ -48,6 +48,12 @@ export interface FileBuffer {
   imageDataUrl: string | null;
   /** Image byte size on disk (for the viewer's info line); null until loaded. */
   imageSize: number | null;
+  /** This path is a PDF: rendered with pdf.js (PdfViewer), never Monaco. Set from
+   *  the path up front (before the bytes load). */
+  isPdf: boolean;
+  /** Base64 of the PDF bytes (no `data:` prefix) once loaded — fed to pdf.js. Null
+   *  until loaded, when too large, and for non-PDF buffers. */
+  pdfBase64: string | null;
   /** Per-tab image view, preserved when switching tabs and back: the zoom
    *  multiplier over "fit" and the pan offset (px). Undefined = the default fit
    *  view (zoom 1, centered). */
@@ -420,6 +426,8 @@ function fileBufferFrom(path: string): FileBuffer {
     isImage: isImagePath(path),
     imageDataUrl: null,
     imageSize: null,
+    isPdf: isPdfPath(path),
+    pdfBase64: null,
     diskChanged: false,
     diskContent: null,
     preview: false,
@@ -863,6 +871,27 @@ export const useEditorStore = create<EditorState>()((set, get) => {
         return;
       }
 
+      // PDFs take the same raw-bytes path as images (read_image is a generic
+      // base64 byte reader — no image-specific logic, same 16 MiB guard), then
+      // render with pdf.js in the PdfViewer rather than decoding as text.
+      if (isPdfPath(path)) {
+        const res = await safeCmd(() => commands.readImage(path));
+        patchBuffer(convId, path, (b) => {
+          if (res.status !== "ok") {
+            return { ...b, loading: false, error: res.error };
+          }
+          const doc = res.data;
+          return {
+            ...b,
+            loading: false,
+            tooLarge: doc.too_large,
+            imageSize: doc.size,
+            pdfBase64: doc.too_large ? null : doc.data_base64,
+          };
+        });
+        return;
+      }
+
       const res = await safeCmd(() => commands.readFile(path));
       patchBuffer(convId, path, (b) => {
         if (res.status !== "ok") {
@@ -1016,6 +1045,24 @@ export const useEditorStore = create<EditorState>()((set, get) => {
             tooLarge: img.too_large,
             imageSize: img.size,
             imageDataUrl: img.too_large ? null : imageDataUrlFor(path, img.data_base64),
+          }));
+          continue;
+        }
+        // PDFs (like images) are never editable → always live-reload the bytes; a
+        // fresh base64 re-triggers the PdfViewer's render effect.
+        if (conv.buffers[path]?.isPdf) {
+          const res = await safeCmd(() => commands.readImage(path));
+          if (res.status !== "ok") {
+            patchBuffer(convId, path, (b) => ({ ...b, error: "PDF indisponible sur le disque." }));
+            continue;
+          }
+          const doc = res.data;
+          patchBuffer(convId, path, (b) => ({
+            ...b,
+            error: null,
+            tooLarge: doc.too_large,
+            imageSize: doc.size,
+            pdfBase64: doc.too_large ? null : doc.data_base64,
           }));
           continue;
         }

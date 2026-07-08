@@ -133,6 +133,13 @@ export function isImagePath(path: string): boolean {
   return imageExt(path) !== "";
 }
 
+/** Whether a path is a PDF (rendered with pdf.js, never Monaco/text). */
+export function isPdfPath(path: string): boolean {
+  const name = baseName(path).toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && name.slice(dot + 1) === "pdf";
+}
+
 /** The MIME type for an image path, or null if it isn't a known image. */
 export function imageMimeForPath(path: string): string | null {
   const ext = imageExt(path);
