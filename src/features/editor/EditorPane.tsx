@@ -114,7 +114,12 @@ function ActiveFile({
 
   const isMd = isMarkdownPath(buffer.path);
   const editable =
-    !buffer.binary && !buffer.tooLarge && !buffer.loading && !buffer.error && !buffer.isImage;
+    !buffer.binary &&
+    !buffer.tooLarge &&
+    !buffer.loading &&
+    !buffer.error &&
+    !buffer.isImage &&
+    !buffer.isPdf;
 
   return (
     <div className={styles.content}>

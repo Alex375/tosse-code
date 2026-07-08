@@ -15,6 +15,12 @@
 // fixed), and (b) vertical scrolling through a multi-page document keeps working (a
 // transform wouldn't grow the scroll area). Each zoom re-renders the bitmap at the new
 // size (via an offscreen canvas swapped in one paint → no flash) so text stays crisp.
+//
+// Virtualization: only pages in (or near) the viewport hold a painted <canvas> bitmap;
+// off-screen pages keep their aspect-ratio placeholder box but release their backing
+// store. An IntersectionObserver on each page canvas maintains the visible set. Without
+// this, a large document would retain one full-size bitmap PER PAGE simultaneously
+// (hundreds of MB → GB) and re-rasterize all of them on every zoom/resize.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
@@ -62,6 +68,11 @@ export default function PdfViewer({ base64 }: { base64: string }) {
   /** Content width available at zoom 1 (panel width minus padding), live-measured. */
   const [fitWidth, setFitWidth] = useState(0);
   const [zoom, setZoom] = useState(1);
+  /** Indices of pages in (or near) the viewport — only these get a painted bitmap.
+   *  Maintained by the IntersectionObserver below; the ref mirrors it so the observer
+   *  callback can accumulate across its incremental deliveries without a stale closure. */
+  const [visible, setVisible] = useState<Set<number>>(() => new Set());
+  const visibleRef = useRef<Set<number>>(new Set());
 
   // ---- Load the document + collect page sizes (once per file) ----------------
   useEffect(() => {
@@ -127,9 +138,59 @@ export default function PdfViewer({ base64 }: { base64: string }) {
     prevZoom.current = zoom;
   }, [zoom]);
 
-  // ---- Render (debounced) each page at the current display size --------------
+  // Display size at the current zoom (fit-width baseline × zoom) and page count.
   const pageWidth = Math.max(1, Math.round(fitWidth * zoom));
   const numPages = pageDims.length;
+
+  // ---- Virtualization: track which pages are in/near the viewport ------------
+  // Observe every page canvas; only those intersecting (± ~2 viewport-heights) stay
+  // in `visible` and therefore keep a painted bitmap. This caps retained memory to a
+  // handful of pages regardless of document length.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || numPages === 0) return;
+    // Seed the first pages so the top of the document paints immediately, before the
+    // observer's first (async) callback — otherwise the initial frame is blank.
+    const seed = new Set<number>();
+    for (let i = 0; i < Math.min(3, numPages); i++) seed.add(i);
+    visibleRef.current = seed;
+    setVisible(new Set(seed));
+    if (typeof IntersectionObserver === "undefined") {
+      // Very old engine: no observer → fall back to rendering all pages (pre-virtualization behaviour).
+      const all = new Set<number>();
+      for (let i = 0; i < numPages; i++) all.add(i);
+      visibleRef.current = all;
+      setVisible(all);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        let changed = false;
+        for (const e of entries) {
+          const idx = Number((e.target as HTMLElement).dataset.page);
+          if (Number.isNaN(idx)) continue;
+          if (e.isIntersecting) {
+            if (!visibleRef.current.has(idx)) {
+              visibleRef.current.add(idx);
+              changed = true;
+            }
+          } else if (visibleRef.current.delete(idx)) {
+            changed = true;
+          }
+        }
+        if (changed) setVisible(new Set(visibleRef.current));
+      },
+      // Preload ~2 viewport-heights each side so scrolling stays ahead of the paint.
+      { root, rootMargin: "200% 0px" },
+    );
+    for (let i = 0; i < numPages; i++) {
+      const c = canvasRefs.current[i];
+      if (c) io.observe(c);
+    }
+    return () => io.disconnect();
+  }, [numPages]);
+
+  // ---- Render (debounced) each VISIBLE page at the current display size ------
   useEffect(() => {
     const pdf = pdfRef.current;
     if (!pdf || numPages === 0 || fitWidth <= 0) return;
@@ -138,7 +199,19 @@ export default function PdfViewer({ base64 }: { base64: string }) {
     const tasks: { cancel: () => void }[] = [];
     const dpr = window.devicePixelRatio || 1;
     const timer = setTimeout(async () => {
+      // Release the backing store of pages that scrolled out of the preload band, so a
+      // long document never retains more than a few bitmaps at once. The placeholder box
+      // stays (CSS width + aspect-ratio), so scroll geometry is unaffected.
       for (let i = 0; i < numPages; i++) {
+        if (visible.has(i)) continue;
+        const c = canvasRefs.current[i];
+        if (c && c.width > 1) {
+          c.width = 0;
+          c.height = 0;
+        }
+      }
+      for (let i = 0; i < numPages; i++) {
+        if (!visible.has(i)) continue;
         if (cancelled) return;
         const canvas = canvasRefs.current[i];
         if (!canvas) continue;
@@ -183,7 +256,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
         }
       }
     };
-  }, [numPages, pageWidth, fitWidth]);
+  }, [numPages, pageWidth, fitWidth, visible]);
 
   // ---- Ctrl/Cmd+wheel (and trackpad pinch) zoom; plain wheel scrolls ----------
   useEffect(() => {
@@ -218,6 +291,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
             {pageDims.map((d, i) => (
               <canvas
                 key={i}
+                data-page={i}
                 ref={(el) => {
                   canvasRefs.current[i] = el;
                 }}
