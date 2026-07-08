@@ -361,8 +361,8 @@ impl Assembler {
                 };
                 out.push(SessionEvent::RemoteControl(RemoteControlState {
                     status: status.to_string(),
-                    session_url: None,
                     error: if status == "error" { detail.clone() } else { None },
+                    ..RemoteControlState::default()
                 }));
             }
             // Other subtypes are discarded by the protocol layer's catch-all; we

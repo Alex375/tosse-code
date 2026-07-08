@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { ChipBtn, Menu } from "../../ui/kit";
 import { EFFORT_LABELS } from "../../agent/subagentMeta";
+import { backendOfModel } from "./models";
 
 /**
  * Claude Code reasoning-effort levels (low → max), plus the top "Ultra code" tier.
@@ -31,6 +32,9 @@ const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultracod
  *  if reality ever differs. NOTE: Sonnet 4.6 accepts `max` but NOT `xhigh`. */
 export function effortLevelsForModel(model: string | null | undefined): EffortLevel[] {
   const m = (model || "").toLowerCase();
+  // Codex models (gpt-5.x): low/medium/high/xhigh (verified against `model/list`), no
+  // `max` and no Ultra code (both Claude-only tiers).
+  if (backendOfModel(model) === "codex") return ["low", "medium", "high", "xhigh"];
   if (m.includes("haiku")) return []; // Haiku 4.5 has no effort support → slider hidden
   if (m.includes("opus")) return ["low", "medium", "high", "xhigh", "max"]; // xhigh + max
   if (m.includes("fable")) return ["low", "medium", "high", "xhigh", "max"]; // same tier as Opus
@@ -38,15 +42,24 @@ export function effortLevelsForModel(model: string | null | undefined): EffortLe
   return ["low", "medium", "high"]; // safe fallback
 }
 
-/** Slider steps for a model: its levels, plus an Ultra code step if xhigh-capable. */
+/** Slider steps for a model: its levels, plus an Ultra code step if xhigh-capable —
+ *  but "Ultra code" (xhigh + standing workflows) is Claude-only, never offered on Codex. */
 function stepsForModel(model: string | null | undefined): EffortLevel[] {
   const levels = effortLevelsForModel(model);
-  return levels.includes("xhigh") ? [...levels, "ultracode"] : levels;
+  const ultraCapable = backendOfModel(model) === "claude" && levels.includes("xhigh");
+  return ultraCapable ? [...levels, "ultracode"] : levels;
 }
 
-/** Clamp an effort to what a model supports (highest supported ≤ requested). */
-export function clampEffort(effort: EffortLevel, model: string | null | undefined): EffortLevel {
-  const steps = stepsForModel(model);
+/** Clamp an effort to what a model supports (highest supported ≤ requested). `steps`
+ *  overrides the derived ladder — pass a Codex model's data-driven
+ *  `supportedReasoningEfforts` so the clamp matches EXACTLY what the gauge renders (a
+ *  Claude-only `max`/Ultra code then clamps down to the model's real top, e.g. xhigh). */
+export function clampEffort(
+  effort: EffortLevel,
+  model: string | null | undefined,
+  explicitSteps?: EffortLevel[],
+): EffortLevel {
+  const steps = explicitSteps && explicitSteps.length ? explicitSteps : stepsForModel(model);
   if (steps.length === 0 || steps.includes(effort)) return effort;
   const reqIdx = ORDER.indexOf(effort);
   let best: EffortLevel | null = null;
@@ -76,6 +89,7 @@ export function EffortGauge({
   value,
   onChange,
   portal,
+  efforts,
 }: {
   model: string | null | undefined;
   value: EffortLevel;
@@ -83,11 +97,15 @@ export function EffortGauge({
   /** Render the popover in a portal — for triggers inside an `overflow`-clipping
    *  container (e.g. a FlightDeck card). See {@link Menu}. */
   portal?: boolean;
+  /** Explicit effort steps (Codex: the selected model's real `supportedReasoningEfforts`
+   *  from `model/list`). When omitted, derived from the model id (`stepsForModel`). Never
+   *  gets an Ultra code step — that tier is Claude-only. */
+  efforts?: EffortLevel[];
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
-  const steps = stepsForModel(model);
+  const steps = efforts && efforts.length ? efforts : stepsForModel(model);
   if (steps.length === 0) return null;
 
   const last = steps.length - 1;

@@ -27,7 +27,12 @@ import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
 import { useWorkflowLiveStore } from "./workflowLive";
 import { useRemoteControlStore } from "./remoteControl";
+import { useCodexPlanUsageStore } from "./codexPlanUsage";
 import { useLastMessageSummaryStore } from "./lastMessageSummary";
+// The Codex default model — seeds a Codex conversation so its persisted `model` is
+// always a real Codex wire id. models.ts only imports `BackendKind` as a TYPE from
+// here (erased at runtime), so this value edge is acyclic.
+import { DEFAULT_CODEX_MODEL } from "../features/conversation/models";
 import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
@@ -36,6 +41,11 @@ import {
   clearComposerAttachments,
   clearAllComposerAttachments,
 } from "../features/conversation/composerAttachments";
+import {
+  clearCodexControls,
+  clearAllCodexControls,
+  DEFAULT_CODEX_EFFORT,
+} from "../features/conversation/codexControls";
 import { clearWorkFold, clearAllWorkFold } from "./workFold";
 import {
   clearPlanAnnotations,
@@ -70,6 +80,12 @@ export interface Repo {
   addedAt: number;
 }
 
+/** Which agent backend drives a conversation. Chosen at creation, immutable after
+ *  — every per-conversation behaviour (transport, message rendering, composer
+ *  controls, usage ring) branches on it. Mirrors the persisted
+ *  `ConversationRecord.backend`; pre-existing rows decode as "claude". */
+export type BackendKind = "claude" | "codex";
+
 export interface Conversation {
   /** Stable uuid — the identity everything keys off. Persisted, never changes. */
   id: string;
@@ -86,6 +102,12 @@ export interface Conversation {
   lastActivityAt: number;
   /** Claude's own session_id from system/init — used for --resume on restart. */
   sessionId: string | null;
+  /**
+   * Agent backend driving this conversation ("claude" | "codex"). PERSISTED,
+   * chosen at creation, immutable after — the single discriminant every
+   * backend-aware surface reads (transport, rendering, composer controls, usage).
+   */
+  kind: BackendKind;
   /**
    * Live Rust session handle (`session-N`) for IPC and live-state lookups.
    * In-memory ONLY — never persisted; set on spawn/resume, changes each launch.
@@ -220,6 +242,7 @@ const convToRecord = (c: Conversation): ConversationRecord => ({
   permission_mode: c.permissionMode,
   pending_reminder: c.pendingReminder,
   clean_output: c.cleanOutput,
+  backend: c.kind,
 });
 
 const recordToRepo = (r: RepoRecord): Repo => ({
@@ -244,6 +267,8 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   permissionMode: c.permission_mode,
   pendingReminder: asReminderKind(c.pending_reminder),
   cleanOutput: c.clean_output,
+  // Defensive: any unexpected/legacy value decodes to "claude" (the default backend).
+  kind: c.backend === "codex" ? "codex" : "claude",
 });
 
 // The one user-facing message for any persistence failure (deduped in the banner),
@@ -345,6 +370,14 @@ interface ConversationsState {
   // read-back then re-aligns the indicator with reality, so the UI can't lie.
   /** Set this conversation's model (the clamp of effort is the composer's job). */
   setConvModel: (id: string, model: string) => void;
+  /**
+   * Flip a FRESH conversation's backend AND model in one shot — how the composer's
+   * unified model picker selects the backend (picking a Codex model ⇒ a Codex
+   * conversation). The backend is immutable once the session exists (incompatible
+   * formats), so this is a NO-OP unless the conversation is still unspawned
+   * (`sessionId` and `handle` both null). Nothing to push live — there is no handle.
+   */
+  setConvBackend: (id: string, kind: BackendKind, model: string) => void;
   /** Set a plain effort level — clears the ultracode tier. */
   setConvEffort: (id: string, effort: string) => void;
   /** Enable the ultracode tier (effort xhigh + the separate flag). */
@@ -405,6 +438,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       clearTodoBarOpen(c.id);
       clearComposerDraft(c.id);
       clearComposerAttachments(c.id);
+      clearCodexControls(c.id);
       clearWorkFold(c.id);
       clearPlanAnnotations(c.id);
       useGitViewStore.getState().clear(c.id);
@@ -474,6 +508,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     clearTodoBarOpen(id);
     clearComposerDraft(id);
     clearComposerAttachments(id);
+    clearCodexControls(id);
     clearWorkFold(id);
     clearPlanAnnotations(id);
     autoTitlePending.delete(id);
@@ -662,7 +697,27 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     const updated = { ...conv, model };
     set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
     syncToCore("upsertConversation(model)", () => commands.upsertConversation(convToRecord(updated)));
-    if (conv.handle) syncToCore("setModel(live)", () => commands.setModel(conv.handle!, model));
+    // Claude pushes the model live (set_model); Codex has no such channel — the model
+    // rides the next turn as an override (see codexControls.buildCodexControls), so only
+    // the persisted record matters here.
+    if (conv.handle && conv.kind === "claude")
+      syncToCore("setModel(live)", () => commands.setModel(conv.handle!, model));
+  },
+
+  setConvBackend: (id, kind, model) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv) return;
+    // Backend is fixed at creation: once a session exists (or ever existed), the
+    // transport + message format are engaged and cannot switch. Only a pristine,
+    // never-spawned conversation may flip. This guard is the safety net behind the
+    // composer already hiding the other backend once the conversation is locked.
+    if (conv.sessionId || conv.handle) return;
+    if (conv.kind === kind && conv.model === model) return;
+    const updated = { ...conv, kind, model };
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
+    // No live push (guarded above → no handle): persist the pick so the eventual
+    // spawn starts on the chosen backend + model.
+    syncToCore("upsertConversation(backend)", () => commands.upsertConversation(convToRecord(updated)));
   },
 
   setConvEffort: (id, effort) => {
@@ -671,7 +726,9 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     const updated = { ...conv, effort, ultracode: false };
     set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
     syncToCore("upsertConversation(effort)", () => commands.upsertConversation(convToRecord(updated)));
-    if (conv.handle) syncToCore("setEffortLevel(live)", () => commands.setEffortLevel(conv.handle!, effort));
+    // Codex effort rides the next turn as an override, not a live command (see setConvModel).
+    if (conv.handle && conv.kind === "claude")
+      syncToCore("setEffortLevel(live)", () => commands.setEffortLevel(conv.handle!, effort));
   },
 
   setConvUltracode: (id) => {
@@ -722,7 +779,12 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
  * created. The live session is spawned on the first message (see
  * [`ensureConversationSession`]).
  */
-export function createConversationInRepo(repoPath: string): string {
+export function createConversationInRepo(
+  repoPath: string,
+  // The backend is chosen HERE (the "+" selector) and immutable afterwards. Defaults
+  // to Claude, so every existing caller and the no-Codex case are unchanged.
+  kind: BackendKind = "claude",
+): string {
   const repo = useConversationsStore.getState().addRepo(repoPath);
   const id = uid();
   const now = Date.now();
@@ -737,14 +799,18 @@ export function createConversationInRepo(repoPath: string): string {
     sessionId: null,
     handle: null, // no live process until the first message
     liveCwd: null,
-    model: DEFAULT_MODEL,
-    effort: DEFAULT_EFFORT,
+    // Seed the backend's own default model so a Codex conversation never carries a
+    // Claude alias (which its binary would reject at thread/start).
+    model: kind === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL,
+    // Seed the backend's own default effort (Codex "medium" vs Claude "xhigh").
+    effort: kind === "codex" ? DEFAULT_CODEX_EFFORT : DEFAULT_EFFORT,
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
     // null = inherit the global "clean output" default; the composer chip sets an
     // explicit per-conversation override.
     cleanOutput: null,
+    kind,
   });
   return id;
 }
@@ -759,7 +825,11 @@ export function createConversationInRepo(repoPath: string): string {
  * a different working directory. The worktree indicator/badge resolve that cwd
  * and light up accordingly. Lazy as ever — no process is spawned here.
  */
-export function createConversationInWorktree(repoId: string, cwd: string): string {
+export function createConversationInWorktree(
+  repoId: string,
+  cwd: string,
+  kind: BackendKind = "claude",
+): string {
   const id = uid();
   const now = Date.now();
   useConversationsStore.getState().addConversation({
@@ -772,14 +842,18 @@ export function createConversationInWorktree(repoId: string, cwd: string): strin
     sessionId: null,
     handle: null, // no live process until the first message
     liveCwd: null,
-    model: DEFAULT_MODEL,
-    effort: DEFAULT_EFFORT,
+    // Seed the backend's own default model so a Codex conversation never carries a
+    // Claude alias (which its binary would reject at thread/start).
+    model: kind === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL,
+    // Seed the backend's own default effort (Codex "medium" vs Claude "xhigh").
+    effort: kind === "codex" ? DEFAULT_CODEX_EFFORT : DEFAULT_EFFORT,
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
     // null = inherit the global "clean output" default; the composer chip sets an
     // explicit per-conversation override.
     cleanOutput: null,
+    kind,
   });
   return id;
 }
@@ -850,6 +924,9 @@ export function reactivateDiskConversation(d: DiskConversation): string {
     // null = inherit the global "clean output" default; the composer chip sets an
     // explicit per-conversation override.
     cleanOutput: null,
+    // Backend is chosen at creation and immutable; defaults to Claude here. The
+    // backend selector (composer "+") threads the chosen kind through instead.
+    kind: "claude",
   });
   return id;
 }
@@ -961,6 +1038,8 @@ export async function ensureConversationSession(
       before.effort,
       before.permissionMode,
       before.ultracode,
+      // The backend is fixed at creation; the spawn routes to the Claude or Codex actor.
+      before.kind,
     );
     if (res.status !== "ok") {
       // The spawn may have failed because the conversation's cwd is GONE — its
@@ -993,6 +1072,8 @@ export async function ensureConversationSession(
           before.effort,
           before.permissionMode,
           before.ultracode,
+          // Same backend on the fresh-worktree re-spawn.
+          before.kind,
         );
       }
     }
@@ -1287,6 +1368,7 @@ export async function wipeAllData(): Promise<void> {
   clearAllTodoBarOpen();
   clearAllComposerDrafts();
   clearAllComposerAttachments();
+  clearAllCodexControls();
   clearAllWorkFold();
   clearAllPlanAnnotations();
   clearAllSidebarFold();
@@ -1303,6 +1385,7 @@ export async function wipeAllData(): Promise<void> {
   useWorkflowLiveStore.getState().clear();
   useGitViewStore.getState().clearAll();
   useRemoteControlStore.getState().clearAll();
+  useCodexPlanUsageStore.getState().clear();
   useLastMessageSummaryStore.getState().clearAll();
 }
 

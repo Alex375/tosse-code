@@ -206,7 +206,7 @@ function DisplayPrefs() {
         hint={
           <>
             N'affiche que le message final de chaque réponse ; les outils, la réflexion et les
-            étapes intermédiaires sont repliés derrière un bloc « Travail de Claude », dépliable à
+            étapes intermédiaires sont repliés derrière un bloc « Work », dépliable à
             la demande. Réglage <strong>par défaut</strong> : chaque conversation peut le surcharger
             via son bouton « Clean output ».
           </>

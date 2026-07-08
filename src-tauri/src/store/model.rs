@@ -43,6 +43,14 @@ pub struct ConversationRecord {
     pub last_activity_at: i64,
     /// Claude's own session UUID (from system/init) — used for `--resume`.
     pub session_id: Option<String>,
+    /// Which agent backend drives this conversation: `"claude"` (default) or
+    /// `"codex"`. Chosen at creation and immutable after — the whole app keys its
+    /// per-conversation behaviour (transport, message normalisation, composer
+    /// controls, usage ring) off it. Pre-existing rows (created before this column)
+    /// decode as `"claude"` via a `COALESCE` in the loader, so no conversation ever
+    /// silently changes backend. A non-optional `String` because every conversation
+    /// always has exactly one backend (unlike the optional controls below).
+    pub backend: String,
     /// Per-conversation controls, persisted so they survive a restart and are
     /// re-applied at the next (lazy) spawn. While a session is LIVE its own state
     /// (get_settings / system/init) is the source of truth; these hold the

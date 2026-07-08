@@ -21,7 +21,7 @@ describe("resolveReloadTargets", () => {
       conv({ id: "b", repoId: "r1", handle: null }), // off
       conv({ id: "z", repoId: "r2", handle: "session-9" }), // other repo
     ];
-    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null };
+    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null, backend: "claude" };
     const { liveConvs, currentConv } = resolveReloadTargets(target, convs, repos);
     expect(currentConv).toBeNull();
     expect(liveConvs.map((c) => c.id)).toEqual(["a"]);
@@ -32,7 +32,7 @@ describe("resolveReloadTargets", () => {
       conv({ id: "a", repoId: "r1", handle: "session-1" }),
       conv({ id: "b", repoId: "r1", handle: "session-2" }),
     ];
-    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a" };
+    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a", backend: "claude" };
     const { liveConvs, currentConv } = resolveReloadTargets(target, convs, repos);
     expect(currentConv?.id).toBe("a");
     expect(liveConvs.map((c) => c.id).sort()).toEqual(["a", "b"]);
@@ -43,7 +43,7 @@ describe("resolveReloadTargets", () => {
       conv({ id: "a", repoId: "r1", handle: null }), // current, off
       conv({ id: "b", repoId: "r1", handle: "session-2" }), // sibling, live
     ];
-    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a" };
+    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a", backend: "claude" };
     const { liveConvs, currentConv } = resolveReloadTargets(target, convs, repos);
     expect(currentConv).toBeNull();
     expect(liveConvs.map((c) => c.id)).toEqual(["b"]);
@@ -51,7 +51,7 @@ describe("resolveReloadTargets", () => {
 
   it("no live conversation → empty liveConvs (bar stays hidden)", () => {
     const convs = [conv({ id: "a", repoId: "r1", handle: null })];
-    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null };
+    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null, backend: "claude" };
     expect(resolveReloadTargets(target, convs, repos).liveConvs).toEqual([]);
   });
 });

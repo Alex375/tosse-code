@@ -249,6 +249,10 @@ function RepoGroup({
           onClick={() =>
             openExtensions({
               kind: "project",
+              // The repo button is Claude-oriented; the repo-level segmented Claude|Codex
+              // view is a later, Armand-scoped iteration. A Codex conversation shows its
+              // extensions via the composer chip instead.
+              backend: "claude",
               path: repo.path,
               title: repoName(repo.path),
               session: null,
@@ -270,7 +274,11 @@ function RepoGroup({
         >
           <Ico name="trash" className="sm" />
         </button>
-        {/* New conversation (+) — always visible, pinned at the right edge. */}
+        {/* New conversation (+) — always visible, pinned at the right edge. Creates a
+            (Claude-default) conversation; the BACKEND is chosen afterwards in the
+            composer's model picker (picking a Codex model ⇒ a Codex conversation),
+            which replaced the old Claude/Codex "+" menu. Backend stays fixed at the
+            first message. */}
         <button
           type="button"
           className="cv-repo-act"

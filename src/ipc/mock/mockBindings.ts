@@ -34,6 +34,7 @@ import type {
   Result,
   RewindOutcome,
   SearchHit,
+  SessionCodexPlanUsageEvent,
   SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
@@ -112,6 +113,9 @@ const sessionSummaryEvent = new MockEmitter<SessionSummaryEvent>();
 // No real bridge in the browser mock — never fires, but must exist so the composer's
 // Remote Control chip / event router can subscribe without crashing.
 const sessionRemoteControlEvent = new MockEmitter<SessionRemoteControlEvent>();
+// No real Codex app-server in the browser mock — never fires, but must exist so the
+// global event router can subscribe without crashing.
+const sessionCodexPlanUsageEvent = new MockEmitter<SessionCodexPlanUsageEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
 // No real filesystem in the browser mock — these never fire, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
@@ -131,6 +135,7 @@ export const mockEvents = {
   sessionTitleEvent,
   sessionSummaryEvent,
   sessionRemoteControlEvent,
+  sessionCodexPlanUsageEvent,
   tickEvent,
   fsChangeEvent,
   fsWatchErrorEvent,
@@ -181,6 +186,44 @@ export const mockCommands = {
     return ok(MOCK_COMMANDS);
   },
 
+  // Codex backend detection + catalogues — stubbed for the browser mock (dev/Playwright)
+  // so the composer's Codex-aware controls render without a real `codex` binary.
+  async codexAvailable(): Promise<boolean> {
+    return true;
+  },
+  async codexListModels(): Promise<
+    Result<
+      { id: string; displayName: string; efforts: string[]; defaultEffort: string | null; isDefault: boolean }[],
+      string
+    >
+  > {
+    return ok([
+      { id: "gpt-5.5", displayName: "GPT-5.5", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "medium", isDefault: true },
+      { id: "gpt-5.4", displayName: "GPT-5.4", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "medium", isDefault: false },
+    ]);
+  },
+  async codexListSkills(_cwds: string[]): Promise<Result<{ name: string; description: string }[], string>> {
+    return ok([{ name: "imagegen", description: "Generate an image" }]);
+  },
+  async codexCompact(_session: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexListExtensions(): Promise<Result<ExtensionsSnapshot, string>> {
+    return ok({
+      mcp_servers: [
+        { name: "node_repl", scope: "user", transport: "stdio", command: "/opt/node_repl", url: null, source: null, enabled: true },
+      ],
+      plugins: [
+        { id: "browser@openai-bundled", name: "browser", marketplace: "openai-bundled", version: null, description: null, enabled: true, scope: "user", update_available: false, latest_version: null, skill_count: 0, agent_count: 0, command_count: 0, mcp_count: 0 },
+      ],
+      skills: [
+        { name: "imagegen", description: "Generate an image", scope: "user", source: null, path: "/Users/x/.codex/skills/.system/imagegen/SKILL.md" },
+      ],
+      agents: [],
+      warnings: [],
+    });
+  },
+
   async spawnSession(
     _repoPath: string,
     _resume: string | null,
@@ -188,6 +231,7 @@ export const mockCommands = {
     effort: string | null,
     permissionMode: string | null,
     ultracode: boolean,
+    _backend: "claude" | "codex",
   ): Promise<Result<string, string>> {
     // Unique id per spawn so multiple browser conversations don't collide.
     const session = `mock-session-${++mockCounter}`;
@@ -288,8 +332,9 @@ export const mockCommands = {
           status: "connected",
           session_url: `https://claude.ai/code?session=mock-${session}`,
           error: null,
+          pairing_code: null,
         }
-      : { status: "disconnected", session_url: null, error: null };
+      : { status: "disconnected", session_url: null, error: null, pairing_code: null };
     return ok(state);
   },
 
@@ -507,6 +552,26 @@ export const mockCommands = {
           permission_mode: "auto",
           pending_reminder: null,
           clean_output: null,
+          backend: "claude",
+        },
+        // A Codex conversation so the mixed-fleet identity (backend badge, neutral avatar,
+        // Codex picker icon) is exercisable in dev/Playwright. Renders live through the same
+        // mock driver; only `backend` drives the brand marks.
+        {
+          id: "conv-demo-codex",
+          name: "Démo Codex",
+          repo_id: "repo-demo",
+          cwd: "/Users/dev/demo-repo",
+          created_at: now - 1,
+          last_activity_at: now - 1,
+          session_id: null,
+          model: "gpt-5.5",
+          effort: "high",
+          ultracode: false,
+          permission_mode: "auto",
+          pending_reminder: null,
+          clean_output: null,
+          backend: "codex",
         },
       ],
       active_id: "conv-demo",

@@ -6,6 +6,7 @@ use crate::supervisor::model::{
     BackgroundTask, ConversationItem, PermissionRequestPayload, RemoteControlState, SessionEmitter,
     SessionStatePayload, SlashCommand,
 };
+use crate::usage::PlanUsage;
 
 /// Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
@@ -87,6 +88,19 @@ pub struct SessionSummaryEvent {
 pub struct SessionRemoteControlEvent {
     pub session: String,
     pub state: RemoteControlState,
+}
+
+/// The Codex backend's subscription rate-limit % (5h + weekly windows) changed. Codex
+/// pushes this over the live app-server (`account/rateLimits/updated`) — there is no
+/// HTTP/Keychain pull as for Claude — normalized to the SAME `PlanUsage` shape the
+/// popover renders. Account-global: the UI keeps ONE Codex plan store (never merged
+/// with Claude's Anthropic one) and the `session` here only tags which conversation
+/// surfaced it. Windows are sparse (a push may carry only the one that moved), so the
+/// front merges onto the last snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionCodexPlanUsageEvent {
+    pub session: String,
+    pub usage: PlanUsage,
 }
 
 /// Coalesced filesystem change notification for the editor panel: the (de-noised,
@@ -195,6 +209,13 @@ impl SessionEmitter for TauriEmitter {
         emit_logged(&self.app, "session_remote_control", SessionRemoteControlEvent {
             session: session.to_string(),
             state: state.clone(),
+        });
+    }
+
+    fn emit_codex_plan_usage(&self, session: &str, usage: &PlanUsage) {
+        emit_logged(&self.app, "session_codex_plan_usage", SessionCodexPlanUsageEvent {
+            session: session.to_string(),
+            usage: usage.clone(),
         });
     }
 }

@@ -31,9 +31,13 @@ use super::transport::{self, SpawnConfig, Transport, TransportError};
 pub enum SessionCommand {
     /// A user turn: the typed text plus any images joined to it (sent as `image`
     /// blocks in the message `content` array). `images` is empty for a plain text turn.
+    /// `controls` carries the Codex composer controls (model / effort / approval /
+    /// sandbox / …) applied as per-turn overrides — `None` for Claude, which pushes
+    /// each control the moment it changes instead of per-turn.
     SendUser {
         text: String,
         images: Vec<transport::ImageAttachment>,
+        controls: Option<crate::supervisor::codex::CodexControls>,
     },
     AnswerPermission {
         request_id: String,
@@ -93,6 +97,12 @@ pub enum SessionCommand {
     /// enable / disable), so a running conversation applies it without a restart.
     /// Fire-and-correlate (bare-success ack; rejection surfaces as a control error).
     ReloadPlugins,
+    /// Compact the conversation's context. CODEX-ONLY: Claude compacts via the plain
+    /// `/compact` text command (a slash-command turn), so its actor treats this as a
+    /// no-op; the Codex actor issues the native `thread/compact/start` RPC (there is no
+    /// `/compact` text command on the app-server). Fire-and-forget — a failure is
+    /// surfaced by the Codex actor as a timeline notice.
+    Compact,
     /// Tear the session down. `ack`, when present, is fired by the actor ONLY after the
     /// process is fully reaped (the graceful EOF→SIGTERM→SIGKILL ladder has run), so a
     /// caller can wait for the `claude` process to ACTUALLY be gone — required before any
@@ -205,18 +215,30 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    /// Send a user turn: text plus any joined images. `send_user_text` is the
-    /// text-only convenience used by internal callers and tests.
+    /// Build a handle around a raw command channel. `pub(crate)` so a sibling backend
+    /// module (`supervisor::codex`) can wrap its OWN actor's channel in a `SessionHandle`
+    /// without the private `cmd_tx` field being exposed — the handle stays "just a
+    /// bounded command channel + a stable id", identical for both backends, and all the
+    /// downstream IPC commands (send / interrupt / stop / …) drive either backend
+    /// unchanged. The Claude path uses the struct literal directly in `spawn_session`.
+    pub(crate) fn from_channel(id: String, cmd_tx: mpsc::Sender<SessionCommand>) -> Self {
+        Self { id, cmd_tx }
+    }
+
+    /// Send a user turn: text, any joined images, and (Codex only) the composer
+    /// controls applied as per-turn overrides. `send_user_text` is the text-only
+    /// convenience used by internal callers and tests.
     pub async fn send_user(
         &self,
         text: impl Into<String>,
         images: Vec<transport::ImageAttachment>,
+        controls: Option<crate::supervisor::codex::CodexControls>,
     ) -> Result<(), SessionError> {
-        self.send(SessionCommand::SendUser { text: text.into(), images }).await
+        self.send(SessionCommand::SendUser { text: text.into(), images, controls }).await
     }
 
     pub async fn send_user_text(&self, text: impl Into<String>) -> Result<(), SessionError> {
-        self.send_user(text, Vec::new()).await
+        self.send_user(text, Vec::new(), None).await
     }
 
     pub async fn answer_permission(
@@ -323,6 +345,13 @@ impl SessionHandle {
     /// running conversation applies the change without a restart. Fire-and-correlate.
     pub async fn reload_plugins(&self) -> Result<(), SessionError> {
         self.send(SessionCommand::ReloadPlugins).await
+    }
+
+    /// Compact this conversation's context (Codex: the native `thread/compact/start`
+    /// RPC; Claude: a no-op — it compacts via the `/compact` text command instead).
+    /// Fire-and-forget: a Codex failure surfaces as a timeline notice, so no reply.
+    pub async fn compact(&self) -> Result<(), SessionError> {
+        self.send(SessionCommand::Compact).await
     }
 
     /// Request teardown WITHOUT waiting for the process to be reaped (the quit path uses
@@ -871,7 +900,9 @@ impl SessionCore {
 
     fn on_command(&mut self, cmd: SessionCommand) {
         match cmd {
-            SessionCommand::SendUser { text, images } => {
+            // `controls` is Codex-only (per-turn overrides); the Claude backend pushes
+            // each control the moment it changes, so it's ignored here.
+            SessionCommand::SendUser { text, images, .. } => {
                 // Stamp a uuid so `--replay-user-messages` echo of THIS turn can be
                 // recognised as our own and suppressed (the UI shows it optimistically);
                 // a remote turn carries a uuid we never recorded, so it surfaces live.
@@ -1047,6 +1078,10 @@ impl SessionCore {
                 // control error so the user knows the update wasn't hot-applied.
                 self.send_tracked(PendingControl::ReloadPlugins, control::reload_plugins_request);
             }
+            // Codex-only: Claude compacts via the `/compact` text command (a normal
+            // slash-command turn the composer sends directly), so there's nothing to do
+            // on the control channel here.
+            SessionCommand::Compact => {}
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown { .. } => {}
         }
@@ -1107,6 +1142,9 @@ mod tests {
         }
         fn emit_remote_control(&self, _session: &str, state: &RemoteControlState) {
             let _ = self.tx.send(SessionEvent::RemoteControl(state.clone()));
+        }
+        fn emit_codex_plan_usage(&self, _session: &str, _usage: &crate::usage::PlanUsage) {
+            // Codex-only push; the Claude core never emits it.
         }
     }
 
@@ -1227,7 +1265,7 @@ mod tests {
     fn send_user_text_on_a_dead_session_surfaces_a_notice() {
         let (mut core, mut events, out) = test_core();
         drop(out); // the process is gone: the outbound channel is closed
-        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new(), controls: None });
         let notice = drain(&mut events).into_iter().find_map(|e| match e {
             SessionEvent::Item(ConversationItem::Notice { subtype, .. }) => Some(subtype),
             _ => None,
@@ -1443,7 +1481,7 @@ mod tests {
     #[test]
     fn send_user_text_writes_a_user_message() {
         let (mut core, _events, mut out) = test_core();
-        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new(), controls: None });
         let lines = drain(&mut out);
         assert_eq!(lines[0]["type"], json!("user"));
         assert_eq!(lines[0]["message"]["content"][0]["text"], json!("hello"));
@@ -1458,7 +1496,7 @@ mod tests {
     #[test]
     fn own_user_message_echo_suppressed_remote_surfaced() {
         let (mut core, mut events, mut out) = test_core();
-        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new(), controls: None });
         let uuid = drain(&mut out)[0]["uuid"].as_str().unwrap().to_string();
         let _ = drain(&mut events); // the busy state event from the send
 

@@ -73,6 +73,11 @@ base64 = "0.22"
 # Already in the tree transitively; enabling `v4` (getrandom) is near-free.
 uuid = { version = "1", features = ["v4"] }
 
+# Parse Codex's `~/.codex/config.toml` (declared MCP servers / plugins / marketplaces)
+# for the Extensions view. Read-only; secret-bearing tables (`[mcp_servers.*.env]`,
+# headers) are NEVER surfaced (whitelist parse), mirroring the Claude-side redaction.
+toml = "0.8"
+
 # Async runtime for the supervisor: spawn `claude`, pipe stdio, drive tasks.
 # Tauri 2 already runs on tokio; we depend on it directly for the features we use.
 tokio = { version = "1", features = [

@@ -46,6 +46,24 @@ export function useExtensions(path: string | null) {
   });
 }
 
+/** Query key for the (account-global) Codex configured extensions snapshot. */
+export const codexExtensionsKey = () => ["codex-extensions"] as const;
+
+/**
+ * The CONFIGURED Codex extensions (`~/.codex/config.toml` declared MCP servers +
+ * installed plugins + on-disk skills), as the SAME `ExtensionsSnapshot` shape as Claude
+ * so the manager renders a Codex segment with the shared primitives. Account-global (not
+ * per-path), so one shared query. `enabled` gates it to when a Codex view is actually shown.
+ */
+export function useCodexExtensions(enabled: boolean) {
+  return useQuery({
+    queryKey: codexExtensionsKey(),
+    enabled,
+    queryFn: () => unwrap(commands.codexListExtensions()),
+    staleTime: 5_000,
+  });
+}
+
 /**
  * Read a skill's `SKILL.md` / a sub-agent's `.md` (by absolute path) for the
  * markdown viewer. Reuses the editor's `read_file` (text, with binary/size guards).

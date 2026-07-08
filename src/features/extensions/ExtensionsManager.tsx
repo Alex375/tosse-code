@@ -17,12 +17,14 @@
 // 3-pane explorer (rail / list / detail) of its own skills / MCP / sub-agents,
 // modelled on Claude.ai's Customize panel. See memory "extensions-two-distinct-views".
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Ico } from "../../ui/kit";
+import { ClaudeMark, CodexMark, Ico } from "../../ui/kit";
+import { useCodexAvailable } from "../../store/codexAvailable";
 import { Toggle } from "../../ui/Toggle";
 import { commands } from "../../ipc/client";
 import { refetchSlashCommands } from "../../store/commandsStore";
 import {
   useCheckPluginUpdates,
+  useCodexExtensions,
   useExtensions,
   useExtensionDoc,
   useMarketplaces,
@@ -34,8 +36,7 @@ import {
   useSetPluginEnabled,
   useUpdatePlugin,
 } from "../../ipc/useExtensions";
-import { useConversationsStore } from "../../store/conversationsStore";
-import type { Conversation } from "../../store/conversationsStore";
+import { useConversationsStore, type BackendKind, type Conversation } from "../../store/conversationsStore";
 import { StreamMarkdown } from "../conversation/StreamMarkdown";
 import type {
   AgentInfo,
@@ -275,8 +276,18 @@ export function ExtensionsManager() {
       ? (s.conversations.find((c) => c.id === target.session)?.handle ?? null)
       : null,
   );
+  const codexAvailable = useCodexAvailable();
+  // Which backend's extensions are shown. Tabs let the user flip between Claude and Codex;
+  // the default is the target's OWN backend (a Codex conversation opens on the Codex tab).
+  // Reset to that default whenever the target changes (see the open effect below).
+  const [activeTab, setActiveTab] = useState<BackendKind>(target?.backend ?? "claude");
+  // BOTH inventories are fetched so either tab renders instantly. `ext` = Claude's on-disk
+  // config for the path; `codexExt` = Codex's account-global `~/.codex` config. `live` MCP
+  // is the conversation's REAL session (Claude or Codex — the Codex actor answers
+  // `mcp_status` via `mcpServerStatus/list`), only meaningful on the tab matching that backend.
   const ext = useExtensions(target?.path ?? null);
   const live = useMcpStatus(handle);
+  const codexExt = useCodexExtensions(codexAvailable);
   const setPluginEnabled = useSetPluginEnabled(target?.path ?? null);
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   // The plugin explorer carries WHICH section to open at (a contribution box jumps
@@ -346,10 +357,15 @@ export function ExtensionsManager() {
   // on its own every 4s while open; this covers the configured snapshot.
   const refetchExt = ext.refetch;
   const refetchLive = live.refetch;
-  const openKey = target ? `${target.kind}:${target.path}:${target.session ?? ""}` : null;
+  const refetchCodexExt = codexExt.refetch;
+  const defaultTab = target?.backend ?? "claude";
+  const openKey = target ? `${target.backend}:${target.kind}:${target.path}:${target.session ?? ""}` : null;
   useEffect(() => {
     if (!openKey) return;
+    // Land on the target's own backend, and refetch both inventories + the live status.
+    setActiveTab(defaultTab);
     void refetchExt();
+    if (codexAvailable) void refetchCodexExt();
     if (handle) void refetchLive();
     // A fresh open starts with no pending plugin toggles.
     setTouched(new Set());
@@ -359,6 +375,14 @@ export function ExtensionsManager() {
 
   if (!target) return null;
   const isConversation = target.kind === "conversation";
+  // The backend of the conversation's LIVE session (null for a repo/project target). The
+  // live lens (ConversationBody / Codex live MCP) is shown only on the matching tab; the
+  // other tab shows that backend's CONFIGURED inventory (project-style, no live process).
+  const liveBackend: BackendKind | null = isConversation ? target.backend : null;
+  const onCodexTab = activeTab === "codex";
+  // Which query the header refresh + spinner track (the active tab's inventory + any live).
+  const tabFetching = onCodexTab ? codexExt.isFetching : ext.isFetching;
+  const liveFetching = isConversation && activeTab === liveBackend && live.isFetching;
 
   return (
     <div className={styles.scrim} onClick={close}>
@@ -372,26 +396,26 @@ export function ExtensionsManager() {
           <button
             className={styles.iconBtn}
             onClick={() => {
-              // The conversation lens reads BOTH the live MCP status and the
-              // configured snapshot (skills/agents/plugins) — refresh both, so a
-              // failed `ext` query can be retried from here (not just `live`).
-              void ext.refetch();
-              if (isConversation) void live.refetch();
+              // Refresh the ACTIVE tab's configured snapshot AND (when it's the live tab)
+              // the live MCP status, so a failed query can be retried from here.
+              if (onCodexTab) void codexExt.refetch();
+              else void ext.refetch();
+              if (liveFetching || (isConversation && activeTab === liveBackend)) void live.refetch();
             }}
-            disabled={isConversation ? live.isFetching || ext.isFetching : ext.isFetching}
+            disabled={tabFetching || liveFetching}
             title="Rafraîchir"
             aria-label="Rafraîchir"
           >
-            <Ico
-              name="refresh"
-              className={"sm" + ((isConversation ? live.isFetching : ext.isFetching) ? " " + styles.spin : "")}
-            />
+            <Ico name="refresh" className={"sm" + (tabFetching || liveFetching ? " " + styles.spin : "")} />
           </button>
           <button className={styles.iconBtn} onClick={close} title="Fermer" aria-label="Fermer">
             ✕
           </button>
         </div>
 
+        {/* Hot-apply plugin toggles to live conversations (Claude — Codex plugins are
+            read-only). Self-gates on `touched`, which only Claude plugin toggles populate,
+            so it never shows on the Codex tab. */}
         {touched.size > 0 && liveConvs.length > 0 ? (
           <PluginReloadBar
             count={touched.size}
@@ -404,7 +428,42 @@ export function ExtensionsManager() {
           />
         ) : null}
 
-        {isConversation ? (
+        {/* Backend tabs — only when Codex is installed. Lets the user see BOTH backends'
+            extensions; defaults to the target's own backend. */}
+        {codexAvailable ? (
+          <div className={styles.tabBar} role="tablist" aria-label="Backend des extensions">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "claude"}
+              className={styles.tabBtn + (activeTab === "claude" ? " " + styles.tabOn : "")}
+              onClick={() => setActiveTab("claude")}
+            >
+              <ClaudeMark className={"sm " + styles.tabMarkClaude} /> Claude
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "codex"}
+              className={styles.tabBtn + (activeTab === "codex" ? " " + styles.tabOn : "")}
+              onClick={() => setActiveTab("codex")}
+            >
+              <CodexMark className={"sm " + styles.tabMarkCodex} /> Codex
+            </button>
+          </div>
+        ) : null}
+
+        {onCodexTab ? (
+          <CodexExtensionsBody
+            codexExt={codexExt}
+            live={live}
+            // Live MCP only when a session is actually running (a lazily-spawned Codex conv
+            // has no handle yet). Otherwise show the CONFIGURED ~/.codex servers, never an
+            // empty "live" list that reads as "no MCP servers".
+            showLive={liveBackend === "codex" && handle != null}
+            onOpenDoc={setDoc}
+          />
+        ) : liveBackend === "claude" ? (
           <ConversationBody
             ext={ext}
             live={live}
@@ -756,6 +815,166 @@ function PluginReloadBar({
       >
         ✕
       </button>
+    </div>
+  );
+}
+
+// ---- Codex backend view --------------------------------------------------------
+
+/** The Extensions view for a Codex conversation/target. Codex's inventory is
+ *  account-global (`~/.codex/config.toml` + `~/.codex/skills`), rendered with the SAME
+ *  section/row primitives as Claude. The MCP section shows LIVE status (from the
+ *  app-server's `mcpServerStatus/list`) when a session is running, else the configured
+ *  servers from the parsed config. Skills open in the shared doc viewer. Plugins are
+ *  read-only in v1 (Codex plugin/marketplace management is a later iteration).
+ *  Everything Claude-specific (plugin toggles, marketplaces, sub-agents, OAuth actions)
+ *  is intentionally absent — Codex has no equivalent. */
+function CodexExtensionsBody({
+  codexExt,
+  live,
+  showLive,
+  onOpenDoc,
+}: {
+  codexExt: ReturnType<typeof useCodexExtensions>;
+  live: ReturnType<typeof useMcpStatus>;
+  showLive: boolean;
+  onOpenDoc: (d: OpenDoc) => void;
+}) {
+  if (codexExt.isLoading) return <div className={styles.body}><div className={styles.empty}>Chargement…</div></div>;
+  if (codexExt.isError)
+    return <div className={styles.body}><div className={styles.error}>{(codexExt.error as Error).message}</div></div>;
+
+  const snap = codexExt.data;
+  const mcpConfigured = snap?.mcp_servers ?? [];
+  const skills = snap?.skills ?? [];
+  const plugins = snap?.plugins ?? [];
+  const liveServers = live.data ?? [];
+
+  return (
+    <div className={styles.body}>
+      <WarningBanner warnings={snap?.warnings ?? []} />
+      {/* MCP servers: live when a Codex session is running, else the configured list. */}
+      {showLive ? (
+        <Section
+          icon="term"
+          title="Serveurs MCP"
+          count={liveServers.length}
+          // Suppress the generic empty text while loading or on error — those states render
+          // their own children below (never a silent empty list on a failed live query).
+          empty={live.isError || live.isLoading ? "" : "Aucun serveur MCP dans cette session Codex."}
+        >
+          {live.isError ? (
+            <div className={styles.error}>{(live.error as Error).message}</div>
+          ) : live.isLoading && liveServers.length === 0 ? (
+            <div className={styles.empty}>Chargement du statut MCP…</div>
+          ) : (
+            liveServers.map((m) => <CodexMcpLiveRow key={m.name} mcp={m} />)
+          )}
+        </Section>
+      ) : (
+        <Section
+          icon="term"
+          title="Serveurs MCP configurés"
+          count={mcpConfigured.length}
+          empty="Aucun serveur MCP dans ~/.codex/config.toml."
+        >
+          {mcpConfigured.map((m) => (
+            <McpConfigRow key={m.name} mcp={m} />
+          ))}
+        </Section>
+      )}
+
+      <Section
+        icon="spark"
+        title="Skills"
+        count={skills.length}
+        empty="Aucun skill dans ~/.codex/skills."
+      >
+        {skills.map((s) => (
+          <SkillRow
+            key={s.path}
+            skill={s}
+            onOpen={() => onOpenDoc({ name: s.name, source: "Codex", path: s.path, description: s.description })}
+          />
+        ))}
+      </Section>
+
+      <Section
+        icon="layers"
+        title="Plugins"
+        count={plugins.length}
+        empty="Aucun plugin Codex installé."
+      >
+        {plugins.map((p) => (
+          <CodexPluginRow key={p.id} plugin={p} />
+        ))}
+      </Section>
+
+      {/* v1 = READ-ONLY. What's deliberately deferred, stated plainly (never a silent gap). */}
+      <div className={styles.codexHint}>
+        Vue en lecture seule pour l'instant. L'activation / désactivation des serveurs MCP,
+        des plugins et des skills Codex, ainsi que la vue des <em>hooks</em> (spécifiques à
+        Codex), arriveront dans une prochaine itération.
+      </div>
+    </div>
+  );
+}
+
+/** A read-only Codex plugin row: status dot + name + marketplace + Actif/Inactif. Mirrors
+ *  the Claude `PluginRow`'s read-only layout (`.pluginMain` provides the padding) — Codex
+ *  plugin toggle / marketplace management is a later iteration, so there's no toggle or
+ *  explore affordance here. */
+function CodexPluginRow({ plugin }: { plugin: PluginInfo }) {
+  return (
+    <div className={styles.pluginRow}>
+      <div className={styles.pluginMain} style={{ cursor: "default" }}>
+        <span className={`${styles.dot} ${plugin.enabled ? styles.sOk : styles.sOff}`} />
+        <div className={styles.rowMain}>
+          <span className={styles.rowName}>{plugin.name}</span>
+          <span className={styles.rowMeta}>{plugin.marketplace}</span>
+        </div>
+      </div>
+      <span className={`${styles.statusWord} ${plugin.enabled ? styles.sOk : styles.sOff}`}>
+        {plugin.enabled ? "Actif" : "Inactif"}
+      </span>
+    </div>
+  );
+}
+
+/** A read-only live MCP row for Codex: status dot + name + tool count (expandable),
+ *  no toggle / auth / reconnect actions (Codex exposes none of those per-server). */
+function CodexMcpLiveRow({ mcp }: { mcp: McpServerLive }) {
+  const [open, setOpen] = useState(false);
+  const tone = statusInfo(mcp.status);
+  const canExpand = mcp.tools.length > 0;
+  return (
+    <div className={styles.mcpRow}>
+      <div className={styles.mcpHead}>
+        <span className={`${styles.dot} ${tone.cls}`} />
+        <span className={styles.rowName}>{mcp.name}</span>
+        <span className={styles.spacer} />
+        {mcp.tool_count > 0 ? <span className={styles.toolPill}>{mcp.tool_count} outils</span> : null}
+        {canExpand ? (
+          <button
+            className={styles.chevBtn}
+            onClick={() => setOpen((o) => !o)}
+            title={open ? "Masquer les outils" : "Voir les outils"}
+            aria-label="Voir les outils"
+          >
+            <Ico name="chev" className={"sm " + styles.chev + (open ? " " + styles.chevOpen : "")} />
+          </button>
+        ) : null}
+      </div>
+      <div className={styles.mcpSub}>
+        <span className={`${styles.statusWord} ${tone.cls}`}>{tone.label}</span>
+      </div>
+      {open ? (
+        <div className={styles.toolList}>
+          {mcp.tools.map((t) => (
+            <span key={t} className={styles.toolChip}>{t}</span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

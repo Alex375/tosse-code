@@ -35,7 +35,8 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { useBackgroundTasksStore, useTaskByToolUse, useRunningTaskCount } from "../../store/backgroundTasksStore";
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
-import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
+import { Avatar, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
+import { AiAvatar } from "./ConvMark";
 import { useNow } from "../../ui/useNow";
 import { QuestionnaireAsk } from "./QuestionnaireAsk";
 import { PlanCard } from "./PlanCard";
@@ -925,7 +926,7 @@ function MsgAI({
   const live = busy && !awaiting && turn.status === "streaming";
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai><ClaudeMark /></Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         {/* Finalized blocks accumulated so far, then the block currently being
             typed as a live tail. Both render together so an already-shown block is
@@ -992,9 +993,7 @@ function MsgAIGroup({
   );
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai>
-        <ClaudeMark />
-      </Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         {blocks.length > 0 && (
           <AssistantBlocks session={session} blocks={blocks} live={live} roundKey={turnIds[0]} />
@@ -1025,7 +1024,7 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
 
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai><ClaudeMark /></Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         <div className="cv-ask-turn">
           <div className="wf-ask">
@@ -1100,9 +1099,20 @@ export function ConductorThread({
   // Gated by the display pref, and only on a SETTLED conversation (both operate on the
   // on-disk transcript and rewind kills the live process — racing a live turn is unsafe),
   // and never in a lightweight surface (the reply modal). `session` is the STABLE conv id.
+  //
+  // NOT offered on a CODEX conversation: the Claude rewind/fork truncate the on-disk
+  // transcript by text, which is Claude-only. The native Codex equivalents (thread/rollback
+  // + thread/fork, wired as `codex_rollback`/`codex_fork`) are blocked on the Codex
+  // thread-RESUME path — the backend always `thread/start`s a fresh thread (never resumes by
+  // id), so a rolled-back/forked thread can't be re-opened, and the live shared-server thread
+  // wouldn't see a disk rollback. Gate the controls off rather than surface a broken button
+  // (which would hit the Claude transcript path and error). See Phase 4.3 follow-up.
+  const isCodex = useConversationsStore(
+    (s) => s.conversations.find((c) => c.id === session)?.kind === "codex",
+  );
   const messageControls = useDisplay((s) => s.messageControls);
   const runningBgTasks = useRunningTaskCount(session);
-  const showControls = messageControls && !busy && !awaiting && !disableControls;
+  const showControls = messageControls && !busy && !awaiting && !disableControls && !isCodex;
   // { target message id, is-user, its clean composer text, occurrence } — set on click; the
   // rewind opens a confirm. `text`/`occurrence` are the fallback locator for a LIVE turn
   // (synthetic front id not on disk); occurrence disambiguates identical repeated prompts.

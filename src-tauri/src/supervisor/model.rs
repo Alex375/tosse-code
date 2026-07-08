@@ -115,10 +115,15 @@ pub struct RemoteControlState {
     /// `"disconnected"` | `"connecting"` | `"connected"` | `"error"`.
     pub status: String,
     /// The claude.ai/code URL to view & control this session — present when
-    /// `status == "connected"`.
+    /// `status == "connected"`. CLAUDE only (its bridge hands back a URL to open).
     pub session_url: Option<String>,
     /// A rejection / bridge-error message — present when `status == "error"`.
     pub error: Option<String>,
+    /// A device-pairing code to enter in the Codex mobile app to link a device to this
+    /// remote-controlled session — CODEX only (its `remoteControl/enable` returns no URL;
+    /// a device is linked via a separate pairing flow). `None` for Claude and when not
+    /// enabled. The front keeps it visible across status-only pushes while still active.
+    pub pairing_code: Option<String>,
 }
 
 /// Context-meter seed for a conversation, read from its on-disk transcript so the
@@ -464,4 +469,10 @@ pub trait SessionEmitter: Send + Sync + 'static {
     fn emit_title(&self, session: &str, title: &str, seq: u32);
     fn emit_summary(&self, session: &str, summary: &str, seq: u32);
     fn emit_remote_control(&self, session: &str, state: &RemoteControlState);
+    /// The Codex backend's subscription rate-limit snapshot (5h + weekly windows),
+    /// normalized to the SAME [`crate::usage::PlanUsage`] shape as Claude's OAuth
+    /// endpoint so the popover renders it verbatim. Codex has NO HTTP/Keychain path —
+    /// the figure arrives as a PUSH (`account/rateLimits/updated`) on the live session,
+    /// so it is emitted here rather than pulled by a command. Claude never calls this.
+    fn emit_codex_plan_usage(&self, session: &str, usage: &crate::usage::PlanUsage);
 }

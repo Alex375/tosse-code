@@ -50,6 +50,7 @@ const baseConv = (over: Partial<Conversation> = {}): Conversation => ({
   permissionMode: "default",
   pendingReminder: null,
   cleanOutput: null,
+  kind: "claude",
   ...over,
 });
 
@@ -364,8 +365,8 @@ describe("conversationsStore — controls applied at spawn", () => {
     );
     const handle = await ensureConversationSession("c1");
     expect(handle).toBe("session-1");
-    // (cwd, resume, model, effort, permissionMode, ultracode) — the conversation's
-    // own controls, NOT the old hardcoded opus/xhigh defaults.
+    // (cwd, resume, model, effort, permissionMode, ultracode, backend) — the
+    // conversation's own controls + its backend, NOT the old hardcoded defaults.
     expect(commands.spawnSession).toHaveBeenCalledWith(
       "/tmp/r1",
       null,
@@ -373,6 +374,7 @@ describe("conversationsStore — controls applied at spawn", () => {
       "high",
       "plan",
       false,
+      "claude",
     );
   });
 });

@@ -15,6 +15,7 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { events } from "./client";
 import type {
+  SessionCodexPlanUsageEvent,
   SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
@@ -36,6 +37,7 @@ import { useDisplay } from "../store/display";
 import { agentStatusForEntry } from "../agent/useAgentStatus";
 import { useCommandsStore } from "../store/commandsStore";
 import { useRemoteControlStore } from "../store/remoteControl";
+import { useCodexPlanUsageStore } from "../store/codexPlanUsage";
 import { useLastMessageSummaryStore } from "../store/lastMessageSummary";
 import { setCachedWindow } from "../store/contextWindowCache";
 import { dispatchAgentNotification } from "../notifications/notify";
@@ -374,6 +376,13 @@ export function useGlobalSessionEvents(): void {
       }
     }
 
+    // Codex subscription rate-limit % push. ACCOUNT-global: it writes the ONE shared
+    // Codex plan store (never keyed by conversation, never merged with Claude's), so we
+    // ignore which session surfaced it. Sparse windows are merged inside the store.
+    function onCodexPlanUsage(payload: SessionCodexPlanUsageEvent) {
+      useCodexPlanUsageStore.getState().set(payload.usage);
+    }
+
     function onCommands(payload: SessionCommandsEvent) {
       // Cache the catalogue by cwd (not by session): commands depend on the
       // working folder, and a fresh conversation in the same repo reuses them
@@ -450,6 +459,10 @@ export function useGlobalSessionEvents(): void {
       .listen((e) => { if (!disposed) onRemote(e.payload); })
       .then((un) => unlisteners.push(un))
       .catch((e) => onAttachError("remote control", e));
+    events.sessionCodexPlanUsageEvent
+      .listen((e) => { if (!disposed) onCodexPlanUsage(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("usage Codex", e));
 
     return () => {
       disposed = true;

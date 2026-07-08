@@ -543,15 +543,14 @@ pub fn parse_remote_control(line: &Value, enabled: bool, err: Option<&str>) -> R
     if let Some(e) = err {
         return RemoteControlState {
             status: "error".to_string(),
-            session_url: None,
             error: Some(e.to_string()),
+            ..RemoteControlState::default()
         };
     }
     if !enabled {
         return RemoteControlState {
             status: "disconnected".to_string(),
-            session_url: None,
-            error: None,
+            ..RemoteControlState::default()
         };
     }
     let session_url = line
@@ -564,12 +563,12 @@ pub fn parse_remote_control(line: &Value, enabled: bool, err: Option<&str>) -> R
         Some(url) => RemoteControlState {
             status: "connected".to_string(),
             session_url: Some(url),
-            error: None,
+            ..RemoteControlState::default()
         },
         None => RemoteControlState {
             status: "error".to_string(),
-            session_url: None,
             error: Some("Le bridge n'a pas renvoyé d'URL de session.".to_string()),
+            ..RemoteControlState::default()
         },
     }
 }

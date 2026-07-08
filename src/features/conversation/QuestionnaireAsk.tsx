@@ -2,7 +2,8 @@ import { useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { JsonValue, PermissionRequestPayload } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
-import { Avatar, ClaudeMark, Ico } from "../../ui/kit";
+import { Ico } from "../../ui/kit";
+import { AiAvatar } from "./ConvMark";
 import { ToolResultBody } from "./ToolResultBody";
 
 // AskUserQuestion questionnaire — reproduces the Claude Code terminal UX:
@@ -76,7 +77,7 @@ export function QuestionnaireAsk({
   if (questions.length === 0) {
     // Malformed payload: never trap the session — let the user skip.
     return (
-      <AskShell>
+      <AskShell session={session}>
         <div className="cv-q">
           <div className="cv-q-head">
             <Ico name="form" className="sm" />
@@ -220,7 +221,7 @@ export function QuestionnaireAsk({
   };
 
   return (
-    <AskShell>
+    <AskShell session={session}>
       <div className="cv-q" onKeyDown={onKeyNav}>
         {/* Tabs: one per question (its header) + a final "Envoi" step. */}
         {multi && (
@@ -292,11 +293,12 @@ export function QuestionnaireAsk({
   );
 }
 
-/** Assistant-side bubble wrapper, shared with the rest of the thread. */
-function AskShell({ children }: { children: ReactNode }) {
+/** Assistant-side bubble wrapper, shared with the rest of the thread. Backend-aware avatar
+ *  so a Codex questionnaire shows the OpenAI mark, not Claude's. */
+function AskShell({ session, children }: { session: string; children: ReactNode }) {
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai><ClaudeMark /></Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">{children}</div>
     </div>
   );

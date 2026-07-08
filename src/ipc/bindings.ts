@@ -16,9 +16,116 @@ async ping(msg: string) : Promise<Pong> {
  * defaults. Returns our session id; conversation/state/permission events are
  * emitted on the Tauri event bus.
  */
-async spawnSession(repoPath: string, resume: string | null, model: string | null, effort: string | null, permissionMode: string | null, ultracode: boolean) : Promise<Result<string, string>> {
+async spawnSession(repoPath: string, resume: string | null, model: string | null, effort: string | null, permissionMode: string | null, ultracode: boolean, backend: Backend) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("spawn_session", { repoPath, resume, model, effort, permissionMode, ultracode }) };
+    return { status: "ok", data: await TAURI_INVOKE("spawn_session", { repoPath, resume, model, effort, permissionMode, ultracode, backend }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Whether a usable `codex` binary is installed on this machine. Gates the Codex
+ * backend selector in the UI so "new Codex conversation" is only offered when the
+ * CLI is present. Cheap: a `PATH` / well-known-location file check, never a spawn.
+ */
+async codexAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("codex_available");
+},
+/**
+ * List the Codex models the installed binary offers (`model/list`), for the composer's
+ * unified picker (its Codex section) + the data-driven effort gauge. Runs against a
+ * transient app-server (no conversation needed), so it works before any Codex chat.
+ */
+async codexListModels() : Promise<Result<CodexModel[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_list_models") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List the Codex skills for the given working directories (`skills/list`), for the
+ * composer's `/` menu on a Codex conversation. `cwds` empty → the server default.
+ */
+async codexListSkills(cwds: string[]) : Promise<Result<CodexSkill[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_list_skills", { cwds }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Compact a live Codex conversation's context (`thread/compact/start`). The Claude
+ * backend has no equivalent command — it compacts via the plain `/compact` text turn —
+ * so the composer only calls this for a Codex conversation. Errors "unknown session"
+ * when the conversation has no live app-server thread (the ring is only interactive
+ * after the first turn, so in practice a thread exists).
+ */
+async codexCompact(session: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_compact", { session }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * List the CONFIGURED Codex extensions (declared MCP servers + installed plugins +
+ * on-disk skills), read from `~/.codex/config.toml` + `~/.codex/skills`, as the SAME
+ * `ExtensionsSnapshot` shape the Claude side uses so the Extensions view renders a Codex
+ * segment with the shared primitives. Secret-bearing fields are never surfaced (whitelist
+ * parse). Account-global (Codex config is not per-repo), so it takes no path. Best-effort;
+ * the blocking file IO runs off the async runtime.
+ */
+async codexListExtensions() : Promise<Result<ExtensionsSnapshot, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_list_extensions") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Rewind a Codex conversation IN PLACE (`thread/rollback`): drop the last `num_turns`
+ * turns of its thread. Count-based (the front derives the count from the timeline), on the
+ * thread on disk by id — no live session needed, mirroring the Claude backend rewinding the
+ * on-disk transcript. `cwd` is the conversation's working directory (needed to start the
+ * transient app-server). Like the Claude rewind, it does NOT revert on-disk file changes.
+ */
+async codexRollback(threadId: string, numTurns: number, cwd: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_rollback", { threadId, numTurns, cwd }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Fork a Codex conversation into a NEW branch (`thread/fork`, then roll the fork back by
+ * `drop_last_turns` so it ends AT the cut point). Non-destructive: the source thread is
+ * left intact. Returns the new thread id + resolved model, which the front materializes as
+ * a fresh Codex conversation (branch). No live session needed (loaded from disk by id).
+ */
+async codexFork(threadId: string, cwd: string, model: string | null, dropLastTurns: number) : Promise<Result<CodexForkResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_fork", { threadId, cwd, model, dropLastTurns }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Archive a Codex conversation's thread (`thread/archive`) — the backend-native cleanup the
+ * front WILL run when a Codex conversation is discarded (the Claude backend just leaves its
+ * transcript on disk). NOT yet wired to the delete path (see the note above); when it is, a
+ * failure will be surfaced by the caller, never silently dropped.
+ */
+async codexArchive(threadId: string, cwd: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_archive", { threadId, cwd }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -229,13 +336,15 @@ async getPlanUsage() : Promise<Result<PlanUsage, UsageError>> {
 }
 },
 /**
- * Send a user turn to a session: the typed `text` plus any joined `images` (sent as
- * `image` blocks in the message `content` array). `images` is empty for a plain text
- * turn.
+ * Send a user turn to a session: the typed `text` plus any joined `images`. For Claude
+ * the images are inline `image` blocks; for Codex they become `localImage` file inputs.
+ * `codex_controls` carries this conversation's composer controls (model / effort /
+ * approval / sandbox / …) applied as per-turn overrides — `None`/ignored for Claude,
+ * whose controls are pushed the moment they change.
  */
-async sendMessage(session: string, text: string, images: ImageAttachment[]) : Promise<Result<null, string>> {
+async sendMessage(session: string, text: string, images: ImageAttachment[], codexControls: CodexControls | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("send_message", { session, text, images }) };
+    return { status: "ok", data: await TAURI_INVOKE("send_message", { session, text, images, codexControls }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -456,18 +565,21 @@ async stopTask(session: string, taskId: string) : Promise<Result<null, string>> 
 }
 },
 /**
- * Open the OS terminal on this conversation: resume it as an interactive
- * `claude` session (`claude --resume <session_id>`) in its working directory.
+ * Open the OS terminal on this conversation: resume it as an interactive CLI session
+ * in its working directory — `claude --resume <id>` for a Claude conversation,
+ * `codex resume <id>` for a Codex one. Backend-aware because the two CLIs take a
+ * DIFFERENT resume syntax and a Codex `<id>` handed to `claude` (or vice-versa) opens a
+ * fresh empty session ("wrong id"). Both resume from the CLI's OWN on-disk history, so
+ * no live process is needed.
  * 
- * This launches a *separate*, user-driven `claude` outside the app — the same
- * session id the supervisor drives, resumed from Claude's on-disk transcript
- * (not the live stream). macOS only for now (drives Terminal.app via
- * AppleScript); other platforms return an error the UI can surface. The
- * blocking `osascript` call runs off the async runtime via `spawn_blocking`.
+ * This launches a *separate*, user-driven CLI outside the app — the same session/thread
+ * id the supervisor drives. macOS only for now (drives Terminal.app via AppleScript);
+ * other platforms return an error the UI can surface. The blocking `osascript` call runs
+ * off the async runtime via `spawn_blocking`.
  */
-async openInTerminal(cwd: string, sessionId: string) : Promise<Result<null, string>> {
+async openInTerminal(cwd: string, sessionId: string, backend: Backend) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("open_in_terminal", { cwd, sessionId }) };
+    return { status: "ok", data: await TAURI_INVOKE("open_in_terminal", { cwd, sessionId, backend }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1046,6 +1158,7 @@ async wipeAllData() : Promise<Result<null, string>> {
 export const events = __makeEvents__<{
 fsChangeEvent: FsChangeEvent,
 fsWatchErrorEvent: FsWatchErrorEvent,
+sessionCodexPlanUsageEvent: SessionCodexPlanUsageEvent,
 sessionCommandsEvent: SessionCommandsEvent,
 sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
@@ -1060,6 +1173,7 @@ tickEvent: TickEvent
 }>({
 fsChangeEvent: "fs-change-event",
 fsWatchErrorEvent: "fs-watch-error-event",
+sessionCodexPlanUsageEvent: "session-codex-plan-usage-event",
 sessionCommandsEvent: "session-commands-event",
 sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
@@ -1088,6 +1202,13 @@ export type AgentInfo = { name: string; description: string | null; model: strin
  * clean markdown view of the sub-agent.
  */
 path: string }
+/**
+ * Which agent backend a new conversation runs on — the IPC discriminant
+ * [`spawn_session`] dispatches on. Serialized lowercase to match the front's
+ * `conv.kind` (`"claude"` | `"codex"`). Defaults to Claude (the app's default backend
+ * and what a conversation with no explicit kind resolves to).
+ */
+export type Backend = "claude" | "codex"
 /**
  * A normalized background task, keyed by `task_id` and updated in place as its
  * `task_*` lifecycle events arrive. The single model behind the (future) sub-agent /
@@ -1246,6 +1367,63 @@ ahead: number | null;
  */
 behind: number | null }
 /**
+ * The Codex-specific composer controls, mirrored from the front and applied as
+ * per-turn overrides on `turn/start`. Every field is optional — an unset field leaves
+ * the server's current value untouched. Sent alongside each user message (the wire is
+ * per-turn), so a mid-conversation change takes effect on the next turn. This is an
+ * IPC param → derives `specta::Type` for the generated TS binding.
+ */
+export type CodexControls = { 
+/**
+ * Codex model id (e.g. `gpt-5.5`). Overrides the model for this turn onward.
+ */
+model: string | null; 
+/**
+ * `ReasoningEffort` (freeform string per the model's `supportedReasoningEfforts`).
+ */
+effort: string | null; 
+/**
+ * Sandbox mode key: `readOnly` | `workspaceWrite` | `dangerFullAccess`.
+ */
+sandbox: string | null; 
+/**
+ * Whether the sandbox may reach the network (folds into the `SandboxPolicy`).
+ */
+networkAccess: boolean | null; 
+/**
+ * `AskForApproval`: `untrusted` | `on-failure` | `on-request` | `never`.
+ */
+approvalPolicy: string | null; 
+/**
+ * `ReasoningSummary`: `auto` | `concise` | `detailed` | `none`.
+ */
+summary: string | null; 
+/**
+ * `Personality`: `none` | `friendly` | `pragmatic`.
+ */
+personality: string | null }
+/**
+ * The outcome of a native `thread/fork` (+ optional `thread/rollback` of the new thread
+ * to the cut point): the id of the freshly forked thread + its resolved model. IPC OUTPUT
+ * type (`specta::Type` + `Serialize`); the front turns `thread_id` into a new Codex
+ * conversation record (like reactivating a disk conversation, but for a branch).
+ */
+export type CodexForkResult = { threadId: string; model: string | null }
+/**
+ * A Codex model, flattened from `model/list` for the composer's picker. IPC OUTPUT
+ * type (`specta::Type` + `Serialize`); parsed from the wire `Model` in `list_models`.
+ */
+export type CodexModel = { id: string; displayName: string; 
+/**
+ * The reasoning-effort ids the model accepts (`supportedReasoningEfforts`).
+ */
+efforts: string[]; defaultEffort: string | null; isDefault: boolean }
+/**
+ * A Codex skill, flattened from `skills/list` into the shape the composer's `/` menu
+ * reuses from the Claude slash-command catalogue (name + description).
+ */
+export type CodexSkill = { name: string; description: string }
+/**
  * One file changed by a commit (name-status against its first parent).
  */
 export type CommitFile = { path: string; 
@@ -1375,6 +1553,16 @@ last_activity_at: number;
  * Claude's own session UUID (from system/init) — used for `--resume`.
  */
 session_id: string | null; 
+/**
+ * Which agent backend drives this conversation: `"claude"` (default) or
+ * `"codex"`. Chosen at creation and immutable after — the whole app keys its
+ * per-conversation behaviour (transport, message normalisation, composer
+ * controls, usage ring) off it. Pre-existing rows (created before this column)
+ * decode as `"claude"` via a `COALESCE` in the loader, so no conversation ever
+ * silently changes backend. A non-optional `String` because every conversation
+ * always has exactly one backend (unlike the optional controls below).
+ */
+backend: string; 
 /**
  * Per-conversation controls, persisted so they survive a restart and are
  * re-applied at the next (lazy) spawn. While a session is LIVE its own state
@@ -1790,7 +1978,9 @@ export type PersistedState = { repos: RepoRecord[]; conversations: ConversationR
 active_id: string | null }
 /**
  * Real plan-usage snapshot: the two subscription windows, each with a fill %.
- * A window is `None` when the endpoint did not report it.
+ * A window is `None` when the endpoint did not report it. `Deserialize` so it can
+ * ride the Codex `session_codex_plan_usage` event (the event bus round-trips its
+ * payload) — the Codex backend reuses this exact shape for its rate-limit push.
  */
 export type PlanUsage = { five_hour: UsageWindow | null; seven_day: UsageWindow | null }
 /**
@@ -1874,13 +2064,20 @@ export type RemoteControlState = {
 status: string; 
 /**
  * The claude.ai/code URL to view & control this session — present when
- * `status == "connected"`.
+ * `status == "connected"`. CLAUDE only (its bridge hands back a URL to open).
  */
 session_url: string | null; 
 /**
  * A rejection / bridge-error message — present when `status == "error"`.
  */
-error: string | null }
+error: string | null; 
+/**
+ * A device-pairing code to enter in the Codex mobile app to link a device to this
+ * remote-controlled session — CODEX only (its `remoteControl/enable` returns no URL;
+ * a device is linked via a separate pairing flow). `None` for Claude and when not
+ * enabled. The front keeps it visible across status-only pushes while still active.
+ */
+pairing_code: string | null }
 /**
  * A working folder a conversation can be opened in.
  */
@@ -1909,6 +2106,16 @@ removed_lines: number }
  * snippet around the first body hit (empty when only title/excerpt matched).
  */
 export type SearchHit = { session_id: string; score: number; snippet: string }
+/**
+ * The Codex backend's subscription rate-limit % (5h + weekly windows) changed. Codex
+ * pushes this over the live app-server (`account/rateLimits/updated`) — there is no
+ * HTTP/Keychain pull as for Claude — normalized to the SAME `PlanUsage` shape the
+ * popover renders. Account-global: the UI keeps ONE Codex plan store (never merged
+ * with Claude's Anthropic one) and the `session` here only tags which conversation
+ * surfaced it. Windows are sparse (a push may carry only the one that moved), so the
+ * front merges onto the last snapshot.
+ */
+export type SessionCodexPlanUsageEvent = { session: string; usage: PlanUsage }
 /**
  * The session's available slash commands (one-shot, at `initialize`). Drives the
  * composer's `/` autocomplete menu.

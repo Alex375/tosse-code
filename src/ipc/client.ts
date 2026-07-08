@@ -46,6 +46,7 @@ export type {
   Result,
   RewindOutcome,
   SearchHit,
+  SessionCodexPlanUsageEvent,
   SessionCommandsEvent,
   SessionMessageEvent,
   SessionPermissionEvent,

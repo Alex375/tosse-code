@@ -37,7 +37,7 @@
 //!   process this app keeps alive refreshes it for us. On any failure we return a
 //!   typed [`UsageError`] so the UI can tell the user exactly what to do.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
 
@@ -55,8 +55,10 @@ const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const USER_AGENT: &str = "claude-cli/2.1.186 (external, cli)";
 
 /// Real plan-usage snapshot: the two subscription windows, each with a fill %.
-/// A window is `None` when the endpoint did not report it.
-#[derive(Debug, Clone, Serialize, Type)]
+/// A window is `None` when the endpoint did not report it. `Deserialize` so it can
+/// ride the Codex `session_codex_plan_usage` event (the event bus round-trips its
+/// payload) — the Codex backend reuses this exact shape for its rate-limit push.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct PlanUsage {
     pub five_hour: Option<UsageWindow>,
     pub seven_day: Option<UsageWindow>,
@@ -65,7 +67,7 @@ pub struct PlanUsage {
 /// One rate-limit window's real fill: `used_percentage` (0–100) + optional reset as a
 /// raw timestamp string (ISO 8601, or epoch-seconds digits for the alternate shape) —
 /// the frontend converts it with the JS `Date` parser.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct UsageWindow {
     pub used_percentage: f64,
     pub resets_at: Option<String>,
