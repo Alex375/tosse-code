@@ -23,6 +23,7 @@ import {
   type ReactNode,
 } from "react";
 import { useEditorStore } from "../editor/editorStore";
+import { useDisplay } from "../../store/display";
 import { parseFileMention, resolveMentionAbs, SCHEME, type FileMention } from "./fileMentions";
 import { cachedStatus, ensureMentionChecked, subscribeMention } from "./mentionCache";
 import { useMarkdownDemo } from "./markdownMode";
@@ -52,7 +53,14 @@ export function FileMentionProvider({
   inert?: boolean;
   children: ReactNode;
 }) {
-  const value = useMemo(() => ({ convId, cwd, inert }), [convId, cwd, inert]);
+  // A global setting can turn OFF clickable file mentions everywhere (default ON);
+  // it folds into `inert`, so an inert prop OR the pref being off → plain text.
+  const clickable = useDisplay((s) => s.clickableFileMentions);
+  const effectiveInert = inert || !clickable;
+  const value = useMemo(
+    () => ({ convId, cwd, inert: effectiveInert }),
+    [convId, cwd, effectiveInert],
+  );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

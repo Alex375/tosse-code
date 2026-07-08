@@ -63,6 +63,11 @@ export interface DisplayPrefs {
    *  hover controls. Read by {@link MessageActions} (via the conversation thread). */
   messageControls: boolean;
 
+  /** Render file paths referenced by tools (Read/Write chips) and prose as clickable chips
+   *  that open the file in the side editor. ON by default. Off → paths render as plain,
+   *  non-clickable text. Read by {@link FileMentionProvider} (folded into its `inert`). */
+  clickableFileMentions: boolean;
+
   /** Show the TURN's own timing in the conversation thread. Gates two surfaces: the total
    *  wall-clock in the FINISHED-turn footer (`result.duration_ms`) — {@link TurnResultRow};
    *  AND the LIVE elapsed counter on a running turn past the threshold — {@link LiveElapsed}.
@@ -109,6 +114,7 @@ const DEFAULTS: DisplayPrefs = {
   showTaskNotifications: false,
   showLastMessagePreview: true,
   messageControls: true,
+  clickableFileMentions: true,
   showTurnDuration: true,
   showModelTime: true,
   showThinkingTime: true,
@@ -153,6 +159,7 @@ export const useDisplay = create<DisplayState>((set) => ({
         showTaskNotifications: patch.showTaskNotifications ?? s.showTaskNotifications,
         showLastMessagePreview: patch.showLastMessagePreview ?? s.showLastMessagePreview,
         messageControls: patch.messageControls ?? s.messageControls,
+        clickableFileMentions: patch.clickableFileMentions ?? s.clickableFileMentions,
         showTurnDuration: patch.showTurnDuration ?? s.showTurnDuration,
         showModelTime: patch.showModelTime ?? s.showModelTime,
         showThinkingTime: patch.showThinkingTime ?? s.showThinkingTime,

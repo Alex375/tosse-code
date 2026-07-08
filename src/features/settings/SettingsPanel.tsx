@@ -196,6 +196,7 @@ function DisplayPrefs() {
   const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
   const showLastMessagePreview = useDisplay((s) => s.showLastMessagePreview);
   const messageControls = useDisplay((s) => s.messageControls);
+  const clickableFileMentions = useDisplay((s) => s.clickableFileMentions);
   const set = useDisplay((s) => s.set);
   return (
     <SettingsGroup title="Affichage" icon="list">
@@ -254,6 +255,19 @@ function DisplayPrefs() {
         checked={messageControls}
         onChange={(v) => set({ messageControls: v })}
         label="Afficher les contrôles sur les messages"
+      />
+      <ToggleRow
+        title="Chemins de fichiers cliquables"
+        hint={
+          <>
+            Rend cliquables les chemins de fichiers référencés par les outils (Read/Write) et dans le
+            texte : un clic <strong>ouvre le fichier</strong> dans le visualiseur latéral, à la bonne
+            ligne. <strong>Activé par défaut.</strong> Désactivé → les chemins restent du texte simple.
+          </>
+        }
+        checked={clickableFileMentions}
+        onChange={(v) => set({ clickableFileMentions: v })}
+        label="Rendre les chemins de fichiers cliquables"
       />
     </SettingsGroup>
   );
