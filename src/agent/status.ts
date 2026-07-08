@@ -78,6 +78,25 @@ export interface AgentSignals {
    */
   runningBackgroundTasks: number;
   /**
+   * Of {@link runningBackgroundTasks}, how many are background *Bash commands*
+   * (`kind:"bash"`). A subset; when it EQUALS `runningBackgroundTasks` (and both are
+   * non-zero) the background set is exclusively Bash — the only case the
+   * {@link reAlertOnBackgroundBash} setting acts on. See {@link reAlertOnBashFinish}.
+   */
+  runningBackgroundBashTasks: number;
+  /**
+   * The user's "re-alert on background Bash" setting (Settings → Notifications; OFF by
+   * default). When ON, a turn that finishes cleanly while a background Bash command is the
+   * SOLE remaining background task surfaces a ONE-TIME `review` (blue) alert that pings — the
+   * "go look" the silent green `backgrounding` state would otherwise swallow. It changes ONLY
+   * that finish edge (see {@link reAlertOnBashFinish}): once the user marks the turn seen, the
+   * conversation falls back to the normal green `backgrounding` while the Bash keeps running.
+   * It only bites in the Bash-only case; a mixed background set (a sub-agent / workflow / Monitor
+   * also running) keeps the calm green state throughout. Sub-agents / workflows / Monitor are
+   * unaffected regardless, as are error / open-question alerts (which alert either way).
+   */
+  reAlertOnBackgroundBash: boolean;
+  /**
    * A reminder persisted from a previous run (or while live), surfaced ONLY when
    * the process is off (`handle === null`): it re-displays a finished-but-unseen
    * turn / error / open question across an app restart, since a settled state is
@@ -138,6 +157,27 @@ function reminderStatus(kind: ReminderKind | null): AgentStatus | null {
 }
 
 /**
+ * Whether a CLEAN turn end should surface a ONE-TIME `review` alert (+ ping) instead of falling
+ * straight through to the silent green `backgrounding` state. True only when the user's
+ * {@link AgentSignals.reAlertOnBackgroundBash} setting is ON and the running background set is
+ * EXCLUSIVELY Bash commands (`runningBackgroundBashTasks === runningBackgroundTasks`, both > 0).
+ *
+ * This gates ONLY the finish edge: the goal is a single "go look" at the moment the turn ends, NOT
+ * a persistent mode. Once the user marks the turn seen, {@link deriveAgentStatus} routes the
+ * conversation back to the normal green `backgrounding` (full count) while the Bash keeps running —
+ * exactly today's calm behaviour. The moment any non-Bash background work is also running (a
+ * sub-agent / workflow / Monitor) the set is no longer Bash-only, so the setting doesn't bite and
+ * the finish stays green. Error / open-question alerts are unaffected — they alert regardless, and
+ * still carry the full background count for their violet "…but work continues" accent.
+ */
+export function reAlertOnBashFinish(s: AgentSignals): boolean {
+  const bashOnly =
+    s.runningBackgroundTasks > 0 &&
+    s.runningBackgroundBashTasks === s.runningBackgroundTasks;
+  return s.reAlertOnBackgroundBash && bashOnly;
+}
+
+/**
  * Derive the rich status from the raw signals. Order encodes priority:
  * off → blocking permission → running → (settled: error / open-question / review)
  * → idle. The "settled" branch only fires when the session is live, not busy, not
@@ -174,16 +214,21 @@ export function deriveAgentStatus(s: AgentSignals): AgentStatus {
     if (looksLikeQuestion(s.lastAssistantText))
       return { kind: "needInput", via: "openQuestion", prompt: s.lastAssistantText, bg };
     // Clean finish. If background work is STILL running there is NOTHING to review yet —
-    // the workflow / sub-agents are churning and the agent will resume on its own — so this
-    // is NOT a blue "review". Fall through to the green `backgrounding` state below; the
-    // blue review surfaces only once the background work also completes (bg back to 0).
-    if (!bg) return { kind: "review" };
+    // the workflow / sub-agents are churning and the agent will resume on its own — so this is
+    // NOT a blue "review": fall through to the green `backgrounding` state below. EXCEPTION: the
+    // "re-alert on background Bash" setting turns THIS finish edge into a one-time blue review
+    // (+ ping) when the sole background work is a Bash command (see {@link reAlertOnBashFinish}) —
+    // the "go look" the calm state would otherwise swallow. It is a one-shot: once the user marks
+    // the turn seen (`turnSeen`), the block above is skipped and the conversation falls back to
+    // the green `backgrounding` below while the Bash keeps running.
+    if (!bg || reAlertOnBashFinish(s)) return { kind: "review" };
   }
 
   // Settled with nothing to review — but if background tools are still running, the
   // conversation isn't truly idle: it's quietly waiting on them (and stays interactive).
   // A calm, distinct GREEN "running-family" state rather than the dormant "idle" — reached
-  // both when nothing was unseen and when a clean finish had background work still running.
+  // both when nothing was unseen and when a clean finish had background work still running
+  // (including, after "Vu", the Bash-only case the setting re-alerted on at the finish edge).
   if (s.runningBackgroundTasks > 0)
     return { kind: "backgrounding", count: s.runningBackgroundTasks };
 

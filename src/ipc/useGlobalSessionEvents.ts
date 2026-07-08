@@ -25,9 +25,14 @@ import type {
   SessionSummaryEvent,
 } from "./client";
 import { useConversationStore } from "../store/conversationStore";
-import { useBackgroundTasksStore, runningCountsByConv } from "../store/backgroundTasksStore";
+import {
+  useBackgroundTasksStore,
+  runningCountsByConv,
+  runningBashCountsByConv,
+} from "../store/backgroundTasksStore";
 import { useWorkflowLiveStore } from "../store/workflowLive";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
+import { useDisplay } from "../store/display";
 import { agentStatusForEntry } from "../agent/useAgentStatus";
 import { useCommandsStore } from "../store/commandsStore";
 import { useRemoteControlStore } from "../store/remoteControl";
@@ -90,15 +95,21 @@ function notifyTransition(
   // encodes that rule, so we just check the resulting status: no extra branching here keeps
   // the visual and the notification in lock-step. An open question / error while a background
   // task runs does NOT derive to `backgrounding` (it genuinely wants the user), so those
-  // still ping.
+  // still ping. The Bash-only re-alert setting (below) makes a lone background Bash command
+  // derive to `review` instead of `backgrounding` → the ping is NOT suppressed → it fires,
+  // exactly the pre-`backgrounding` behaviour the setting restores. Feeding the same signals
+  // to `agentStatusForEntry` keeps the ping and the visual in lock-step.
   if (kind === "done") {
-    const bg = runningCountsByConv(useBackgroundTasksStore.getState().sessions)[convId] ?? 0;
+    const tasks = useBackgroundTasksStore.getState().sessions;
+    const bg = runningCountsByConv(tasks)[convId] ?? 0;
     if (bg > 0) {
       const status = agentStatusForEntry(
         conv.handle,
         useConversationStore.getState().sessions[convId],
         conv.pendingReminder,
         bg,
+        runningBashCountsByConv(tasks)[convId] ?? 0,
+        useDisplay.getState().alertOnBackgroundBash,
       );
       if (status.kind === "backgrounding") return;
     }

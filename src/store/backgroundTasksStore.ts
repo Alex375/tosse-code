@@ -185,6 +185,20 @@ export const useRunningTaskCount = (session: string): number =>
     return n;
   });
 
+/** How many background *Bash commands* (`kind: "bash"`) are currently RUNNING for a
+ *  conversation. A SUBSET of {@link useRunningTaskCount}; when the two are equal (and
+ *  non-zero) the background set is EXCLUSIVELY Bash — the case the "re-alert on background
+ *  Bash" setting acts on (see {@link deriveAgentStatus}). A plain number → referentially
+ *  stable, re-renders only when the bash count changes. */
+export const useRunningBashTaskCount = (session: string): number =>
+  useBackgroundTasksStore((s) => {
+    const tasks = s.sessions[session];
+    if (!tasks) return 0;
+    let n = 0;
+    for (const t of Object.values(tasks)) if (t.kind === "bash" && t.status === "running") n++;
+    return n;
+  });
+
 /** Running background-task count for EVERY conversation at once, `{ convId → n }`,
  *  omitting the zeros so the object stays small and shallow-stable — re-renders only
  *  when some conversation's count actually moves (a task starts/stops), not on the
@@ -204,6 +218,26 @@ export function runningCountsByConv(
 
 export const useRunningCountsByConv = (): Record<string, number> =>
   useBackgroundTasksStore(useShallow((s) => runningCountsByConv(s.sessions)));
+
+/** Running background *Bash-command* count for EVERY conversation at once, `{ convId → n }`,
+ *  omitting the zeros — the Bash-only counterpart of {@link runningCountsByConv}, feeding the
+ *  fleet-wide derivation so it can tell a Bash-only background set from a mixed one without a
+ *  per-card hook. Read alongside `runningCountsByConv` from the SAME `sessions` snapshot so the
+ *  total and the Bash subset stay consistent within a render. */
+export function runningBashCountsByConv(
+  sessions: Record<string, Record<string, BackgroundTask>>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [conv, tasks] of Object.entries(sessions)) {
+    let n = 0;
+    for (const t of Object.values(tasks)) if (t.kind === "bash" && t.status === "running") n++;
+    if (n > 0) out[conv] = n;
+  }
+  return out;
+}
+
+export const useRunningBashCountsByConv = (): Record<string, number> =>
+  useBackgroundTasksStore(useShallow((s) => runningBashCountsByConv(s.sessions)));
 
 /**
  * The background task spawned by a given `tool_use` block (an `Agent` / `Bash` /

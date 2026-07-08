@@ -9,7 +9,8 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "../store/conversationStore";
 import { useConversationsStore } from "../store/conversationsStore";
-import { useRunningTaskCount } from "../store/backgroundTasksStore";
+import { useRunningTaskCount, useRunningBashTaskCount } from "../store/backgroundTasksStore";
+import { useDisplay } from "../store/display";
 import type { SessionEntry } from "../store/types";
 import {
   deriveAgentStatus,
@@ -20,11 +21,16 @@ import {
 
 // The signals carried by the LIVE message-store entry — everything in AgentSignals
 // except the ones sourced elsewhere: the live `handle` and `persistedReminder` (the
-// conversations/metadata store), `runningBackgroundTasks` (the background-task
-// registry).
+// conversations/metadata store), the background counts (`runningBackgroundTasks` /
+// `runningBackgroundBashTasks`, the background-task registry) and the global
+// `reAlertOnBackgroundBash` setting (the display-prefs store).
 type InnerSignals = Omit<
   AgentSignals,
-  "handle" | "persistedReminder" | "runningBackgroundTasks"
+  | "handle"
+  | "persistedReminder"
+  | "runningBackgroundTasks"
+  | "runningBackgroundBashTasks"
+  | "reAlertOnBackgroundBash"
 >;
 
 const NEUTRAL: InnerSignals = {
@@ -103,11 +109,15 @@ export function agentStatusForEntry(
   entry: SessionEntry | undefined,
   persistedReminder: ReminderKind | null = null,
   runningBackgroundTasks = 0,
+  runningBackgroundBashTasks = 0,
+  reAlertOnBackgroundBash = false,
 ): AgentStatus {
   return deriveAgentStatus({
     handle,
     persistedReminder,
     runningBackgroundTasks,
+    runningBackgroundBashTasks,
+    reAlertOnBackgroundBash,
     ...gather(entry),
   });
 }
@@ -129,14 +139,25 @@ export function useAgentStatus(convId: string): AgentStatus {
   );
   const inner = useConversationStore(useShallow((s) => gather(s.sessions[convId])));
   const runningBackgroundTasks = useRunningTaskCount(convId);
+  const runningBackgroundBashTasks = useRunningBashTaskCount(convId);
+  const reAlertOnBackgroundBash = useDisplay((s) => s.alertOnBackgroundBash);
   return useMemo(
     () =>
       deriveAgentStatus({
         handle,
         persistedReminder,
         runningBackgroundTasks,
+        runningBackgroundBashTasks,
+        reAlertOnBackgroundBash,
         ...inner,
       }),
-    [handle, persistedReminder, runningBackgroundTasks, inner],
+    [
+      handle,
+      persistedReminder,
+      runningBackgroundTasks,
+      runningBackgroundBashTasks,
+      reAlertOnBackgroundBash,
+      inner,
+    ],
   );
 }

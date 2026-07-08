@@ -82,6 +82,19 @@ export interface DisplayPrefs {
    *  once its result lands. ON by default. Off → tool rows render without a duration. Read by
    *  {@link LiveToolStep}. */
   showToolTime: boolean;
+
+  /** Re-alert at a clean turn end when the ONLY background work still running is a background
+   *  Bash command. OFF by default (the calm green `backgrounding` state — no ping — applies to
+   *  every background tool, the shipped behaviour). ON adds a ONE-TIME alert FOR BASH COMMANDS
+   *  ONLY: a turn that finishes while a background Bash command is the sole remaining background
+   *  task fires the "done" notification and surfaces the blue "à relire" (`review`) state instead
+   *  of silently going green. It is a one-shot "go look": as soon as the user marks the turn seen,
+   *  the conversation falls back to today's green `backgrounding` while the Bash keeps running.
+   *  Scope is strict: the moment any non-Bash background work (sub-agent / workflow / Monitor) is
+   *  also running, the finish stays green (the agent resumes on its own). Read by the status
+   *  derivation ({@link deriveAgentStatus} via {@link AgentSignals.reAlertOnBackgroundBash}) and
+   *  the notification suppression. */
+  alertOnBackgroundBash: boolean;
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
@@ -100,6 +113,7 @@ const DEFAULTS: DisplayPrefs = {
   showModelTime: true,
   showThinkingTime: true,
   showToolTime: true,
+  alertOnBackgroundBash: false,
 };
 
 function load(): DisplayPrefs {
@@ -143,6 +157,7 @@ export const useDisplay = create<DisplayState>((set) => ({
         showModelTime: patch.showModelTime ?? s.showModelTime,
         showThinkingTime: patch.showThinkingTime ?? s.showThinkingTime,
         showToolTime: patch.showToolTime ?? s.showToolTime,
+        alertOnBackgroundBash: patch.alertOnBackgroundBash ?? s.alertOnBackgroundBash,
       };
       save(next);
       return next;
