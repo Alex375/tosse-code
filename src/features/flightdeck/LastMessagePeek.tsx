@@ -12,6 +12,7 @@ import { useRef, useState } from "react";
 import { Ico } from "../../ui/kit";
 import { useUserMessageHistory } from "../../store/conversationStore";
 import { userMessagePreviewText } from "../conversation/userText";
+import { LinkText } from "../conversation/LinkText";
 import { CardPopover } from "./CardPopover";
 
 export function LastMessagePeek({ convId, summary }: { convId: string; summary: string }) {
@@ -32,7 +33,9 @@ export function LastMessagePeek({ convId, summary }: { convId: string; summary: 
         title="Voir le message envoyé"
       >
         <Ico name="reply" className="sm" />
-        <span className="ag-lastmsg-txt">{summary}</span>
+        <span className="ag-lastmsg-txt">
+          <LinkText text={summary} inButton />
+        </span>
       </button>
 
       <CardPopover
@@ -43,7 +46,9 @@ export function LastMessagePeek({ convId, summary }: { convId: string; summary: 
         title="Dernier message envoyé"
         icon="reply"
       >
-        <div className="ag-pop-msg">{full}</div>
+        <div className="ag-pop-msg">
+          <LinkText text={full} />
+        </div>
       </CardPopover>
     </>
   );

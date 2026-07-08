@@ -16,6 +16,7 @@ import { useDisplay } from "../../store/display";
 import { useLastMessageSummary, summaryPreview } from "../../store/lastMessageSummary";
 import { useUserMessageHistory } from "../../store/conversationStore";
 import { userMessagePreviewText } from "./userText";
+import { LinkText } from "./LinkText";
 
 export function LastMessagePin({
   session,
@@ -58,7 +59,9 @@ export function LastMessagePin({
       }}
     >
       <Ico name="reply" className="sm" />
-      <span className="cv-lastpin-txt">{text}</span>
+      <span className="cv-lastpin-txt">
+        <LinkText text={text} inButton />
+      </span>
     </button>
   );
 }
