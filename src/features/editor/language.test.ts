@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseName, dirName, isMarkdownPath, languageForPath } from "./language";
+import { baseName, dirName, isMarkdownPath, isPdfPath, languageForPath } from "./language";
 
 describe("languageForPath", () => {
   it("maps common extensions to Monaco language ids", () => {
@@ -29,6 +29,16 @@ describe("isMarkdownPath", () => {
     expect(isMarkdownPath("/r/README.md")).toBe(true);
     expect(isMarkdownPath("/r/doc.markdown")).toBe(true);
     expect(isMarkdownPath("/r/main.rs")).toBe(false);
+  });
+});
+
+describe("isPdfPath", () => {
+  it("is true only for a .pdf extension (case-insensitive)", () => {
+    expect(isPdfPath("/r/report.pdf")).toBe(true);
+    expect(isPdfPath("/r/REPORT.PDF")).toBe(true);
+    expect(isPdfPath("/r/notes.md")).toBe(false);
+    expect(isPdfPath("/r/pdf")).toBe(false);
+    expect(isPdfPath("/r/archive.pdf.zip")).toBe(false);
   });
 });
 

@@ -81,8 +81,17 @@ export function FlightDeckReplyModal({ onPromote }: { onPromote: (id: string) =>
   };
 
   return (
-    <div className={styles.scrim} onClick={close}>
-      <div className={styles.panel} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal>
+    <div
+      className={styles.scrim}
+      // Close on a genuine backdrop click only. We must NOT stopPropagation on the
+      // panel (the old approach): that swallowed clicks before they reached the
+      // window-level listener the opener plugin installs for `<a target="_blank">`,
+      // so links in Claude's messages were dead in the modal but worked in the full view.
+      onClick={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+    >
+      <div className={styles.panel} role="dialog" aria-modal>
         <div className={styles.head}>
           <Dot s={agentStatusToDot(status)} pulse />
           <span className={styles.title} title={conv.name}>

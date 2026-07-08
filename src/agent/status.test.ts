@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   agentStatusToDot,
   backgroundCount,
+  reAlertOnBashFinish,
   deriveAgentStatus,
   isDismissable,
   looksLikeQuestion,
@@ -26,6 +27,8 @@ function sig(over: Partial<AgentSignals> = {}): AgentSignals {
     lastAssistantText: null,
     persistedReminder: null,
     runningBackgroundTasks: 0,
+    runningBackgroundBashTasks: 0,
+    reAlertOnBackgroundBash: false,
     ...over,
   };
 }
@@ -221,6 +224,128 @@ describe("deriveAgentStatus", () => {
     expect(
       deriveAgentStatus(sig({ turnSeen: true, lastAssistantText: "Je peux commencer ?" })).kind,
     ).toBe("idle");
+  });
+
+  describe("re-alert on background Bash (setting, Bash-only scope, finish-edge only)", () => {
+    // Baseline: a background Bash command running is one of the background tasks. The
+    // "bash-only" case is `runningBackgroundBashTasks === runningBackgroundTasks` (> 0). The
+    // setting adds a ONE-TIME review alert at the clean-finish edge; once seen, the conversation
+    // falls back to the normal green backgrounding.
+
+    it("OFF: a lone background Bash command keeps the calm green backgrounding (shipped default)", () => {
+      const s = deriveAgentStatus(
+        sig({
+          turnSeen: false,
+          lastTurnSubtype: "success",
+          runningBackgroundTasks: 1,
+          runningBackgroundBashTasks: 1,
+          reAlertOnBackgroundBash: false,
+        }),
+      );
+      expect(s).toEqual({ kind: "backgrounding", count: 1 });
+    });
+
+    it("ON + Bash-only + clean finish (unseen) → blue review, NOT backgrounding (the ping fires)", () => {
+      const s = deriveAgentStatus(
+        sig({
+          turnSeen: false,
+          lastTurnSubtype: "success",
+          runningBackgroundTasks: 2,
+          runningBackgroundBashTasks: 2,
+          reAlertOnBackgroundBash: true,
+        }),
+      );
+      expect(s).toEqual({ kind: "review" });
+      // `review` never carries a background count (the violet accent is for alerts, not review).
+      expect(backgroundCount(s)).toBe(0);
+    });
+
+    it("ON + Bash-only + SEEN (turnSeen) → falls BACK to green backgrounding (full count), NOT idle", () => {
+      // The alert is a one-shot: after "Vu" the conversation returns to today's calm green state
+      // while the Bash keeps running. This is the crux of the finish-edge-only scope.
+      const s = deriveAgentStatus(
+        sig({
+          turnSeen: true,
+          runningBackgroundTasks: 1,
+          runningBackgroundBashTasks: 1,
+          reAlertOnBackgroundBash: true,
+        }),
+      );
+      expect(s).toEqual({ kind: "backgrounding", count: 1 });
+    });
+
+    it("ON + Bash-only + error/question → UNCHANGED alert, KEEPS the violet bg accent (full count)", () => {
+      // The setting touches only the clean-finish path; error / open-question alert exactly as they
+      // do with the setting off, still carrying the background count for the violet accent.
+      const err = deriveAgentStatus(
+        sig({
+          turnSeen: false,
+          lastTurnIsError: true,
+          runningBackgroundTasks: 1,
+          runningBackgroundBashTasks: 1,
+          reAlertOnBackgroundBash: true,
+        }),
+      );
+      expect(err.kind).toBe("error");
+      expect(backgroundCount(err)).toBe(1);
+
+      const q = deriveAgentStatus(
+        sig({
+          turnSeen: false,
+          lastAssistantText: "On continue ?",
+          runningBackgroundTasks: 1,
+          runningBackgroundBashTasks: 1,
+          reAlertOnBackgroundBash: true,
+        }),
+      );
+      expect(q.kind).toBe("needInput");
+      expect(backgroundCount(q)).toBe(1);
+    });
+
+    it("ON + MIXED (a workflow/sub-agent also running) → keeps green backgrounding with the FULL count", () => {
+      // 2 background tasks, only 1 is Bash → not Bash-only → the setting does not bite.
+      const s = deriveAgentStatus(
+        sig({
+          turnSeen: false,
+          lastTurnSubtype: "success",
+          runningBackgroundTasks: 2,
+          runningBackgroundBashTasks: 1,
+          reAlertOnBackgroundBash: true,
+        }),
+      );
+      expect(s).toEqual({ kind: "backgrounding", count: 2 });
+    });
+
+    it("ON + NO Bash (only a sub-agent/workflow) → unchanged green backgrounding", () => {
+      const s = deriveAgentStatus(
+        sig({
+          turnSeen: false,
+          lastTurnSubtype: "success",
+          runningBackgroundTasks: 1,
+          runningBackgroundBashTasks: 0,
+          reAlertOnBackgroundBash: true,
+        }),
+      );
+      expect(s).toEqual({ kind: "backgrounding", count: 1 });
+    });
+
+    it("reAlertOnBashFinish: true only for ON + Bash-only", () => {
+      const base = { runningBackgroundTasks: 2, runningBackgroundBashTasks: 2 };
+      expect(reAlertOnBashFinish(sig({ ...base, reAlertOnBackgroundBash: true }))).toBe(true);
+      expect(reAlertOnBashFinish(sig({ ...base, reAlertOnBackgroundBash: false }))).toBe(false);
+      // Mixed set (1 of 2 is Bash) → not bash-only → false even with the setting on.
+      expect(
+        reAlertOnBashFinish(
+          sig({ runningBackgroundTasks: 2, runningBackgroundBashTasks: 1, reAlertOnBackgroundBash: true }),
+        ),
+      ).toBe(false);
+      // No background work at all → false regardless.
+      expect(
+        reAlertOnBashFinish(
+          sig({ runningBackgroundTasks: 0, runningBackgroundBashTasks: 0, reAlertOnBackgroundBash: true }),
+        ),
+      ).toBe(false);
+    });
   });
 });
 

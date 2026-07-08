@@ -259,6 +259,46 @@ describe("image buffers", () => {
   });
 });
 
+describe("pdf buffers", () => {
+  it("opens a PDF via readImage as base64 bytes (not the text/Monaco path)", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/doc.pdf");
+    const b = buffer("/repo/doc.pdf");
+    expect(b.loading).toBe(false);
+    expect(b.isPdf).toBe(true);
+    expect(b.isImage).toBe(false);
+    expect(b.pdfBase64).toBeTruthy();
+    expect(b.tooLarge).toBe(false);
+    // Never decoded as editable text.
+    expect(b.binary).toBe(false);
+    expect(b.content).toBe("");
+  });
+
+  it("live-reloads an open PDF on external change", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/doc.pdf");
+    patch("/repo/doc.pdf", { pdfBase64: "STALE" });
+
+    await s.onExternalChange(CONV, ["/repo/doc.pdf"]);
+
+    const b = buffer("/repo/doc.pdf");
+    expect(b.pdfBase64).toBeTruthy();
+    expect(b.pdfBase64).not.toBe("STALE");
+  });
+
+  it("surfaces a failed PDF read instead of staying stuck loading", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/__fail__.pdf");
+    const b = buffer("/repo/__fail__.pdf");
+    expect(b.loading).toBe(false);
+    expect(b.error).toBeTruthy();
+    expect(b.pdfBase64).toBeNull();
+  });
+});
+
 describe("tabs", () => {
   it("closing the active tab falls back to a neighbour", async () => {
     const s = useEditorStore.getState();

@@ -384,6 +384,42 @@
   /* A subtle frame so a light image on the checkerboard still has an edge. */
   box-shadow: 0 1px 12px rgba(0, 0, 0, 0.28);
 }
+/* ---- PDF viewer (pdf.js → canvas pages) ---- */
+.pdfViewer {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Scroll region. Vertical padding only — the horizontal gap comes from the fit-width
+   calc, so `margin:0 auto` centres the page column AND left content is never clipped
+   when the page is zoomed wider than the panel. */
+.pdfScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 0;
+  background: var(--wf-bg-2);
+}
+/* Width set inline (fit-width × zoom); centred column of pages. */
+.pdfPages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 0 auto;
+}
+/* Fills the page column; the inline aspect-ratio reserves correct height and prevents
+   any squash when the panel is resized (the box scales, never distorts). */
+.pdfPage {
+  display: block;
+  width: 100%;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 12px rgba(0, 0, 0, 0.28);
+}
+
 /* Bottom info strip: dimensions + on-disk size. Mirrors the editor toolbar. */
 .imageInfo {
   display: flex;

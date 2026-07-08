@@ -4,6 +4,8 @@ import {
   orderBashTasks,
   orderMonitorTasks,
   orderWorkflowTasks,
+  runningCountsByConv,
+  runningBashCountsByConv,
   useBackgroundTasksStore,
 } from "./backgroundTasksStore";
 
@@ -225,5 +227,49 @@ describe("orderWorkflowTasks", () => {
         ),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("runningCountsByConv / runningBashCountsByConv", () => {
+  const map = (...ts: BackgroundTask[]): Record<string, BackgroundTask> =>
+    Object.fromEntries(ts.map((t) => [t.task_id, t]));
+
+  it("counts ALL running kinds (total) and only running bash (subset), omitting zeros", () => {
+    const sessions = {
+      // Bash-only conv: total 2, bash 2 → the setting's target case (total === bash).
+      "conv-a": map(
+        task({ task_id: "a1", kind: "bash", status: "running" }),
+        task({ task_id: "a2", kind: "bash", status: "running" }),
+        task({ task_id: "a3", kind: "bash", status: "completed" }), // finished, not counted
+      ),
+      // Mixed conv: total 2 (1 bash + 1 workflow), bash 1 → NOT bash-only.
+      "conv-b": map(
+        task({ task_id: "b1", kind: "bash", status: "running" }),
+        task({ task_id: "b2", kind: "workflow", status: "running" }),
+      ),
+      // Non-bash conv: total 1 (a sub-agent), bash 0.
+      "conv-c": map(task({ task_id: "c1", kind: "agent", status: "running" })),
+      // Idle conv: nothing running → omitted from BOTH maps.
+      "conv-d": map(task({ task_id: "d1", kind: "bash", status: "completed" })),
+    };
+
+    expect(runningCountsByConv(sessions)).toEqual({ "conv-a": 2, "conv-b": 2, "conv-c": 1 });
+    expect(runningBashCountsByConv(sessions)).toEqual({ "conv-a": 2, "conv-b": 1 });
+    // conv-c (non-bash) and conv-d (idle) are absent from the bash map.
+    expect(runningBashCountsByConv(sessions)["conv-c"]).toBeUndefined();
+    expect(runningBashCountsByConv(sessions)["conv-d"]).toBeUndefined();
+  });
+
+  it("Monitor is local_bash on the wire but kind:'monitor' → NOT counted as a bash command", () => {
+    const sessions = {
+      "conv-a": map(task({ task_id: "m", kind: "monitor", status: "running" })),
+    };
+    expect(runningCountsByConv(sessions)).toEqual({ "conv-a": 1 });
+    expect(runningBashCountsByConv(sessions)).toEqual({}); // monitor is not bash
+  });
+
+  it("both are empty objects when nothing runs anywhere", () => {
+    expect(runningCountsByConv({})).toEqual({});
+    expect(runningBashCountsByConv({})).toEqual({});
   });
 });

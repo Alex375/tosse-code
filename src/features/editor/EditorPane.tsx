@@ -10,6 +10,8 @@ import styles from "./editor.module.css";
 
 // Monaco lives in its own lazily-loaded chunk (see MonacoView's header).
 const MonacoView = lazy(() => import("./MonacoView"));
+// pdf.js lives in its own lazily-loaded chunk too — only pulled in when a PDF opens.
+const PdfViewer = lazy(() => import("./PdfViewer"));
 
 /** Tab bar + the active file's content (Monaco / markdown preview / a guard). */
 export function EditorPane({ convId }: { convId: string }) {
@@ -112,7 +114,12 @@ function ActiveFile({
 
   const isMd = isMarkdownPath(buffer.path);
   const editable =
-    !buffer.binary && !buffer.tooLarge && !buffer.loading && !buffer.error && !buffer.isImage;
+    !buffer.binary &&
+    !buffer.tooLarge &&
+    !buffer.loading &&
+    !buffer.error &&
+    !buffer.isImage &&
+    !buffer.isPdf;
 
   return (
     <div className={styles.content}>
@@ -176,6 +183,14 @@ function ActiveFile({
           />
         ) : (
           <div className={styles.placeholder}>Aperçu de l'image indisponible.</div>
+        )
+      ) : buffer.isPdf ? (
+        buffer.pdfBase64 ? (
+          <Suspense fallback={<div className={styles.placeholder}>Chargement du lecteur PDF…</div>}>
+            <PdfViewer key={`${convId}:${buffer.path}`} base64={buffer.pdfBase64} />
+          </Suspense>
+        ) : (
+          <div className={styles.placeholder}>Aperçu du PDF indisponible.</div>
         )
       ) : buffer.binary ? (
         <div className={styles.placeholder}>Fichier binaire — aperçu non disponible.</div>

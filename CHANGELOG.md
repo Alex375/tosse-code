@@ -10,6 +10,14 @@ GitHub, que l'app affiche telle quelle. Le bloc d'instructions d'installation (a
 le marqueur `<!-- gh-only -->`) est ajouté par `release.yml` et reste **seulement**
 sur la page GitHub — il n'apparaît pas dans l'app.
 
+## v0.28.0
+
+- Nouveau visualiseur de PDF intégré à l'éditeur : zoom, ajustement à la largeur, ouverture en lecture seule.
+- Les liens web et markdown sont désormais cliquables dans l'aperçu du Flight Deck.
+- Dans la conversation, une capture lue par l'agent s'affiche en aperçu d'image au lieu de son code base64.
+- Nouveau réglage « chemins de fichiers cliquables » (activé par défaut).
+- Le réglage des tâches de fond est déplacé dans l'onglet Général des Réglages.
+
 ## v0.27.0
 
 - Durée des tours affichée dans la conversation, avec un compteur en direct pendant que l'agent travaille et le détail par poste (modèle, réflexion, outils).

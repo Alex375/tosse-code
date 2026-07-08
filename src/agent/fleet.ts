@@ -10,7 +10,8 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "../store/conversationStore";
-import { useRunningCountsByConv } from "../store/backgroundTasksStore";
+import { useRunningCountsByConv, useRunningBashCountsByConv } from "../store/backgroundTasksStore";
+import { useDisplay } from "../store/display";
 import {
   groupByRepo,
   useConversations,
@@ -107,13 +108,22 @@ export function isFleetCalm(c: FleetCounts): boolean {
 export function useFleetCounts(): FleetCounts {
   const convs = useConversations();
   const bg = useRunningCountsByConv();
+  const bgBash = useRunningBashCountsByConv();
+  const reAlertBash = useDisplay((s) => s.alertOnBackgroundBash);
   return useConversationStore(
     useShallow((s) =>
       convs.length === 0
         ? EMPTY_COUNTS
         : tallyFleet(
             convs.map((c) =>
-              agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder, bg[c.id] ?? 0),
+              agentStatusForEntry(
+                c.handle,
+                s.sessions[c.id],
+                c.pendingReminder,
+                bg[c.id] ?? 0,
+                bgBash[c.id] ?? 0,
+                reAlertBash,
+              ),
             ),
           ),
     ),
@@ -203,11 +213,20 @@ export function useFleetLanes(): FleetLane[] {
   const repos = useRepos();
   const conversations = useConversations();
   const bg = useRunningCountsByConv();
+  const bgBash = useRunningBashCountsByConv();
+  const reAlertBash = useDisplay((s) => s.alertOnBackgroundBash);
   const tokens = useConversationStore(
     useShallow((s) => {
       const rank = (c: Conversation) =>
         statusRank(
-          agentStatusForEntry(c.handle, s.sessions[c.id], c.pendingReminder, bg[c.id] ?? 0),
+          agentStatusForEntry(
+            c.handle,
+            s.sessions[c.id],
+            c.pendingReminder,
+            bg[c.id] ?? 0,
+            bgBash[c.id] ?? 0,
+            reAlertBash,
+          ),
         );
       return lanesToTokens(orderLanes(repos, conversations, rank));
     }),

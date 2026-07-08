@@ -130,6 +130,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 <DisplayPrefs />
                 <TimingPrefs />
                 <FleetBannerPrefs />
+                <BackgroundTaskPrefs />
               </div>
             )}
 
@@ -196,6 +197,7 @@ function DisplayPrefs() {
   const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);
   const showLastMessagePreview = useDisplay((s) => s.showLastMessagePreview);
   const messageControls = useDisplay((s) => s.messageControls);
+  const clickableFileMentions = useDisplay((s) => s.clickableFileMentions);
   const set = useDisplay((s) => s.set);
   return (
     <SettingsGroup title="Affichage" icon="list">
@@ -254,6 +256,19 @@ function DisplayPrefs() {
         checked={messageControls}
         onChange={(v) => set({ messageControls: v })}
         label="Afficher les contrôles sur les messages"
+      />
+      <ToggleRow
+        title="Chemins de fichiers cliquables (outils Read/Write)"
+        hint={
+          <>
+            Rend cliquables les chemins de fichiers des outils <strong>Read/Write</strong> et dans le
+            texte : un clic <strong>ouvre le fichier</strong> dans le visualiseur latéral, à la bonne
+            ligne. <strong>Activé par défaut.</strong> Désactivé → les chemins restent du texte simple.
+          </>
+        }
+        checked={clickableFileMentions}
+        onChange={(v) => set({ clickableFileMentions: v })}
+        label="Rendre les chemins de fichiers cliquables"
       />
     </SettingsGroup>
   );
@@ -349,6 +364,35 @@ function FleetBannerPrefs() {
         checked={conversation}
         onChange={(v) => set({ fleetBannerConversation: v })}
         label="Bandeau de flotte dans la Conversation"
+      />
+    </SettingsGroup>
+  );
+}
+
+/** Background-task behaviour toggles. Today: re-alert at a clean turn end when the sole
+ *  background work still running is a background Bash command (see store/display
+ *  `alertOnBackgroundBash`). Off by default — a lone background Bash command otherwise stays
+ *  in the silent green `backgrounding` state like every other background tool. */
+function BackgroundTaskPrefs() {
+  const alertOnBackgroundBash = useDisplay((s) => s.alertOnBackgroundBash);
+  const set = useDisplay((s) => s.set);
+  return (
+    <SettingsGroup title="Tâches de fond" icon="term">
+      <ToggleRow
+        title="Alerter pour les commandes shell de fond"
+        hint={
+          <>
+            À la fin d'un tour, si la <strong>seule</strong> tâche de fond en cours est une commande
+            Bash lancée en arrière-plan, déclenche une notification et passe la conversation en{" "}
+            <strong>« à relire »</strong> (bleu) au lieu de l'état vert silencieux. Une fois la
+            conversation marquée comme vue, elle retourne au vert « tâche de fond » tant que la
+            commande tourne. Les sous-agents et workflows gardent l'état vert.{" "}
+            <strong>Désactivé par défaut.</strong>
+          </>
+        }
+        checked={alertOnBackgroundBash}
+        onChange={(v) => set({ alertOnBackgroundBash: v })}
+        label="Alerter pour les commandes shell de fond"
       />
     </SettingsGroup>
   );
