@@ -10,14 +10,18 @@
 //! backend selector gates on. The transport, protocol types, and the session actor
 //! that maps app-server messages to `SessionEvent`s land in the following subtasks.
 
+pub mod accounts;
 mod config;
+pub mod extensions;
 mod history;
 pub mod protocol;
 mod server;
 mod session;
 mod transport;
 
+pub use accounts::{CodexAccountStatus, CodexLoginStart};
 pub use config::list_extensions;
+pub use extensions::{CodexHooksSnapshot, CodexPluginsLive};
 pub use history::load_thread_history;
 pub use protocol::{CodexControls, CodexForkResult, CodexModel, CodexSkill};
 pub use server::{CodexError, CodexServer};

@@ -103,6 +103,29 @@ pub struct SessionCodexPlanUsageEvent {
     pub usage: PlanUsage,
 }
 
+/// An extension-inventory invalidation push from a live Codex session — the server
+/// noticed its skills / MCP startup status / account changed (`skills/changed`,
+/// `mcpServer/startupStatus/updated`, `account/updated`). Carries NO inventory data:
+/// the front just invalidates the matching cached queries and refetches through the
+/// normal read commands. `area` = `"skills"` | `"mcp"` | `"accounts"`.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionExtensionsChangedEvent {
+    pub session: String,
+    pub area: String,
+}
+
+/// Terminal outcome of an in-app account login flow (today: the Codex OAuth flow,
+/// whose completion arrives asynchronously as `account/login/completed` on the
+/// dedicated login server — the Claude flow completes synchronously on its command).
+/// NOT session-keyed: accounts are app-global. `error` is present when `success` is
+/// false and a reason is known.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct AccountLoginEvent {
+    pub backend: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 /// Coalesced filesystem change notification for the editor panel: the (de-noised,
 /// debounced) set of paths that changed under the watched working directory. The
 /// UI reloads any open file in this set and refreshes any expanded tree dirs it
@@ -218,4 +241,26 @@ impl SessionEmitter for TauriEmitter {
             usage: usage.clone(),
         });
     }
+
+    fn emit_extensions_changed(&self, session: &str, area: &str) {
+        emit_logged(&self.app, "session_extensions_changed", SessionExtensionsChangedEvent {
+            session: session.to_string(),
+            area: area.to_string(),
+        });
+    }
+}
+
+/// Emit the app-global [`AccountLoginEvent`] — used by the account commands (the Codex
+/// login completes asynchronously in a watcher task holding only an `AppHandle`).
+pub fn emit_account_login(
+    app: &tauri::AppHandle,
+    backend: &str,
+    success: bool,
+    error: Option<String>,
+) {
+    emit_logged(app, "account_login", AccountLoginEvent {
+        backend: backend.to_string(),
+        success,
+        error,
+    });
 }

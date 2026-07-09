@@ -561,3 +561,37 @@
   border-radius: var(--radius-sm);
   box-shadow: 0 1px 0 var(--border);
 }
+
+/* ---- Comptes (AccountsSection) ------------------------------------------ */
+
+/* Inline error under a group card's rows — a login/logout failure, never silent. */
+.accountErr {
+  padding: 8px 12px;
+  font-size: var(--fs-sm);
+  color: var(--danger, #e5484d);
+  border-top: 1px solid var(--border-strong);
+}
+
+/* The pasted-authorization-code input (Claude login step 2). */
+.codeInput {
+  height: 30px;
+  min-width: 150px;
+  padding: 0 10px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.codeInput:focus {
+  border-color: var(--accent, #ff6b57);
+}
+
+/* "Autorise dans le navigateur…" while the Codex OAuth callback is pending. */
+.waitingHint {
+  align-self: center;
+  font-size: var(--fs-sm);
+  color: var(--text-muted, inherit);
+}

@@ -7,6 +7,7 @@ import { create } from "zustand";
 /** The settings sections, mirrored by the panel's left-rail tabs. */
 export type SettingsSection =
   | "general"
+  | "accounts"
   | "conversation"
   | "shortcuts"
   | "notifications"

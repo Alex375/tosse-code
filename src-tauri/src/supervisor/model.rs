@@ -475,4 +475,10 @@ pub trait SessionEmitter: Send + Sync + 'static {
     /// the figure arrives as a PUSH (`account/rateLimits/updated`) on the live session,
     /// so it is emitted here rather than pulled by a command. Claude never calls this.
     fn emit_codex_plan_usage(&self, session: &str, usage: &crate::usage::PlanUsage);
+    /// An extension-inventory invalidation push from the live Codex session
+    /// (`skills/changed`, `mcpServer/startupStatus/updated`, `account/updated` →
+    /// `area` = `"skills"` | `"mcp"` | `"accounts"`). The front only INVALIDATES its
+    /// cached queries on it — no payload beyond the area, so a default no-op is safe
+    /// (only the Tauri emitter forwards it; test sinks don't observe it).
+    fn emit_extensions_changed(&self, _session: &str, _area: &str) {}
 }

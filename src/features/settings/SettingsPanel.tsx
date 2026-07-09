@@ -13,12 +13,14 @@ import { TosseMark } from "../../ui/TosseMark";
 import { UpdateSection } from "./UpdateSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { ConversationSection } from "./ConversationSection";
+import { AccountsSection } from "./AccountsSection";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { PageHead, SettingsGroup, ToggleRow } from "./SettingsKit";
 import styles from "./SettingsPanel.module.css";
 
 const TABS: Array<{ id: SettingsSection; label: string; icon: string }> = [
   { id: "general", label: "Général", icon: "cog" },
+  { id: "accounts", label: "Comptes", icon: "key" },
   { id: "conversation", label: "Conversation", icon: "chat" },
   { id: "shortcuts", label: "Raccourcis", icon: "key" },
   { id: "notifications", label: "Notifications", icon: "bell" },
@@ -133,6 +135,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 <BackgroundTaskPrefs />
               </div>
             )}
+
+            {section === "accounts" && <AccountsSection />}
 
             {section === "conversation" && <ConversationSection />}
 

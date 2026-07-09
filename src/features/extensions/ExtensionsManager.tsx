@@ -25,6 +25,11 @@ import { refetchSlashCommands } from "../../store/commandsStore";
 import {
   useCheckPluginUpdates,
   useCodexExtensions,
+  useCodexHooks,
+  useCodexMarketplaceActions,
+  useCodexPluginContents,
+  useCodexPlugins,
+  useCodexToggles,
   useExtensions,
   useExtensionDoc,
   useMarketplaces,
@@ -287,16 +292,24 @@ export function ExtensionsManager() {
   // `mcp_status` via `mcpServerStatus/list`), only meaningful on the tab matching that backend.
   const ext = useExtensions(target?.path ?? null);
   const live = useMcpStatus(handle);
-  const codexExt = useCodexExtensions(codexAvailable);
+  const codexExt = useCodexExtensions(codexAvailable, target?.path ?? null);
   const setPluginEnabled = useSetPluginEnabled(target?.path ?? null);
   const [doc, setDoc] = useState<OpenDoc | null>(null);
   // The plugin explorer carries WHICH section to open at (a contribution box jumps
-  // straight to skills / mcp / agents).
-  const [pluginView, setPluginView] = useState<{ plugin: PluginInfo; section: ExplorerSectionKey } | null>(null);
+  // straight to skills / mcp / agents). `codexMeta` (Extensions v2) marks a CODEX
+  // plugin: the explorer then reads its contents via `plugin/read` instead of the
+  // Claude plugin cache.
+  const [pluginView, setPluginView] = useState<{
+    plugin: PluginInfo;
+    section: ExplorerSectionKey;
+    codexMeta?: { pluginName: string; marketplacePath: string | null };
+  } | null>(null);
   // The Marketplaces page (auto-update management), reached from the Plugins section.
   const [mktOpen, setMktOpen] = useState(false);
   const openPlugin = (p: PluginInfo, section: ExplorerSectionKey = "skills") =>
     setPluginView({ plugin: p, section });
+  const openCodexPlugin = (p: PluginInfo, codexMeta: { pluginName: string; marketplacePath: string | null }) =>
+    setPluginView({ plugin: p, section: "skills", codexMeta });
 
   // ---- Live plugin-reload bar --------------------------------------------------
   // Toggling a plugin only writes settings.json (USER-GLOBAL). A RUNNING session
@@ -461,7 +474,9 @@ export function ExtensionsManager() {
             // has no handle yet). Otherwise show the CONFIGURED ~/.codex servers, never an
             // empty "live" list that reads as "no MCP servers".
             showLive={liveBackend === "codex" && handle != null}
+            cwd={target.path}
             onOpenDoc={setDoc}
+            onOpenPlugin={openCodexPlugin}
           />
         ) : liveBackend === "claude" ? (
           <ConversationBody
@@ -494,6 +509,7 @@ export function ExtensionsManager() {
           plugin={pluginView.plugin}
           initialSection={pluginView.section}
           repoPath={target.path}
+          codexMeta={pluginView.codexMeta ?? null}
           onClose={() => setPluginView(null)}
         />
       ) : null}
@@ -821,25 +837,34 @@ function PluginReloadBar({
 
 // ---- Codex backend view --------------------------------------------------------
 
-/** The Extensions view for a Codex conversation/target. Codex's inventory is
- *  account-global (`~/.codex/config.toml` + `~/.codex/skills`), rendered with the SAME
- *  section/row primitives as Claude. The MCP section shows LIVE status (from the
- *  app-server's `mcpServerStatus/list`) when a session is running, else the configured
- *  servers from the parsed config. Skills open in the shared doc viewer. Plugins are
- *  read-only in v1 (Codex plugin/marketplace management is a later iteration).
- *  Everything Claude-specific (plugin toggles, marketplaces, sub-agents, OAuth actions)
- *  is intentionally absent — Codex has no equivalent. */
+/** The Extensions view for a Codex conversation/target — v2, ACTIONNABLE. Codex's
+ *  inventory is account-global (`~/.codex/config.toml` + `~/.codex/skills`, plus the
+ *  repo's `.codex/skills`), rendered with the SAME section/row primitives as Claude.
+ *  v2 wires the toggles (skills / MCP servers / plugins — every write goes through the
+ *  BINARY's own config writer), upgrades the plugin list to the live `plugin/installed`
+ *  inventory (explorable, like Claude), and adds the Codex-only Hooks section plus the
+ *  Codex marketplaces. Sub-agents stay absent — Codex has no equivalent. */
 function CodexExtensionsBody({
   codexExt,
   live,
   showLive,
+  cwd,
   onOpenDoc,
+  onOpenPlugin,
 }: {
   codexExt: ReturnType<typeof useCodexExtensions>;
   live: ReturnType<typeof useMcpStatus>;
   showLive: boolean;
+  cwd: string;
   onOpenDoc: (d: OpenDoc) => void;
+  onOpenPlugin: (p: PluginInfo, codexMeta: { pluginName: string; marketplacePath: string | null }) => void;
 }) {
+  // Live inventories layered over the instant config snapshot (each spawns a transient
+  // app-server, so they load in ~1s while the snapshot renders immediately).
+  const codexPlugins = useCodexPlugins(true);
+  const hooks = useCodexHooks(true, cwd);
+  const toggles = useCodexToggles(cwd);
+
   if (codexExt.isLoading) return <div className={styles.body}><div className={styles.empty}>Chargement…</div></div>;
   if (codexExt.isError)
     return <div className={styles.body}><div className={styles.error}>{(codexExt.error as Error).message}</div></div>;
@@ -847,13 +872,26 @@ function CodexExtensionsBody({
   const snap = codexExt.data;
   const mcpConfigured = snap?.mcp_servers ?? [];
   const skills = snap?.skills ?? [];
-  const plugins = snap?.plugins ?? [];
+  const configPlugins = snap?.plugins ?? [];
   const liveServers = live.data ?? [];
+  // The enabled state is CONFIG-owned (a live server row doesn't carry it): resolve a
+  // live row's toggle state from the configured list (absent = enabled, the default).
+  const configEnabled = (name: string) =>
+    mcpConfigured.find((m) => m.name === name)?.enabled ?? true;
+  // A toggle failure must never be silent — surface the most recent mutation error.
+  const toggleError =
+    (toggles.skill.error as Error | null)?.message ??
+    (toggles.mcp.error as Error | null)?.message ??
+    (toggles.plugin.error as Error | null)?.message ??
+    null;
 
   return (
     <div className={styles.body}>
       <WarningBanner warnings={snap?.warnings ?? []} />
-      {/* MCP servers: live when a Codex session is running, else the configured list. */}
+      {toggleError ? <div className={styles.error}>{toggleError}</div> : null}
+      {/* MCP servers: live when a Codex session is running, else the configured list.
+          Both carry the v2 toggle (config-level `enabled`, applied via the binary's
+          config writer + `config/mcpServer/reload`). */}
       {showLive ? (
         <Section
           icon="term"
@@ -868,7 +906,15 @@ function CodexExtensionsBody({
           ) : live.isLoading && liveServers.length === 0 ? (
             <div className={styles.empty}>Chargement du statut MCP…</div>
           ) : (
-            liveServers.map((m) => <CodexMcpLiveRow key={m.name} mcp={m} />)
+            liveServers.map((m) => (
+              <CodexMcpLiveRow
+                key={m.name}
+                mcp={m}
+                enabled={configEnabled(m.name)}
+                busy={toggles.mcp.isPending}
+                onToggle={(enabled) => toggles.mcp.mutate({ name: m.name, enabled })}
+              />
+            ))
           )}
         </Section>
       ) : (
@@ -879,7 +925,15 @@ function CodexExtensionsBody({
           empty="Aucun serveur MCP dans ~/.codex/config.toml."
         >
           {mcpConfigured.map((m) => (
-            <McpConfigRow key={m.name} mcp={m} />
+            <McpConfigRow
+              key={m.name}
+              mcp={m}
+              toggle={{
+                checked: m.enabled,
+                busy: toggles.mcp.isPending,
+                onChange: (enabled) => toggles.mcp.mutate({ name: m.name, enabled }),
+              }}
+            />
           ))}
         </Section>
       )}
@@ -895,55 +949,312 @@ function CodexExtensionsBody({
             key={s.path}
             skill={s}
             onOpen={() => onOpenDoc({ name: s.name, source: "Codex", path: s.path, description: s.description })}
+            toggle={{
+              checked: s.enabled,
+              busy: toggles.skill.isPending,
+              onChange: (enabled) => toggles.skill.mutate({ path: s.path, enabled }),
+            }}
           />
         ))}
       </Section>
 
-      <Section
-        icon="layers"
-        title="Plugins"
-        count={plugins.length}
-        empty="Aucun plugin Codex installé."
-      >
-        {plugins.map((p) => (
-          <CodexPluginRow key={p.id} plugin={p} />
-        ))}
-      </Section>
+      <CodexPluginsSection
+        codexPlugins={codexPlugins}
+        configPlugins={configPlugins}
+        busy={toggles.plugin.isPending}
+        onToggle={(pluginId, enabled) => toggles.plugin.mutate({ pluginId, enabled })}
+        onOpenPlugin={onOpenPlugin}
+      />
 
-      {/* v1 = READ-ONLY. What's deliberately deferred, stated plainly (never a silent gap). */}
-      <div className={styles.codexHint}>
-        Vue en lecture seule pour l'instant. L'activation / désactivation des serveurs MCP,
-        des plugins et des skills Codex, ainsi que la vue des <em>hooks</em> (spécifiques à
-        Codex), arriveront dans une prochaine itération.
-      </div>
+      <CodexHooksSection hooks={hooks} />
+
+      <CodexMarketplacesSection codexPlugins={codexPlugins} />
     </div>
   );
 }
 
-/** A read-only Codex plugin row: status dot + name + marketplace + Actif/Inactif. Mirrors
- *  the Claude `PluginRow`'s read-only layout (`.pluginMain` provides the padding) — Codex
- *  plugin toggle / marketplace management is a later iteration, so there's no toggle or
- *  explore affordance here. */
-function CodexPluginRow({ plugin }: { plugin: PluginInfo }) {
+/** The Codex Plugins section — prefers the AUTHORITATIVE live inventory
+ *  (`plugin/installed`: bundled/runtime plugins, versions, display metadata,
+ *  explorable) and falls back to the config-snapshot rows while it loads. A failed
+ *  live query still shows the config rows, WITH the error surfaced (never silently
+ *  degraded). */
+function CodexPluginsSection({
+  codexPlugins,
+  configPlugins,
+  busy,
+  onToggle,
+  onOpenPlugin,
+}: {
+  codexPlugins: ReturnType<typeof useCodexPlugins>;
+  configPlugins: PluginInfo[];
+  busy: boolean;
+  onToggle: (pluginId: string, enabled: boolean) => void;
+  onOpenPlugin: (p: PluginInfo, codexMeta: { pluginName: string; marketplacePath: string | null }) => void;
+}) {
+  const livePlugins = codexPlugins.data?.plugins ?? [];
+  const useLive = codexPlugins.isSuccess && livePlugins.length > 0;
+  const count = useLive ? livePlugins.length : configPlugins.length;
+  return (
+    <Section
+      icon="layers"
+      title="Plugins"
+      count={count}
+      empty={codexPlugins.isLoading ? "Chargement de l'inventaire des plugins…" : "Aucun plugin Codex installé."}
+    >
+      {codexPlugins.isError ? (
+        <div className={styles.error}>
+          Inventaire live des plugins indisponible : {(codexPlugins.error as Error).message}
+        </div>
+      ) : null}
+      {(codexPlugins.data?.loadErrors ?? []).map((e) => (
+        <div key={e} className={styles.error}>Marketplace en erreur — {e}</div>
+      ))}
+      {useLive
+        ? livePlugins.map((p) => (
+            <CodexPluginRow
+              key={p.id}
+              name={p.displayName ?? p.name}
+              meta={[p.marketplace, p.version ? `v${p.version}` : null, p.shortDescription]
+                .filter(Boolean)
+                .join(" · ")}
+              enabled={p.enabled}
+              busy={busy}
+              onToggle={(enabled) => onToggle(p.id, enabled)}
+              onOpen={() =>
+                onOpenPlugin(
+                  {
+                    id: p.id,
+                    name: p.displayName ?? p.name,
+                    marketplace: p.marketplace,
+                    version: p.version,
+                    description: p.shortDescription,
+                    enabled: p.enabled,
+                    scope: "user",
+                    update_available: false,
+                    latest_version: null,
+                    skill_count: 0,
+                    agent_count: 0,
+                    command_count: 0,
+                    mcp_count: 0,
+                  },
+                  { pluginName: p.name, marketplacePath: p.marketplacePath },
+                )
+              }
+            />
+          ))
+        : configPlugins.map((p) => (
+            <CodexPluginRow
+              key={p.id}
+              name={p.name}
+              meta={p.marketplace}
+              enabled={p.enabled}
+              busy={busy}
+              onToggle={(enabled) => onToggle(p.id, enabled)}
+            />
+          ))}
+    </Section>
+  );
+}
+
+/** The Codex-only Hooks section (`hooks/list`) — read-only (Codex exposes no hook
+ *  toggle RPC), with the scan's warnings/errors surfaced so a broken hooks config is
+ *  never indiscernible from "no hooks". */
+function CodexHooksSection({ hooks }: { hooks: ReturnType<typeof useCodexHooks> }) {
+  const data = hooks.data;
+  const list = data?.hooks ?? [];
+  return (
+    <Section
+      icon="grid"
+      title="Hooks"
+      count={list.length}
+      empty={
+        hooks.isLoading
+          ? "Chargement des hooks…"
+          : hooks.isError
+            ? ""
+            : "Aucun hook Codex configuré."
+      }
+    >
+      {hooks.isError ? (
+        <div className={styles.error}>{(hooks.error as Error).message}</div>
+      ) : null}
+      {(data?.warnings ?? []).map((w) => (
+        <div key={w} className={styles.error}>{w}</div>
+      ))}
+      {(data?.errors ?? []).map((e) => (
+        <div key={e} className={styles.error}>{e}</div>
+      ))}
+      {list.map((h) => (
+        <div key={h.key} className={styles.mcpRow}>
+          <div className={styles.mcpHead + " " + styles.noExpand}>
+            <span className={`${styles.dot} ${h.enabled ? styles.sOk : styles.sOff}`} />
+            <span className={styles.rowName}>{h.eventName}</span>
+            <span className={styles.spacer} />
+            <span className={styles.connKind}>{h.handlerType}</span>
+            <span className={`${styles.statusWord} ${h.trustStatus === "trusted" || h.trustStatus === "managed" ? styles.sOk : styles.sWarn}`}>
+              {HOOK_TRUST_LABEL[h.trustStatus] ?? h.trustStatus}
+            </span>
+          </div>
+          <div className={styles.mcpSub}>
+            <span className={styles.subDetail}>
+              {h.command ?? h.sourcePath}
+              {h.pluginId ? ` · plugin ${h.pluginId}` : ` · ${h.source}`}
+            </span>
+          </div>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
+const HOOK_TRUST_LABEL: Record<string, string> = {
+  trusted: "Approuvé",
+  managed: "Géré",
+  untrusted: "Non approuvé",
+  modified: "Modifié",
+};
+
+/** The Codex marketplaces (from the live inventory): list + per-marketplace refresh +
+ *  removal + an add-by-source form. Every action reports its error inline. */
+function CodexMarketplacesSection({
+  codexPlugins,
+}: {
+  codexPlugins: ReturnType<typeof useCodexPlugins>;
+}) {
+  const [source, setSource] = useState("");
+  const { add, remove, upgrade } = useCodexMarketplaceActions();
+  const err =
+    (add.error as Error | null)?.message ??
+    (remove.error as Error | null)?.message ??
+    (upgrade.error as Error | null)?.message ??
+    null;
+  const marketplaces = codexPlugins.data?.marketplaces ?? [];
+  const anyBusy = add.isPending || remove.isPending || upgrade.isPending;
+
+  return (
+    <Section
+      icon="layers"
+      title="Marketplaces"
+      count={marketplaces.length}
+      empty={codexPlugins.isLoading ? "Chargement…" : "Aucune marketplace Codex enregistrée."}
+    >
+      {err ? <div className={styles.error}>{err}</div> : null}
+      {marketplaces.map((m) => (
+        <div key={m.name} className={styles.mcpRow}>
+          <div className={styles.mcpHead + " " + styles.noExpand}>
+            <Ico name="layers" className="sm" />
+            <span className={styles.rowName}>{m.displayName ?? m.name}</span>
+            <span className={styles.spacer} />
+            <span className={styles.toolPill}>{m.pluginCount} plugin{m.pluginCount > 1 ? "s" : ""}</span>
+            <button
+              className={styles.updateBtnGhost}
+              disabled={anyBusy}
+              onClick={() => upgrade.mutate(m.name)}
+              title="Rafraîchir le contenu de cette marketplace"
+            >
+              <Ico name="refresh" className={"sm" + (upgrade.isPending ? " " + styles.spin : "")} />
+              Mettre à jour
+            </button>
+            <button
+              className={styles.updateBtnGhost}
+              disabled={anyBusy}
+              onClick={() => remove.mutate(m.name)}
+              title="Retirer cette marketplace"
+            >
+              ✕
+            </button>
+          </div>
+          {m.path ? (
+            <div className={styles.mcpSub}>
+              <span className={styles.subDetail}>{m.path}</span>
+            </div>
+          ) : null}
+        </div>
+      ))}
+      <div className={styles.mktAddRow}>
+        <input
+          className={styles.mktAddInput}
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+          placeholder="Ajouter une marketplace (owner/repo, URL git ou chemin local)"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && source.trim() && !anyBusy)
+              add.mutate(source.trim(), { onSuccess: () => setSource("") });
+          }}
+        />
+        <button
+          className={styles.updateBtnGhost}
+          disabled={!source.trim() || anyBusy}
+          onClick={() => add.mutate(source.trim(), { onSuccess: () => setSource("") })}
+        >
+          {add.isPending ? "Ajout…" : "Ajouter"}
+        </button>
+      </div>
+    </Section>
+  );
+}
+
+/** A Codex plugin row (v2): status dot + name + meta, an optional explore affordance
+ *  (live inventory only — the explorer needs the marketplace path), and the enable
+ *  toggle (config-level, written by the binary). */
+function CodexPluginRow({
+  name,
+  meta,
+  enabled,
+  busy,
+  onToggle,
+  onOpen,
+}: {
+  name: string;
+  meta: string;
+  enabled: boolean;
+  busy?: boolean;
+  onToggle: (enabled: boolean) => void;
+  onOpen?: () => void;
+}) {
+  const main = (
+    <>
+      <span className={`${styles.dot} ${enabled ? styles.sOk : styles.sOff}`} />
+      <div className={styles.rowMain}>
+        <span className={styles.rowName}>{name}</span>
+        <span className={styles.rowMeta}>{meta}</span>
+      </div>
+    </>
+  );
   return (
     <div className={styles.pluginRow}>
-      <div className={styles.pluginMain} style={{ cursor: "default" }}>
-        <span className={`${styles.dot} ${plugin.enabled ? styles.sOk : styles.sOff}`} />
-        <div className={styles.rowMain}>
-          <span className={styles.rowName}>{plugin.name}</span>
-          <span className={styles.rowMeta}>{plugin.marketplace}</span>
-        </div>
-      </div>
-      <span className={`${styles.statusWord} ${plugin.enabled ? styles.sOk : styles.sOff}`}>
-        {plugin.enabled ? "Actif" : "Inactif"}
-      </span>
+      {onOpen ? (
+        <button className={styles.pluginMain} onClick={onOpen} title="Explorer le plugin">
+          {main}
+          <Ico name="arrow" className={"sm " + styles.openArrow} />
+        </button>
+      ) : (
+        <div className={styles.pluginMain} style={{ cursor: "default" }}>{main}</div>
+      )}
+      <Toggle
+        checked={enabled}
+        disabled={busy}
+        onChange={onToggle}
+        label={`${enabled ? "Désactiver" : "Activer"} ${name}`}
+        title="Réglage Codex global (~/.codex/config.toml)"
+      />
     </div>
   );
 }
 
-/** A read-only live MCP row for Codex: status dot + name + tool count (expandable),
- *  no toggle / auth / reconnect actions (Codex exposes none of those per-server). */
-function CodexMcpLiveRow({ mcp }: { mcp: McpServerLive }) {
+/** A live MCP row for Codex: status dot + name + tool count (expandable), plus the v2
+ *  config-level enable toggle (no per-server auth/reconnect — Codex exposes none). */
+function CodexMcpLiveRow({
+  mcp,
+  enabled,
+  busy,
+  onToggle,
+}: {
+  mcp: McpServerLive;
+  enabled: boolean;
+  busy?: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
   const [open, setOpen] = useState(false);
   const tone = statusInfo(mcp.status);
   const canExpand = mcp.tools.length > 0;
@@ -964,6 +1275,13 @@ function CodexMcpLiveRow({ mcp }: { mcp: McpServerLive }) {
             <Ico name="chev" className={"sm " + styles.chev + (open ? " " + styles.chevOpen : "")} />
           </button>
         ) : null}
+        <Toggle
+          checked={enabled}
+          disabled={busy}
+          onChange={onToggle}
+          label={`${enabled ? "Désactiver" : "Activer"} ${mcp.name}`}
+          title="Réglage Codex global (~/.codex/config.toml) · appliqué au prochain tour via reload"
+        />
       </div>
       <div className={styles.mcpSub}>
         <span className={`${styles.statusWord} ${tone.cls}`}>{tone.label}</span>
@@ -1365,11 +1683,19 @@ function McpLiveRow({ mcp, actions }: { mcp: McpServerLive; actions: ReturnType<
   );
 }
 
-function McpConfigRow({ mcp }: { mcp: McpServerInfo }) {
+function McpConfigRow({
+  mcp,
+  toggle,
+}: {
+  mcp: McpServerInfo;
+  /** Extensions v2 (Codex): the config-level enable toggle. Absent on Claude rows
+   *  (their toggle is live-session-scoped) — the row then renders as before. */
+  toggle?: { checked: boolean; busy?: boolean; onChange: (enabled: boolean) => void };
+}) {
   const conn = connType(mcp);
-  // No enabled/disabled state: a server's live connection is only knowable in a
-  // conversation. This is purely "what's configured for the repo" (the scope lives
-  // in the group sub-header). Lead with the connection-type icon.
+  // No live connection state here: a server's connection is only knowable in a
+  // conversation. This is purely "what's configured" (the scope lives in the group
+  // sub-header). Lead with the connection-type icon.
   return (
     <div className={styles.mcpRow}>
       <div className={styles.mcpHead + " " + styles.noExpand}>
@@ -1377,6 +1703,15 @@ function McpConfigRow({ mcp }: { mcp: McpServerInfo }) {
         <span className={styles.rowName}>{mcp.name}</span>
         <span className={styles.spacer} />
         {conn ? <span className={styles.connKind}>{conn.kind}</span> : null}
+        {toggle ? (
+          <Toggle
+            checked={toggle.checked}
+            disabled={toggle.busy}
+            onChange={toggle.onChange}
+            label={`${toggle.checked ? "Désactiver" : "Activer"} ${mcp.name}`}
+            title="Réglage Codex global (~/.codex/config.toml)"
+          />
+        ) : null}
       </div>
       {conn?.detail ? (
         <div className={styles.mcpSub}>
@@ -1474,16 +1809,49 @@ function PluginRow({
   );
 }
 
-function SkillRow({ skill, onOpen }: { skill: SkillInfo; onOpen: () => void }) {
-  return (
-    <button className={styles.docRow} onClick={onOpen} title="Ouvrir le skill">
+function SkillRow({
+  skill,
+  onOpen,
+  toggle,
+}: {
+  skill: SkillInfo;
+  onOpen: () => void;
+  /** Extensions v2 (Codex): the per-skill enable toggle. Absent on Claude rows (no
+   *  per-skill toggle there) — the row then renders exactly as before. */
+  toggle?: { checked: boolean; busy?: boolean; onChange: (enabled: boolean) => void };
+}) {
+  const main = (
+    <>
       <Ico name="spark" className="sm" />
       <div className={styles.rowMain}>
         <span className={styles.rowName}>{skill.name}</span>
         {skill.description ? <span className={styles.desc}>{skill.description}</span> : null}
       </div>
       <Ico name="arrow" className={"sm " + styles.openArrow} />
-    </button>
+    </>
+  );
+  if (!toggle) {
+    return (
+      <button className={styles.docRow} onClick={onOpen} title="Ouvrir le skill">
+        {main}
+      </button>
+    );
+  }
+  // With a toggle, the row splits: the main area stays a button (opens the doc), the
+  // toggle sits outside it (a control can't nest inside a button).
+  return (
+    <div className={styles.pluginRow}>
+      <button className={styles.pluginMain} onClick={onOpen} title="Ouvrir le skill">
+        {main}
+      </button>
+      <Toggle
+        checked={toggle.checked}
+        disabled={toggle.busy}
+        onChange={toggle.onChange}
+        label={`${toggle.checked ? "Désactiver" : "Activer"} ${skill.name}`}
+        title="Réglage Codex global (écrit [[skills.config]] dans ~/.codex/config.toml)"
+      />
+    </div>
   );
 }
 
@@ -1521,14 +1889,24 @@ function PluginExplorer({
   plugin,
   initialSection,
   repoPath,
+  codexMeta,
   onClose,
 }: {
   plugin: PluginInfo;
   initialSection: ExplorerSectionKey;
   repoPath: string;
+  /** Extensions v2: set for a CODEX plugin — contents are then read via the
+   *  app-server's `plugin/read` (the Claude plugin cache knows nothing about it). */
+  codexMeta: { pluginName: string; marketplacePath: string | null } | null;
   onClose: () => void;
 }) {
-  const { data, isLoading, isError, error } = usePluginContents(repoPath, plugin.id);
+  // Both hooks are called unconditionally (rules of hooks); each gates itself on its
+  // own null/enabled input, so exactly one actually fetches.
+  const claudeContents = usePluginContents(codexMeta ? null : repoPath, codexMeta ? null : plugin.id);
+  const codexContents = useCodexPluginContents(
+    codexMeta ? { pluginId: plugin.id, ...codexMeta } : null,
+  );
+  const { data, isLoading, isError, error } = codexMeta ? codexContents : claudeContents;
   const [section, setSection] = useState<ExplorerSectionKey>(initialSection);
   const [itemKey, setItemKey] = useState<string | null>(null);
 

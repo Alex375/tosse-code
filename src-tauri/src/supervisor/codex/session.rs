@@ -593,6 +593,17 @@ impl CodexCore {
                 self.ingest_rate_limits(params.get("rateLimits").cloned().unwrap_or(Value::Null));
             }
 
+            // ── Extension-inventory invalidation pushes (Extensions v2). All three are
+            // GLOBAL notifications the shared server broadcasts to every actor; the front
+            // dedupes/coalesces the invalidation, so multiple actors re-emitting the same
+            // push is harmless. No payload is forwarded — the front refetches through the
+            // normal read commands (whitelisted shapes), never from the raw wire.
+            "skills/changed" => self.emitter.emit_extensions_changed(&self.id, "skills"),
+            "mcpServer/startupStatus/updated" => {
+                self.emitter.emit_extensions_changed(&self.id, "mcp")
+            }
+            "account/updated" => self.emitter.emit_extensions_changed(&self.id, "accounts"),
+
             "thread/tokenUsage/updated" => {
                 let usage = params.get("tokenUsage");
                 if let Some(win) = usage

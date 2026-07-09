@@ -127,6 +127,9 @@ pub struct SkillInfo {
     /// Absolute path to the skill's `SKILL.md` — the UI reads it to render a clean
     /// markdown view of the skill.
     pub path: String,
+    /// Per-skill toggle state. Claude has no per-skill toggle (always `true` there);
+    /// Codex resolves it from its `[[skills.config]]` entries (Extensions v2).
+    pub enabled: bool,
 }
 
 /// One sub-agent available to a repository (file-based or plugin-provided).
@@ -981,6 +984,8 @@ fn scan_skills(dir: &Path, scope: ExtScope, source: Option<&str>) -> Vec<SkillIn
             scope,
             source: source.map(str::to_string),
             path: skill_md.to_string_lossy().into_owned(),
+            // Claude exposes no per-skill toggle — a discovered skill is active.
+            enabled: true,
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));

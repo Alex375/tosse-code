@@ -106,8 +106,10 @@ impl CodexServer {
 
     /// Start the app-server + do the `initialize`/`initialized` handshake ONCE for the
     /// whole process, rooted at `cwd` (the first conversation's dir; per-thread cwd is
-    /// set at `thread/start`). Idempotent — a no-op once started.
-    async fn ensure_started(&self, cwd: &Path) -> Result<(), CodexError> {
+    /// set at `thread/start`). Idempotent — a no-op once started. `pub(crate)` so the
+    /// sibling extensions/accounts modules can run multi-request sequences against a
+    /// DEDICATED transient server (always paired with `shutdown_all`).
+    pub(crate) async fn ensure_started(&self, cwd: &Path) -> Result<(), CodexError> {
         let mut guard = self.inner.lock().await;
         if guard.is_some() {
             return Ok(());
@@ -405,6 +407,22 @@ impl CodexServer {
         if idle {
             self.shutdown_all().await;
         }
+    }
+
+    /// Register a route under a SYNTHETIC key (not a thread id) to receive this
+    /// server's GLOBAL (thread-less) notifications — the demux broadcasts those to
+    /// every route. For DEDICATED transient servers only (e.g. the account-login
+    /// watcher waiting on `account/login/completed`): on the SHARED server the extra
+    /// route would keep `shutdown_if_no_threads` from ever seeing an empty router.
+    pub(crate) async fn subscribe_global(
+        &self,
+        key: &str,
+    ) -> Result<mpsc::UnboundedReceiver<Incoming>, CodexError> {
+        let (tx, rx) = mpsc::unbounded_channel::<Incoming>();
+        let guard = self.inner.lock().await;
+        let started = guard.as_ref().ok_or(CodexError::Closed)?;
+        started.router.lock().unwrap().insert(key.to_string(), tx);
+        Ok(rx)
     }
 
     /// Close one conversation's thread: drop its route. When the LAST thread closes,

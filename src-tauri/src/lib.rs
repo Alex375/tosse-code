@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod extensions;
 pub mod fs;
 pub mod git;
@@ -19,8 +20,14 @@ use ipc::commands::{
     list_worktrees, load_persisted_state, load_session_context, load_session_history,
     load_subagent_transcript, load_workflow_journal, load_workflow_phases, load_workflow_run,
     mcp_authenticate, mcp_clear_auth, mcp_reconnect, mcp_status, mcp_toggle, open_in_terminal,
+    account_claude_login_cancel, account_claude_login_code, account_claude_login_start,
+    account_claude_logout, account_claude_status, account_codex_login_cancel,
+    account_codex_login_start, account_codex_logout, account_codex_status,
     codex_available, codex_archive, codex_compact, codex_fork, codex_list_extensions,
-    codex_list_models, codex_list_skills, codex_load_history, codex_rollback,
+    codex_list_hooks, codex_list_models, codex_list_plugins, codex_list_skills,
+    codex_load_history, codex_marketplace_add, codex_marketplace_remove,
+    codex_marketplace_upgrade, codex_plugin_contents, codex_rollback,
+    codex_set_mcp_enabled, codex_set_plugin_enabled, codex_set_skill_enabled,
     path_exists, ping, prime_history_index,
     read_dir, read_file, read_image,
     read_task_output_file,
@@ -35,10 +42,10 @@ use ipc::commands::{
     upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file, HistoryIndex, Sessions,
 };
 use ipc::events::{
-    FsChangeEvent, FsWatchErrorEvent, SessionCodexPlanUsageEvent, SessionCommandsEvent,
-    SessionMessageEvent, SessionPermissionEvent, SessionRemoteControlEvent, SessionStateEvent,
-    SessionSummaryEvent, SessionTaskEvent, SessionTitleEvent, TerminalExitEvent,
-    TerminalOutputEvent, TickEvent,
+    AccountLoginEvent, FsChangeEvent, FsWatchErrorEvent, SessionCodexPlanUsageEvent,
+    SessionCommandsEvent, SessionExtensionsChangedEvent, SessionMessageEvent,
+    SessionPermissionEvent, SessionRemoteControlEvent, SessionStateEvent, SessionSummaryEvent,
+    SessionTaskEvent, SessionTitleEvent, TerminalExitEvent, TerminalOutputEvent, TickEvent,
 };
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
@@ -58,6 +65,24 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             codex_fork,
             codex_archive,
             codex_load_history,
+            codex_set_skill_enabled,
+            codex_set_mcp_enabled,
+            codex_set_plugin_enabled,
+            codex_list_plugins,
+            codex_plugin_contents,
+            codex_list_hooks,
+            codex_marketplace_add,
+            codex_marketplace_remove,
+            codex_marketplace_upgrade,
+            account_claude_status,
+            account_claude_login_start,
+            account_claude_login_code,
+            account_claude_login_cancel,
+            account_claude_logout,
+            account_codex_status,
+            account_codex_login_start,
+            account_codex_login_cancel,
+            account_codex_logout,
             fetch_slash_commands,
             load_session_history,
             load_session_context,
@@ -150,6 +175,8 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionSummaryEvent,
             SessionRemoteControlEvent,
             SessionCodexPlanUsageEvent,
+            SessionExtensionsChangedEvent,
+            AccountLoginEvent,
             FsChangeEvent,
             FsWatchErrorEvent,
             TerminalOutputEvent,

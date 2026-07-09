@@ -74,15 +74,16 @@ async codexCompact(session: string) : Promise<Result<null, string>> {
 },
 /**
  * List the CONFIGURED Codex extensions (declared MCP servers + installed plugins +
- * on-disk skills), read from `~/.codex/config.toml` + `~/.codex/skills`, as the SAME
+ * on-disk skills), read from `~/.codex/config.toml` + `~/.codex/skills` — plus the
+ * repository's own `<cwd>/.codex/skills` when `cwd` is given — as the SAME
  * `ExtensionsSnapshot` shape the Claude side uses so the Extensions view renders a Codex
  * segment with the shared primitives. Secret-bearing fields are never surfaced (whitelist
- * parse). Account-global (Codex config is not per-repo), so it takes no path. Best-effort;
- * the blocking file IO runs off the async runtime.
+ * parse). Skill rows carry their `[[skills.config]]` toggle state; MCP rows their
+ * `enabled` flag. Best-effort; the blocking file IO runs off the async runtime.
  */
-async codexListExtensions() : Promise<Result<ExtensionsSnapshot, string>> {
+async codexListExtensions(cwd: string | null) : Promise<Result<ExtensionsSnapshot, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("codex_list_extensions") };
+    return { status: "ok", data: await TAURI_INVOKE("codex_list_extensions", { cwd }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -144,6 +145,216 @@ async codexArchive(threadId: string, cwd: string) : Promise<Result<null, string>
 async codexLoadHistory(threadId: string) : Promise<Result<ConversationItem[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("codex_load_history", { threadId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable/disable a Codex SKILL (`skills/config/write`). `path` is the skill's
+ * `SKILL.md` (as carried by the snapshot rows); returns the server-resolved state.
+ */
+async codexSetSkillEnabled(path: string, enabled: boolean) : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_set_skill_enabled", { path, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable/disable a Codex MCP server (`config/value/write` on
+ * `mcp_servers.<name>.enabled`, then `config/mcpServer/reload`).
+ */
+async codexSetMcpEnabled(name: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_set_mcp_enabled", { name, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Enable/disable a Codex PLUGIN (`config/value/write` on `plugins."<id>".enabled`).
+ */
+async codexSetPluginEnabled(pluginId: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_set_plugin_enabled", { pluginId, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The authoritative INSTALLED Codex plugin inventory (`plugin/installed`) — richer
+ * than the config snapshot (bundled/runtime plugins, versions, display metadata,
+ * marketplace grouping). `cwds` lets repo-scoped marketplaces be discovered.
+ */
+async codexListPlugins(cwds: string[]) : Promise<Result<CodexPluginsLive, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_list_plugins", { cwds }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Everything ONE Codex plugin provides (`plugin/read`), as the SAME `PluginContents`
+ * shape the Claude explorer drills into. `marketplace_path` comes from the live
+ * inventory row; `plugin_id` tags the provenance on the returned items.
+ */
+async codexPluginContents(pluginName: string, marketplacePath: string | null, pluginId: string) : Promise<Result<PluginContents, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_plugin_contents", { pluginName, marketplacePath, pluginId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The Codex hooks visible from `cwds` (`hooks/list`) — read-only view (Codex exposes
+ * no hook-toggle RPC); scan warnings/errors are surfaced alongside.
+ */
+async codexListHooks(cwds: string[]) : Promise<Result<CodexHooksSnapshot, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_list_hooks", { cwds }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Register a Codex marketplace (`marketplace/add` — git URL / owner-repo / local path).
+ */
+async codexMarketplaceAdd(source: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_marketplace_add", { source }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Unregister a Codex marketplace by name (`marketplace/remove`).
+ */
+async codexMarketplaceRemove(name: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_marketplace_remove", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Refresh a Codex marketplace's pinned content (`marketplace/upgrade`; `None` → all).
+ */
+async codexMarketplaceUpgrade(name: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_marketplace_upgrade", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The signed-in Claude account (`claude auth status --json`), whitelisted.
+ */
+async accountClaudeStatus() : Promise<Result<ClaudeAccountStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_claude_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start a Claude login: spawns `claude auth login`, returns the OAuth URL to open.
+ * The flow completes when the user pastes the authorization code
+ * ([`account_claude_login_code`]) — or is dropped by [`account_claude_login_cancel`].
+ */
+async accountClaudeLoginStart() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_claude_login_start") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Submit the authorization code the user pasted; completes the in-flight Claude login.
+ */
+async accountClaudeLoginCode(code: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_claude_login_code", { code }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Abort the in-flight Claude login (kills the CLI child). Safe when none is running.
+ */
+async accountClaudeLoginCancel() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_claude_login_cancel") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Log out of the Claude account (`claude auth logout`).
+ */
+async accountClaudeLogout() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_claude_logout") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * The signed-in Codex account (`account/read` on a transient app-server), whitelisted.
+ */
+async accountCodexStatus() : Promise<Result<CodexAccountStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_codex_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start a Codex ChatGPT login (`account/login/start`): returns `{loginId, authUrl}`
+ * immediately; the OAuth callback is served by the DEDICATED app-server kept alive by
+ * the accounts module, and completion lands as an app-global [`AccountLoginEvent`]
+ * (`backend: "codex"`) when `account/login/completed` arrives.
+ */
+async accountCodexLoginStart() : Promise<Result<CodexLoginStart, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_codex_login_start") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Abort the in-flight Codex login (`account/login/cancel` + teardown of its server).
+ */
+async accountCodexLoginCancel() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_codex_login_cancel") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Log out of the Codex account (`account/logout`; the binary clears its own store).
+ */
+async accountCodexLogout() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("account_codex_logout") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1174,10 +1385,12 @@ async wipeAllData() : Promise<Result<null, string>> {
 
 
 export const events = __makeEvents__<{
+accountLoginEvent: AccountLoginEvent,
 fsChangeEvent: FsChangeEvent,
 fsWatchErrorEvent: FsWatchErrorEvent,
 sessionCodexPlanUsageEvent: SessionCodexPlanUsageEvent,
 sessionCommandsEvent: SessionCommandsEvent,
+sessionExtensionsChangedEvent: SessionExtensionsChangedEvent,
 sessionMessageEvent: SessionMessageEvent,
 sessionPermissionEvent: SessionPermissionEvent,
 sessionRemoteControlEvent: SessionRemoteControlEvent,
@@ -1189,10 +1402,12 @@ terminalExitEvent: TerminalExitEvent,
 terminalOutputEvent: TerminalOutputEvent,
 tickEvent: TickEvent
 }>({
+accountLoginEvent: "account-login-event",
 fsChangeEvent: "fs-change-event",
 fsWatchErrorEvent: "fs-watch-error-event",
 sessionCodexPlanUsageEvent: "session-codex-plan-usage-event",
 sessionCommandsEvent: "session-commands-event",
+sessionExtensionsChangedEvent: "session-extensions-changed-event",
 sessionMessageEvent: "session-message-event",
 sessionPermissionEvent: "session-permission-event",
 sessionRemoteControlEvent: "session-remote-control-event",
@@ -1211,6 +1426,14 @@ tickEvent: "tick-event"
 
 /** user-defined types **/
 
+/**
+ * Terminal outcome of an in-app account login flow (today: the Codex OAuth flow,
+ * whose completion arrives asynchronously as `account/login/completed` on the
+ * dedicated login server — the Claude flow completes synchronously on its command).
+ * NOT session-keyed: accounts are app-global. `error` is present when `success` is
+ * false and a reason is known.
+ */
+export type AccountLoginEvent = { backend: string; success: boolean; error: string | null }
 /**
  * One sub-agent available to a repository (file-based or plugin-provided).
  */
@@ -1385,6 +1608,32 @@ ahead: number | null;
  */
 behind: number | null }
 /**
+ * The signed-in Claude account, whitelisted from `claude auth status --json` (no
+ * tokens — that output carries none; we forward only these fields).
+ */
+export type ClaudeAccountStatus = { loggedIn: boolean; 
+/**
+ * `claude.ai` | `console` | `none`.
+ */
+authMethod: string | null; email: string | null; orgName: string | null; 
+/**
+ * `max` | `pro` | … when on a subscription.
+ */
+subscriptionType: string | null }
+/**
+ * The signed-in Codex account, whitelisted from `account/read` (no tokens — the wire
+ * response carries none, and we forward only these fields).
+ */
+export type CodexAccountStatus = { loggedIn: boolean; 
+/**
+ * `chatgpt` | `apiKey` — how the account is authenticated.
+ */
+authMethod: string | null; email: string | null; 
+/**
+ * ChatGPT plan (`plus`, `pro`, …) when known.
+ */
+planType: string | null }
+/**
  * The Codex-specific composer controls, mirrored from the front and applied as
  * per-turn overrides on `turn/start`. Every field is optional — an unset field leaves
  * the server's current value untouched. Sent alongside each user message (the wire is
@@ -1428,6 +1677,37 @@ personality: string | null }
  */
 export type CodexForkResult = { threadId: string; model: string | null }
 /**
+ * One configured Codex hook, whitelisted from the wire `HookMetadata`. The `command`
+ * is the user's OWN configured handler (their config, not a secret store) — same
+ * visibility as Claude's settings.json hooks.
+ */
+export type CodexHook = { key: string; eventName: string; 
+/**
+ * `command` | `prompt` | `agent`.
+ */
+handlerType: string; command: string | null; 
+/**
+ * Where it is configured: `user` | `project` | `plugin` | `system` | …
+ */
+source: string; sourcePath: string; pluginId: string | null; enabled: boolean; 
+/**
+ * `trusted` | `untrusted` | `modified` | `managed`.
+ */
+trustStatus: string }
+/**
+ * The hooks visible from one cwd, with that scan's warnings/errors surfaced (a broken
+ * hooks file must never read as "no hooks").
+ */
+export type CodexHooksSnapshot = { hooks: CodexHook[]; warnings: string[]; errors: string[] }
+/**
+ * What the front needs to drive a started login: the URL to open + the id to cancel.
+ */
+export type CodexLoginStart = { loginId: string; authUrl: string }
+/**
+ * One registered Codex marketplace (from `plugin/installed`).
+ */
+export type CodexMarketplaceLive = { name: string; displayName: string | null; path: string | null; pluginCount: number }
+/**
  * A Codex model, flattened from `model/list` for the composer's picker. IPC OUTPUT
  * type (`specta::Type` + `Serialize`); parsed from the wire `Model` in `list_models`.
  */
@@ -1436,6 +1716,30 @@ export type CodexModel = { id: string; displayName: string;
  * The reasoning-effort ids the model accepts (`supportedReasoningEfforts`).
  */
 efforts: string[]; defaultEffort: string | null; isDefault: boolean }
+/**
+ * One plugin from the authoritative `plugin/installed` inventory — a WHITELIST of the
+ * wire `PluginSummary` (no share context, no auth policy, no remote catalog internals).
+ */
+export type CodexPluginLive = { 
+/**
+ * `name@marketplace` — the config key used by the enable toggle.
+ */
+id: string; name: string; marketplace: string; 
+/**
+ * The marketplace's local file path — needed by `plugin/read` for the explorer.
+ * `None` for a remote-only catalog entry.
+ */
+marketplacePath: string | null; displayName: string | null; shortDescription: string | null; version: string | null; installed: boolean; enabled: boolean }
+/**
+ * The live Codex plugin inventory, grouped flat with marketplace names for the UI's
+ * existing per-marketplace grouping. `load_errors` carries marketplaces that failed
+ * to load (message only — paths are fine, they are user-local marketplace files).
+ */
+export type CodexPluginsLive = { plugins: CodexPluginLive[]; 
+/**
+ * Registered marketplace names (even empty ones), for the marketplaces view.
+ */
+marketplaces: CodexMarketplaceLive[]; loadErrors: string[] }
 /**
  * A Codex skill, flattened from `skills/list` into the shape the composer's `/` menu
  * reuses from the Claude slash-command catalogue (name + description).
@@ -2140,6 +2444,14 @@ export type SessionCodexPlanUsageEvent = { session: string; usage: PlanUsage }
  */
 export type SessionCommandsEvent = { session: string; commands: SlashCommand[] }
 /**
+ * An extension-inventory invalidation push from a live Codex session — the server
+ * noticed its skills / MCP startup status / account changed (`skills/changed`,
+ * `mcpServer/startupStatus/updated`, `account/updated`). Carries NO inventory data:
+ * the front just invalidates the matching cached queries and refetches through the
+ * normal read commands. `area` = `"skills"` | `"mcp"` | `"accounts"`.
+ */
+export type SessionExtensionsChangedEvent = { session: string; area: string }
+/**
  * A normalized conversation item to render (text delta, assistant message,
  * tool result, turn result, …).
  */
@@ -2266,7 +2578,12 @@ source: string | null;
  * Absolute path to the skill's `SKILL.md` — the UI reads it to render a clean
  * markdown view of the skill.
  */
-path: string }
+path: string; 
+/**
+ * Per-skill toggle state. Claude has no per-skill toggle (always `true` there);
+ * Codex resolves it from its `[[skills.config]]` entries (Extensions v2).
+ */
+enabled: boolean }
 /**
  * One slash command available in the session, as advertised by the CLI in its
  * `initialize` control response (spec §4.4). The same shape the official VS Code

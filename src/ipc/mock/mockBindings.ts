@@ -10,6 +10,11 @@ import type {
   ConversationItem,
   ConversationRecord,
   DiskConversation,
+  ClaudeAccountStatus,
+  CodexAccountStatus,
+  CodexHooksSnapshot,
+  CodexLoginStart,
+  CodexPluginsLive,
   ExtensionsSnapshot,
   FileContent,
   FsChangeEvent,
@@ -34,8 +39,10 @@ import type {
   Result,
   RewindOutcome,
   SearchHit,
+  AccountLoginEvent,
   SessionCodexPlanUsageEvent,
   SessionCommandsEvent,
+  SessionExtensionsChangedEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionRemoteControlEvent,
@@ -116,6 +123,9 @@ const sessionRemoteControlEvent = new MockEmitter<SessionRemoteControlEvent>();
 // No real Codex app-server in the browser mock — never fires, but must exist so the
 // global event router can subscribe without crashing.
 const sessionCodexPlanUsageEvent = new MockEmitter<SessionCodexPlanUsageEvent>();
+// Extensions v2 + comptes: never fire in the mock, but the global router subscribes.
+const sessionExtensionsChangedEvent = new MockEmitter<SessionExtensionsChangedEvent>();
+const accountLoginEvent = new MockEmitter<AccountLoginEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
 // No real filesystem in the browser mock — these never fire, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
@@ -136,6 +146,8 @@ export const mockEvents = {
   sessionSummaryEvent,
   sessionRemoteControlEvent,
   sessionCodexPlanUsageEvent,
+  sessionExtensionsChangedEvent,
+  accountLoginEvent,
   tickEvent,
   fsChangeEvent,
   fsWatchErrorEvent,
@@ -208,20 +220,140 @@ export const mockCommands = {
   async codexCompact(_session: string): Promise<Result<null, string>> {
     return ok(null);
   },
-  async codexListExtensions(): Promise<Result<ExtensionsSnapshot, string>> {
+  async codexListExtensions(_cwd: string | null): Promise<Result<ExtensionsSnapshot, string>> {
     return ok({
       mcp_servers: [
         { name: "node_repl", scope: "user", transport: "stdio", command: "/opt/node_repl", url: null, source: null, enabled: true },
+        { name: "railway", scope: "user", transport: "stdio", command: "railway", url: null, source: null, enabled: false },
       ],
       plugins: [
         { id: "browser@openai-bundled", name: "browser", marketplace: "openai-bundled", version: null, description: null, enabled: true, scope: "user", update_available: false, latest_version: null, skill_count: 0, agent_count: 0, command_count: 0, mcp_count: 0 },
       ],
       skills: [
-        { name: "imagegen", description: "Generate an image", scope: "user", source: null, path: "/Users/x/.codex/skills/.system/imagegen/SKILL.md" },
+        { name: "imagegen", description: "Generate an image", scope: "user", source: null, path: "/Users/x/.codex/skills/.system/imagegen/SKILL.md", enabled: true },
+        { name: "off-skill", description: "Un skill désactivé (démo toggle)", scope: "user", source: null, path: "/Users/x/.codex/skills/off-skill/SKILL.md", enabled: false },
       ],
       agents: [],
       warnings: [],
     });
+  },
+  // ---- Extensions v2 (Codex) — toggles + live inventories, demo-shaped ----------
+  async codexSetSkillEnabled(_path: string, enabled: boolean): Promise<Result<boolean, string>> {
+    return ok(enabled);
+  },
+  async codexSetMcpEnabled(_name: string, _enabled: boolean): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexSetPluginEnabled(_pluginId: string, _enabled: boolean): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexListPlugins(_cwds: string[]): Promise<Result<CodexPluginsLive, string>> {
+    return ok({
+      plugins: [
+        {
+          id: "documents@openai-primary-runtime",
+          name: "documents",
+          marketplace: "openai-primary-runtime",
+          marketplacePath: "/Users/x/.cache/codex-runtimes/marketplace.json",
+          displayName: "Documents",
+          shortDescription: "Create and edit document artifacts",
+          version: "26.630.12135",
+          installed: true,
+          enabled: true,
+        },
+        {
+          id: "browser@openai-bundled",
+          name: "browser",
+          marketplace: "openai-bundled",
+          marketplacePath: "/Users/x/.codex/plugins/marketplace.json",
+          displayName: "Browser",
+          shortDescription: "Control the in-app browser",
+          version: "26.623.141536",
+          installed: true,
+          enabled: true,
+        },
+      ],
+      marketplaces: [
+        { name: "openai-primary-runtime", displayName: null, path: "/Users/x/.cache/codex-runtimes/marketplace.json", pluginCount: 1 },
+        { name: "openai-bundled", displayName: null, path: "/Users/x/.codex/plugins/marketplace.json", pluginCount: 1 },
+      ],
+      loadErrors: [],
+    });
+  },
+  async codexPluginContents(
+    _pluginName: string,
+    _marketplacePath: string | null,
+    pluginId: string,
+  ): Promise<Result<PluginContents, string>> {
+    return ok({
+      skills: [
+        { name: "documents", description: "Create/edit .docx artifacts", scope: "plugin", source: pluginId, path: "/Users/x/.codex/plugins/cache/documents/SKILL.md", enabled: true },
+      ],
+      agents: [],
+      mcp_servers: [],
+    });
+  },
+  async codexListHooks(_cwds: string[]): Promise<Result<CodexHooksSnapshot, string>> {
+    return ok({
+      hooks: [
+        {
+          key: "user:preToolUse:0",
+          eventName: "preToolUse",
+          handlerType: "command",
+          command: "./scripts/lint-guard.sh",
+          source: "user",
+          sourcePath: "/Users/x/.codex/hooks.toml",
+          pluginId: null,
+          enabled: true,
+          trustStatus: "trusted",
+        },
+      ],
+      warnings: [],
+      errors: [],
+    });
+  },
+  async codexMarketplaceAdd(_source: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexMarketplaceRemove(_name: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexMarketplaceUpgrade(_name: string | null): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  // ---- Comptes (Claude & Codex) — demo statuses ----------------------------------
+  async accountClaudeStatus(): Promise<Result<ClaudeAccountStatus, string>> {
+    return ok({
+      loggedIn: true,
+      authMethod: "claude.ai",
+      email: "demo@example.com",
+      orgName: "Demo Org",
+      subscriptionType: "max",
+    });
+  },
+  async accountClaudeLoginStart(): Promise<Result<string, string>> {
+    return ok("https://claude.ai/oauth/demo");
+  },
+  async accountClaudeLoginCode(_code: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async accountClaudeLoginCancel(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async accountClaudeLogout(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async accountCodexStatus(): Promise<Result<CodexAccountStatus, string>> {
+    return ok({ loggedIn: true, authMethod: "chatgpt", email: "demo@example.com", planType: "plus" });
+  },
+  async accountCodexLoginStart(): Promise<Result<CodexLoginStart, string>> {
+    return ok({ loginId: "demo-login", authUrl: "https://auth.openai.com/demo" });
+  },
+  async accountCodexLoginCancel(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async accountCodexLogout(): Promise<Result<null, string>> {
+    return ok(null);
   },
 
   async spawnSession(

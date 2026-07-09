@@ -15,8 +15,10 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { events } from "./client";
 import type {
+  AccountLoginEvent,
   SessionCodexPlanUsageEvent,
   SessionCommandsEvent,
+  SessionExtensionsChangedEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionRemoteControlEvent,
@@ -383,6 +385,35 @@ export function useGlobalSessionEvents(): void {
       useCodexPlanUsageStore.getState().set(payload.usage);
     }
 
+    // Extensions v2: the live Codex session noticed its inventory changed
+    // (skills/changed, mcpServer/startupStatus/updated, account/updated). Pure
+    // INVALIDATION — the payload carries no data; the affected queries refetch through
+    // the normal whitelisted read commands. Broadcast to every actor by the shared
+    // server, so several sessions may re-emit the same push: invalidation is idempotent.
+    function onExtensionsChanged(payload: SessionExtensionsChangedEvent) {
+      switch (payload.area) {
+        case "skills":
+          void queryClient.invalidateQueries({ queryKey: ["codex-extensions"] });
+          void queryClient.invalidateQueries({ queryKey: ["codex-plugins"] });
+          void queryClient.invalidateQueries({ queryKey: ["codex-hooks"] });
+          break;
+        case "mcp":
+          void queryClient.invalidateQueries({ queryKey: ["mcp-status"] });
+          void queryClient.invalidateQueries({ queryKey: ["codex-extensions"] });
+          break;
+        case "accounts":
+          void queryClient.invalidateQueries({ queryKey: ["account-status"] });
+          break;
+      }
+    }
+
+    // An in-app account login flow finished (today: the async Codex OAuth flow).
+    // Refresh the account panels; the Comptes tab (when open) also listens to show
+    // the outcome inline.
+    function onAccountLogin(_payload: AccountLoginEvent) {
+      void queryClient.invalidateQueries({ queryKey: ["account-status"] });
+    }
+
     function onCommands(payload: SessionCommandsEvent) {
       // Cache the catalogue by cwd (not by session): commands depend on the
       // working folder, and a fresh conversation in the same repo reuses them
@@ -463,6 +494,14 @@ export function useGlobalSessionEvents(): void {
       .listen((e) => { if (!disposed) onCodexPlanUsage(e.payload); })
       .then((un) => unlisteners.push(un))
       .catch((e) => onAttachError("usage Codex", e));
+    events.sessionExtensionsChangedEvent
+      .listen((e) => { if (!disposed) onExtensionsChanged(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("extensions", e));
+    events.accountLoginEvent
+      .listen((e) => { if (!disposed) onAccountLogin(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("comptes", e));
 
     return () => {
       disposed = true;

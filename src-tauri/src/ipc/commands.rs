@@ -263,17 +263,190 @@ pub async fn codex_load_history(thread_id: String) -> Result<Vec<ConversationIte
 }
 
 /// List the CONFIGURED Codex extensions (declared MCP servers + installed plugins +
-/// on-disk skills), read from `~/.codex/config.toml` + `~/.codex/skills`, as the SAME
+/// on-disk skills), read from `~/.codex/config.toml` + `~/.codex/skills` — plus the
+/// repository's own `<cwd>/.codex/skills` when `cwd` is given — as the SAME
 /// `ExtensionsSnapshot` shape the Claude side uses so the Extensions view renders a Codex
 /// segment with the shared primitives. Secret-bearing fields are never surfaced (whitelist
-/// parse). Account-global (Codex config is not per-repo), so it takes no path. Best-effort;
-/// the blocking file IO runs off the async runtime.
+/// parse). Skill rows carry their `[[skills.config]]` toggle state; MCP rows their
+/// `enabled` flag. Best-effort; the blocking file IO runs off the async runtime.
 #[tauri::command]
 #[specta::specta]
-pub async fn codex_list_extensions() -> Result<crate::extensions::ExtensionsSnapshot, String> {
-    tokio::task::spawn_blocking(codex::list_extensions)
+pub async fn codex_list_extensions(
+    cwd: Option<String>,
+) -> Result<crate::extensions::ExtensionsSnapshot, String> {
+    tokio::task::spawn_blocking(move || {
+        codex::list_extensions(cwd.as_deref().map(std::path::Path::new))
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+// ── Extensions v2 (Codex) — toggles + live inventories. Every mutation goes through
+// the BINARY's own config writer (surgical TOML edit, secrets/comments preserved);
+// every read is mapped through whitelisted structs (no raw wire Value crosses the IPC).
+
+/// Enable/disable a Codex SKILL (`skills/config/write`). `path` is the skill's
+/// `SKILL.md` (as carried by the snapshot rows); returns the server-resolved state.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_set_skill_enabled(path: String, enabled: bool) -> Result<bool, String> {
+    codex::extensions::set_skill_enabled(&path, enabled)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Enable/disable a Codex MCP server (`config/value/write` on
+/// `mcp_servers.<name>.enabled`, then `config/mcpServer/reload`).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_set_mcp_enabled(name: String, enabled: bool) -> Result<(), String> {
+    codex::extensions::set_mcp_enabled(&name, enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Enable/disable a Codex PLUGIN (`config/value/write` on `plugins."<id>".enabled`).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_set_plugin_enabled(plugin_id: String, enabled: bool) -> Result<(), String> {
+    codex::extensions::set_plugin_enabled(&plugin_id, enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The authoritative INSTALLED Codex plugin inventory (`plugin/installed`) — richer
+/// than the config snapshot (bundled/runtime plugins, versions, display metadata,
+/// marketplace grouping). `cwds` lets repo-scoped marketplaces be discovered.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_list_plugins(cwds: Vec<String>) -> Result<codex::CodexPluginsLive, String> {
+    codex::extensions::list_plugins_live(cwds)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Everything ONE Codex plugin provides (`plugin/read`), as the SAME `PluginContents`
+/// shape the Claude explorer drills into. `marketplace_path` comes from the live
+/// inventory row; `plugin_id` tags the provenance on the returned items.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_plugin_contents(
+    plugin_name: String,
+    marketplace_path: Option<String>,
+    plugin_id: String,
+) -> Result<crate::extensions::PluginContents, String> {
+    codex::extensions::plugin_contents(&plugin_name, marketplace_path, &plugin_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The Codex hooks visible from `cwds` (`hooks/list`) — read-only view (Codex exposes
+/// no hook-toggle RPC); scan warnings/errors are surfaced alongside.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_list_hooks(cwds: Vec<String>) -> Result<codex::CodexHooksSnapshot, String> {
+    codex::extensions::list_hooks(cwds).await.map_err(|e| e.to_string())
+}
+
+/// Register a Codex marketplace (`marketplace/add` — git URL / owner-repo / local path).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_marketplace_add(source: String) -> Result<(), String> {
+    codex::extensions::marketplace_add(&source).await.map_err(|e| e.to_string())
+}
+
+/// Unregister a Codex marketplace by name (`marketplace/remove`).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_marketplace_remove(name: String) -> Result<(), String> {
+    codex::extensions::marketplace_remove(&name).await.map_err(|e| e.to_string())
+}
+
+/// Refresh a Codex marketplace's pinned content (`marketplace/upgrade`; `None` → all).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_marketplace_upgrade(name: Option<String>) -> Result<(), String> {
+    codex::extensions::marketplace_upgrade(name).await.map_err(|e| e.to_string())
+}
+
+// ── Comptes (Claude & Codex) — statut / login / logout in-app. The credential stores
+// stay OWNED by the CLIs (`claude auth`, `codex app-server account/*`): the app never
+// reads/writes `~/.claude/.credentials.json`, the Keychain item, or `~/.codex/auth.json`.
+
+/// The signed-in Claude account (`claude auth status --json`), whitelisted.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_status() -> Result<crate::accounts::ClaudeAccountStatus, String> {
+    crate::accounts::status().await
+}
+
+/// Start a Claude login: spawns `claude auth login`, returns the OAuth URL to open.
+/// The flow completes when the user pastes the authorization code
+/// ([`account_claude_login_code`]) — or is dropped by [`account_claude_login_cancel`].
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_login_start() -> Result<String, String> {
+    crate::accounts::login_start().await
+}
+
+/// Submit the authorization code the user pasted; completes the in-flight Claude login.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_login_code(code: String) -> Result<(), String> {
+    crate::accounts::login_submit_code(&code).await
+}
+
+/// Abort the in-flight Claude login (kills the CLI child). Safe when none is running.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_login_cancel() -> Result<(), String> {
+    crate::accounts::login_cancel().await;
+    Ok(())
+}
+
+/// Log out of the Claude account (`claude auth logout`).
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_logout() -> Result<(), String> {
+    crate::accounts::logout().await
+}
+
+/// The signed-in Codex account (`account/read` on a transient app-server), whitelisted.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_codex_status() -> Result<codex::CodexAccountStatus, String> {
+    codex::accounts::account_status().await.map_err(|e| e.to_string())
+}
+
+/// Start a Codex ChatGPT login (`account/login/start`): returns `{loginId, authUrl}`
+/// immediately; the OAuth callback is served by the DEDICATED app-server kept alive by
+/// the accounts module, and completion lands as an app-global [`AccountLoginEvent`]
+/// (`backend: "codex"`) when `account/login/completed` arrives.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_codex_login_start(
+    app: tauri::AppHandle,
+) -> Result<codex::CodexLoginStart, String> {
+    codex::accounts::login_start(move |success, error| {
+        crate::ipc::events::emit_account_login(&app, "codex", success, error);
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Abort the in-flight Codex login (`account/login/cancel` + teardown of its server).
+#[tauri::command]
+#[specta::specta]
+pub async fn account_codex_login_cancel() -> Result<(), String> {
+    codex::accounts::login_cancel().await;
+    Ok(())
+}
+
+/// Log out of the Codex account (`account/logout`; the binary clears its own store).
+#[tauri::command]
+#[specta::specta]
+pub async fn account_codex_logout() -> Result<(), String> {
+    codex::accounts::logout().await.map_err(|e| e.to_string())
 }
 
 /// Fetch the slash commands available in `cwd` WITHOUT starting a persistent

@@ -18,15 +18,18 @@ use serde::Deserialize;
 
 use crate::extensions::{ExtScope, ExtensionsSnapshot, McpServerInfo, PluginInfo, SkillInfo};
 
-/// The subset of `~/.codex/config.toml` we read. Only `mcp_servers` + `plugins` are
-/// declared; every other table (`model`, `marketplaces`, `features`, `projects`, …) is
-/// ignored (serde drops unknown fields — no `deny_unknown_fields`).
+/// The subset of `~/.codex/config.toml` we read. Only `mcp_servers` + `plugins` +
+/// `skills.config` are declared; every other table (`model`, `marketplaces`,
+/// `features`, `projects`, …) is ignored (serde drops unknown fields — no
+/// `deny_unknown_fields`).
 #[derive(Debug, Default, Deserialize)]
 struct CodexConfigRaw {
     #[serde(default)]
     mcp_servers: BTreeMap<String, McpRaw>,
     #[serde(default)]
     plugins: BTreeMap<String, PluginRaw>,
+    #[serde(default)]
+    skills: SkillsRaw,
 }
 
 /// One `[mcp_servers.<name>]` table — WHITELIST. `args`, `startup_timeout_sec`, the
@@ -38,6 +41,10 @@ struct McpRaw {
     command: Option<String>,
     #[serde(default)]
     url: Option<String>,
+    /// Per-server toggle (`enabled = false` written by `config/value/write`). Absent
+    /// (the common case) = enabled.
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 /// One `[plugins."name@marketplace"]` table.
@@ -45,6 +52,26 @@ struct McpRaw {
 struct PluginRaw {
     #[serde(default)]
     enabled: bool,
+}
+
+/// The `[skills]` table — only its `config` array of per-skill toggles (what
+/// `skills/config/write` maintains). Path + enabled: no secret can live here.
+#[derive(Debug, Default, Deserialize)]
+struct SkillsRaw {
+    #[serde(default)]
+    config: Vec<SkillCfgRaw>,
+}
+
+/// One `[[skills.config]]` entry: the skill DIR path and its toggle.
+#[derive(Debug, Deserialize)]
+struct SkillCfgRaw {
+    path: PathBuf,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Codex's home dir: `$CODEX_HOME` when set (a test build / non-default install), else
@@ -74,26 +101,50 @@ fn split_plugin_id(id: &str) -> (String, String) {
 /// The configured Codex extension inventory (declared MCP servers + installed plugins +
 /// on-disk skills), as an [`ExtensionsSnapshot`]. Read-only; an absent config or skills
 /// dir degrades to an empty snapshot, a corrupt config to a warning (never a hard error).
-pub fn list_extensions() -> ExtensionsSnapshot {
+/// `cwd` additionally scans the repository's own `<cwd>/.codex/skills` (scope Project),
+/// mirroring what the binary's `skills/list` discovers for that directory.
+pub fn list_extensions(cwd: Option<&Path>) -> ExtensionsSnapshot {
     let mut snap = ExtensionsSnapshot::default();
     let Some(home) = codex_home() else {
         return snap;
     };
-    read_config(&home.join("config.toml"), &mut snap);
-    scan_skills(&home.join("skills"), &mut snap);
+    let toggles = read_config(&home.join("config.toml"), &mut snap);
+    scan_skills(&home.join("skills"), ExtScope::User, &mut snap);
+    if let Some(cwd) = cwd {
+        scan_skills(&cwd.join(".codex/skills"), ExtScope::Project, &mut snap);
+    }
+    apply_skill_toggles(&toggles, &mut snap);
     snap
+}
+
+/// Fold the `[[skills.config]]` toggles onto the scanned skills: an entry whose path
+/// is the skill's DIR (the parent of its `SKILL.md`) carries that skill's state.
+/// Untoggled skills stay enabled (the Codex default).
+fn apply_skill_toggles(toggles: &[(PathBuf, bool)], snap: &mut ExtensionsSnapshot) {
+    if toggles.is_empty() {
+        return;
+    }
+    for skill in &mut snap.skills {
+        let dir = Path::new(&skill.path).parent();
+        if let Some(dir) = dir {
+            if let Some((_, enabled)) = toggles.iter().find(|(p, _)| p == dir) {
+                skill.enabled = *enabled;
+            }
+        }
+    }
 }
 
 /// Parse `config.toml` into the snapshot's MCP + plugin lists. An absent file → the
 /// common "nothing configured" case (silent); a present-but-unparseable file → a warning
-/// so a broken config is never indiscernible from an empty inventory.
-fn read_config(path: &Path, snap: &mut ExtensionsSnapshot) {
+/// so a broken config is never indiscernible from an empty inventory. Returns the
+/// `[[skills.config]]` toggles (dir path → enabled) for [`apply_skill_toggles`].
+fn read_config(path: &Path, snap: &mut ExtensionsSnapshot) -> Vec<(PathBuf, bool)> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(e) => {
             snap.warnings.push(format!("~/.codex/config.toml illisible : {e}"));
-            return;
+            return Vec::new();
         }
     };
     let cfg: CodexConfigRaw = match toml::from_str(&text) {
@@ -106,7 +157,7 @@ fn read_config(path: &Path, snap: &mut ExtensionsSnapshot) {
             eprintln!("[codex-config] ~/.codex/config.toml parse error: {e}");
             snap.warnings
                 .push("~/.codex/config.toml est malformé (erreur de syntaxe).".to_string());
-            return;
+            return Vec::new();
         }
     };
     for (name, m) in cfg.mcp_servers {
@@ -118,8 +169,8 @@ fn read_config(path: &Path, snap: &mut ExtensionsSnapshot) {
             command: m.command,
             url: m.url.as_deref().map(strip_url_query),
             source: None,
-            // Codex has no per-server enable flag — a declared server is active.
-            enabled: true,
+            // Per-server toggle written by `config/value/write`; absent = enabled.
+            enabled: m.enabled.unwrap_or(true),
         });
     }
     for (id, p) in cfg.plugins {
@@ -140,12 +191,17 @@ fn read_config(path: &Path, snap: &mut ExtensionsSnapshot) {
             mcp_count: 0,
         });
     }
+    cfg.skills
+        .config
+        .into_iter()
+        .map(|c| (c.path, c.enabled))
+        .collect()
 }
 
 /// Scan `~/.codex/skills` for `<skill>/SKILL.md` files (one level, plus one level inside a
 /// group dir such as `.system` — the bundled skills live under `skills/.system/<name>/`).
 /// Best-effort: an unreadable dir is skipped, not an error.
-fn scan_skills(skills_dir: &Path, snap: &mut ExtensionsSnapshot) {
+fn scan_skills(skills_dir: &Path, scope: ExtScope, snap: &mut ExtensionsSnapshot) {
     let Ok(entries) = std::fs::read_dir(skills_dir) else {
         return;
     };
@@ -156,7 +212,7 @@ fn scan_skills(skills_dir: &Path, snap: &mut ExtensionsSnapshot) {
         }
         // A skill dir (`<name>/SKILL.md`) or a GROUP dir (`.system/`) holding skill dirs.
         if path.join("SKILL.md").is_file() {
-            push_skill(&path, snap);
+            push_skill(&path, scope, snap);
         } else {
             let Ok(inner) = std::fs::read_dir(&path) else {
                 continue;
@@ -164,7 +220,7 @@ fn scan_skills(skills_dir: &Path, snap: &mut ExtensionsSnapshot) {
             for child in inner.flatten() {
                 let cpath = child.path();
                 if cpath.is_dir() && cpath.join("SKILL.md").is_file() {
-                    push_skill(&cpath, snap);
+                    push_skill(&cpath, scope, snap);
                 }
             }
         }
@@ -172,7 +228,7 @@ fn scan_skills(skills_dir: &Path, snap: &mut ExtensionsSnapshot) {
 }
 
 /// Push one skill (its dir name + optional frontmatter description) onto the snapshot.
-fn push_skill(dir: &Path, snap: &mut ExtensionsSnapshot) {
+fn push_skill(dir: &Path, scope: ExtScope, snap: &mut ExtensionsSnapshot) {
     let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
         return;
     };
@@ -183,9 +239,11 @@ fn push_skill(dir: &Path, snap: &mut ExtensionsSnapshot) {
     snap.skills.push(SkillInfo {
         name: name.to_string(),
         description,
-        scope: ExtScope::User,
+        scope,
         source: None,
         path: skill_md.to_string_lossy().to_string(),
+        // The `[[skills.config]]` toggles are folded on afterwards (`apply_skill_toggles`).
+        enabled: true,
     });
 }
 
@@ -270,6 +328,38 @@ enabled = false
     }
 
     #[test]
+    fn mcp_enabled_flag_and_skill_toggles_are_resolved() {
+        // Extensions v2: a server toggled off via `config/value/write` carries
+        // `enabled = false`; `[[skills.config]]` entries fold onto scanned skills by DIR.
+        let dir = std::env::temp_dir().join(format!("fd-codex-v2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("skills/on-skill")).unwrap();
+        std::fs::create_dir_all(dir.join("skills/off-skill")).unwrap();
+        std::fs::write(dir.join("skills/on-skill/SKILL.md"), "---\ndescription: a\n---\n").unwrap();
+        std::fs::write(dir.join("skills/off-skill/SKILL.md"), "---\ndescription: b\n---\n").unwrap();
+        let off_dir = dir.join("skills/off-skill");
+        let toml = format!(
+            "[mcp_servers.off_server]\ncommand = \"/bin/x\"\nenabled = false\n\n\
+             [[skills.config]]\npath = \"{}\"\nenabled = false\n",
+            off_dir.display()
+        );
+        let path = dir.join("config.toml");
+        std::fs::write(&path, toml).unwrap();
+
+        let mut snap = ExtensionsSnapshot::default();
+        let toggles = read_config(&path, &mut snap);
+        scan_skills(&dir.join("skills"), ExtScope::User, &mut snap);
+        apply_skill_toggles(&toggles, &mut snap);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let server = snap.mcp_servers.iter().find(|m| m.name == "off_server").expect("server");
+        assert!(!server.enabled, "enabled = false must surface as disabled");
+        let on = snap.skills.iter().find(|s| s.name == "on-skill").expect("on-skill");
+        assert!(on.enabled, "an untoggled skill stays enabled (the Codex default)");
+        let off = snap.skills.iter().find(|s| s.name == "off-skill").expect("off-skill");
+        assert!(!off.enabled, "the [[skills.config]] toggle must fold onto the row");
+    }
+
+    #[test]
     fn corrupt_config_surfaces_a_warning_not_a_panic() {
         let mut snap = ExtensionsSnapshot::default();
         let dir = std::env::temp_dir().join(format!("fd-codex-bad-{}", uuid::Uuid::new_v4()));
@@ -324,7 +414,7 @@ enabled = false
         std::fs::create_dir_all(dir.join(".system/imagegen")).unwrap();
         std::fs::write(dir.join(".system/imagegen/SKILL.md"), "no frontmatter here").unwrap();
         let mut snap = ExtensionsSnapshot::default();
-        scan_skills(&dir, &mut snap);
+        scan_skills(&dir, ExtScope::User, &mut snap);
         let _ = std::fs::remove_dir_all(&dir);
 
         let mine = snap.skills.iter().find(|s| s.name == "my-skill").expect("top-level skill");
