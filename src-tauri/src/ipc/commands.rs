@@ -299,8 +299,15 @@ pub async fn codex_set_skill_enabled(path: String, enabled: bool) -> Result<bool
 /// `mcp_servers.<name>.enabled`, then `config/mcpServer/reload`).
 #[tauri::command]
 #[specta::specta]
-pub async fn codex_set_mcp_enabled(name: String, enabled: bool) -> Result<(), String> {
-    codex::extensions::set_mcp_enabled(&name, enabled)
+pub async fn codex_set_mcp_enabled(
+    app: tauri::AppHandle,
+    name: String,
+    enabled: bool,
+) -> Result<(), String> {
+    // The reload half must reach the SHARED server (the live conversations' process),
+    // not just the transient writer — resolved from managed state like spawn_session.
+    let shared: Arc<CodexServer> = (*app.state::<Arc<CodexServer>>()).clone();
+    codex::extensions::set_mcp_enabled(&name, enabled, &shared)
         .await
         .map_err(|e| e.to_string())
 }

@@ -33,24 +33,6 @@ fn is_safe_quoted_key(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(|c| c == '"' || c == '\\' || c.is_control())
 }
 
-/// Run `f`'s requests against ONE fresh transient app-server (spawn → handshake →
-/// requests → teardown). Like [`CodexServer::oneshot`] but for SEQUENCES of requests
-/// that must share the server (e.g. a config write followed by its reload).
-async fn with_transient<T, F, Fut>(cwd: &Path, f: F) -> Result<T, CodexError>
-where
-    F: FnOnce(CodexServer) -> Fut,
-    Fut: std::future::Future<Output = (CodexServer, Result<T, CodexError>)>,
-{
-    let server = CodexServer::new();
-    if let Err(e) = server.ensure_started(cwd).await {
-        server.shutdown_all().await;
-        return Err(e);
-    }
-    let (server, result) = f(server).await;
-    server.shutdown_all().await;
-    result
-}
-
 // ---------------------------------------------------------------------------
 // Toggles
 // ---------------------------------------------------------------------------
@@ -80,32 +62,35 @@ pub async fn set_skill_enabled(skill_path: &str, enabled: bool) -> Result<bool, 
 /// Enable/disable a Codex MCP server. No dedicated RPC exists — the official path
 /// (verified live) is writing `mcp_servers.<name>.enabled` via `config/value/write`
 /// (the binary edits the existing block in place, preserving `env` secrets and
-/// comments), then `config/mcpServer/reload` so a live session picks it up.
-pub async fn set_mcp_enabled(name: &str, enabled: bool) -> Result<(), CodexError> {
+/// comments), then `config/mcpServer/reload`. ⚠️ The reload only affects the server
+/// process it is sent to — so it also fires on `shared` (the app's long-lived server
+/// carrying the LIVE conversations); the transient writer's own reload would change
+/// nothing anyone sees. No live server running is the normal case, not an error.
+pub async fn set_mcp_enabled(
+    name: &str,
+    enabled: bool,
+    shared: &CodexServer,
+) -> Result<(), CodexError> {
     if !is_toml_bare_key(name) {
         return Err(CodexError::Rpc(format!(
             "nom de serveur MCP invalide pour un toggle : « {name} »"
         )));
     }
     let key_path = format!("mcp_servers.{name}.enabled");
-    with_transient(&std::env::temp_dir(), |server| async move {
-        let write = server
-            .request(
-                "config/value/write",
-                json!({ "keyPath": key_path, "value": enabled, "mergeStrategy": "upsert" }),
-            )
-            .await;
-        if let Err(e) = write {
-            return (server, Err(e));
-        }
-        // Reload is best-effort ON TOP of a successful write: the config IS changed; a
-        // reload failure only delays live pickup (next spawn reads the file anyway).
-        if let Err(e) = server.request("config/mcpServer/reload", json!({})).await {
-            eprintln!("[codex-ext] config/mcpServer/reload after toggle failed: {e}");
-        }
-        (server, Ok(()))
-    })
-    .await
+    CodexServer::oneshot(
+        "config/value/write",
+        json!({ "keyPath": key_path, "value": enabled, "mergeStrategy": "upsert" }),
+        &std::env::temp_dir(),
+    )
+    .await?;
+    // Best-effort ON TOP of a successful write: the config IS changed; a reload failure
+    // only delays live pickup (the next spawn reads the file anyway).
+    match shared.request("config/mcpServer/reload", json!({})).await {
+        Ok(_) => {}
+        Err(CodexError::Closed) => {} // no live Codex session — nothing to reload
+        Err(e) => eprintln!("[codex-ext] config/mcpServer/reload on live server failed: {e}"),
+    }
+    Ok(())
 }
 
 /// Enable/disable a Codex PLUGIN. The config key is the FULL id (`name@marketplace`),
