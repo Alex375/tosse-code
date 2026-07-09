@@ -82,6 +82,10 @@ struct Started {
     /// The demultiplexer task. Aborted on teardown (it also ends on its own when the
     /// transport's inbound channel closes).
     reader: tokio::task::JoinHandle<()>,
+    /// Thread-open sequences in flight (`thread/start`/`thread/resume` sent, route not
+    /// yet registered). Guards the idle teardown ([`CodexServer::take_if_idle`]): the
+    /// router alone can't see an open that hasn't registered yet.
+    opening: Arc<AtomicU64>,
 }
 
 /// The Tauri-managed shared Codex server. Cloneable-by-Arc at the managed-state layer;
@@ -158,6 +162,7 @@ impl CodexServer {
             router,
             transport,
             reader,
+            opening: Arc::new(AtomicU64::new(0)),
         });
         Ok(())
     }
@@ -306,6 +311,11 @@ impl CodexServer {
         approval_policy: &str,
     ) -> Result<(String, mpsc::UnboundedReceiver<Incoming>), CodexError> {
         self.ensure_started(cwd).await?;
+        // Hold the open-guard across the whole round-trip (request → route registered):
+        // a concurrent last-thread teardown must not reap the server under us.
+        let Some(_open) = self.begin_open().await else {
+            return Err(CodexError::Closed);
+        };
 
         let params = serde_json::to_value(protocol::ThreadStartParams {
             model: model.map(str::to_string),
@@ -360,6 +370,11 @@ impl CodexServer {
         model: Option<&str>,
     ) -> Result<(String, mpsc::UnboundedReceiver<Incoming>), CodexError> {
         self.ensure_started(cwd).await?;
+        // Same open-guard as start_thread_with: the resume round-trip must not race a
+        // concurrent last-thread teardown.
+        let Some(_open) = self.begin_open().await else {
+            return Err(CodexError::Closed);
+        };
 
         let params = serde_json::json!({ "threadId": thread_id, "model": model });
         let result = match self.request("thread/resume", params).await {
@@ -397,16 +412,42 @@ impl CodexServer {
     /// after a failed `thread/start` so it (and its MCP children) never leaks, and a
     /// wedged server is never re-used by the next conversation.
     async fn shutdown_if_no_threads(&self) {
-        let idle = {
-            let guard = self.inner.lock().await;
-            guard
-                .as_ref()
-                .map(|s| s.router.lock().unwrap().is_empty())
-                .unwrap_or(false)
-        };
-        if idle {
-            self.shutdown_all().await;
+        if let Some(started) = self.take_if_idle().await {
+            teardown(started).await;
         }
+    }
+
+    /// Take the running server FOR TEARDOWN — only if it is genuinely idle: no
+    /// registered route AND no thread-open sequence in flight. The check and the
+    /// `take()` happen under ONE acquisition of `inner`, closing the TOCTOU where a
+    /// concurrent `start_thread_with`/`resume_thread` opened (or was opening) a thread
+    /// between a caller's "is it empty?" and its unconditional `shutdown_all` — which
+    /// EOF'd the brand-new route and killed the fresh conversation (review HIGH).
+    async fn take_if_idle(&self) -> Option<Started> {
+        let mut guard = self.inner.lock().await;
+        let idle = guard
+            .as_ref()
+            .map(|s| {
+                s.router.lock().unwrap().is_empty() && s.opening.load(Ordering::SeqCst) == 0
+            })
+            .unwrap_or(false);
+        if idle {
+            guard.take()
+        } else {
+            None
+        }
+    }
+
+    /// Mark a thread-open sequence as in flight (guards [`take_if_idle`] across the
+    /// whole `thread/start`/`thread/resume` round-trip, BEFORE the route exists).
+    /// Returns a drop-guard so every exit path — success, RPC error, parse error —
+    /// decrements honestly. `None` when the server is already gone.
+    async fn begin_open(&self) -> Option<OpenGuard> {
+        let guard = self.inner.lock().await;
+        guard.as_ref().map(|s| {
+            s.opening.fetch_add(1, Ordering::SeqCst);
+            OpenGuard(s.opening.clone())
+        })
     }
 
     /// Register a route under a SYNTHETIC key (not a thread id) to receive this
@@ -426,49 +467,71 @@ impl CodexServer {
     }
 
     /// Close one conversation's thread: drop its route. When the LAST thread closes,
-    /// tear the whole server down gracefully (invariant #9).
+    /// tear the whole server down gracefully (invariant #9) — via the ATOMIC
+    /// idle-check-and-take, so a conversation opening concurrently is never torn down.
     pub async fn close_thread(&self, thread_id: &str) {
-        let now_empty = {
+        {
             let guard = self.inner.lock().await;
-            match guard.as_ref() {
-                Some(started) => {
-                    let mut r = started.router.lock().unwrap();
-                    r.remove(thread_id);
-                    r.is_empty()
-                }
-                None => false,
+            if let Some(started) = guard.as_ref() {
+                started.router.lock().unwrap().remove(thread_id);
             }
-        };
-        if now_empty {
-            self.shutdown_all().await;
+        }
+        if let Some(started) = self.take_if_idle().await {
+            teardown(started).await;
         }
     }
 
-    /// Unconditional graceful teardown of the whole server (last thread closed, or app
-    /// quit). Drops OUR writer clone FIRST so the transport's own clone becomes the
-    /// only one → its `shutdown` EOFs stdin → the app-server reaps its MCP children.
+    /// UNCONDITIONAL graceful teardown of the whole server. Reserved for the cases
+    /// where killing everything is the point (app quit, dedicated transient servers);
+    /// the last-thread-closed path goes through [`take_if_idle`] instead.
     pub async fn shutdown_all(&self) {
         let started = self.inner.lock().await.take();
         if let Some(started) = started {
-            let Started {
-                outbound,
-                router,
-                mut transport,
-                reader,
-                ..
-            } = started;
-            // Stop the demux and WAIT for it to finish, so ITS clone of `outbound` is
-            // dropped — otherwise stdin never EOFs and the graceful teardown can't reap
-            // the app-server's (setsid) MCP children (invariant #9).
-            reader.abort();
-            let _ = reader.await;
-            // Release our own writer clone → the transport's is now the last one.
-            drop(outbound);
-            // EOF every remaining actor's inbound so they run their own teardown.
-            router.lock().unwrap().clear();
-            transport.shutdown().await;
+            teardown(started).await;
         }
     }
+}
+
+/// Decrements the thread-open in-flight counter on drop, so every exit path of an
+/// open sequence (success, RPC error, malformed response) releases its guard.
+struct OpenGuard(Arc<AtomicU64>);
+
+impl Drop for OpenGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// The one teardown routine for a TAKEN server. Drops OUR writer clone FIRST so the
+/// transport's own clone becomes the only one → its `shutdown` EOFs stdin → the
+/// app-server reaps its MCP children. Also FAILS every in-flight request with
+/// `Closed`: `reader.abort()` cancels the demux BEFORE its own epilogue drains
+/// `pending`, so without this drain a request in flight at teardown would sit on its
+/// oneshot until the full 30s REQUEST_TIMEOUT (review HIGH) instead of erroring now.
+async fn teardown(started: Started) {
+    let Started {
+        outbound,
+        pending,
+        router,
+        mut transport,
+        reader,
+        ..
+    } = started;
+    // Stop the demux and WAIT for it to finish, so ITS clone of `outbound` is
+    // dropped — otherwise stdin never EOFs and the graceful teardown can't reap
+    // the app-server's (setsid) MCP children (invariant #9).
+    reader.abort();
+    let _ = reader.await;
+    // Fail every awaiting request immediately (the demux epilogue only runs on a
+    // natural EOF, not on abort).
+    for (_, tx) in pending.lock().unwrap().drain() {
+        let _ = tx.send(Err(CodexError::Closed));
+    }
+    // Release our own writer clone → the transport's is now the last one.
+    drop(outbound);
+    // EOF every remaining actor's inbound so they run their own teardown.
+    router.lock().unwrap().clear();
+    transport.shutdown().await;
 }
 
 /// Extract the text of an `item/completed` notification whose item is an `agentMessage`

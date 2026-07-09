@@ -34,6 +34,7 @@ import { ChipBtn, ClaudeMark, CodexMark, ContextRing, Ico, Menu, MenuItem, MenuL
 import { useCodexAvailable } from "../../store/codexAvailable";
 import { backendOfModel, modelFamily, modelLabel, modelsForPicker } from "./models";
 import { useCodexModels } from "./codexModels";
+import { useAccountsLoggedOut } from "../../ipc/useAccounts";
 import { useCodexSkills } from "./codexSkills";
 import {
   CODEX_PRESETS,
@@ -178,11 +179,19 @@ export const ConductorComposer = forwardRef<
   // (A fresh pick flips both together via setConvBackend; and a legacy Codex conv whose
   // persisted model is a Claude alias must still show Codex controls, not Claude ones.)
   const backend = ctl.kind;
-  const locked = !isFresh;
+  // Locked once a message was sent — INCLUDING while the first send's spawn is still
+  // in flight (worktree creation can take seconds; sessionId/handle land only at the
+  // end). During that window the actor being started already reads the kind captured
+  // at send time, so a cross-backend pick would be refused by the store guard anyway
+  // (setConvBackend) — lock the picker so it doesn't offer a dead choice.
+  const locked = !isFresh || send.isPending;
   // Dynamic Codex model catalogue (`model/list`), with the verified static fallback —
   // feeds the picker's Codex section AND the data-driven effort gauge.
   const { models: codexModels, effortsById: codexEfforts } = useCodexModels(codexAvailable);
   const pickerGroups = modelsForPicker(ctl.kind, { locked, codexAvailable, codexModels });
+  // Account state per backend, for the picker's "non connecté" badges (definitive
+  // logged-out only — cf. useAccountsLoggedOut). Shared cached queries, cost ~nil.
+  const loggedOut = useAccountsLoggedOut(codexAvailable);
   // Codex-only composer controls (per-conv, localStorage). Read unconditionally (hook
   // rules); only rendered/consumed when the conversation runs on Codex. Model + effort
   // live on the conversation record (shared picker/gauge); these are the Codex-only axes.
@@ -792,6 +801,11 @@ export const ConductorComposer = forwardRef<
                 <span className="wf-mi-lbl-brand">
                   {g.backend === "codex" ? <CodexMark /> : <ClaudeMark />}
                   {g.label}
+                  {/* Definitive logged-out flag only (a failed probe shows nothing) —
+                      picking a model of a disconnected backend WILL fail on send. */}
+                  {(g.backend === "codex" ? loggedOut.codex : loggedOut.claude) ? (
+                    <span className="wf-mi-lbl-warn">non connecté</span>
+                  ) : null}
                 </span>
               </MenuLabel>
               {g.models.map((m) => (

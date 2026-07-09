@@ -64,6 +64,27 @@ export function useClaudeAccountActions() {
 }
 
 /**
+ * The DEFINITIVE logged-out flags for both backends, for the passive warning
+ * surfaces (composer banner, model-picker badges). `true` only when the status
+ * query answered `loggedIn: false` — loading, disabled, or a failed status probe
+ * yield `false` so a transient error never shows a scary false "non connecté".
+ * Codex is only probed when its binary is installed. One shared cached query per
+ * backend (30s staleTime + the global `account_login`/`account/updated`
+ * invalidation), so mounting this in every composer costs nothing extra.
+ */
+export function useAccountsLoggedOut(codexAvailable: boolean): {
+  claude: boolean;
+  codex: boolean;
+} {
+  const claude = useClaudeAccount(true);
+  const codex = useCodexAccount(codexAvailable);
+  return {
+    claude: claude.data?.loggedIn === false,
+    codex: codexAvailable && codex.data?.loggedIn === false,
+  };
+}
+
+/**
  * The Codex login/logout actions. `loginStart` returns `{loginId, authUrl}` and the
  * flow completes ASYNCHRONOUSLY: the dedicated app-server held by the backend serves
  * the OAuth callback and the outcome arrives as the app-global `account_login` event

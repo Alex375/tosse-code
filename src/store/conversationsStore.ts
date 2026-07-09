@@ -712,6 +712,11 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // never-spawned conversation may flip. This guard is the safety net behind the
     // composer already hiding the other backend once the conversation is locked.
     if (conv.sessionId || conv.handle) return;
+    // A spawn IN FLIGHT is engaged too: sessionId/handle only land at its end, but the
+    // actor being started already reads the kind captured at send time. Flipping now
+    // would persist kind=X with a session of backend Y — history invisible on reload,
+    // resume permanently broken (review HIGH). The pick is refused, not queued.
+    if (isSpawning(id)) return;
     if (conv.kind === kind && conv.model === model) return;
     const updated = { ...conv, kind, model };
     set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
@@ -991,6 +996,14 @@ export function acknowledgeConversation(convId: string): void {
 // idempotent per conversation: concurrent callers await the same one.
 const spawning = new Map<string, Promise<string>>();
 
+/** Whether `convId` has a session spawn IN FLIGHT (worktree creation + process start).
+ *  Consulted by the backend guard (`setConvBackend`) and the composer's picker lock:
+ *  during this window the conversation has no sessionId/handle yet but is already
+ *  engaged on the kind captured at send time. */
+export function isSpawning(convId: string): boolean {
+  return spawning.has(convId);
+}
+
 /**
  * Ensure a conversation has a LIVE `claude` session, spawning it lazily if not.
  * Returns the live handle. This is the single spawn point of the lazy policy —
@@ -1031,15 +1044,21 @@ export async function ensureConversationSession(
     // Apply this conversation's persisted controls at spawn, so the live stream
     // starts in EXACTLY the model/effort/permission/ultracode the UI shows — never
     // the old hardcoded defaults. A pre-first-message pick is honored here too.
+    // RE-READ the record here (not the `before` captured above): the worktree
+    // creation can take seconds, and a control changed during that window must
+    // reach the actor being started — most critically `kind` (belt to the
+    // setConvBackend spawning guard: whatever kind spawns is the kind persisted).
+    const atSpawn =
+      useConversationsStore.getState().conversations.find((c) => c.id === convId) ?? before;
     let res = await commands.spawnSession(
       cwd,
-      before.sessionId ?? null,
-      before.model,
-      before.effort,
-      before.permissionMode,
-      before.ultracode,
+      atSpawn.sessionId ?? null,
+      atSpawn.model,
+      atSpawn.effort,
+      atSpawn.permissionMode,
+      atSpawn.ultracode,
       // The backend is fixed at creation; the spawn routes to the Claude or Codex actor.
-      before.kind,
+      atSpawn.kind,
     );
     if (res.status !== "ok") {
       // The spawn may have failed because the conversation's cwd is GONE — its
@@ -1068,12 +1087,12 @@ export async function ensureConversationSession(
         res = await commands.spawnSession(
           fallback,
           null,
-          before.model,
-          before.effort,
-          before.permissionMode,
-          before.ultracode,
+          atSpawn.model,
+          atSpawn.effort,
+          atSpawn.permissionMode,
+          atSpawn.ultracode,
           // Same backend on the fresh-worktree re-spawn.
-          before.kind,
+          atSpawn.kind,
         );
       }
     }
