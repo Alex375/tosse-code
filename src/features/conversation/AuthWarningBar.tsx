@@ -23,7 +23,9 @@ export function AuthWarningBar({ session }: { session: string }) {
 
   const name = kind === "codex" ? "Codex" : "Claude";
   return (
-    <div className="cv-reviewbar" data-tone="input">
+    // Tone "error" (red): a disconnected backend is a hard blocker — the next send WILL
+    // fail — not a soft warning.
+    <div className="cv-reviewbar" data-tone="error">
       <span className="cv-reviewbar-dot" />
       <span className="cv-reviewbar-label">
         Compte {name} non connecté — les prochains messages échoueront.

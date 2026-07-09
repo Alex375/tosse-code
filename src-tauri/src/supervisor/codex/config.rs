@@ -101,6 +101,30 @@ fn split_plugin_id(id: &str) -> (String, String) {
     }
 }
 
+/// Whether `name` is a user-defined `[mcp_servers.<name>]` in `~/.codex/config.toml`.
+/// The Codex runtime ALSO injects servers at runtime (codex_apps, computer-use) that
+/// have NO config entry — those appear in the live `mcpServerStatus/list` but cannot be
+/// toggled by writing `mcp_servers.<name>.enabled` (it would produce an entry with no
+/// transport, which the app-server rejects). Only a configured server is toggleable.
+pub(crate) fn mcp_server_in_config(name: &str) -> bool {
+    let Some(home) = codex_home() else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else {
+        return false;
+    };
+    config_declares_mcp_server(&text, name)
+}
+
+/// Pure core of [`mcp_server_in_config`]: does the config TEXT declare `[mcp_servers.<name>]`?
+/// A malformed config answers `false` (better to refuse a toggle than to write against a
+/// config we couldn't parse).
+fn config_declares_mcp_server(text: &str, name: &str) -> bool {
+    toml::from_str::<CodexConfigRaw>(text)
+        .map(|cfg| cfg.mcp_servers.contains_key(name))
+        .unwrap_or(false)
+}
+
 /// The configured Codex extension inventory (declared MCP servers + installed plugins +
 /// on-disk skills), as an [`ExtensionsSnapshot`]. Read-only; an absent config or skills
 /// dir degrades to an empty snapshot, a corrupt config to a warning (never a hard error).
@@ -364,6 +388,19 @@ enabled = false
         assert!(on.enabled, "an untoggled skill stays enabled (the Codex default)");
         let off = snap.skills.iter().find(|s| s.name == "off-skill").expect("off-skill");
         assert!(!off.enabled, "the [[skills.config]] toggle must fold onto the row");
+    }
+
+    #[test]
+    fn only_configured_mcp_servers_are_reported_as_toggleable() {
+        // node_repl is user-declared → toggleable; codex_apps is a runtime-injected
+        // server absent from config.toml → NOT toggleable (writing its enabled key
+        // would create a transport-less entry the app-server rejects).
+        let toml = "[mcp_servers.node_repl]\ncommand = \"/bin/x\"\n";
+        assert!(config_declares_mcp_server(toml, "node_repl"));
+        assert!(!config_declares_mcp_server(toml, "codex_apps"));
+        assert!(!config_declares_mcp_server(toml, "computer-use"));
+        // A malformed config refuses the toggle rather than writing blind.
+        assert!(!config_declares_mcp_server("this = not [[[ valid", "node_repl"));
     }
 
     #[test]

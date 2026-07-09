@@ -356,11 +356,12 @@
 .wf-mi-lbl-brand .wf-claude, .wf-mi-lbl-brand .wf-codex { width:11px; height:11px; }
 .wf-mi-lbl-brand .wf-claude { color:var(--wf-accent); }
 /* "non connecté" badge in a backend section label — the account is definitively
-   logged out, a model picked here will fail on send (composer AuthWarningBar's twin). */
+   logged out, a model picked here WILL fail on send (composer AuthWarningBar's twin).
+   Red (not amber): a hard blocker, not a soft warning. */
 .wf-mi-lbl-warn { margin-left:4px; padding:1px 6px; border-radius:99px; font-size:9px;
-  letter-spacing:.02em; color:var(--wf-att); border:1px solid
-  color-mix(in srgb, var(--wf-att) 45%, transparent);
-  background:color-mix(in srgb, var(--wf-att) 12%, transparent); text-transform:none; }
+  letter-spacing:.02em; color:var(--wf-err); border:1px solid
+  color-mix(in srgb, var(--wf-err) 45%, transparent);
+  background:color-mix(in srgb, var(--wf-err) 12%, transparent); text-transform:none; }
 /* Cursor-anchored file-explorer context menu (positioned inline via the portal).
    Reuses .wf-pop / .wf-mi; adds a destructive ("Delete") variant + an icon-width
    spacer so label-only items stay aligned. */

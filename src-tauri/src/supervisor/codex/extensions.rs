@@ -81,6 +81,20 @@ pub async fn set_mcp_enabled(
             "nom de serveur MCP invalide pour un toggle : « {name} »"
         )));
     }
+    // Only a server DEFINED in config.toml can be toggled by writing its `enabled` key:
+    // the Codex runtime also injects servers (codex_apps, computer-use) that have NO
+    // config entry and whose transport lives outside config.toml. Writing
+    // `mcp_servers.<injected>.enabled` would create a table with an `enabled` flag and
+    // NO transport → the app-server rejects the whole config ("invalid transport",
+    // verified live). Refuse with an actionable message instead of surfacing that
+    // cryptic validation error. (The front already hides the toggle for these; this is
+    // the belt.)
+    if !super::config::mcp_server_in_config(name) {
+        return Err(CodexError::Rpc(format!(
+            "« {name} » est un serveur MCP fourni par Codex : il n'est pas dans votre config.toml \
+             et ne peut pas être activé/désactivé depuis la configuration."
+        )));
+    }
     let key_path = format!("mcp_servers.{name}.enabled");
     CodexServer::oneshot(
         "config/value/write",

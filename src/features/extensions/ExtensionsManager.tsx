@@ -878,6 +878,11 @@ function CodexExtensionsBody({
   // live row's toggle state from the configured list (absent = enabled, the default).
   const configEnabled = (name: string) =>
     mcpConfigured.find((m) => m.name === name)?.enabled ?? true;
+  // Only a server DECLARED in config.toml is toggleable. The Codex runtime ALSO injects
+  // servers (codex_apps, computer-use) that show up live but have no config entry —
+  // writing `mcp_servers.<injected>.enabled` produces a transport-less entry the
+  // app-server rejects ("invalid transport"). So injected servers render read-only.
+  const configHas = (name: string) => mcpConfigured.some((m) => m.name === name);
   // A toggle failure must never be silent — surface the most recent mutation error.
   const toggleError =
     (toggles.skill.error as Error | null)?.message ??
@@ -920,6 +925,10 @@ function CodexExtensionsBody({
                 mcp={m}
                 enabled={configEnabled(m.name)}
                 busy={toggles.mcp.isPending}
+                // Injected servers (not in config.toml) can't be toggled via config —
+                // render them read-only with a "géré par Codex" note instead of a
+                // toggle that would fail with an "invalid transport" error.
+                toggleable={configHas(m.name)}
                 onToggle={(enabled) => toggles.mcp.mutate({ name: m.name, enabled })}
               />
             ))
@@ -1251,16 +1260,20 @@ function CodexPluginRow({
 }
 
 /** A live MCP row for Codex: status dot + name + tool count (expandable), plus the v2
- *  config-level enable toggle (no per-server auth/reconnect — Codex exposes none). */
+ *  config-level enable toggle — ONLY when the server is declared in config.toml.
+ *  Runtime-injected servers (codex_apps, computer-use) are read-only: they have no
+ *  config entry, so writing their `enabled` key would fail ("invalid transport"). */
 function CodexMcpLiveRow({
   mcp,
   enabled,
   busy,
+  toggleable,
   onToggle,
 }: {
   mcp: McpServerLive;
   enabled: boolean;
   busy?: boolean;
+  toggleable: boolean;
   onToggle: (enabled: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -1283,13 +1296,19 @@ function CodexMcpLiveRow({
             <Ico name="chev" className={"sm " + styles.chev + (open ? " " + styles.chevOpen : "")} />
           </button>
         ) : null}
-        <Toggle
-          checked={enabled}
-          disabled={busy}
-          onChange={onToggle}
-          label={`${enabled ? "Désactiver" : "Activer"} ${mcp.name}`}
-          title="Réglage Codex global (~/.codex/config.toml) · appliqué au prochain tour via reload"
-        />
+        {toggleable ? (
+          <Toggle
+            checked={enabled}
+            disabled={busy}
+            onChange={onToggle}
+            label={`${enabled ? "Désactiver" : "Activer"} ${mcp.name}`}
+            title="Réglage Codex global (~/.codex/config.toml) · appliqué au prochain tour via reload"
+          />
+        ) : (
+          <span className={styles.connKind} title="Serveur fourni par Codex — non désactivable depuis la configuration">
+            géré par Codex
+          </span>
+        )}
       </div>
       <div className={styles.mcpSub}>
         <span className={`${styles.statusWord} ${tone.cls}`}>{tone.label}</span>

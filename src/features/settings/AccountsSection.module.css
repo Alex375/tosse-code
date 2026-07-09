@@ -1,0 +1,368 @@
+/* Réglages → Comptes — graphical per-backend account cards. Each card carries a
+   brand accent (--brand, set per backend) driving a soft top glow, the mark tile,
+   the plan pill and the connect CTA. Three visual states via [data-state]:
+   connected (rich identity + brand glow), disconnected (muted + red status), and
+   loading (skeleton). Built on the shared wirekit + semantic tokens. */
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* ---- the card ---------------------------------------------------------- */
+.card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  padding: var(--space-6);
+  transition: border-color var(--transition-hover), transform var(--transition-hover),
+    box-shadow var(--transition-hover);
+}
+.card[data-state="connected"] {
+  border-color: color-mix(in srgb, var(--brand) 32%, var(--border-strong));
+}
+.card[data-state="connected"]:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 30px -14px color-mix(in srgb, var(--brand) 60%, transparent);
+}
+/* The brand glow: a soft radial wash in the top-right, richer when connected. */
+.card::before {
+  content: "";
+  position: absolute;
+  inset: -40% 0 auto -40%;
+  height: 180px;
+  background: radial-gradient(
+    120% 90% at 80% 0%,
+    color-mix(in srgb, var(--brand) 18%, transparent),
+    transparent 70%
+  );
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity var(--transition-hover);
+}
+.card[data-state="connected"]::before {
+  opacity: 1;
+}
+
+/* ---- header: mark tile + name + status chip ---------------------------- */
+.head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.tile {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius-md);
+  color: #fff;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--brand) 92%, white 8%),
+    color-mix(in srgb, var(--brand) 62%, black 20%)
+  );
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 6px 16px -8px color-mix(in srgb, var(--brand) 80%, transparent);
+}
+.tile svg {
+  width: 24px;
+  height: 24px;
+}
+/* Disconnected: drain the tile's colour so the eye goes to the CTA, not the logo. */
+.card[data-state="disconnected"] .tile {
+  background: linear-gradient(145deg, var(--wf-panel-3), var(--wf-panel-2));
+  color: var(--text-muted);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.headText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.brandName {
+  font-size: var(--fs-h2);
+  font-weight: 650;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.provider {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* ---- status chip ------------------------------------------------------- */
+.chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 550;
+  border: 1px solid transparent;
+}
+.chipDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.chip[data-tone="ok"] {
+  color: var(--wf-run);
+  background: color-mix(in srgb, var(--wf-run) 12%, transparent);
+  border-color: color-mix(in srgb, var(--wf-run) 35%, transparent);
+}
+.chip[data-tone="ok"] .chipDot {
+  background: var(--wf-run);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--wf-run) 70%, transparent);
+  animation: accPulse 2.4s ease-out infinite;
+}
+.chip[data-tone="off"] {
+  color: var(--wf-err);
+  background: color-mix(in srgb, var(--wf-err) 12%, transparent);
+  border-color: color-mix(in srgb, var(--wf-err) 35%, transparent);
+}
+.chip[data-tone="off"] .chipDot {
+  background: var(--wf-err);
+}
+.chip[data-tone="idle"] {
+  color: var(--text-muted);
+  background: var(--wf-panel-3);
+  border-color: var(--border-strong);
+}
+.chip[data-tone="idle"] .chipDot {
+  background: var(--text-muted);
+  animation: accBlink 1.1s ease-in-out infinite;
+}
+@keyframes accPulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--wf-run) 55%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+@keyframes accBlink {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ---- body: identity (connected) or invite (disconnected) --------------- */
+.body {
+  position: relative;
+  margin-top: var(--space-5);
+}
+.email {
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.pill {
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 550;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  background: var(--wf-panel-3);
+}
+/* The plan pill wears the brand colour — the one splash of identity colour. */
+.pillPlan {
+  color: color-mix(in srgb, var(--brand) 75%, white 25%);
+  border-color: color-mix(in srgb, var(--brand) 45%, transparent);
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  text-transform: capitalize;
+}
+.invite {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  line-height: var(--lh-body);
+  max-width: 42ch;
+}
+
+/* ---- actions ----------------------------------------------------------- */
+.actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+.spacer {
+  flex: 1 1 auto;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  cursor: pointer;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: background var(--transition-hover), border-color var(--transition-hover),
+    opacity var(--transition-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn svg {
+  width: 14px;
+  height: 14px;
+}
+/* Primary "Se connecter" — filled with the brand colour. */
+.connect {
+  color: #fff;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--brand) 92%, white 8%),
+    color-mix(in srgb, var(--brand) 70%, black 12%)
+  );
+  box-shadow: 0 6px 16px -10px color-mix(in srgb, var(--brand) 85%, transparent);
+}
+.connect:not(:disabled):hover {
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--brand) 100%, white 12%),
+    color-mix(in srgb, var(--brand) 78%, black 8%)
+  );
+}
+.ghost {
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+  background: transparent;
+}
+.ghost:not(:disabled):hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.danger {
+  color: var(--wf-err);
+  border-color: color-mix(in srgb, var(--wf-err) 45%, transparent);
+  background: color-mix(in srgb, var(--wf-err) 10%, transparent);
+}
+.danger:not(:disabled):hover {
+  background: color-mix(in srgb, var(--wf-err) 18%, transparent);
+}
+
+/* ---- login sub-rows (code input / waiting) ----------------------------- */
+.subRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px dashed var(--border-strong);
+}
+.subLabel {
+  flex: 1 1 100%;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.codeInput {
+  flex: 1 1 160px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 11px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+  background: var(--wf-bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--transition-hover);
+}
+.codeInput:focus {
+  border-color: var(--brand);
+}
+.waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.waitingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: accBlink 1.1s ease-in-out infinite;
+}
+
+/* ---- inline error / fallback ------------------------------------------- */
+.err {
+  position: relative;
+  margin-top: var(--space-4);
+  padding: 9px 12px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+  color: var(--wf-err);
+  background: color-mix(in srgb, var(--wf-err) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wf-err) 30%, transparent);
+  border-radius: var(--radius-sm);
+  word-break: break-word;
+}
+.errLink {
+  text-decoration: underline;
+  cursor: pointer;
+  user-select: text;
+  word-break: break-all;
+}
+
+/* ---- skeleton (loading) ------------------------------------------------ */
+.skelLine {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--wf-skel), var(--wf-skel-2), var(--wf-skel));
+  background-size: 200% 100%;
+  animation: accShimmer 1.3s linear infinite;
+}
+@keyframes accShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chip[data-tone="ok"] .chipDot,
+  .chip[data-tone="idle"] .chipDot,
+  .waitingDot,
+  .skelLine {
+    animation: none;
+  }
+}
