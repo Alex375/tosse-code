@@ -60,16 +60,34 @@ async fn run_codex_actor(
 ) {
     let mut core = CodexCore::new(id, emitter);
 
-    // Handshake + open this conversation's thread. A failure here (server won't
-    // spawn, cwd vanished, handshake rejected) is surfaced as a visible notice and a
-    // clean end — never a silent dead session (invariant #6).
-    let (thread_id, mut inbound) = match server
-        .start_thread(&cfg.cwd, codex_model(&cfg).as_deref())
-        .await
-    {
+    // Handshake + open this conversation's thread. When the conversation carries a
+    // persisted thread id (`cfg.resume`, the analogue of Claude's `--resume`), RESUME it
+    // by id so continuing a cold-loaded conversation keeps its full prior context and a
+    // STABLE id; otherwise open a fresh thread. A failure here (server won't spawn, cwd
+    // vanished, handshake rejected) is surfaced as a visible notice and a clean end —
+    // never a silent dead session (invariant #6).
+    let model = codex_model(&cfg);
+    let resuming = cfg.resume.as_deref().filter(|s| !s.is_empty());
+    let open = match resuming {
+        Some(resume_id) => server.resume_thread(&cfg.cwd, resume_id, model.as_deref()).await,
+        None => server.start_thread(&cfg.cwd, model.as_deref()).await,
+    };
+    let (thread_id, mut inbound) = match open {
         Ok(pair) => pair,
         Err(e) => {
-            core.emit_notice("process_exited", &e.to_string());
+            // A fresh-start OR a resume failure both end the session cleanly with a surfaced
+            // notice (invariant #6). ⚠️ On a RESUME failure we deliberately DO NOT fall back to
+            // a fresh `start_thread`: that would mint a NEW thread id, which the front persists
+            // over the conversation's real id (`noteSessionId`), ORPHANING the on-disk rollout
+            // and permanently hiding its cold history — a silent data loss. Ending here keeps
+            // the id (and thus the history) intact; a transient failure (RPC timeout on the
+            // shared server) is recoverable by simply resending.
+            let msg = if resuming.is_some() {
+                format!("Reprise de la conversation Codex impossible : {e}. L'historique est conservé — réessayez d'envoyer.")
+            } else {
+                e.to_string()
+            };
+            core.emit_notice("process_exited", &msg);
             core.emit_ended();
             on_exit();
             return;

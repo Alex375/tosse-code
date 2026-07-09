@@ -197,12 +197,12 @@ pub async fn codex_compact(
 
 // ⚠️ PROVEN-BUT-NOT-YET-WIRED (Phase 4.3): the three commands below (rollback / fork /
 // archive) are the verified backend foundation for native Codex rewind/fork, but NOTHING in
-// `src/` calls them yet — the UI is gated OFF for Codex (`ConductorThread`: `!isCodex`)
-// because the Codex spawn always `thread/start`s a fresh thread and never resumes by id, so a
-// rolled-back/forked thread can't be re-opened and the live-only timeline can't be rebuilt.
-// They land in the follow-up once `thread/resume` + cold-history reload exist. Kept because
-// they're tested + live-probed; their `Err` is mapped to a String so a future caller can
-// surface it, but that path is currently unreachable.
+// `src/` calls them yet — the UI is still gated OFF for Codex (`ConductorThread`: `!isCodex`).
+// Their former BLOCKER — no `thread/resume` by id + no cold-history reload, so a
+// rolled-back/forked thread couldn't be re-opened and the live-only timeline couldn't be
+// rebuilt — is now REMOVED (this file's `codex_load_history` + the actor's resume-by-id).
+// Un-gating the rewind/fork UI on top of them is the remaining follow-up. Kept because
+// they're tested + live-probed; their `Err` is mapped to a String so the caller can surface it.
 
 /// Rewind a Codex conversation IN PLACE (`thread/rollback`): drop the last `num_turns`
 /// turns of its thread. Count-based (the front derives the count from the timeline), on the
@@ -242,6 +242,22 @@ pub async fn codex_fork(
 #[specta::specta]
 pub async fn codex_archive(thread_id: String, cwd: String) -> Result<(), String> {
     codex::archive_thread(&thread_id, std::path::Path::new(&cwd))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Rebuild a Codex conversation's history from its on-disk ROLLOUT — the Codex analogue
+/// of [`load_session_history`]. Codex rendering is otherwise LIVE-only (a resumed thread
+/// re-streams nothing), so a cold-opened Codex conversation would show a blank thread.
+/// The front calls this (keyed on `conv.kind === "codex"`) after selecting a Codex
+/// conversation to replay its full timeline — messages AND tool cards — with no
+/// app-server spawned (the rollout has full tool fidelity; `thread/resume` omits tools).
+/// `thread_id` is the conversation's persisted `sessionId`. An absent rollout yields an
+/// empty list (not an error). File IO runs off the async runtime via `spawn_blocking`.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_load_history(thread_id: String) -> Result<Vec<ConversationItem>, String> {
+    tokio::task::spawn_blocking(move || codex::load_thread_history(&thread_id))
         .await
         .map_err(|e| e.to_string())
 }

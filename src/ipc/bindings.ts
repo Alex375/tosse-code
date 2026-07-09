@@ -132,6 +132,24 @@ async codexArchive(threadId: string, cwd: string) : Promise<Result<null, string>
 }
 },
 /**
+ * Rebuild a Codex conversation's history from its on-disk ROLLOUT — the Codex analogue
+ * of [`load_session_history`]. Codex rendering is otherwise LIVE-only (a resumed thread
+ * re-streams nothing), so a cold-opened Codex conversation would show a blank thread.
+ * The front calls this (keyed on `conv.kind === "codex"`) after selecting a Codex
+ * conversation to replay its full timeline — messages AND tool cards — with no
+ * app-server spawned (the rollout has full tool fidelity; `thread/resume` omits tools).
+ * `thread_id` is the conversation's persisted `sessionId`. An absent rollout yields an
+ * empty list (not an error). File IO runs off the async runtime via `spawn_blocking`.
+ */
+async codexLoadHistory(threadId: string) : Promise<Result<ConversationItem[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("codex_load_history", { threadId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Fetch the slash commands available in `cwd` WITHOUT starting a persistent
  * session. Spawns a short-lived `claude`, performs the `initialize` handshake
  * (spec §4.4), reads the advertised commands from its `control_response`, and

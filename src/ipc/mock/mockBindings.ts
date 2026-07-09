@@ -414,6 +414,14 @@ export const mockCommands = {
     return ok([]);
   },
 
+  async codexLoadHistory(threadId: string): Promise<Result<ConversationItem[], string>> {
+    // No real rollout in the browser mock. For the demo Codex conversation return a
+    // representative cold timeline (messages + Bash + ApplyPatch cards) so the reload
+    // rendering is exercisable in dev/Playwright; otherwise empty.
+    if (threadId === "codex-thread-demo") return ok(DEMO_CODEX_HISTORY);
+    return ok([]);
+  },
+
   async loadSubagentTranscript(
     _sessionId: string,
     _agentId: string,
@@ -564,7 +572,9 @@ export const mockCommands = {
           cwd: "/Users/dev/demo-repo",
           created_at: now - 1,
           last_activity_at: now - 1,
-          session_id: null,
+          // A persisted thread id so selecting it exercises the Codex COLD-load path
+          // (rollout reader) — `codexLoadHistory` returns a representative timeline below.
+          session_id: "codex-thread-demo",
           model: "gpt-5.5",
           effort: "high",
           ultracode: false,
@@ -1048,3 +1058,17 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
 
 // Session ids of the history-panel demo rows — their preview renders a sample transcript.
 const HISTORY_DEMO_SESSION_IDS = new Set(MOCK_DISK_CONVERSATIONS.map((c) => c.session_id));
+
+// A representative Codex COLD-load timeline (what `codex_load_history` reconstructs from a
+// rollout): user turn + agent text + a Bash card and an ApplyPatch card, each paired with
+// its result by `tool_use_id`. Mirrors the real reader's output shape so the reload
+// rendering (tool cards, diff view) is verifiable in dev/Playwright without a real rollout.
+const DEMO_CODEX_HISTORY: ConversationItem[] = [
+  { kind: "user_message", id: "cx-u1", text: "Ajoute un fichier hello.txt et liste le dossier", parent_tool_use_id: null, replay: false },
+  { kind: "assistant_message", id: "cx-a1", parent_tool_use_id: null, blocks: [{ type: "text", text: "Je crée le fichier puis je liste le dossier." }] },
+  { kind: "assistant_message", id: "cx-p1", parent_tool_use_id: null, blocks: [{ type: "tool_use", id: "cx-p1", name: "ApplyPatch", input: { changes: [{ path: "/Users/dev/demo-repo/hello.txt", kind: { type: "add" }, diff: "@@ -0,0 +1,2 @@\n+bonjour\n+le monde\n" }] } }] },
+  { kind: "tool_result", tool_use_id: "cx-p1", is_error: false, parent_tool_use_id: null, content: { status: "completed", changes: [{ path: "/Users/dev/demo-repo/hello.txt", kind: { type: "add" }, diff: "@@ -0,0 +1,2 @@\n+bonjour\n+le monde\n" }] } },
+  { kind: "assistant_message", id: "cx-t1", parent_tool_use_id: null, blocks: [{ type: "tool_use", id: "cx-t1", name: "Bash", input: { command: "ls -la", cwd: "/Users/dev/demo-repo" } }] },
+  { kind: "tool_result", tool_use_id: "cx-t1", is_error: false, parent_tool_use_id: null, content: "total 8\n-rw-r--r--  1 dev  staff  17 hello.txt\n" },
+  { kind: "assistant_message", id: "cx-a2", parent_tool_use_id: null, blocks: [{ type: "text", text: "C'est fait : `hello.txt` créé, dossier listé." }] },
+];

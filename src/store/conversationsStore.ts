@@ -1173,12 +1173,18 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   historyLoaded.add(convId); // mark before awaiting to avoid a double-load race
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv || !conv.sessionId) return;
-  const res = await commands.loadSessionHistory(conv.sessionId);
+  // Codex renders LIVE-only (a resumed thread re-streams nothing), so its cold history
+  // comes from its on-disk ROLLOUT via a distinct reader (full tool fidelity); Claude
+  // reads its transcript. Both return the same `ConversationItem[]` result shape.
+  const res =
+    conv.kind === "codex"
+      ? await commands.codexLoadHistory(conv.sessionId)
+      : await commands.loadSessionHistory(conv.sessionId);
   // Distinguish a real failure from "nothing to show": a command-level error
   // (rare — the core itself rarely rejects; a corrupt transcript comes back as an
   // in-band history_error Notice item) is surfaced, an empty history is silent.
   if (res.status !== "ok") {
-    console.error("loadSessionHistory failed:", res.error);
+    console.error("load history failed:", res.error);
     useAppErrors
       .getState()
       .pushError("Impossible de charger l'historique d'une conversation.", res.error);
@@ -1201,19 +1207,22 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   // Mark the restored history seen: a historical completion is not a fresh "Claude
   // just finished, go look", so only genuine LIVE completions surface as review.
   markSeen(convId);
-  // Seed the context ring from the transcript so it shows immediately on open,
-  // before any new live turn reports usage. A missing/unreadable transcript is NOT
-  // an error (the core returns an empty fill), so a status "error" here is a real
-  // failure worth surfacing rather than swallowing.
-  const ctx = await commands.loadSessionContext(conv.sessionId);
-  if (ctx.status === "ok")
-    // Tokens from the transcript; window from the persisted cache (the only place the
-    // real 200k-vs-1M window is known before the first live turn).
-    applyContextFill(convId, {
-      context_tokens: ctx.data.context_tokens,
-      context_window: getCachedWindow(convId),
-    });
-  else console.error("loadSessionContext failed:", ctx.error);
+  // Seed the context ring from the transcript so it shows immediately on open, before any
+  // new live turn reports usage. CLAUDE only — Codex has no cold context source (its ring
+  // fills from the first live `thread/tokenUsage/updated` push). A missing/unreadable
+  // transcript is NOT an error (the core returns an empty fill), so a status "error" here
+  // is a real failure worth surfacing rather than swallowing.
+  if (conv.kind !== "codex") {
+    const ctx = await commands.loadSessionContext(conv.sessionId);
+    if (ctx.status === "ok")
+      // Tokens from the transcript; window from the persisted cache (the only place the
+      // real 200k-vs-1M window is known before the first live turn).
+      applyContextFill(convId, {
+        context_tokens: ctx.data.context_tokens,
+        context_window: getCachedWindow(convId),
+      });
+    else console.error("loadSessionContext failed:", ctx.error);
+  }
 }
 
 /**
@@ -1230,9 +1239,14 @@ export async function loadConversationHistory(convId: string): Promise<void> {
 export async function reloadConversationHistory(convId: string): Promise<void> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return;
-  const res = await commands.loadSessionHistory(conv.sessionId);
+  // Codex cold history comes from its rollout reader; Claude from its transcript (see
+  // loadConversationHistory). Same result shape either way.
+  const res =
+    conv.kind === "codex"
+      ? await commands.codexLoadHistory(conv.sessionId)
+      : await commands.loadSessionHistory(conv.sessionId);
   if (res.status !== "ok") {
-    console.error("loadSessionHistory (reload) failed:", res.error);
+    console.error("reload history failed:", res.error);
     useAppErrors
       .getState()
       .pushError("Impossible de recharger l'historique d'une conversation.", res.error);
@@ -1253,15 +1267,18 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
   // Mark restored history seen so turning the stream on doesn't flash an old
   // conversation as "review" (only fresh LIVE completions should).
   markSeen(convId);
-  // Re-seed the context ring from the transcript (resetSession cleared it); window
-  // from the persisted cache (the real 200k-vs-1M value learned on a prior turn).
-  const ctx = await commands.loadSessionContext(conv.sessionId);
-  if (ctx.status === "ok")
-    applyContextFill(convId, {
-      context_tokens: ctx.data.context_tokens,
-      context_window: getCachedWindow(convId),
-    });
-  else console.error("loadSessionContext failed:", ctx.error);
+  // Re-seed the context ring from the transcript (resetSession cleared it); window from
+  // the persisted cache (the real 200k-vs-1M value learned on a prior turn). CLAUDE only —
+  // Codex re-fills the ring from the first live `thread/tokenUsage/updated`.
+  if (conv.kind !== "codex") {
+    const ctx = await commands.loadSessionContext(conv.sessionId);
+    if (ctx.status === "ok")
+      applyContextFill(convId, {
+        context_tokens: ctx.data.context_tokens,
+        context_window: getCachedWindow(convId),
+      });
+    else console.error("loadSessionContext failed:", ctx.error);
+  }
   historyLoaded.add(convId); // the select-time loader is now satisfied for this run
 }
 

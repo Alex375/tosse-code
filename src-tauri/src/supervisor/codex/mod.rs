@@ -11,12 +11,14 @@
 //! that maps app-server messages to `SessionEvent`s land in the following subtasks.
 
 mod config;
+mod history;
 pub mod protocol;
 mod server;
 mod session;
 mod transport;
 
 pub use config::list_extensions;
+pub use history::load_thread_history;
 pub use protocol::{CodexControls, CodexForkResult, CodexModel, CodexSkill};
 pub use server::{CodexError, CodexServer};
 pub use session::spawn_session;

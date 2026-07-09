@@ -344,6 +344,53 @@ impl CodexServer {
         Ok((thread_id, rx))
     }
 
+    /// RESUME an existing thread by id (`thread/resume`) instead of opening a fresh one —
+    /// the analogue of Claude's `--resume`. Verified against the live binary: the server
+    /// reloads the thread's rollout from disk, the returned `thread.id` is the SAME id
+    /// (stable across resumes), and a subsequent `turn/start` continues it with the full
+    /// prior context. Registers the thread's route exactly like [`start_thread_with`], so
+    /// the conversation actor receives its live notifications. `model` overrides the
+    /// resumed model (the conversation's chosen one); `None` keeps the thread's own.
+    pub async fn resume_thread(
+        &self,
+        cwd: &Path,
+        thread_id: &str,
+        model: Option<&str>,
+    ) -> Result<(String, mpsc::UnboundedReceiver<Incoming>), CodexError> {
+        self.ensure_started(cwd).await?;
+
+        let params = serde_json::json!({ "threadId": thread_id, "model": model });
+        let result = match self.request("thread/resume", params).await {
+            Ok(r) => r,
+            Err(e) => {
+                self.shutdown_if_no_threads().await;
+                return Err(e);
+            }
+        };
+        // `thread/resume` returns `{thread:{id,…}, model, …}` — the same envelope shape as
+        // `thread/start` for our purposes (we only need `thread.id`); extra fields are
+        // ignored by serde.
+        let parsed: protocol::ThreadStartResult = match serde_json::from_value(result) {
+            Ok(p) => p,
+            Err(e) => {
+                self.shutdown_if_no_threads().await;
+                return Err(CodexError::Rpc(format!("réponse thread/resume malformée : {e}")));
+            }
+        };
+        let resumed_id = parsed.thread.id;
+
+        let (tx, rx) = mpsc::unbounded_channel::<Incoming>();
+        {
+            let guard = self.inner.lock().await;
+            if let Some(started) = guard.as_ref() {
+                started.router.lock().unwrap().insert(resumed_id.clone(), tx);
+            } else {
+                return Err(CodexError::Closed);
+            }
+        }
+        Ok((resumed_id, rx))
+    }
+
     /// Tear the server down if NO conversation thread is open — reaps an idle app-server
     /// after a failed `thread/start` so it (and its MCP children) never leaks, and a
     /// wedged server is never re-used by the next conversation.
@@ -639,6 +686,77 @@ mod tests {
         assert!(saw_text, "expected at least one assistant-text notification");
 
         server.shutdown_all().await;
+    }
+
+    /// End-to-end proof of RESUME-by-id (the cold-history continuation path): server A
+    /// opens a thread and runs a turn (writing its rollout to disk), then a SEPARATE server
+    /// B `resume_thread`s it by id and runs ANOTHER turn — proving a resumed thread keeps a
+    /// STABLE id and accepts further turns (so continuing a cold-loaded conversation works).
+    /// Self-contained: it creates its OWN throwaway thread in a temp dir, never touching a
+    /// real user thread. Ignored by default (real binary + auth + a sliver of quota).
+    /// Run: `cargo test --lib -- --ignored --nocapture live_resume_thread_and_continue`.
+    #[tokio::test]
+    #[ignore = "spawns a real codex app-server (network + ChatGPT auth + quota)"]
+    async fn live_resume_thread_and_continue() {
+        let cwd = std::env::temp_dir();
+
+        // Server A: create a thread + one turn so a rollout is persisted on disk.
+        let server_a = CodexServer::new();
+        let (thread_id, mut inbound_a) = server_a
+            .start_thread(&cwd, None)
+            .await
+            .expect("thread/start should succeed");
+        server_a
+            .request(
+                "turn/start",
+                serde_json::json!({ "threadId": thread_id, "input": [{"type":"text","text":"Reply with exactly: un"}] }),
+            )
+            .await
+            .expect("first turn/start accepted");
+        drain_until_turn_completed(&mut inbound_a).await;
+        server_a.shutdown_all().await;
+
+        // Server B (fresh process): RESUME the thread by id and run another turn.
+        let server_b = CodexServer::new();
+        let (resumed_id, mut inbound_b) = server_b
+            .resume_thread(&cwd, &thread_id, None)
+            .await
+            .expect("thread/resume by id should succeed against the real binary");
+        assert_eq!(resumed_id, thread_id, "resume must keep the SAME thread id (stable)");
+
+        server_b
+            .request(
+                "turn/start",
+                serde_json::json!({ "threadId": resumed_id, "input": [{"type":"text","text":"Reply with exactly: deux"}] }),
+            )
+            .await
+            .expect("turn/start on the RESUMED thread should be accepted");
+        let saw_text = drain_until_turn_completed(&mut inbound_b).await;
+        assert!(saw_text, "the resumed thread must produce assistant text on its next turn");
+
+        server_b.shutdown_all().await;
+    }
+
+    /// Drain a thread's inbound until `turn/completed`, reporting whether any assistant-text
+    /// notification was seen. Bounded so a stuck turn fails the test instead of hanging.
+    async fn drain_until_turn_completed(inbound: &mut mpsc::UnboundedReceiver<Incoming>) -> bool {
+        let mut saw_text = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            match tokio::time::timeout_at(deadline, inbound.recv()).await {
+                Ok(Some(Incoming::Notification { method, .. })) => {
+                    if method == "item/agentMessage/delta" || method == "item/completed" {
+                        saw_text = true;
+                    }
+                    if method == "turn/completed" {
+                        break;
+                    }
+                }
+                Ok(Some(_)) => {}
+                _ => break,
+            }
+        }
+        saw_text
     }
 
     /// Does the stream-control button work for Codex? It sends `SessionCommand::Interrupt`
