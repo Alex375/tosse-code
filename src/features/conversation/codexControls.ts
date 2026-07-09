@@ -24,7 +24,8 @@ export type CodexPersonality = "none" | "friendly" | "pragmatic";
  * The permission PRESET a Codex conversation runs under — the two independent axes
  * (sandbox × approval) collapsed into the four meaningful combinations, mirroring
  * OpenAI's own VS Code dropdown (Read only / Auto / Agent / Full access). ⇧Tab cycles
- * them in the composer, the analogue of Claude's permission-mode cycle.
+ * the SAFE ones in the composer (`PRESET_CYCLE`), the analogue of Claude's
+ * permission-mode cycle; « Accès total » is menu-only (see `PRESET_CYCLE`).
  */
 export type CodexPreset = "prudent" | "standard" | "auto" | "danger";
 
@@ -37,7 +38,8 @@ export interface CodexPresetDef {
   tone: string;
 }
 
-// Order = increasing autonomy / decreasing safety. `PRESET_CYCLE` (below) walks it.
+// Order = increasing autonomy / decreasing safety. The menu renders `PRESET_ORDER` in
+// full; ⇧Tab walks the restricted `PRESET_CYCLE` (both below).
 export const CODEX_PRESETS: Record<CodexPreset, CodexPresetDef> = {
   prudent: {
     label: "Prudent",
@@ -69,6 +71,12 @@ export const CODEX_PRESETS: Record<CodexPreset, CodexPresetDef> = {
   },
 };
 export const PRESET_ORDER: CodexPreset[] = ["prudent", "standard", "auto", "danger"];
+// The presets ⇧Tab cycles blindly. « Accès total » (no sandbox, no approvals, persisted
+// per conversation) is EXCLUDED — mirroring how Claude keeps bypassPermissions out of
+// PERM_CYCLE — so one stray keystroke can never disarm the sandbox; it stays reachable
+// only through a deliberate menu pick (whose hint spells out the risk). Cycling FROM
+// danger (indexOf → -1) lands on the safest preset: ⇧Tab always steps back to safety.
+export const PRESET_CYCLE: CodexPreset[] = PRESET_ORDER.filter((p) => p !== "danger");
 export const DEFAULT_CODEX_PRESET: CodexPreset = "standard";
 export const DEFAULT_CODEX_SUMMARY: CodexSummary = "auto";
 export const DEFAULT_CODEX_PERSONALITY: CodexPersonality = "none";

@@ -66,11 +66,16 @@ pub async fn set_skill_enabled(skill_path: &str, enabled: bool) -> Result<bool, 
 /// process it is sent to — so it also fires on `shared` (the app's long-lived server
 /// carrying the LIVE conversations); the transient writer's own reload would change
 /// nothing anyone sees. No live server running is the normal case, not an error.
+///
+/// Returns whether the LIVE sessions reflect the change: `true` when the reload
+/// succeeded (or there was nothing live to reload), `false` when it failed — the
+/// config IS written either way (it applies on the next spawn), but the front must
+/// warn the user instead of showing a state the live sessions don't have.
 pub async fn set_mcp_enabled(
     name: &str,
     enabled: bool,
     shared: &CodexServer,
-) -> Result<(), CodexError> {
+) -> Result<bool, CodexError> {
     if !is_toml_bare_key(name) {
         return Err(CodexError::Rpc(format!(
             "nom de serveur MCP invalide pour un toggle : « {name} »"
@@ -83,14 +88,17 @@ pub async fn set_mcp_enabled(
         &std::env::temp_dir(),
     )
     .await?;
-    // Best-effort ON TOP of a successful write: the config IS changed; a reload failure
-    // only delays live pickup (the next spawn reads the file anyway).
+    // ON TOP of a successful write: the config IS changed; a reload failure only delays
+    // live pickup (the next spawn reads the file anyway) — but it is REPORTED, not
+    // swallowed, so the UI never pretends the live sessions switched.
     match shared.request("config/mcpServer/reload", json!({})).await {
-        Ok(_) => {}
-        Err(CodexError::Closed) => {} // no live Codex session — nothing to reload
-        Err(e) => eprintln!("[codex-ext] config/mcpServer/reload on live server failed: {e}"),
+        Ok(_) => Ok(true),
+        Err(CodexError::Closed) => Ok(true), // no live Codex session — nothing to reload
+        Err(e) => {
+            eprintln!("[codex-ext] config/mcpServer/reload on live server failed: {e}");
+            Ok(false)
+        }
     }
-    Ok(())
 }
 
 /// Enable/disable a Codex PLUGIN. The config key is the FULL id (`name@marketplace`),

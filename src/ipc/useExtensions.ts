@@ -139,8 +139,11 @@ export function useCodexToggles(cwd?: string | null) {
       unwrap(commands.codexSetSkillEnabled(a.path, a.enabled)),
     onSuccess: refresh,
   });
+  // Resolves to whether the LIVE Codex sessions picked the change up — `false` means
+  // the config was written but the live reload failed (it applies on the next session
+  // spawn); the manager surfaces that as a non-blocking warning.
   const mcp = useMutation({
-    mutationFn: (a: { name: string; enabled: boolean }): Promise<null> =>
+    mutationFn: (a: { name: string; enabled: boolean }): Promise<boolean> =>
       unwrap(commands.codexSetMcpEnabled(a.name, a.enabled)),
     onSuccess: refresh,
   });

@@ -14,7 +14,7 @@ import type { BackendKind } from "../../store/conversationsStore";
 import type { UserTurnImage } from "../../store/types";
 import { isTauri } from "../../ipc/provider";
 import { useShallow } from "zustand/react/shallow";
-import { useCodexCompact, useInterrupt, useSendMessage } from "../../ipc/useCommands";
+import { useInterrupt, useSendMessage } from "../../ipc/useCommands";
 import { useSessionState, useUserMessageHistory } from "../../store/conversationStore";
 import {
   DEFAULT_EFFORT,
@@ -38,6 +38,7 @@ import { useAccountsLoggedOut } from "../../ipc/useAccounts";
 import { useCodexSkills } from "./codexSkills";
 import {
   CODEX_PRESETS,
+  PRESET_CYCLE,
   PRESET_ORDER,
   useCodexConvControls,
   useCodexControls,
@@ -45,8 +46,7 @@ import {
   type CodexSummary,
 } from "./codexControls";
 import { useContextData } from "../../store/contextData";
-import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
-import { useCodexPlanUsage } from "../../store/codexPlanUsage";
+import { useBackendUsage } from "./backendUsage";
 import { useUltraBlast } from "../../store/ultraBlast";
 import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
 import { RemoteControlChip } from "./RemoteControlChip";
@@ -196,9 +196,13 @@ export const ConductorComposer = forwardRef<
   // rules); only rendered/consumed when the conversation runs on Codex. Model + effort
   // live on the conversation record (shared picker/gauge); these are the Codex-only axes.
   const codexCtl = useCodexConvControls(session);
+  // ⇧Tab walks the SAFE presets only (PRESET_CYCLE): « Accès total » is excluded from
+  // the blind cycle — a stray keystroke must never disarm the sandbox — and stays
+  // reachable only through an explicit menu pick, mirroring Claude's PERM_CYCLE
+  // excluding bypassPermissions. From danger, ⇧Tab steps back to the safest preset.
   const cyclePreset = () => {
-    const i = PRESET_ORDER.indexOf(codexCtl.preset);
-    useCodexControls.getState().set(session, { preset: PRESET_ORDER[(i + 1) % PRESET_ORDER.length] });
+    const i = PRESET_CYCLE.indexOf(codexCtl.preset);
+    useCodexControls.getState().set(session, { preset: PRESET_CYCLE[(i + 1) % PRESET_CYCLE.length] });
   };
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -313,31 +317,16 @@ export const ConductorComposer = forwardRef<
   // FlightDeck card's context bar (see useContextData).
   const { ctx: ctxData, ready: ctxReady, plan: planData } = useContextData(session);
 
-  // Real plan-usage % (account-global, NOT per-conversation). The SOURCE is backend-aware:
-  //  - Claude: the Anthropic OAuth endpoint, background-polled here so the figure stays
-  //    warm; on open we refetch only when stale, to spare the rate-limited endpoint.
-  //    Gated on `!isCodex` so a Codex conversation NEVER reads Claude credentials / pops
-  //    the macOS Keychain — the two subscriptions (Max ≠ ChatGPT) are never mixed.
-  //  - Codex: the account-global store fed by the live `session_codex_plan_usage` PUSH
-  //    (no HTTP/Keychain surface exists), so there is nothing to poll or refetch.
-  // Both feed the SAME `PlanUsage` shape the popover renders.
-  const planUsage = usePlanUsage({ enabled: ctxReady && !isCodex });
-  const codexPlan = useCodexPlanUsage();
-  const usageData = isCodex ? codexPlan.usage : (planUsage.data ?? null);
-  const usageLoading = isCodex ? false : planUsage.isFetching;
-  const usageError = isCodex ? null : planUsage.error;
-  const usageUpdatedAt = isCodex ? codexPlan.updatedAt : planUsage.dataUpdatedAt;
-  const onOpenUsage = isCodex
-    ? undefined // push-fed: nothing to refetch on open
-    : () => {
-        // Throttle against the last attempt — success OR failure — so opening the popover
-        // after an error (e.g. a 429) doesn't immediately hammer the endpoint again.
-        const lastAttempt = Math.max(planUsage.dataUpdatedAt, planUsage.errorUpdatedAt);
-        if (Date.now() - lastAttempt >= PLAN_USAGE_STALE_MS) void planUsage.refetch();
-      };
-  // Compact the context: Codex fires the native RPC; Claude sends the `/compact` text turn.
-  const codexCompact = useCodexCompact(session);
-  const onCompact = isCodex ? () => codexCompact.mutate() : () => sendText("/compact");
+  // Real plan-usage % (account-global, NOT per-conversation) + the compact action.
+  // The whole backend-aware wiring (usage source, Forfait label, open/refresh/compact)
+  // lives in useBackendUsage, SHARED with the Flight Deck card's context meter
+  // (CardContext) so the two surfaces can never drift. Claude's `/compact` rides the
+  // composer's own send pipeline (optimistic bubble + scroll-to-bottom); `sendText` is
+  // declared below — the closure only runs on click, well after initialization.
+  const usage = useBackendUsage(session, {
+    enabled: ctxReady,
+    compactClaude: () => sendText("/compact"),
+  });
 
   // Every control routes through the conversations store: it persists the choice
   // (so a pre-spawn pick survives and is applied at spawn) AND pushes it to the live
@@ -391,9 +380,13 @@ export const ConductorComposer = forwardRef<
     }
   }, [gaugeValue]);
 
-  const chooseModel = (value: string) => {
+  const chooseModel = (value: string, optionBackend?: BackendKind) => {
     const store = useConversationsStore.getState();
-    const nextBackend = backendOfModel(value);
+    // The picked option's DECLARED backend is authoritative: the Codex section is fed
+    // by the dynamic `model/list` inventory, whose ids owe nothing to our naming
+    // heuristics — re-deriving from the id could flip/keep the wrong backend. The
+    // `backendOfModel` heuristic remains only for ids arriving WITHOUT an option.
+    const nextBackend = optionBackend ?? backendOfModel(value);
     // Picking a model from the OTHER backend on a fresh conversation IS how the
     // backend is chosen: flip kind + model in one shot (the store guards it to the
     // pre-spawn state). Otherwise it's a plain model change on the same backend.
@@ -813,7 +806,7 @@ export const ConductorComposer = forwardRef<
                   key={m.value}
                   on={modelFamily(modelId) === m.value}
                   hint={m.hint}
-                  onClick={() => chooseModel(m.value)}
+                  onClick={() => chooseModel(m.value, m.backend)}
                 >
                   {m.label}
                 </MenuItem>
@@ -1040,16 +1033,14 @@ export const ConductorComposer = forwardRef<
           ctx={ctxData}
           plan={isCodex ? null : planData}
           disabled={!ctxReady}
-          onCompact={onCompact}
-          usage={usageData}
-          usageLoading={usageLoading}
-          usageError={usageError}
-          usageUpdatedAt={usageUpdatedAt}
-          // Label the Forfait by backend ONLY when both backends are in play (a Codex-less
-          // setup has no ambiguity → keep the plain "Forfait").
-          usageBackend={codexAvailable ? backend : undefined}
-          onOpenUsage={onOpenUsage}
-          onRefreshUsage={isCodex ? undefined : () => void planUsage.refetch()}
+          onCompact={usage.onCompact}
+          usage={usage.usage}
+          usageLoading={usage.usageLoading}
+          usageError={usage.usageError}
+          usageUpdatedAt={usage.usageUpdatedAt}
+          usageBackend={usage.usageBackend}
+          onOpenUsage={usage.onOpenUsage}
+          onRefreshUsage={usage.onRefreshUsage}
         />
       </div>
     </div>

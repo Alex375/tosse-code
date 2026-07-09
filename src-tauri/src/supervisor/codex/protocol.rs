@@ -21,8 +21,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// JSON-RPC id. The server echoes back whatever we sent; the extension namespaces
-/// them as strings, so we always SEND strings — but tolerate a numeric id inbound.
+/// JSON-RPC id. We always SEND plain string ids (the server echoes them back, so
+/// response correlation is string-keyed) — but a SERVER-initiated request may carry a
+/// NUMERIC id (codex-rs uses an integer counter for its own requests). Such an id is
+/// carried as its raw JSON text so the reply can echo the ORIGINAL type (see
+/// [`classify`] / [`reply_result`]).
 pub type RequestId = String;
 
 // ---------------------------------------------------------------------------
@@ -64,7 +67,10 @@ pub enum Incoming {
     /// actor by `params.threadId` when present.
     Notification { method: String, params: Value },
     /// A server-initiated request that EXPECTS a reply keyed by `id` (approvals,
-    /// elicitations, currentTime/read…). Routed by `params.threadId`.
+    /// elicitations, currentTime/read…). Routed by `params.threadId`. `id` is the wire
+    /// id's RAW JSON TEXT (`7` → `"7"`, `"cx-1"` → `"\"cx-1\""` — see [`classify`]):
+    /// treat it as OPAQUE and hand it back to [`reply_result`]/[`reply_error`], which
+    /// re-emit it with its original JSON type.
     ServerRequest {
         id: RequestId,
         method: String,
@@ -90,23 +96,29 @@ impl Incoming {
     }
 }
 
-/// Coerce a JSON-RPC id (string per spec, tolerated numeric) to a string.
-fn id_to_string(v: &Value) -> Option<RequestId> {
+/// Coerce a response id to OUR pending-table key. We only ever SEND plain string ids,
+/// so a string comes back verbatim; a (tolerated) numeric echo is stringified.
+fn response_key(v: &Value) -> RequestId {
     match v {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 
 /// Sort a raw envelope into one of the four JSON-RPC shapes by presence of
 /// `method`/`id`. `(method, id)` → server request ; `(method, _)` → notification ;
-/// `(_, id)` → response ; neither → malformed.
+/// `(_, id)` → response ; neither → malformed. An id that is neither a string nor a
+/// number identifies nothing and is treated as absent.
 pub fn classify(raw: RawMessage) -> Incoming {
-    let id = raw.id.as_ref().and_then(id_to_string);
+    let id = raw.id.filter(|v| v.is_string() || v.is_number());
     match (raw.method, id) {
         (Some(method), Some(id)) => Incoming::ServerRequest {
-            id,
+            // Keep the id's RAW JSON text (`7` → "7", `"cx-1"` → "\"cx-1\"") so
+            // `reply_result`/`reply_error` can re-emit it with its ORIGINAL JSON type:
+            // the server correlates replies by TYPED id, so answering a numeric id
+            // with the string "7" would never resolve the approval — wedging the
+            // shared server's turn forever.
+            id: id.to_string(),
             method,
             params: raw.params.unwrap_or(Value::Null),
         },
@@ -115,7 +127,7 @@ pub fn classify(raw: RawMessage) -> Incoming {
             params: raw.params.unwrap_or(Value::Null),
         },
         (None, Some(id)) => Incoming::Response {
-            id,
+            id: response_key(&id),
             result: raw.result,
             error: raw.error,
         },
@@ -164,18 +176,10 @@ pub struct ItemEnvelope {
     pub item: ThreadItem,
 }
 
-/// Back-compat alias: the socle referred to the completed envelope as `ItemCompleted`.
-pub type ItemCompleted = ItemEnvelope;
-
-/// `turn/diff/updated` — the latest aggregated unified git diff across every file change
-/// in the turn. We keep it for a future turn-level diff view (phase 4.3); per-file diffs
-/// already ride on each `fileChange` item.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnDiffUpdated {
-    #[serde(default)]
-    pub diff: String,
-}
+// NOTE: `turn/diff/updated` (the turn-level aggregated diff) is deliberately NOT
+// modelled: nothing consumes it yet (the actor ignores the notification), and an unused
+// Deserialize type would drift silently against the wire. Re-add it — re-verifying the
+// wire shape — when the turn-level diff view lands (phase 4.3).
 
 /// One file's change inside a `fileChange` item: a `path`, an add/modify/delete `kind`,
 /// and a per-file unified `diff`. ⚠️ `kind` is a TAGGED OBJECT on the wire
@@ -392,15 +396,26 @@ pub fn notification(method: &str, params: Option<Value>) -> Value {
     }
 }
 
-/// Build a success reply to a server request (echo its `id`).
+/// Re-hydrate a ServerRequest id — kept as its raw JSON text by [`classify`] — back to
+/// a JSON value, so the reply echoes the id with its ORIGINAL type: `"7"` → `7`
+/// (number), `"\"cx-1\""` → `"cx-1"` (string). An id that is not valid JSON (e.g. a
+/// hand-built one that never went through `classify`) is echoed as a plain string.
+fn id_value(id: &str) -> Value {
+    serde_json::from_str::<Value>(id)
+        .ok()
+        .filter(|v| v.is_string() || v.is_number())
+        .unwrap_or_else(|| Value::String(id.to_string()))
+}
+
+/// Build a success reply to a server request (echo its `id`, original JSON type).
 pub fn reply_result(id: &str, result: Value) -> Value {
-    json!({ "id": id, "result": result })
+    json!({ "id": id_value(id), "result": result })
 }
 
 /// Build an error reply to a server request. Used defensively to decline approvals
 /// we cannot honor in-band, so the server never blocks waiting on us.
 pub fn reply_error(id: &str, code: i64, message: &str) -> Value {
-    json!({ "id": id, "error": { "code": code, "message": message } })
+    json!({ "id": id_value(id), "error": { "code": code, "message": message } })
 }
 
 /// The `initialize` params — who we are + our capabilities.
@@ -640,12 +655,13 @@ mod tests {
         let n = parse_incoming(r#"{"method":"turn/completed","params":{"threadId":"t"}}"#).unwrap();
         assert!(matches!(&n, Incoming::Notification { method, .. } if method == "turn/completed"));
         assert_eq!(n.thread_id(), Some("t"));
-        // Server request: id + method + params.
+        // Server request: id + method + params. The id is kept as its RAW JSON text
+        // (the string "9" → "\"9\"") so a reply can echo the original type.
         let s = parse_incoming(
             r#"{"id":"9","method":"item/fileChange/requestApproval","params":{"threadId":"t"}}"#,
         )
         .unwrap();
-        assert!(matches!(s, Incoming::ServerRequest { id, .. } if id == "9"));
+        assert!(matches!(s, Incoming::ServerRequest { id, .. } if id == "\"9\""));
         // Malformed: neither method nor id.
         let m = parse_incoming(r#"{"foo":1}"#).unwrap();
         assert!(matches!(m, Incoming::Malformed(_)));
@@ -656,6 +672,34 @@ mod tests {
         // We send string ids, but a numeric id inbound must still classify.
         let r = parse_incoming(r#"{"id":7,"result":null}"#).unwrap();
         assert!(matches!(r, Incoming::Response { id, .. } if id == "7"));
+    }
+
+    #[test]
+    fn server_request_reply_echoes_the_id_with_its_original_json_type() {
+        // Numeric wire id (codex-rs numbers its server→client requests with an integer
+        // counter): the reply must carry the NUMBER back, not the string "7", or the
+        // server-side correlation fails and the approval never resolves.
+        let s = parse_incoming(
+            r#"{"id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":"t"}}"#,
+        )
+        .unwrap();
+        let Incoming::ServerRequest { id, .. } = s else {
+            panic!("expected a ServerRequest");
+        };
+        assert_eq!(reply_result(&id, json!({"decision":"accept"}))["id"], 7);
+        assert_eq!(reply_error(&id, -32601, "nope")["id"], 7);
+
+        // String wire id: echoed back as a string, verbatim.
+        let s = parse_incoming(
+            r#"{"id":"cx-1","method":"item/fileChange/requestApproval","params":{"threadId":"t"}}"#,
+        )
+        .unwrap();
+        let Incoming::ServerRequest { id, .. } = s else {
+            panic!("expected a ServerRequest");
+        };
+        assert_eq!(reply_result(&id, json!({"decision":"accept"}))["id"], "cx-1");
+        // Defensive: a plain id that never went through `classify` echoes as a string.
+        assert_eq!(reply_error("req-9", -1, "x")["id"], "req-9");
     }
 
     #[test]
@@ -671,13 +715,13 @@ mod tests {
     #[test]
     fn unmodelled_thread_item_decodes_to_unknown_not_error() {
         // An item type phase 4.1 does not specialize (dynamicToolCall) must decode, not fail.
-        let p: ItemCompleted = serde_json::from_value(
+        let p: ItemEnvelope = serde_json::from_value(
             json!({"item":{"type":"dynamicToolCall","id":"d1","tool":"x","arguments":{}}}),
         )
         .unwrap();
         assert!(matches!(p.item, ThreadItem::Unknown));
         // The assistant text item round-trips with its text.
-        let p2: ItemCompleted =
+        let p2: ItemEnvelope =
             serde_json::from_value(json!({"item":{"type":"agentMessage","id":"m1","text":"hi"}})).unwrap();
         assert!(matches!(p2.item, ThreadItem::AgentMessage { text, .. } if text == "hi"));
     }

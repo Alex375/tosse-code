@@ -17,8 +17,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
+use super::protocol::Incoming;
 use super::server::{CodexError, CodexServer};
 
 /// The signed-in Codex account, whitelisted from `account/read` (no tokens — the wire
@@ -46,12 +47,21 @@ pub struct CodexLoginStart {
 struct ActiveLogin {
     login_id: String,
     server: Arc<CodexServer>,
-    /// Set by an explicit cancel so the watcher ends silently instead of reporting a
+    /// Set by [`cancel_current`] so the watcher ends silently instead of reporting a
     /// spurious failure when the teardown closes its channel.
     cancelled: Arc<AtomicBool>,
 }
 
 static ACTIVE_LOGIN: Mutex<Option<ActiveLogin>> = Mutex::const_new(None);
+
+/// Serializes login lifecycle transitions (start/cancel). `login_start`'s sequence —
+/// cancel the previous flow → spawn a dedicated server → `account/login/start` →
+/// register in [`ACTIVE_LOGIN`] — spans several awaits; without this lock two
+/// near-simultaneous starts both pass the cancel, race on the OAuth callback port, and
+/// the second registration clobbers the first server without teardown (its watcher then
+/// reports a phantom failure while the surviving login is legitimately in flight).
+/// The watcher task itself never takes this lock (no deadlock with its cleanup).
+static LOGIN_FLOW: Mutex<()> = Mutex::const_new(());
 
 /// Read the signed-in account (`account/read`) off a transient server. Logged out is a
 /// normal answer (`account: null`), not an error.
@@ -88,7 +98,10 @@ pub async fn login_start<F>(on_done: F) -> Result<CodexLoginStart, CodexError>
 where
     F: FnOnce(bool, Option<String>) + Send + 'static,
 {
-    cancel_current(true).await;
+    // Hold the flow lock across the WHOLE sequence (see LOGIN_FLOW): a second start
+    // arriving mid-sequence waits here, then cleanly cancels this one once registered.
+    let _flow = LOGIN_FLOW.lock().await;
+    cancel_current().await;
 
     let server = Arc::new(CodexServer::new());
     if let Err(e) = server.ensure_started(&std::env::temp_dir()).await {
@@ -135,36 +148,8 @@ where
     // the user just closes the browser tab; 10 min is generous), then report + tear down.
     let watch_id = login_id.clone();
     tokio::spawn(async move {
-        use super::protocol::Incoming;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
-        let outcome: Option<(bool, Option<String>)> = loop {
-            match tokio::time::timeout_at(deadline, rx.recv()).await {
-                Ok(Some(Incoming::Notification { method, params })) => {
-                    if method == "account/login/completed" {
-                        // A completion for ANOTHER loginId (stale flow) is ignored.
-                        let for_us = params
-                            .get("loginId")
-                            .and_then(Value::as_str)
-                            .map(|id| id == watch_id)
-                            .unwrap_or(true);
-                        if for_us {
-                            let success =
-                                params.get("success").and_then(Value::as_bool).unwrap_or(false);
-                            let error = params
-                                .get("error")
-                                .and_then(Value::as_str)
-                                .map(str::to_string);
-                            break Some((success, error));
-                        }
-                    }
-                }
-                Ok(Some(_)) => {}
-                Ok(None) => break None, // server died / torn down
-                Err(_) => {
-                    break Some((false, Some("délai d'autorisation dépassé (10 min)".into())))
-                }
-            }
-        };
+        let outcome = await_login_completed(&mut rx, &watch_id, deadline).await;
         // Clear the registry (if it still points at THIS login) and tear the server down.
         {
             let mut guard = ACTIVE_LOGIN.lock().await;
@@ -191,19 +176,56 @@ where
     Ok(CodexLoginStart { login_id, auth_url })
 }
 
-/// Cancel the in-flight login, if any. Safe to call when none is running.
-pub async fn login_cancel() {
-    cancel_current(true).await;
+/// Wait (bounded) for THIS login's `account/login/completed` on the dedicated server's
+/// global notification stream. Returns the wire outcome `(success, error)`, a
+/// synthesized timeout failure when the deadline passes, or `None` when the channel
+/// closes without a completion (server died / torn down).
+async fn await_login_completed(
+    rx: &mut mpsc::UnboundedReceiver<Incoming>,
+    login_id: &str,
+    deadline: tokio::time::Instant,
+) -> Option<(bool, Option<String>)> {
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(Incoming::Notification { method, params })) => {
+                if method == "account/login/completed" {
+                    // A completion for ANOTHER loginId (stale flow) is ignored; an
+                    // absent loginId is trusted (this server only runs OUR login).
+                    let for_us = params
+                        .get("loginId")
+                        .and_then(Value::as_str)
+                        .map(|id| id == login_id)
+                        .unwrap_or(true);
+                    if for_us {
+                        let success =
+                            params.get("success").and_then(Value::as_bool).unwrap_or(false);
+                        let error =
+                            params.get("error").and_then(Value::as_str).map(str::to_string);
+                        return Some((success, error));
+                    }
+                }
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => return None, // server died / torn down
+            Err(_) => return Some((false, Some("délai d'autorisation dépassé (10 min)".into()))),
+        }
+    }
 }
 
-/// Take and tear down the active login. `explicit` marks it user-initiated so the
-/// watcher stays silent instead of reporting a failure.
-async fn cancel_current(explicit: bool) {
+/// Cancel the in-flight login, if any. Safe to call when none is running. Waits for a
+/// concurrently starting login to finish registering (LOGIN_FLOW) before cancelling it.
+pub async fn login_cancel() {
+    let _flow = LOGIN_FLOW.lock().await;
+    cancel_current().await;
+}
+
+/// Take and tear down the active login, marking it cancelled so its watcher ends
+/// silently (the caller initiated the cancel and already knows) instead of reporting
+/// the closed channel as a spurious failure.
+async fn cancel_current() {
     let active = ACTIVE_LOGIN.lock().await.take();
     if let Some(active) = active {
-        if explicit {
-            active.cancelled.store(true, Ordering::SeqCst);
-        }
+        active.cancelled.store(true, Ordering::SeqCst);
         // Best-effort polite cancel (frees the callback port server-side), then teardown.
         let _ = active
             .server
@@ -241,6 +263,68 @@ mod tests {
         let s = parse_account_status(&out);
         assert!(!s.logged_in);
         assert!(s.email.is_none() && s.plan_type.is_none() && s.auth_method.is_none());
+    }
+
+    /// Far-future deadline so only the channel drives the outcome in these tests.
+    fn far_deadline() -> tokio::time::Instant {
+        tokio::time::Instant::now() + std::time::Duration::from_secs(3600)
+    }
+
+    fn completed(params: Value) -> Incoming {
+        Incoming::Notification { method: "account/login/completed".into(), params }
+    }
+
+    /// The watcher skips unrelated notifications and completions for a STALE loginId,
+    /// then settles on OUR completion — forwarding the wire's success + error verbatim.
+    #[tokio::test]
+    async fn login_watch_ignores_stale_login_ids_and_settles_on_ours() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(Incoming::Notification {
+            method: "account/rateLimits/updated".into(),
+            params: json!({}),
+        })
+        .unwrap();
+        tx.send(completed(json!({ "loginId": "stale", "success": true }))).unwrap();
+        tx.send(completed(json!({ "loginId": "ours", "success": false, "error": "boom" })))
+            .unwrap();
+
+        let outcome = await_login_completed(&mut rx, "ours", far_deadline()).await;
+        assert_eq!(outcome, Some((false, Some("boom".into()))));
+    }
+
+    /// A completion WITHOUT a loginId is trusted (the dedicated server only runs our
+    /// login) — the flow must not hang on a wire that omits the field.
+    #[tokio::test]
+    async fn login_watch_accepts_a_completion_without_login_id() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(completed(json!({ "success": true }))).unwrap();
+
+        let outcome = await_login_completed(&mut rx, "ours", far_deadline()).await;
+        assert_eq!(outcome, Some((true, None)));
+    }
+
+    /// Past the deadline with no completion, the watcher reports an explicit timeout
+    /// failure — never a silent hang. (Already-elapsed deadline: fires on first poll.)
+    #[tokio::test]
+    async fn login_watch_times_out_with_an_explicit_failure() {
+        let (_tx, mut rx) = mpsc::unbounded_channel::<Incoming>(); // sender alive: recv pends
+        let deadline = tokio::time::Instant::now();
+
+        let outcome = await_login_completed(&mut rx, "ours", deadline).await;
+        let (success, error) = outcome.expect("timeout must produce an outcome");
+        assert!(!success);
+        assert!(error.as_deref().is_some_and(|e| e.contains("délai")), "{error:?}");
+    }
+
+    /// A channel that closes with no completion (server died / torn down) yields `None`
+    /// — the caller distinguishes an explicit cancel from a mid-flow death there.
+    #[tokio::test]
+    async fn login_watch_reports_a_closed_channel_as_none() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Incoming>();
+        drop(tx);
+
+        let outcome = await_login_completed(&mut rx, "ours", far_deadline()).await;
+        assert_eq!(outcome, None);
     }
 
     /// PROBE (read-only): `account/read` against the real binary — prints the redacted

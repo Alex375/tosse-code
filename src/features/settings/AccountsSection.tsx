@@ -47,6 +47,63 @@ function statusHint(parts: Array<string | null | undefined>): string {
   return parts.filter(Boolean).join(" · ");
 }
 
+/** The browser-open step of a login flow. `openUrl`'s rejection is NEVER swallowed
+ *  (zero-silent-error): it lands in `error`, and `url` keeps the auth link around so
+ *  the UI can offer the manual fallback (clickable retry + copiable text) — the flow
+ *  must stay completable even when the opener is broken (no default browser…). */
+function useAuthUrlOpener() {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const open = (u: string) => {
+    setUrl(u);
+    setError(null);
+    openUrl(u).catch((e: unknown) => {
+      setError(
+        `Impossible d'ouvrir le navigateur : ${e instanceof Error ? e.message : String(e)}`,
+      );
+    });
+  };
+  return { url, error, open };
+}
+
+/** Inline fallback when the browser open failed: the error plus the auth URL itself,
+ *  clickable (retries the opener) and selectable (copy by hand). */
+function OpenUrlFallback({
+  error,
+  url,
+  onRetry,
+}: {
+  error: string;
+  url: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className={styles.accountErr}>
+      {error}
+      {" — ouvre ce lien à la main : "}
+      {/* role="link" span (not <a>): opened via the opener plugin, and the text stays
+          selectable so the URL can be copied if the retry fails too. */}
+      <span
+        role="link"
+        tabIndex={0}
+        style={{
+          textDecoration: "underline",
+          cursor: "pointer",
+          userSelect: "text",
+          wordBreak: "break-all",
+        }}
+        title="Réessayer d'ouvrir dans le navigateur — le texte reste sélectionnable pour le copier"
+        onClick={onRetry}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onRetry();
+        }}
+      >
+        {url}
+      </span>
+    </div>
+  );
+}
+
 function ClaudeAccountGroup() {
   const status = useClaudeAccount(true);
   const { loginStart, loginCode, loginCancel, logout } = useClaudeAccountActions();
@@ -54,6 +111,8 @@ function ClaudeAccountGroup() {
   const [step, setStep] = useState<"idle" | "code">("idle");
   const [code, setCode] = useState("");
   const [confirmingLogout, setConfirmingLogout] = useState(false);
+  // Browser-open step — its failure surfaces inline with the URL as a manual fallback.
+  const opener = useAuthUrlOpener();
   const err =
     (loginStart.error as Error | null)?.message ??
     (loginCode.error as Error | null)?.message ??
@@ -65,7 +124,7 @@ function ClaudeAccountGroup() {
       onSuccess: (url) => {
         setStep("code");
         setCode("");
-        void openUrl(url);
+        opener.open(url);
       },
     });
   };
@@ -175,6 +234,15 @@ function ClaudeAccountGroup() {
           }
         />
       ) : null}
+      {/* The browser never opened: say so and keep the flow completable by hand — the
+          pasted-code step still works once the user reaches the URL themselves. */}
+      {step === "code" && opener.error && opener.url ? (
+        <OpenUrlFallback
+          error={opener.error}
+          url={opener.url}
+          onRetry={() => opener.open(opener.url!)}
+        />
+      ) : null}
       {err ? <div className={styles.accountErr}>{err}</div> : null}
     </SettingsGroup>
   );
@@ -188,6 +256,8 @@ function CodexAccountGroup() {
   const [waiting, setWaiting] = useState(false);
   const [loginErr, setLoginErr] = useState<string | null>(null);
   const [confirmingLogout, setConfirmingLogout] = useState(false);
+  // Browser-open step — its failure surfaces inline with the URL as a manual fallback.
+  const opener = useAuthUrlOpener();
 
   useEffect(() => {
     let disposed = false;
@@ -212,7 +282,7 @@ function CodexAccountGroup() {
     loginStart.mutate(undefined, {
       onSuccess: (res) => {
         setWaiting(true);
-        void openUrl(res.authUrl);
+        opener.open(res.authUrl);
       },
     });
   };
@@ -281,6 +351,15 @@ function CodexAccountGroup() {
           )
         }
       />
+      {/* The browser never opened: the dedicated app-server is still holding the OAuth
+          callback (10 min), so opening the URL by hand completes the flow normally. */}
+      {waiting && opener.error && opener.url ? (
+        <OpenUrlFallback
+          error={opener.error}
+          url={opener.url}
+          onRetry={() => opener.open(opener.url!)}
+        />
+      ) : null}
       {err ? <div className={styles.accountErr}>{err}</div> : null}
     </SettingsGroup>
   );

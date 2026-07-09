@@ -3,6 +3,7 @@
 // Selected at runtime by provider.ts when window.__TAURI_INTERNALS__ is absent.
 
 import type {
+  Backend,
   BranchInfo,
   CommitFile,
   CommitInfo,
@@ -12,6 +13,7 @@ import type {
   DiskConversation,
   ClaudeAccountStatus,
   CodexAccountStatus,
+  CodexControls,
   CodexHooksSnapshot,
   CodexLoginStart,
   CodexPluginsLive,
@@ -23,6 +25,7 @@ import type {
   GitDiff,
   GitFileEntry,
   GitStatus,
+  ImageAttachment,
   ImageContent,
   MarketplaceInfo,
   McpAuthResult,
@@ -241,8 +244,9 @@ export const mockCommands = {
   async codexSetSkillEnabled(_path: string, enabled: boolean): Promise<Result<boolean, string>> {
     return ok(enabled);
   },
-  async codexSetMcpEnabled(_name: string, _enabled: boolean): Promise<Result<null, string>> {
-    return ok(null);
+  async codexSetMcpEnabled(_name: string, _enabled: boolean): Promise<Result<boolean, string>> {
+    // true = live sessions picked the change up (mirrors the real command's contract).
+    return ok(true);
   },
   async codexSetPluginEnabled(_pluginId: string, _enabled: boolean): Promise<Result<null, string>> {
     return ok(null);
@@ -390,8 +394,12 @@ export const mockCommands = {
   async sendMessage(
     session: string,
     _text: string,
-    _images?: { media_type: string; data: string }[],
+    _images: ImageAttachment[],
+    codexControls: CodexControls | null,
   ): Promise<Result<null, string>> {
+    // No actor to apply the per-turn Codex overrides to — log them so a dev/Playwright
+    // run driving the demo Codex conversation can observe they were actually folded in.
+    if (codexControls) console.info("[mock] sendMessage codexControls:", codexControls);
     const demo =
       typeof location !== "undefined"
         ? new URLSearchParams(location.search).get("demo")
@@ -531,9 +539,12 @@ export const mockCommands = {
     return ok(mockTaskOutput(taskId));
   },
 
-  async openInTerminal(cwd: string, sessionId: string): Promise<Result<null, string>> {
-    // No OS terminal in the browser mock — just log what the real command would run.
-    console.info(`[mock] openInTerminal: cd ${cwd} && claude --resume ${sessionId}`);
+  async openInTerminal(cwd: string, sessionId: string, backend: Backend): Promise<Result<null, string>> {
+    // No OS terminal in the browser mock — log what the real command would run,
+    // backend-aware like the core's resume_invocation (`claude --resume` vs
+    // `codex resume`; same id, different CLI syntax).
+    const resume = backend === "codex" ? `codex resume ${sessionId}` : `claude --resume ${sessionId}`;
+    console.info(`[mock] openInTerminal: cd ${cwd} && ${resume}`);
     return ok(null);
   },
 

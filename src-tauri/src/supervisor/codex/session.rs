@@ -12,6 +12,7 @@
 //! relies on). The SOCLE emits enough to "answer text"; rich item rendering is 4.1.
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -23,14 +24,14 @@ use crate::supervisor::model::{
     RemoteControlState, SessionEmitter, SessionStatePayload,
 };
 use crate::supervisor::session::{InitialControls, SessionCommand, SessionError, SessionHandle};
-use crate::supervisor::transport::{ImageAttachment, SpawnConfig};
+use crate::supervisor::transport::{ImageAttachment, SpawnConfig, TransportError};
 
 use super::protocol::{
     reply_result, CodexControls, CommandApprovalParams, ErrorNotification, FileChangeApprovalParams,
     Incoming, ItemDelta, ItemEnvelope, RateLimitSnapshot, RateLimitWindow, ThreadItem,
     TurnCompleted, TurnStartParams, TurnStartResult, UserInput,
 };
-use super::server::CodexServer;
+use super::server::{CodexError, CodexServer};
 
 /// Spawn a Codex session: start the actor task and return a handle to drive it. The
 /// signature MIRRORS [`crate::supervisor::session::spawn_session`] (same `SpawnConfig`
@@ -45,6 +46,15 @@ pub fn spawn_session(
     on_exit: Box<dyn FnOnce() + Send + 'static>,
     server: Arc<CodexServer>,
 ) -> Result<SessionHandle, SessionError> {
+    // Mirror the Claude transport's SYNCHRONOUS cwd guard (transport.rs): the IPC
+    // caller's contract is "Err ⇒ recoverable spawn failure" — on it the front detects
+    // a deleted worktree cwd and re-spawns in the repo's main checkout, re-delivering
+    // the user's message. Failing only asynchronously (an actor notice) would skip
+    // that recovery and LOSE the message. Same error type + wording as Claude so both
+    // backends surface the identical, actionable cause.
+    if !cfg.cwd.exists() {
+        return Err(SessionError::Spawn(TransportError::CwdMissing(cfg.cwd.clone())));
+    }
     let (cmd_tx, cmd_rx) = mpsc::channel(64);
     tokio::spawn(run_codex_actor(id.clone(), cfg, emitter, cmd_rx, on_exit, server));
     Ok(SessionHandle::from_channel(id, cmd_tx))
@@ -164,11 +174,16 @@ async fn run_codex_actor(
     server.close_thread(&thread_id).await;
     // Evict the dead session from the IPC registry.
     on_exit();
-    // Release a `shutdown_and_wait` caller LAST — after we've stopped consuming this
-    // conversation's inbound and dropped its route. ⚠️ At the socle this does NOT yet
-    // interrupt an in-flight turn on the shared server (`close_thread` only drops the
-    // route). Wiring the Codex rewind (phase 4.x) will additionally need a `turn/interrupt`
-    // + ack HERE before truncating the rollout, or it could race a still-live writer.
+    // Best-effort cleanup of this session's materialized image attachments (pasted
+    // screenshots can hold secrets — never leave them to the OS temp reaper alone).
+    core.cleanup_images_dir();
+    // Release a `shutdown_and_wait` caller LAST — after the pending approvals were
+    // cancelled, the in-flight turn was interrupted (`interrupt_if_active` above, on
+    // the requested-stop path), we stopped consuming this conversation's inbound, and
+    // its route was dropped. ⚠️ `interrupt_if_active` awaits only the `turn/interrupt`
+    // RPC *response*, not the turn's terminal notification — a rewind that truncates
+    // the rollout (phase 4.x) may additionally want to await `turn/completed` here
+    // before cutting, or it could race the tail of a still-flushing writer.
     if let Some(ack) = shutdown_ack {
         let _ = ack.send(());
     }
@@ -207,6 +222,13 @@ struct CodexCore {
     /// / …), refreshed from each `SendUser` and re-asserted as per-turn overrides on
     /// every `turn/start` — the app-server has no separate settings channel.
     controls: CodexControls,
+    /// This session's PRIVATE dir for materialized image attachments (Codex reads
+    /// images from a file PATH, not base64 — see [`materialize_image`]). Created
+    /// lazily on first image, removed best-effort at actor teardown
+    /// ([`Self::cleanup_images_dir`]) so pasted screenshots (which can hold secrets)
+    /// don't linger. Uuid-suffixed: unique across app restarts AND concurrent builds
+    /// sharing `$TMPDIR`.
+    images_dir: PathBuf,
 }
 
 impl CodexCore {
@@ -221,6 +243,26 @@ impl CodexCore {
             pending_approvals: HashSet::new(),
             current_turn_id: None,
             controls: CodexControls::default(),
+            images_dir: std::env::temp_dir()
+                .join("flightdeck-codex-attachments")
+                .join(uuid::Uuid::new_v4().to_string()),
+        }
+    }
+
+    /// Remove this session's attachments dir (see [`materialize_image`]). Best-effort:
+    /// a failure is non-fatal (the OS temp reaper collects the dir eventually), but
+    /// logged so it never disappears without trace. What REMAINS on disk after a hard
+    /// kill (no teardown runs): the session dir under
+    /// `$TMPDIR/flightdeck-codex-attachments/`, until the OS reaps it.
+    fn cleanup_images_dir(&self) {
+        match std::fs::remove_dir_all(&self.images_dir) {
+            Ok(()) => {}
+            // No image was ever materialized (the dir is created lazily).
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!(
+                "[codex-session] failed to clean attachments dir {}: {e}",
+                self.images_dir.display()
+            ),
         }
     }
 
@@ -280,7 +322,31 @@ impl CodexCore {
                 if let Some(c) = controls {
                     self.controls = c;
                 }
-                let input = user_inputs(text, &images);
+                let (input, failed_images) = user_inputs(text, &images, &self.images_dir);
+                // A dropped attachment must NEVER be silent: the composer showed its
+                // thumbnail, so without this the user believes the model saw an image it
+                // never received (zero-silent-error rule).
+                if !failed_images.is_empty() {
+                    let msg = if failed_images.len() == 1 {
+                        format!(
+                            "une image jointe n'a pas pu être transmise à Codex : {}",
+                            failed_images[0]
+                        )
+                    } else {
+                        format!(
+                            "{} images jointes n'ont pas pu être transmises à Codex : {}",
+                            failed_images.len(),
+                            failed_images.join(" ; ")
+                        )
+                    };
+                    self.emit_notice("send_failed", &msg);
+                    // Nothing survived (no text, every image failed) → refuse the turn:
+                    // the notice above told the user, and a blank turn would only burn
+                    // quota for an answer to nothing.
+                    if input.is_empty() {
+                        return;
+                    }
+                }
 
                 // A message sent WHILE a turn is in flight STEERS the active turn (Codex's
                 // analogue of the CLI's mid-turn queue-injection), rather than starting a
@@ -289,10 +355,11 @@ impl CodexCore {
                 // ⚠️ `busy` LAGS the server: it clears only when the actor DEQUEUES
                 // `turn/completed`, not when the server actually finishes. So a message
                 // sent just as a turn ends can find `busy` still true with a turn id that
-                // has already completed → the steer is rejected. On ANY steer failure we
-                // FALL THROUGH to `turn/start` rather than drop the message: a rejected
-                // steer is atomic (nothing was injected), so it can't duplicate, and the
-                // message is really a fresh turn. Only a SUCCESSFUL steer returns early.
+                // has already completed → the steer is rejected. On a steer failure that is
+                // PROVABLY atomic (nothing was injected — see `steer_outcome_uncertain`) we
+                // FALL THROUGH to `turn/start` rather than drop the message: it can't
+                // duplicate, and the message is really a fresh turn. Only a SUCCESSFUL
+                // steer returns early.
                 if self.state.busy {
                     if let Some(turn_id) = self.current_turn_id.clone() {
                         let params = json!({
@@ -300,11 +367,27 @@ impl CodexCore {
                             "input": &input,
                             "expectedTurnId": turn_id,
                         });
-                        if server.request("turn/steer", params).await.is_ok() {
-                            return; // steered into the live turn
+                        match server.request("turn/steer", params).await {
+                            Ok(_) => return, // steered into the live turn
+                            // ⚠️ A Timeout is NOT atomic: the steer WAS written to the
+                            // server, which may have applied it with only its response
+                            // arriving late (the pending slot is gone after 30 s, so a
+                            // late success is dropped). Re-sending the same input via
+                            // `turn/start` could inject the user's message TWICE —
+                            // surface the uncertainty instead of guessing.
+                            Err(e) if steer_outcome_uncertain(&e) => {
+                                self.emit_notice(
+                                    "send_failed",
+                                    "le serveur n'a pas confirmé la prise en compte du message à temps — il a peut-être quand même été injecté dans le tour en cours ; vérifiez la réponse avant de le renvoyer",
+                                );
+                                return;
+                            }
+                            // Steer rejected in-band (turn already completed / not
+                            // steerable) or the server is gone (the live turn died with
+                            // it) → fall through and start a fresh turn below; nothing
+                            // was injected, so it can't duplicate — never a silent drop.
+                            Err(_) => {}
                         }
-                        // Steer rejected (turn already completed / not steerable) → fall
-                        // through and start a fresh turn below; never a silent drop.
                     }
                 }
 
@@ -332,14 +415,29 @@ impl CodexCore {
                 // `turn/interrupt` REQUIRES the live turnId alongside the threadId — the
                 // stream-control button is a no-op without it.
                 if let Some(turn_id) = self.current_turn_id.clone() {
-                    let _ = server
+                    // A failed interrupt means the turn KEEPS RUNNING on the shared
+                    // server (burning quota, writing the rollout) while the user believes
+                    // they stopped it — surface it (mirror of the Claude backend's
+                    // control_error), never a silent no-op.
+                    if let Err(e) = server
                         .request(
                             "turn/interrupt",
                             json!({ "threadId": thread_id, "turnId": turn_id }),
                         )
-                        .await;
+                        .await
+                    {
+                        self.emit_notice("error", &format!("interruption du tour impossible : {e}"));
+                    }
+                } else if self.state.busy {
+                    // Busy with NO turn id (the turn/start response parse missed it and
+                    // no notification refilled it yet): the stop cannot be delivered —
+                    // say so rather than silently swallowing the click.
+                    self.emit_notice(
+                        "error",
+                        "interruption impossible : identifiant du tour introuvable — le tour se terminera de lui-même",
+                    );
                 }
-                // No live turn → nothing to interrupt; `turn/completed` settles `busy`.
+                // Not busy → nothing to interrupt; `turn/completed` settles `busy`.
             }
             SessionCommand::AnswerPermission { request_id, decision } => {
                 // Reply to the routed approval server-request. Codex approvals can't rewrite
@@ -470,15 +568,24 @@ impl CodexCore {
 
     /// Interrupt an in-flight turn on the shared server (if any). Used at teardown so
     /// turning the stream off actually STOPS the turn (the Claude backend gets this by
-    /// killing its process; the shared Codex server can't be killed).
+    /// killing its process; the shared Codex server can't be killed). A failure is
+    /// surfaced: the conversation is closing, but the turn would keep running
+    /// server-side (quota + rollout writes) — the notice (emitted BEFORE the actor's
+    /// final `emit_ended`) leaves a visible trace instead of a silent leak.
     async fn interrupt_if_active(&self, thread_id: &str, server: &CodexServer) {
         if let Some(turn_id) = self.current_turn_id.clone() {
-            let _ = server
+            if let Err(e) = server
                 .request(
                     "turn/interrupt",
                     json!({ "threadId": thread_id, "turnId": turn_id }),
                 )
-                .await;
+                .await
+            {
+                self.emit_notice(
+                    "error",
+                    &format!("interruption du tour à l'arrêt de la session impossible : {e}"),
+                );
+            }
         }
     }
 
@@ -1159,35 +1266,59 @@ fn epoch_to_seconds_string(n: f64) -> String {
     secs.to_string()
 }
 
+/// Whether a failed `turn/steer` may have actually been APPLIED server-side — in which
+/// case re-sending the same input as a fresh `turn/start` could inject the user's
+/// message TWICE. Only a `Timeout` is uncertain: the request WAS written to the server
+/// and only the response is missing (a late success is dropped by the demux). An
+/// in-band `Rpc` rejection is provably atomic (nothing injected), and `Closed`/
+/// `Transport` mean the server is gone — the live turn died with it, so a re-send
+/// can't duplicate.
+fn steer_outcome_uncertain(e: &CodexError) -> bool {
+    matches!(e, CodexError::Timeout(_))
+}
+
 /// Build the `turn/start` input blocks from a message: the text (if any) then one
 /// `localImage` per joined image. Codex reads images from a file PATH (unlike Claude's
-/// inline base64), so each attachment is materialized to a temp file. Guarantees at
-/// least one block (an empty text) so an image-only turn still has valid input.
-fn user_inputs(text: String, images: &[ImageAttachment]) -> Vec<UserInput> {
+/// inline base64), so each attachment is materialized under `dir` (the session's
+/// private attachments dir). Returns the inputs PLUS one human-readable reason per
+/// attachment that could NOT be materialized — the caller surfaces them, never a
+/// silently amputated send. Guarantees at least one block (an empty text) so an
+/// image-only turn still has valid input, EXCEPT when every block failed (empty
+/// inputs + non-empty failures): then the caller refuses the turn instead of
+/// fabricating a blank one.
+fn user_inputs(
+    text: String,
+    images: &[ImageAttachment],
+    dir: &Path,
+) -> (Vec<UserInput>, Vec<String>) {
     let mut inputs = Vec::new();
+    let mut failed = Vec::new();
     if !text.trim().is_empty() {
         inputs.push(UserInput::text(text));
     }
     for img in images {
-        if let Some(path) = materialize_image(img) {
-            inputs.push(UserInput::local_image(path));
+        match materialize_image(img, dir) {
+            Ok(path) => inputs.push(UserInput::local_image(path)),
+            Err(reason) => failed.push(reason),
         }
     }
-    if inputs.is_empty() {
+    if inputs.is_empty() && failed.is_empty() {
         inputs.push(UserInput::text(String::new()));
     }
-    inputs
+    (inputs, failed)
 }
 
-/// Write a base64 image attachment to a temp file and return its path, so it can be
-/// referenced as a Codex `localImage`. `None` if the base64 is undecodable or the write
-/// fails (the attachment is then simply dropped — never a failed turn). Files live under
-/// a dedicated temp dir; the OS reaps them (they must outlive the turn the model reads).
-fn materialize_image(img: &ImageAttachment) -> Option<String> {
+/// Write a base64 image attachment under `dir` (the session's attachments dir, created
+/// lazily here) and return its path, so it can be referenced as a Codex `localImage`.
+/// `Err` carries a human-readable (French, UI-bound) reason — undecodable base64 or an
+/// unwritable temp dir — for the caller to surface. Files must OUTLIVE the turn (the
+/// app-server reads them from disk mid-turn), so no per-file deletion here: the whole
+/// dir is removed at actor teardown (`CodexCore::cleanup_images_dir`).
+fn materialize_image(img: &ImageAttachment, dir: &Path) -> Result<String, String> {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(img.data.trim())
-        .ok()?;
+        .map_err(|e| format!("image illisible (base64 invalide : {e})"))?;
     let ext = match img.media_type.as_str() {
         "image/png" => "png",
         "image/jpeg" => "jpg",
@@ -1195,11 +1326,12 @@ fn materialize_image(img: &ImageAttachment) -> Option<String> {
         "image/webp" => "webp",
         _ => "png",
     };
-    let dir = std::env::temp_dir().join("flightdeck-codex-attachments");
-    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("dossier temporaire inaccessible ({}) : {e}", dir.display()))?;
     let path = dir.join(format!("{}.{ext}", uuid::Uuid::new_v4()));
-    std::fs::write(&path, &bytes).ok()?;
-    Some(path.to_string_lossy().to_string())
+    std::fs::write(&path, &bytes)
+        .map_err(|e| format!("écriture de l'image impossible ({}) : {e}", path.display()))?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// Join a reasoning item's `summary` (human-facing) then `content` (raw chain, often
@@ -1304,26 +1436,65 @@ mod tests {
         assert_eq!(codex_title_from_description("   \n  \n"), None);
     }
 
+    /// A throwaway attachments dir for `user_inputs` tests (the per-session dir the
+    /// actor normally owns).
+    fn tmp_images_dir() -> PathBuf {
+        std::env::temp_dir()
+            .join("flightdeck-codex-attachments")
+            .join(format!("test-{}", uuid::Uuid::new_v4()))
+    }
+
     #[test]
     fn user_inputs_builds_text_then_images_and_never_empty() {
-        // Plain text → a single text block.
-        let inputs = user_inputs("hello".into(), &[]);
+        let dir = tmp_images_dir();
+        // Plain text → a single text block, no failures.
+        let (inputs, failed) = user_inputs("hello".into(), &[], &dir);
+        assert!(failed.is_empty());
         let v = serde_json::to_value(&inputs).unwrap();
         assert_eq!(v, serde_json::json!([{"type":"text","text":"hello"}]));
         // Empty text, no image → still one (empty) text block so the turn has valid input.
-        let inputs = user_inputs("   ".into(), &[]);
+        let (inputs, failed) = user_inputs("   ".into(), &[], &dir);
+        assert!(failed.is_empty());
         assert_eq!(inputs.len(), 1);
-        // A real image materializes to a localImage pointing at a temp file on disk.
+        // A real image materializes to a localImage pointing at a file in the given dir.
         use base64::Engine;
         let png = base64::engine::general_purpose::STANDARD.encode([0x89, 0x50, 0x4e, 0x47]);
         let img = ImageAttachment { media_type: "image/png".into(), data: png };
-        let inputs = user_inputs("look".into(), std::slice::from_ref(&img));
+        let (inputs, failed) = user_inputs("look".into(), std::slice::from_ref(&img), &dir);
+        assert!(failed.is_empty());
         let v = serde_json::to_value(&inputs).unwrap();
         assert_eq!(v[0]["type"], "text");
         assert_eq!(v[1]["type"], "localImage");
         let path = v[1]["path"].as_str().unwrap();
         assert!(std::path::Path::new(path).is_file(), "the image must be written to disk");
-        let _ = std::fs::remove_file(path);
+        assert!(path.starts_with(dir.to_string_lossy().as_ref()), "the file lives in the session dir");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn user_inputs_reports_failed_attachments_instead_of_silently_dropping() {
+        let dir = tmp_images_dir();
+        // Undecodable base64 → the attachment comes back as a FAILURE, never vanishes.
+        let bad = ImageAttachment { media_type: "image/png".into(), data: "not!base64!!".into() };
+        let (inputs, failed) = user_inputs("look".into(), std::slice::from_ref(&bad), &dir);
+        assert_eq!(inputs.len(), 1, "the text still goes");
+        assert_eq!(failed.len(), 1, "the dropped attachment must be reported");
+        // An image-only send where EVERY attachment failed yields NO inputs (the caller
+        // then refuses the turn) rather than a fabricated blank turn.
+        let (inputs, failed) = user_inputs("  ".into(), std::slice::from_ref(&bad), &dir);
+        assert!(inputs.is_empty(), "nothing survived → no fabricated empty input");
+        assert_eq!(failed.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn steer_timeout_is_uncertain_but_rejection_and_closed_are_not() {
+        // A Timeout may have been APPLIED server-side (only the response is missing) →
+        // re-sending could duplicate the message; an in-band rejection is atomic and
+        // Closed means the live turn died with the server → both safe to fall through.
+        assert!(steer_outcome_uncertain(&CodexError::Timeout("turn/steer")));
+        assert!(!steer_outcome_uncertain(&CodexError::Rpc("not steerable".into())));
+        assert!(!steer_outcome_uncertain(&CodexError::Closed));
     }
 
     #[test]
@@ -1733,5 +1904,189 @@ mod tests {
             })
             .collect();
         assert_eq!(ids, vec!["r1", "m1"]);
+    }
+
+    /// Count the emitted notices of a given subtype.
+    fn notice_count(items: &[ConversationItem], wanted: &str) -> usize {
+        items
+            .iter()
+            .filter(|i| matches!(i, ConversationItem::Notice { subtype, .. } if subtype == wanted))
+            .count()
+    }
+
+    /// A plain-text SendUser command, for the on_command error-path tests.
+    fn send_user(text: &str) -> SessionCommand {
+        SessionCommand::SendUser { text: text.into(), images: vec![], controls: None }
+    }
+
+    // Mirror of the Claude backend's `send_user_text_on_a_dead_session_surfaces_a_notice`:
+    // a `turn/start` that can't reach the server (never-started server → Closed at once)
+    // must surface a `send_failed` notice AND settle `busy` — never a silent drop with a
+    // spinner stuck forever.
+    #[tokio::test]
+    async fn send_user_failure_surfaces_a_notice_and_settles_busy() {
+        let (mut c, sink) = core();
+        let server = Arc::new(CodexServer::new()); // never started → requests fail Closed
+        c.on_command(send_user("hello"), "t1", &server).await;
+        assert!(!c.state.busy, "a failed turn/start must settle busy");
+        assert_eq!(notice_count(&items(&sink), "send_failed"), 1);
+    }
+
+    // The steer fall-through: busy + a live turn id → SendUser first tries `turn/steer`;
+    // on an ATOMIC failure (here Closed) it must FALL THROUGH to `turn/start` — whose own
+    // failure then surfaces as send_failed + settles busy. Without the fall-through there
+    // would be NO notice and `busy` would stay true forever (the silent-swallow class).
+    #[tokio::test]
+    async fn rejected_steer_falls_through_to_turn_start_whose_failure_is_surfaced() {
+        let (mut c, sink) = core();
+        c.state.busy = true;
+        c.current_turn_id = Some("T1".into());
+        let server = Arc::new(CodexServer::new());
+        c.on_command(send_user("mid-turn message"), "t1", &server).await;
+        assert!(!c.state.busy, "the fall-through turn/start failed → busy settled");
+        assert_eq!(
+            notice_count(&items(&sink), "send_failed"),
+            1,
+            "the fall-through's failure must be surfaced, not swallowed"
+        );
+    }
+
+    // Findings 18/22: a SendUser whose ONLY content is an unmaterializable image must be
+    // REFUSED with a visible notice — exactly one send_failed (the dropped attachment),
+    // proving no blank turn/start was attempted (that would add a second notice here).
+    #[tokio::test]
+    async fn send_user_with_only_a_failed_image_refuses_the_turn_with_a_notice() {
+        let (mut c, sink) = core();
+        let server = Arc::new(CodexServer::new());
+        let bad = ImageAttachment { media_type: "image/png".into(), data: "!!!".into() };
+        c.on_command(
+            SessionCommand::SendUser { text: "  ".into(), images: vec![bad], controls: None },
+            "t1",
+            &server,
+        )
+        .await;
+        assert!(!c.state.busy, "a refused turn must not leave busy set");
+        assert_eq!(
+            notice_count(&items(&sink), "send_failed"),
+            1,
+            "one notice for the dropped attachment, and NO turn attempted"
+        );
+    }
+
+    // A failed `turn/interrupt` (server unreachable) means the turn keeps running
+    // server-side — the Stop click must surface an error notice, never a silent no-op.
+    #[tokio::test]
+    async fn failed_interrupt_surfaces_an_error_notice() {
+        let (mut c, sink) = core();
+        c.state.busy = true;
+        c.current_turn_id = Some("T1".into());
+        let server = Arc::new(CodexServer::new());
+        c.on_command(SessionCommand::Interrupt, "t1", &server).await;
+        assert_eq!(notice_count(&items(&sink), "error"), 1);
+        // Busy with NO turn id: the stop cannot be delivered — also surfaced.
+        let (mut c2, sink2) = core();
+        c2.state.busy = true;
+        c2.on_command(SessionCommand::Interrupt, "t1", &server).await;
+        assert_eq!(notice_count(&items(&sink2), "error"), 1);
+        // Idle (not busy, no turn): nothing to interrupt, nothing to report.
+        let (mut c3, sink3) = core();
+        c3.on_command(SessionCommand::Interrupt, "t1", &server).await;
+        assert_eq!(notice_count(&items(&sink3), "error"), 0);
+    }
+
+    #[test]
+    fn unknown_approval_method_is_tracked_pending_without_a_prompt() {
+        let (mut c, sink) = core();
+        c.on_incoming(Incoming::ServerRequest {
+            id: "req-9".into(),
+            method: "item/somethingNew/requestApproval".into(),
+            params: json!({}),
+        });
+        assert!(sink.perms.lock().unwrap().is_empty(), "no broken prompt for an unknown method");
+        // ⚠️ The id MUST still be pending: the teardown `cancel` is what releases the
+        // shared server — dropping it here would wedge the turn for every conversation.
+        assert!(c.pending_approvals.contains("req-9"));
+        assert!(!c.state.awaiting_permission, "no prompt → the composer is not blocked");
+    }
+
+    #[test]
+    fn file_change_approval_maps_to_an_apply_patch_prompt() {
+        let (mut c, sink) = core();
+        c.on_incoming(Incoming::ServerRequest {
+            id: "req-8".into(),
+            method: "item/fileChange/requestApproval".into(),
+            params: json!({"threadId":"t","turnId":"u","itemId":"f1","reason":"apply the patch"}),
+        });
+        let perms = sink.perms.lock().unwrap().clone();
+        assert_eq!(perms.len(), 1);
+        assert_eq!(perms[0].request_id, "req-8");
+        assert_eq!(perms[0].tool_name, "ApplyPatch");
+        assert_eq!(perms[0].tool_use_id, "f1"); // ties the prompt to the rendered card
+        assert!(c.pending_approvals.contains("req-8"));
+        assert!(c.state.awaiting_permission);
+    }
+
+    // The approval answer cycle: Allow and Deny both resolve the pending slot and clear
+    // `awaiting_permission`; an unknown / already-answered id is a clean no-op. (`reply`
+    // on a never-started server is itself a no-op, so this runs hermetically.)
+    #[tokio::test]
+    async fn answer_permission_resolves_pending_and_ignores_unknown_ids() {
+        let server = Arc::new(CodexServer::new());
+        for decision in [
+            PermissionDecision::Allow { updated_input: None },
+            PermissionDecision::Deny { message: "non".into() },
+        ] {
+            let (mut c, _sink) = core();
+            c.on_approval_request(
+                "req-1".into(),
+                "item/commandExecution/requestApproval",
+                json!({"itemId":"c1","command":"ls"}),
+            );
+            assert!(c.state.awaiting_permission);
+            c.on_command(
+                SessionCommand::AnswerPermission { request_id: "req-1".into(), decision },
+                "t1",
+                &server,
+            )
+            .await;
+            assert!(c.pending_approvals.is_empty(), "the answered id leaves the pending set");
+            assert!(!c.state.awaiting_permission, "the composer prompt is released");
+            // Answering the same id again (unknown by now) must be a clean no-op.
+            c.on_command(
+                SessionCommand::AnswerPermission {
+                    request_id: "req-1".into(),
+                    decision: PermissionDecision::Allow { updated_input: None },
+                },
+                "t1",
+                &server,
+            )
+            .await;
+            assert!(c.pending_approvals.is_empty());
+            assert!(!c.state.awaiting_permission);
+        }
+    }
+
+    // Finding 33: the spawn contract must fail SYNCHRONOUSLY on a vanished cwd (same
+    // error as the Claude transport), so the front's worktree-recovery branch fires
+    // instead of the message dying against an async-doomed actor.
+    #[tokio::test]
+    async fn spawn_session_fails_synchronously_when_the_cwd_is_missing() {
+        let cwd = std::env::temp_dir().join(format!("gone-{}", uuid::Uuid::new_v4()));
+        let cfg = SpawnConfig::new(cwd.clone());
+        let sink = Arc::new(Sink::default());
+        let emitter: Arc<dyn SessionEmitter> = sink.clone();
+        let r = spawn_session(
+            "s1".into(),
+            cfg,
+            InitialControls::default(),
+            emitter,
+            Box::new(|| {}),
+            Arc::new(CodexServer::new()),
+        );
+        let err = r.err().expect("a missing cwd must fail the spawn synchronously");
+        assert!(
+            err.to_string().contains(&cwd.display().to_string()),
+            "the error names the missing dir: {err}"
+        );
     }
 }

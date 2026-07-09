@@ -34,16 +34,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use super::codex_home;
 use crate::supervisor::model::{ConversationItem, NormalizedBlock};
-
-/// Codex's home dir: `$CODEX_HOME` if set, else `$HOME/.codex`. Mirrors the Claude
-/// backend's [`crate::supervisor::history::claude_config_dir`].
-fn codex_home() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("CODEX_HOME") {
-        return Some(PathBuf::from(dir));
-    }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex"))
-}
 
 /// Find the rollout file for `thread_id` under `<home>/sessions` (nested
 /// `YYYY/MM/DD/`). The thread id is the tail of the filename

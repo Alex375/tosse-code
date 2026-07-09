@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use super::codex_home;
 use crate::extensions::{ExtScope, ExtensionsSnapshot, McpServerInfo, PluginInfo, SkillInfo};
 
 /// The subset of `~/.codex/config.toml` we read. Only `mcp_servers` + `plugins` +
@@ -74,13 +75,15 @@ fn default_true() -> bool {
     true
 }
 
-/// Codex's home dir: `$CODEX_HOME` when set (a test build / non-default install), else
-/// `~/.codex`. `None` when neither is resolvable.
-fn codex_home() -> Option<PathBuf> {
-    if let Some(h) = std::env::var_os("CODEX_HOME") {
-        return Some(PathBuf::from(h));
+/// The stderr-only detail for a TOML parse failure: the error's own message plus its
+/// byte span, WITHOUT the offending source line that `toml::de::Error`'s Display
+/// renders (it can carry a half-typed secret). Split out so the leak test asserts on
+/// the exact text that reaches the log.
+fn toml_error_log_detail(e: &toml::de::Error) -> String {
+    match e.span() {
+        Some(span) => format!("{} (bytes {}..{})", e.message(), span.start, span.end),
+        None => e.message().to_string(),
     }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex"))
 }
 
 /// Strip a URL's query/fragment — it can carry an auth token. Same guard the Claude
@@ -151,10 +154,14 @@ fn read_config(path: &Path, snap: &mut ExtensionsSnapshot) -> Vec<(PathBuf, bool
         Ok(c) => c,
         Err(e) => {
             // ⚠️ SECRET-LEAK GUARD: `toml::de::Error`'s Display embeds the OFFENDING SOURCE
-            // LINE (e.g. a half-typed `SECRET_TOKEN = "sk-…`), so it must NEVER reach the
-            // user-facing warning. The detail goes to stderr (logs) only; the UI gets a
+            // LINE (e.g. a half-typed `SECRET_TOKEN = "sk-…`), so the FULL error must never
+            // be printed ANYWHERE — stderr included (terminal scrollback, unified log).
+            // Only the bounded message + byte span go to the log; the UI gets a
             // generic-but-non-silent "malformed" notice so the user still knows.
-            eprintln!("[codex-config] ~/.codex/config.toml parse error: {e}");
+            eprintln!(
+                "[codex-config] ~/.codex/config.toml parse error: {}",
+                toml_error_log_detail(&e)
+            );
             snap.warnings
                 .push("~/.codex/config.toml est malformé (erreur de syntaxe).".to_string());
             return Vec::new();
@@ -380,17 +387,21 @@ enabled = false
         let dir = std::env::temp_dir().join(format!("fd-codex-leak-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
-        std::fs::write(
-            &path,
-            "[mcp_servers.node_repl.env]\nSECRET_TOKEN = \"sk-super-secret-LEAKED\n",
-        )
-        .unwrap();
+        let source = "[mcp_servers.node_repl.env]\nSECRET_TOKEN = \"sk-super-secret-LEAKED\n";
+        std::fs::write(&path, source).unwrap();
         read_config(&path, &mut snap);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!snap.warnings.is_empty(), "a malformed config must still surface a warning");
         let blob = snap.warnings.join(" ");
         assert!(!blob.contains("sk-super-secret-LEAKED"), "the secret must never reach the warning");
         assert!(!blob.contains("SECRET_TOKEN"), "not even the secret's field name leaks");
+
+        // The stderr log is bounded the same way: message + span only, never the line.
+        let err = toml::from_str::<CodexConfigRaw>(source).expect_err("source is malformed");
+        let log = toml_error_log_detail(&err);
+        assert!(!log.contains("sk-super-secret-LEAKED"), "the secret must never reach the log");
+        assert!(!log.contains("SECRET_TOKEN"), "not even the secret's field name is logged");
+        assert!(!log.is_empty(), "the log detail still says WHAT failed");
     }
 
     #[test]

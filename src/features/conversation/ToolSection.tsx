@@ -390,8 +390,9 @@ export function ClaudeWorkBlock({
   const onToggle = persisted
     ? () => toggleStore(foldConv!, foldKey!)
     : () => setLocalOpen((o) => !o);
-  // Backend-neutral label (the fold serves both Claude and Codex conversations).
-  const label = count > 0 ? `Work · ${count} step${count > 1 ? "s" : ""}` : "Work";
+  // Backend-neutral label (the fold serves both Claude and Codex conversations), in
+  // French like the neighbouring labels (« Exécuté N étapes »).
+  const label = count > 0 ? `Travail · ${count} étape${count > 1 ? "s" : ""}` : "Travail";
   return (
     <div className="cv-work">
       <button type="button" className="cv-work-h" onClick={onToggle} aria-expanded={open}>

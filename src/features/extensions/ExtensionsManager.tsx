@@ -884,11 +884,19 @@ function CodexExtensionsBody({
     (toggles.mcp.error as Error | null)?.message ??
     (toggles.plugin.error as Error | null)?.message ??
     null;
+  // The MCP toggle writes the config even when the live reload fails (`false` from the
+  // mutation): warn — non-blocking — that running Codex sessions keep the old state
+  // until their next spawn, instead of showing a state they don't have.
+  const mcpReloadWarning =
+    toggles.mcp.data === false
+      ? "Réglage MCP écrit, mais les conversations Codex en cours n'ont pas pu le recharger — il s'appliquera au prochain démarrage de session."
+      : null;
 
   return (
     <div className={styles.body}>
       <WarningBanner warnings={snap?.warnings ?? []} />
       {toggleError ? <div className={styles.error}>{toggleError}</div> : null}
+      {mcpReloadWarning ? <div className={styles.warn}>{mcpReloadWarning}</div> : null}
       {/* MCP servers: live when a Codex session is running, else the configured list.
           Both carry the v2 toggle (config-level `enabled`, applied via the binary's
           config writer + `config/mcpServer/reload`). */}

@@ -84,14 +84,15 @@ pub async fn list_skills(cwds: Vec<String>) -> Result<Vec<CodexSkill>, CodexErro
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     let value = CodexServer::oneshot("skills/list", json!({ "cwds": cwds }), &cwd).await?;
-    let entries = value
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    Ok(parse_skills(&value))
+}
+
+/// Flatten a `skills/list` response (`data[].skills[]` — one entry per cwd) into the
+/// menu shape, de-duplicating by name (the same skill can be listed under several cwds).
+fn parse_skills(value: &Value) -> Vec<CodexSkill> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for entry in &entries {
+    for entry in value.get("data").and_then(Value::as_array).into_iter().flatten() {
         let Some(skills) = entry.get("skills").and_then(Value::as_array) else {
             continue;
         };
@@ -112,7 +113,7 @@ pub async fn list_skills(cwds: Vec<String>) -> Result<Vec<CodexSkill>, CodexErro
             });
         }
     }
-    Ok(out)
+    out
 }
 
 /// Rewind a Codex thread IN PLACE by dropping its last `num_turns` turns (`thread/rollback`
@@ -216,6 +217,18 @@ fn clean_model_title(raw: &str) -> Option<String> {
     session::codex_title_from_description(unquoted)
 }
 
+/// Codex's home dir: `$CODEX_HOME` when set (a test build / non-default install), else
+/// `~/.codex`; `None` when neither resolves. The SINGLE definition shared by the
+/// rollout reader (`history.rs`) and the config snapshot (`config.rs`) so both always
+/// describe the SAME Codex install — the never-read-`auth.json` invariant hangs off
+/// this directory too.
+pub(crate) fn codex_home() -> Option<PathBuf> {
+    if let Some(h) = std::env::var_os("CODEX_HOME") {
+        return Some(PathBuf::from(h));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex"))
+}
+
 /// The `codex` binary this app would spawn: `$TOSSE_CODEX_BIN` when set, else the
 /// bare name `codex` (resolved on `PATH`). Kept deliberately parallel to the Claude
 /// backend's `transport::default_claude_bin`, and to its `$TOSSE_*_BIN` override so
@@ -310,6 +323,88 @@ mod tests {
         // We don't assert the env var here (parallel tests share the process env);
         // the bare-name default is the branch that matters for detection.
         assert_eq!(default_codex_bin().as_os_str(), "codex");
+    }
+
+    #[test]
+    fn parse_model_flattens_the_wire_shape_and_drops_hidden_models() {
+        // Shape copied from a live `model/list` entry (the fields the picker consumes).
+        let visible = json!({
+            "id": "gpt-5.5",
+            "displayName": "GPT-5.5",
+            "hidden": false,
+            "isDefault": true,
+            "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": [
+                { "reasoningEffort": "low", "description": "fastest" },
+                { "reasoningEffort": "medium", "description": "balanced" },
+                { "reasoningEffort": "high", "description": "deeper" },
+                { "reasoningEffort": "xhigh", "description": "deepest" }
+            ]
+        });
+        let m = parse_model(&visible).expect("a visible model must parse");
+        assert_eq!(m.id, "gpt-5.5");
+        assert_eq!(m.display_name, "GPT-5.5");
+        assert_eq!(m.efforts, vec!["low", "medium", "high", "xhigh"]);
+        assert_eq!(m.default_effort.as_deref(), Some("medium"));
+        assert!(m.is_default);
+
+        // A hidden model is dropped from the picker.
+        assert!(parse_model(&json!({ "id": "gpt-internal", "hidden": true })).is_none());
+        // No id → unusable → dropped (filter_map upstream).
+        assert!(parse_model(&json!({ "displayName": "nameless" })).is_none());
+        // Missing displayName falls back to the id; missing efforts → empty ladder.
+        let bare = parse_model(&json!({ "id": "gpt-5.4-mini" })).expect("bare model parses");
+        assert_eq!(bare.display_name, "gpt-5.4-mini");
+        assert!(bare.efforts.is_empty());
+        assert!(bare.default_effort.is_none() && !bare.is_default);
+    }
+
+    #[test]
+    fn parse_skills_flattens_entries_and_dedups_by_name() {
+        // Shape copied from a live `skills/list` response: one entry per cwd, each with
+        // its own `skills` array; the same skill can appear under several cwds.
+        let value = json!({ "data": [
+            { "cwd": "/repo/a", "skills": [
+                { "name": "review", "description": "Relit le diff" },
+                { "name": "deploy" }
+            ]},
+            { "cwd": "/repo/b", "skills": [
+                { "name": "review", "description": "duplicate — must be dropped" }
+            ]},
+            { "cwd": "/repo/c" }
+        ]});
+        let skills = parse_skills(&value);
+        assert_eq!(
+            skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["review", "deploy"],
+        );
+        assert_eq!(skills[0].description, "Relit le diff");
+        assert_eq!(skills[1].description, "", "a missing description is empty, not dropped");
+        // No data at all → empty catalogue, never an error.
+        assert!(parse_skills(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn clean_model_title_strips_quotes_takes_first_line_and_caps() {
+        // French guillemets + surrounding whitespace.
+        assert_eq!(
+            clean_model_title("« Export CSV des factures »").as_deref(),
+            Some("Export CSV des factures")
+        );
+        // Plain quotes/backticks; the truncation cleaner trims the trailing period.
+        assert_eq!(
+            clean_model_title("\"Corrige le bug de login.\"").as_deref(),
+            Some("Corrige le bug de login")
+        );
+        assert_eq!(clean_model_title("`titre`").as_deref(), Some("titre"));
+        // A chatty multi-line answer: only the FIRST non-empty line is used.
+        assert_eq!(
+            clean_model_title("\n  \nRefonte de la sidebar\nExplication : blabla").as_deref(),
+            Some("Refonte de la sidebar")
+        );
+        // Nothing usable → None (the caller falls back to a truncation).
+        assert_eq!(clean_model_title(""), None);
+        assert_eq!(clean_model_title("  \n \n"), None);
     }
 
     #[tokio::test]

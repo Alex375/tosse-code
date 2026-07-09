@@ -296,14 +296,17 @@ pub async fn codex_set_skill_enabled(path: String, enabled: bool) -> Result<bool
 }
 
 /// Enable/disable a Codex MCP server (`config/value/write` on
-/// `mcp_servers.<name>.enabled`, then `config/mcpServer/reload`).
+/// `mcp_servers.<name>.enabled`, then `config/mcpServer/reload`). Resolves to whether
+/// the LIVE sessions picked the change up — `false` means the config was written but
+/// the live reload failed (it applies on the next spawn); the front surfaces that as
+/// a non-blocking warning instead of showing a state the live sessions don't have.
 #[tauri::command]
 #[specta::specta]
 pub async fn codex_set_mcp_enabled(
     app: tauri::AppHandle,
     name: String,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     // The reload half must reach the SHARED server (the live conversations' process),
     // not just the transient writer — resolved from managed state like spawn_session.
     let shared: Arc<CodexServer> = (*app.state::<Arc<CodexServer>>()).clone();

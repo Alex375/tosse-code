@@ -164,9 +164,12 @@ async codexSetSkillEnabled(path: string, enabled: boolean) : Promise<Result<bool
 },
 /**
  * Enable/disable a Codex MCP server (`config/value/write` on
- * `mcp_servers.<name>.enabled`, then `config/mcpServer/reload`).
+ * `mcp_servers.<name>.enabled`, then `config/mcpServer/reload`). Resolves to whether
+ * the LIVE sessions picked the change up — `false` means the config was written but
+ * the live reload failed (it applies on the next spawn); the front surfaces that as
+ * a non-blocking warning instead of showing a state the live sessions don't have.
  */
-async codexSetMcpEnabled(name: string, enabled: boolean) : Promise<Result<null, string>> {
+async codexSetMcpEnabled(name: string, enabled: boolean) : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("codex_set_mcp_enabled", { name, enabled }) };
 } catch (e) {

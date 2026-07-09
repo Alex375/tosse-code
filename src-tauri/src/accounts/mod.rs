@@ -57,14 +57,33 @@ fn first_line_capped(raw: &str) -> String {
     s
 }
 
+/// Bound for the quick `claude auth` invocations (status/logout). Generous for a cold
+/// CLI start, but a wedged binary (e.g. its startup update-check stalling on a dead
+/// network) must surface as an error instead of hanging the Comptes panel forever.
+const AUTH_CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Run a short-lived `claude auth …` command, bounded by [`AUTH_CMD_TIMEOUT`].
+/// `kill_on_drop` reaps the child when the timeout drops the in-flight future, so a
+/// hung CLI never accumulates as a stuck process across panel refetches.
+async fn run_bounded(label: &str, args: &[&str]) -> Result<std::process::Output, String> {
+    let fut = Command::new(claude_bin())
+        .args(args)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(AUTH_CMD_TIMEOUT, fut).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(format!("impossible de lancer `{label}` : {e}")),
+        Err(_) => Err(format!(
+            "`{label}` n'a pas répondu à temps ({} s) — réessayez",
+            AUTH_CMD_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 /// Read the auth status (`claude auth status --json`). Fast and read-only.
 pub async fn status() -> Result<ClaudeAccountStatus, String> {
-    let output = Command::new(claude_bin())
-        .args(["auth", "status", "--json"])
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("impossible de lancer `claude auth status` : {e}"))?;
+    let output = run_bounded("claude auth status", &["auth", "status", "--json"]).await?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|_| {
         // The CLI answered something that isn't the JSON contract (crash text, update
@@ -184,12 +203,7 @@ pub async fn login_cancel() {
 
 /// Log out (`claude auth logout`). The CLI clears its own credential store.
 pub async fn logout() -> Result<(), String> {
-    let output = Command::new(claude_bin())
-        .args(["auth", "logout"])
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("impossible de lancer `claude auth logout` : {e}"))?;
+    let output = run_bounded("claude auth logout", &["auth", "logout"]).await?;
     if output.status.success() {
         Ok(())
     } else {
@@ -216,6 +230,25 @@ mod tests {
         assert_eq!(first_line_capped(""), "erreur inconnue");
         let long = "x".repeat(500);
         assert_eq!(first_line_capped(&long).chars().count(), 200);
+    }
+
+    /// The empty-code guard fires BEFORE touching the login registry: whitespace-only
+    /// input is rejected immediately with an actionable message.
+    #[tokio::test]
+    async fn submit_code_rejects_an_empty_code() {
+        let err = login_submit_code("   \n").await.expect_err("empty code must fail");
+        assert!(err.contains("vide"), "unexpected error: {err}");
+    }
+
+    /// Submitting a code with no login in flight tells the user to restart the flow —
+    /// and the pasted code NEVER leaks into the error text (module contract).
+    #[tokio::test]
+    async fn submit_code_without_a_login_in_flight_says_restart() {
+        let err = login_submit_code("sk-test-not-a-real-code")
+            .await
+            .expect_err("no in-flight login must fail");
+        assert!(err.contains("aucune connexion Claude en cours"), "unexpected error: {err}");
+        assert!(!err.contains("sk-test-not-a-real-code"), "code leaked into error: {err}");
     }
 
     /// PROBE (read-only): `claude auth status --json` against the real CLI.

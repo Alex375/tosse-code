@@ -203,9 +203,11 @@ impl CodexServer {
 
     /// Run ONE self-contained model turn against a FRESH, `read-only` + `never`-approval
     /// app-server (spawn → thread/start → turn/start → collect the agent's final text →
-    /// shutdown) and return the assistant's answer. For a cheap one-shot query (the Codex
-    /// auto-title) that must NOT touch the shared server, invoke a tool, or block on an
-    /// approval. Bounded by a 30s deadline; `Err` on timeout / transport / an empty answer.
+    /// archive the ephemeral thread → shutdown) and return the assistant's answer. For a
+    /// cheap one-shot query (the Codex auto-title) that must NOT touch the shared server,
+    /// invoke a tool, or block on an approval. The thread is best-effort `thread/archive`d
+    /// after collection so it never lands in the user's `codex resume` history. Bounded by
+    /// a 30s deadline; `Err` on timeout / transport / an empty answer.
     pub async fn run_ephemeral_turn(
         prompt: String,
         model: Option<&str>,
@@ -221,10 +223,11 @@ impl CodexServer {
                 }
             };
         let params = serde_json::json!({
-            "threadId": thread_id,
+            "threadId": &thread_id,
             "input": [{ "type": "text", "text": prompt }],
         });
         if let Err(e) = server.request("turn/start", params).await {
+            // No turn ever started → the thread has no on-disk rollout, nothing to archive.
             server.shutdown_all().await;
             return Err(e);
         }
@@ -258,6 +261,18 @@ impl CodexServer {
                 Ok(Some(_)) => {} // ServerRequest — not expected under never-approval; ignore
                 _ => break,       // timeout or channel closed
             }
+        }
+        // Best-effort cleanup: the binary persists every thread that ran a turn as a
+        // rollout under ~/.codex/sessions, so an un-archived ephemeral thread would
+        // pollute the user's `codex resume` picker with our internal title prompt —
+        // permanently, once per generation attempt. Archive it on the same transient
+        // server before teardown; a failure costs one stray rollout, so it is only
+        // logged, never surfaced (the collected answer matters more than the cleanup).
+        if let Err(e) = server
+            .request("thread/archive", serde_json::json!({ "threadId": &thread_id }))
+            .await
+        {
+            eprintln!("[codex-ephemeral] thread/archive of ephemeral thread {thread_id} failed: {e}");
         }
         server.shutdown_all().await;
         let answer = answer.trim().to_string();
@@ -310,13 +325,6 @@ impl CodexServer {
         sandbox: &str,
         approval_policy: &str,
     ) -> Result<(String, mpsc::UnboundedReceiver<Incoming>), CodexError> {
-        self.ensure_started(cwd).await?;
-        // Hold the open-guard across the whole round-trip (request → route registered):
-        // a concurrent last-thread teardown must not reap the server under us.
-        let Some(_open) = self.begin_open().await else {
-            return Err(CodexError::Closed);
-        };
-
         let params = serde_json::to_value(protocol::ThreadStartParams {
             model: model.map(str::to_string),
             cwd: Some(cwd.to_string_lossy().to_string()),
@@ -324,36 +332,7 @@ impl CodexServer {
             approval_policy: Some(approval_policy.to_string()),
         })
         .unwrap_or(Value::Null);
-        // On ANY failure after the server is up, if no thread ended up open, tear the
-        // idle server down — otherwise it (and its MCP children) leaks until quit, and
-        // every later Codex conversation would re-use a possibly-wedged server (MAJEUR 2).
-        let result = match self.request("thread/start", params).await {
-            Ok(r) => r,
-            Err(e) => {
-                self.shutdown_if_no_threads().await;
-                return Err(e);
-            }
-        };
-        let parsed: protocol::ThreadStartResult = match serde_json::from_value(result) {
-            Ok(p) => p,
-            Err(e) => {
-                self.shutdown_if_no_threads().await;
-                return Err(CodexError::Rpc(format!("réponse thread/start malformée : {e}")));
-            }
-        };
-        let thread_id = parsed.thread.id;
-
-        let (tx, rx) = mpsc::unbounded_channel::<Incoming>();
-        {
-            let guard = self.inner.lock().await;
-            if let Some(started) = guard.as_ref() {
-                started.router.lock().unwrap().insert(thread_id.clone(), tx);
-            } else {
-                // Torn down between ensure_started and here (extremely unlikely).
-                return Err(CodexError::Closed);
-            }
-        }
-        Ok((thread_id, rx))
+        self.open_thread_route(cwd, "thread/start", params).await
     }
 
     /// RESUME an existing thread by id (`thread/resume`) instead of opening a fresh one —
@@ -369,43 +348,60 @@ impl CodexServer {
         thread_id: &str,
         model: Option<&str>,
     ) -> Result<(String, mpsc::UnboundedReceiver<Incoming>), CodexError> {
+        // `thread/resume` returns `{thread:{id,…}, model, …}` — the same envelope shape
+        // as `thread/start` for our purposes (we only need `thread.id`); extra fields
+        // are ignored by serde. The returned id is the SAME id (stable across resumes).
+        let params = serde_json::json!({ "threadId": thread_id, "model": model });
+        self.open_thread_route(cwd, "thread/resume", params).await
+    }
+
+    /// The ONE open-and-register sequence behind [`start_thread_with`] and
+    /// [`resume_thread`] (they only differ by method + params): start the server if
+    /// needed, hold the open-guard across the whole round-trip (request → route
+    /// registered) so a concurrent last-thread teardown never reaps the server under
+    /// us, fire the thread-opening request, parse the `{thread:{id}}` envelope both
+    /// methods return, and register the thread's inbound route. On ANY failure after
+    /// the server is up, if no thread ended up open, tear the idle server down —
+    /// otherwise it (and its MCP children) leaks until quit, and every later Codex
+    /// conversation would re-use a possibly-wedged server (MAJEUR 2).
+    async fn open_thread_route(
+        &self,
+        cwd: &Path,
+        method: &'static str,
+        params: Value,
+    ) -> Result<(String, mpsc::UnboundedReceiver<Incoming>), CodexError> {
         self.ensure_started(cwd).await?;
-        // Same open-guard as start_thread_with: the resume round-trip must not race a
-        // concurrent last-thread teardown.
         let Some(_open) = self.begin_open().await else {
             return Err(CodexError::Closed);
         };
 
-        let params = serde_json::json!({ "threadId": thread_id, "model": model });
-        let result = match self.request("thread/resume", params).await {
+        let result = match self.request(method, params).await {
             Ok(r) => r,
             Err(e) => {
                 self.shutdown_if_no_threads().await;
                 return Err(e);
             }
         };
-        // `thread/resume` returns `{thread:{id,…}, model, …}` — the same envelope shape as
-        // `thread/start` for our purposes (we only need `thread.id`); extra fields are
-        // ignored by serde.
         let parsed: protocol::ThreadStartResult = match serde_json::from_value(result) {
             Ok(p) => p,
             Err(e) => {
                 self.shutdown_if_no_threads().await;
-                return Err(CodexError::Rpc(format!("réponse thread/resume malformée : {e}")));
+                return Err(CodexError::Rpc(format!("réponse {method} malformée : {e}")));
             }
         };
-        let resumed_id = parsed.thread.id;
+        let thread_id = parsed.thread.id;
 
         let (tx, rx) = mpsc::unbounded_channel::<Incoming>();
         {
             let guard = self.inner.lock().await;
             if let Some(started) = guard.as_ref() {
-                started.router.lock().unwrap().insert(resumed_id.clone(), tx);
+                started.router.lock().unwrap().insert(thread_id.clone(), tx);
             } else {
+                // Torn down between ensure_started and here (extremely unlikely).
                 return Err(CodexError::Closed);
             }
         }
-        Ok((resumed_id, rx))
+        Ok((thread_id, rx))
     }
 
     /// Tear the server down if NO conversation thread is open — reaps an idle app-server
@@ -954,7 +950,9 @@ mod tests {
             })
             .unwrap();
         let reply = outbound_rx.recv().await.expect("server request must be answered");
-        assert_eq!(reply["id"], "42");
+        // The hand-built id "42" mimics `classify`'s raw-JSON-text encoding of a NUMERIC
+        // wire id → the decline echoes it back as the number 42 (original JSON type).
+        assert_eq!(reply["id"], 42);
         assert!(reply.get("error").is_some(), "an unhandleable server request is declined");
 
         // Closing the stream fails outstanding waiters and EOFs routes.
