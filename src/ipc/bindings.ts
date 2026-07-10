@@ -1661,7 +1661,8 @@ sandbox: string | null;
  */
 networkAccess: boolean | null; 
 /**
- * `AskForApproval`: `untrusted` | `on-failure` | `on-request` | `never`.
+ * `AskForApproval`: `untrusted` | `on-request` | `never` (`on-failure` was removed in
+ * codex-cli 0.144.1; the `granular` object variant exists but we don't send it).
  */
 approvalPolicy: string | null; 
 /**

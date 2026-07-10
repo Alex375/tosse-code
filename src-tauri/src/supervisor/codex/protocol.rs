@@ -514,7 +514,8 @@ pub struct CodexControls {
     pub sandbox: Option<String>,
     /// Whether the sandbox may reach the network (folds into the `SandboxPolicy`).
     pub network_access: Option<bool>,
-    /// `AskForApproval`: `untrusted` | `on-failure` | `on-request` | `never`.
+    /// `AskForApproval`: `untrusted` | `on-request` | `never` (`on-failure` was removed in
+    /// codex-cli 0.144.1; the `granular` object variant exists but we don't send it).
     pub approval_policy: Option<String>,
     /// `ReasoningSummary`: `auto` | `concise` | `detailed` | `none`.
     pub summary: Option<String>,

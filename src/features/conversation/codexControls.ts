@@ -16,7 +16,10 @@ import { loadJson, saveJson } from "../../store/persist";
 const STORAGE_KEY = "tosse:codexcontrols";
 
 export type CodexSandbox = "readOnly" | "workspaceWrite" | "dangerFullAccess";
-export type CodexApproval = "untrusted" | "on-failure" | "on-request" | "never";
+// `on-failure` was removed from the wire `AskForApproval` enum in codex-cli 0.144.1
+// (remaining string variants: `untrusted` | `on-request` | `never`; a `granular` object
+// variant also exists but no preset uses it). Our presets only ever send on-request/never.
+export type CodexApproval = "untrusted" | "on-request" | "never";
 export type CodexSummary = "auto" | "concise" | "detailed" | "none";
 export type CodexPersonality = "none" | "friendly" | "pragmatic";
 
