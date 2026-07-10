@@ -64,10 +64,10 @@ import styles from "./ConductorComposer.module.css";
 // The real Claude models. Wire value = CLI alias (sent verbatim to set_model and
 // used at spawn); the hint surfaces Opus's 1M context window. Default = Opus 4.8.
 const MODEL_OPTS: [string, string, string?][] = [
-  // Fable 5: time-limited preview model (special rate limit, until 2026-07-07). Same
+  // Fable 5: time-limited preview model (special rate limit, until 2026-07-12). Same
   // effort tier as Opus (see effortLevelsForModel). Alias "fable" is sent verbatim to
   // set_model. Pinned at the top while the preview window is open.
-  ["Fable 5", "fable", "7 juil."],
+  ["Fable 5", "fable", "12 juil."],
   ["Opus 4.8", "opus", "1M"],
   ["Sonnet 4.6", "sonnet"],
   ["Haiku 4.5", "haiku"],
