@@ -233,6 +233,10 @@
 .wf-claude, .wf-user-mark { width: 15px; height: 15px; display: inline-block; flex: 0 0 auto; }
 /* The model picker chip wears the Claude logo, tinted with the brand coral. */
 .wf-chip .wf-claude { width: 14px; height: 14px; color: var(--wf-accent); }
+/* Codex/OpenAI brand mark — monochrome (currentColor), NO background. Inherits the
+   chip's text colour (neutral black/white per theme, not the coral accent). */
+.wf-codex { width: 15px; height: 15px; display: inline-block; flex: 0 0 auto; }
+.wf-chip .wf-codex { width: 14px; height: 14px; color: var(--wf-tx-hi); }
 
 .wf-avatar {
   width: 22px; height: 22px; border-radius: 6px; flex: 0 0 auto;
@@ -241,13 +245,16 @@
   background: var(--wf-panel-3); color: var(--wf-tx);
 }
 .wf-avatar.ai { background: var(--wf-accent-dim); color: var(--wf-accent); }
+/* Codex response avatar: a NEUTRAL monochrome disc (the OpenAI logo is black & white —
+   the coral tile of `.ai` reads as Anthropic branding, so a Codex conversation drops it). */
+.wf-avatar.ai.codex { background: var(--wf-panel-3); color: var(--wf-tx-hi); }
 /* The user's own messages: a filled silhouette knocked out of a coral brand tile
    (counterpart to the AI avatar's Claude mark). */
 .wf-avatar.user {
   background: linear-gradient(150deg, #e8895f, #c8603f); color: #1a0f0a;
   box-shadow: 0 2px 8px -3px rgba(217,119,87,.4), inset 0 1px 0 rgba(255,255,255,.21);
 }
-.wf-avatar .wf-claude, .wf-avatar .wf-user-mark { width: 14px; height: 14px; }
+.wf-avatar .wf-claude, .wf-avatar .wf-user-mark, .wf-avatar .wf-codex { width: 14px; height: 14px; }
 
 .wf-mono { font-family: var(--wf-mono); }
 .wf-muted { color: var(--wf-tx-lo); }
@@ -276,6 +283,9 @@
 .wf-act.arch { color:var(--wf-tx-xlo); }
 .wf-act.done { color:var(--wf-tx-lo); }
 .wf-act .wf-claude { width:13px; height:13px; color:var(--wf-accent); }
+/* Codex counterpart on a running card's activity line: same 13px, but NEUTRAL (the OpenAI
+   logo is monochrome) instead of the coral accent — parity with the Claude mark. */
+.wf-act .wf-codex { width:13px; height:13px; color:var(--wf-tx-hi); }
 .wf-act-t { color:var(--wf-tx-hi); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; animation: wf-act-in .32s ease both; }
 .wf-act.att .wf-act-t, .wf-act.err .wf-act-t { color:inherit; }
 
@@ -335,8 +345,23 @@
 .wf-mi:disabled:hover { background:transparent; }
 .wf-mi-ck { width:14px; flex:0 0 auto; display:inline-flex; color:var(--wf-accent); }
 .wf-mi-t { font-size:12px; flex:1; white-space:nowrap; }
-.wf-mi-h { font-size:10px; color:var(--wf-tx-xlo); margin-left:12px; }
+/* Hint stays on ONE line (no wrapping to a word-per-line, which grew each row's height);
+   the popover has no max-width, so it widens to fit the longest hint instead. */
+.wf-mi-h { font-size:10px; color:var(--wf-tx-xlo); margin-left:12px; white-space:nowrap; flex:0 0 auto; }
 .wf-mi-lbl { font-size:9.5px; letter-spacing:.7px; text-transform:uppercase; color:var(--wf-tx-xlo); padding:6px 8px 4px; }
+/* Brand mark on a picker section header (Claude / Codex) — spot the backend at a glance.
+   Claude wears the coral accent; Codex inherits the muted label colour (neutral, since the
+   OpenAI logo is monochrome). */
+.wf-mi-lbl-brand { display:inline-flex; align-items:center; gap:6px; }
+.wf-mi-lbl-brand .wf-claude, .wf-mi-lbl-brand .wf-codex { width:11px; height:11px; }
+.wf-mi-lbl-brand .wf-claude { color:var(--wf-accent); }
+/* "non connecté" badge in a backend section label — the account is definitively
+   logged out, a model picked here WILL fail on send (composer AuthWarningBar's twin).
+   Red (not amber): a hard blocker, not a soft warning. */
+.wf-mi-lbl-warn { margin-left:4px; padding:1px 6px; border-radius:99px; font-size:9px;
+  letter-spacing:.02em; color:var(--wf-err); border:1px solid
+  color-mix(in srgb, var(--wf-err) 45%, transparent);
+  background:color-mix(in srgb, var(--wf-err) 12%, transparent); text-transform:none; }
 /* Cursor-anchored file-explorer context menu (positioned inline via the portal).
    Reuses .wf-pop / .wf-mi; adds a destructive ("Delete") variant + an icon-width
    spacer so label-only items stay aligned. */
@@ -361,6 +386,8 @@
 .wf-eff-notch.ultra { width:5px; height:5px; background:var(--wf-ultra); }
 .wf-eff-thumb { position:absolute; top:2px; width:14px; height:14px; border-radius:50%; background:var(--wf-tx-hi); box-shadow:0 1px 3px #0007; transition:left .2s cubic-bezier(.2,.7,.2,1), box-shadow .25s ease, background .25s ease; pointer-events:none; }
 .wf-eff-thumb.ultra { background:#fff; box-shadow:0 0 0 2px var(--wf-ultra), 0 0 12px -1px var(--wf-ultra); animation:wf-ultra-thumb .9s ease both; }
+/* Note: the `.ultra` slider visuals above (fill gradient + pulse, thumb glow, notch) are shared
+   by the Claude `ultracode` tier AND the Codex `ultra` effort (see EffortGauge `ultraFx`). */
 
 @keyframes wf-ultra-pulse { 0%,100%{ box-shadow:0 0 14px -4px var(--wf-ultra); } 50%{ box-shadow:0 0 22px 0 var(--wf-ultra); } }
 @keyframes wf-ultra-thumb { 0%{ transform:scale(1); } 35%{ transform:scale(1.45); } 100%{ transform:scale(1); } }
@@ -369,17 +396,24 @@
 .wf-chip[data-ultra] .wf-ico:first-child { color:var(--wf-ultra); opacity:1; }
 .wf-chip[data-ultra] { color:var(--wf-ultra); }
 
-/* ---- chip mode de permission : pastille colorée par mode ---- */
-.wf-chip[data-perm] { color:var(--pm); background:var(--pm-bg); border-color:transparent; font-weight:500; }
-.wf-chip[data-perm] .wf-ico:first-child { color:var(--pm); opacity:1; }
-.wf-chip[data-perm] .wf-chip-chev { color:var(--pm); opacity:.5; }
-.wf-chip[data-perm]:hover, .wf-chip[data-perm][data-open] { background:var(--pm-bg); border-color:var(--pm); }
+/* ---- chip mode de permission (Claude) + preset de sécurité (Codex) : pastille colorée ---- */
+.wf-chip[data-perm], .wf-chip[data-codex-preset] { color:var(--pm); background:var(--pm-bg); border-color:transparent; font-weight:500; }
+.wf-chip[data-perm] .wf-ico:first-child, .wf-chip[data-codex-preset] .wf-ico:first-child { color:var(--pm); opacity:1; }
+.wf-chip[data-perm] .wf-chip-chev, .wf-chip[data-codex-preset] .wf-chip-chev { color:var(--pm); opacity:.5; }
+.wf-chip[data-perm]:hover, .wf-chip[data-perm][data-open],
+.wf-chip[data-codex-preset]:hover, .wf-chip[data-codex-preset][data-open] { background:var(--pm-bg); border-color:var(--pm); }
 .wf-chip[data-perm="auto"]              { --pm:var(--wf-perm-auto);    --pm-bg:var(--wf-perm-auto-bg); }
 .wf-chip[data-perm="default"]           { --pm:var(--wf-perm-default); --pm-bg:var(--wf-perm-default-bg); }
 .wf-chip[data-perm="acceptEdits"]       { --pm:var(--wf-perm-accept);  --pm-bg:var(--wf-perm-accept-bg); }
 .wf-chip[data-perm="plan"]              { --pm:var(--wf-perm-plan);    --pm-bg:var(--wf-perm-plan-bg); }
 .wf-chip[data-perm="bypassPermissions"],
 .wf-chip[data-perm="dontAsk"]           { --pm:var(--wf-perm-bypass);  --pm-bg:var(--wf-perm-bypass-bg); }
+/* Codex presets, mapped to the same severity palette: prudent=plan(bleu), standard=default(gris),
+   auto=accept(violet), danger=bypass(rouge). */
+.wf-chip[data-codex-preset="prudent"]   { --pm:var(--wf-perm-plan);    --pm-bg:var(--wf-perm-plan-bg); }
+.wf-chip[data-codex-preset="standard"]  { --pm:var(--wf-perm-default); --pm-bg:var(--wf-perm-default-bg); }
+.wf-chip[data-codex-preset="auto"]      { --pm:var(--wf-perm-accept);  --pm-bg:var(--wf-perm-accept-bg); }
+.wf-chip[data-codex-preset="danger"]    { --pm:var(--wf-perm-bypass);  --pm-bg:var(--wf-perm-bypass-bg); }
 
 /* pastille de mode dans le menu déroulant */
 .cv-perm-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:8px; vertical-align:middle; }

@@ -6,6 +6,7 @@ use crate::supervisor::model::{
     BackgroundTask, ConversationItem, PermissionRequestPayload, RemoteControlState, SessionEmitter,
     SessionStatePayload, SlashCommand,
 };
+use crate::usage::PlanUsage;
 
 /// Emitted periodically by a Rust timer. Proves Rust -> React (typed event).
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
@@ -87,6 +88,42 @@ pub struct SessionSummaryEvent {
 pub struct SessionRemoteControlEvent {
     pub session: String,
     pub state: RemoteControlState,
+}
+
+/// The Codex backend's subscription rate-limit % (5h + weekly windows) changed. Codex
+/// pushes this over the live app-server (`account/rateLimits/updated`) — there is no
+/// HTTP/Keychain pull as for Claude — normalized to the SAME `PlanUsage` shape the
+/// popover renders. Account-global: the UI keeps ONE Codex plan store (never merged
+/// with Claude's Anthropic one) and the `session` here only tags which conversation
+/// surfaced it. Windows are sparse (a push may carry only the one that moved), so the
+/// front merges onto the last snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionCodexPlanUsageEvent {
+    pub session: String,
+    pub usage: PlanUsage,
+}
+
+/// An extension-inventory invalidation push from a live Codex session — the server
+/// noticed its skills / MCP startup status / account changed (`skills/changed`,
+/// `mcpServer/startupStatus/updated`, `account/updated`). Carries NO inventory data:
+/// the front just invalidates the matching cached queries and refetches through the
+/// normal read commands. `area` = `"skills"` | `"mcp"` | `"accounts"`.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct SessionExtensionsChangedEvent {
+    pub session: String,
+    pub area: String,
+}
+
+/// Terminal outcome of an in-app account login flow (today: the Codex OAuth flow,
+/// whose completion arrives asynchronously as `account/login/completed` on the
+/// dedicated login server — the Claude flow completes synchronously on its command).
+/// NOT session-keyed: accounts are app-global. `error` is present when `success` is
+/// false and a reason is known.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct AccountLoginEvent {
+    pub backend: String,
+    pub success: bool,
+    pub error: Option<String>,
 }
 
 /// Coalesced filesystem change notification for the editor panel: the (de-noised,
@@ -197,4 +234,33 @@ impl SessionEmitter for TauriEmitter {
             state: state.clone(),
         });
     }
+
+    fn emit_codex_plan_usage(&self, session: &str, usage: &PlanUsage) {
+        emit_logged(&self.app, "session_codex_plan_usage", SessionCodexPlanUsageEvent {
+            session: session.to_string(),
+            usage: usage.clone(),
+        });
+    }
+
+    fn emit_extensions_changed(&self, session: &str, area: &str) {
+        emit_logged(&self.app, "session_extensions_changed", SessionExtensionsChangedEvent {
+            session: session.to_string(),
+            area: area.to_string(),
+        });
+    }
+}
+
+/// Emit the app-global [`AccountLoginEvent`] — used by the account commands (the Codex
+/// login completes asynchronously in a watcher task holding only an `AppHandle`).
+pub fn emit_account_login(
+    app: &tauri::AppHandle,
+    backend: &str,
+    success: bool,
+    error: Option<String>,
+) {
+    emit_logged(app, "account_login", AccountLoginEvent {
+        backend: backend.to_string(),
+        success,
+        error,
+    });
 }

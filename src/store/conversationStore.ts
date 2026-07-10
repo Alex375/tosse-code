@@ -527,6 +527,9 @@ export const useConversationStore = create<ConversationState>((set) => {
               streamingText: "",
               streamingThinking: "",
               hasThinking: blocks.some((b) => b.type === "thinking"),
+              // Codex: tag the turn with its backend turn id (for native rewind/fork by id).
+              // Null on Claude; keep any prior value if a later block omits it.
+              codexTurnId: item.turn_id ?? existing.codexTurnId,
             };
             // Freeze the elapsed of any thinking block finalized here, keyed by its text
             // (what the renderer receives). Clear the live start so the next block re-stamps.

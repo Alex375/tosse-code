@@ -4735,6 +4735,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-specta",
  "tokio",
+ "toml 0.8.2",
  "trash",
  "uuid",
 ]

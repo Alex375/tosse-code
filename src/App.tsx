@@ -187,6 +187,7 @@ export default function App() {
           if (!conv) return false;
           useExtensionsUi.getState().openManager({
             kind: "conversation",
+            backend: conv.kind,
             path: conv.liveCwd ?? conv.cwd ?? ".",
             title: conv.name,
             session: conv.id,
@@ -281,7 +282,11 @@ export default function App() {
               {active ? <TerminalToggle /> : null}
               {active ? <GitToggle /> : null}
               {active ? (
-                <OpenInTerminalButton sessionId={active.sessionId} cwd={active.cwd} />
+                <OpenInTerminalButton
+                  sessionId={active.sessionId}
+                  cwd={active.cwd}
+                  backend={active.kind}
+                />
               ) : null}
               <Tag icon="folder" title={activeRepo.path}>
                 {repoName(activeRepo.path)}

@@ -4,9 +4,9 @@ import type { Conversation, Repo } from "../../store/conversationsStore";
 import type { ExtensionsTarget } from "./extensionsUiStore";
 
 // Minimal conversation factory — only the fields the resolver reads (id, repoId,
-// handle, cwd, liveCwd). The rest of the type is irrelevant here.
+// handle, cwd, liveCwd, kind). The rest of the type is irrelevant here.
 function conv(over: Partial<Conversation>): Conversation {
-  return { id: "c", repoId: "r1", cwd: "/repo", handle: null, liveCwd: null, ...over } as unknown as Conversation;
+  return { id: "c", repoId: "r1", cwd: "/repo", handle: null, liveCwd: null, kind: "claude", ...over } as unknown as Conversation;
 }
 const repos: Repo[] = [{ id: "r1", path: "/repo", addedAt: 0 } as unknown as Repo];
 
@@ -21,7 +21,7 @@ describe("resolveReloadTargets", () => {
       conv({ id: "b", repoId: "r1", handle: null }), // off
       conv({ id: "z", repoId: "r2", handle: "session-9" }), // other repo
     ];
-    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null };
+    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null, backend: "claude" };
     const { liveConvs, currentConv } = resolveReloadTargets(target, convs, repos);
     expect(currentConv).toBeNull();
     expect(liveConvs.map((c) => c.id)).toEqual(["a"]);
@@ -32,7 +32,7 @@ describe("resolveReloadTargets", () => {
       conv({ id: "a", repoId: "r1", handle: "session-1" }),
       conv({ id: "b", repoId: "r1", handle: "session-2" }),
     ];
-    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a" };
+    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a", backend: "claude" };
     const { liveConvs, currentConv } = resolveReloadTargets(target, convs, repos);
     expect(currentConv?.id).toBe("a");
     expect(liveConvs.map((c) => c.id).sort()).toEqual(["a", "b"]);
@@ -43,7 +43,7 @@ describe("resolveReloadTargets", () => {
       conv({ id: "a", repoId: "r1", handle: null }), // current, off
       conv({ id: "b", repoId: "r1", handle: "session-2" }), // sibling, live
     ];
-    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a" };
+    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a", backend: "claude" };
     const { liveConvs, currentConv } = resolveReloadTargets(target, convs, repos);
     expect(currentConv).toBeNull();
     expect(liveConvs.map((c) => c.id)).toEqual(["b"]);
@@ -51,7 +51,30 @@ describe("resolveReloadTargets", () => {
 
   it("no live conversation → empty liveConvs (bar stays hidden)", () => {
     const convs = [conv({ id: "a", repoId: "r1", handle: null })];
-    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null };
+    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null, backend: "claude" };
+    expect(resolveReloadTargets(target, convs, repos).liveConvs).toEqual([]);
+  });
+
+  it("live CODEX conversations are out of scope (Claude-only action), as current AND in liveConvs", () => {
+    // The bar's action = settings.json toggle + `reload_plugins` (a Claude control
+    // request the Codex actor no-ops) + an ephemeral `claude` spawn per cwd — none of
+    // it applies to a Codex session, so it must not be counted nor targeted.
+    const convs = [
+      conv({ id: "a", repoId: "r1", handle: "session-1", kind: "codex" }), // live, but codex
+      conv({ id: "b", repoId: "r1", handle: "session-2" }), // live claude
+    ];
+    const target: ExtensionsTarget = { kind: "conversation", path: "/repo", title: "c", session: "a", backend: "codex" };
+    const { liveConvs, currentConv } = resolveReloadTargets(target, convs, repos);
+    expect(currentConv).toBeNull(); // the codex lens conv is never a reload target
+    expect(liveConvs.map((c) => c.id)).toEqual(["b"]);
+  });
+
+  it("a repo with ONLY live codex conversations yields no targets (bar stays hidden)", () => {
+    const convs = [
+      conv({ id: "a", repoId: "r1", handle: "session-1", kind: "codex" }),
+      conv({ id: "b", repoId: "r1", handle: "session-2", kind: "codex" }),
+    ];
+    const target: ExtensionsTarget = { kind: "project", path: "/repo", title: "repo", session: null, backend: "claude" };
     expect(resolveReloadTargets(target, convs, repos).liveConvs).toEqual([]);
   });
 });

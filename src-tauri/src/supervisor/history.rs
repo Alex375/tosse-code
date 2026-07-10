@@ -344,6 +344,8 @@ fn push_assistant(entry: &Value, items: &mut Vec<ConversationItem>) {
         id,
         blocks,
         parent_tool_use_id: None,
+        // Claude targets rewind/fork by prompt text — no Codex turn id.
+        turn_id: None,
     });
 }
 

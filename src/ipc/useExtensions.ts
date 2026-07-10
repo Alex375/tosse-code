@@ -46,6 +46,143 @@ export function useExtensions(path: string | null) {
   });
 }
 
+/** Query key for the Codex configured extensions snapshot (per optional repo cwd). */
+export const codexExtensionsKey = (cwd?: string | null) =>
+  ["codex-extensions", cwd ?? null] as const;
+
+/**
+ * The CONFIGURED Codex extensions (`~/.codex/config.toml` declared MCP servers +
+ * installed plugins + on-disk skills — plus `<cwd>/.codex/skills` when a repo path is
+ * given), as the SAME `ExtensionsSnapshot` shape as Claude so the manager renders a
+ * Codex segment with the shared primitives. Skill/MCP rows carry their toggle state
+ * (Extensions v2). `enabled` gates it to when a Codex view is actually shown.
+ */
+export function useCodexExtensions(enabled: boolean, cwd?: string | null) {
+  return useQuery({
+    queryKey: codexExtensionsKey(cwd),
+    enabled,
+    queryFn: () => unwrap(commands.codexListExtensions(cwd ?? null)),
+    staleTime: 5_000,
+  });
+}
+
+/** Query key for the live (app-server) Codex plugin inventory. Account-global. */
+export const codexPluginsKey = () => ["codex-plugins"] as const;
+
+/**
+ * The AUTHORITATIVE installed Codex plugin inventory (`plugin/installed` on a transient
+ * app-server): bundled/runtime plugins with versions, display metadata and marketplace
+ * grouping — richer than the config.toml snapshot, which only sees toggled entries.
+ * Slower (spawns the binary), so it's a separate query layered over the instant
+ * snapshot: the UI renders config rows immediately and upgrades when this lands.
+ */
+export function useCodexPlugins(enabled: boolean) {
+  return useQuery({
+    queryKey: codexPluginsKey(),
+    enabled,
+    queryFn: () => unwrap(commands.codexListPlugins([])),
+    staleTime: 30_000,
+  });
+}
+
+/** Query key for the Codex hooks visible from a cwd. */
+export const codexHooksKey = (cwd: string | null) => ["codex-hooks", cwd] as const;
+
+/**
+ * The Codex hooks visible from `cwd` (`hooks/list` on a transient app-server) —
+ * read-only view with the scan's warnings/errors surfaced. Codex-only section (Claude
+ * hooks live in settings.json and have no equivalent list RPC).
+ */
+export function useCodexHooks(enabled: boolean, cwd: string | null) {
+  return useQuery({
+    queryKey: codexHooksKey(cwd),
+    enabled,
+    queryFn: () => unwrap(commands.codexListHooks(cwd ? [cwd] : [])),
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Everything ONE Codex plugin provides (`plugin/read`), as the same `PluginContents`
+ * shape the Claude explorer drills into. Keyed by plugin id; `meta` carries the
+ * wire selectors (name + marketplace path) from the live inventory row.
+ */
+export function useCodexPluginContents(
+  meta: { pluginId: string; pluginName: string; marketplacePath: string | null } | null,
+) {
+  return useQuery<PluginContents>({
+    queryKey: ["codex-plugin-contents", meta?.pluginId ?? null] as const,
+    enabled: !!meta,
+    queryFn: () =>
+      unwrap(
+        commands.codexPluginContents(meta!.pluginName, meta!.marketplacePath, meta!.pluginId),
+      ),
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * The Extensions v2 Codex toggles — skill (`skills/config/write`), MCP server
+ * (`config/value/write` + `config/mcpServer/reload`) and plugin
+ * (`config/value/write` on `plugins."<id>".enabled`). Every mutation goes through the
+ * BINARY's own config writer (comments + secrets preserved). On success both Codex
+ * inventories are invalidated so the rows reflect the resolved state.
+ */
+export function useCodexToggles(cwd?: string | null) {
+  const qc = useQueryClient();
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ["codex-extensions"] });
+    void qc.invalidateQueries({ queryKey: codexPluginsKey() });
+  };
+  const skill = useMutation({
+    mutationFn: (a: { path: string; enabled: boolean }) =>
+      unwrap(commands.codexSetSkillEnabled(a.path, a.enabled)),
+    onSuccess: refresh,
+  });
+  // Resolves to whether the LIVE Codex sessions picked the change up — `false` means
+  // the config was written but the live reload failed (it applies on the next session
+  // spawn); the manager surfaces that as a non-blocking warning.
+  const mcp = useMutation({
+    mutationFn: (a: { name: string; enabled: boolean }): Promise<boolean> =>
+      unwrap(commands.codexSetMcpEnabled(a.name, a.enabled)),
+    onSuccess: refresh,
+  });
+  const plugin = useMutation({
+    mutationFn: (a: { pluginId: string; enabled: boolean }): Promise<null> =>
+      unwrap(commands.codexSetPluginEnabled(a.pluginId, a.enabled)),
+    onSuccess: refresh,
+  });
+  // `cwd` keeps the signature symmetrical with the Claude hooks (and documents which
+  // snapshot the caller is looking at); the invalidation is prefix-wide regardless.
+  void cwd;
+  return { skill, mcp, plugin };
+}
+
+/**
+ * Codex marketplace actions (`marketplace/add` / `remove` / `upgrade`) — each
+ * invalidates both Codex inventories on success so the sections reflect the change.
+ */
+export function useCodexMarketplaceActions() {
+  const qc = useQueryClient();
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: codexPluginsKey() });
+    void qc.invalidateQueries({ queryKey: ["codex-extensions"] });
+  };
+  const add = useMutation({
+    mutationFn: (source: string): Promise<null> => unwrap(commands.codexMarketplaceAdd(source)),
+    onSuccess: refresh,
+  });
+  const remove = useMutation({
+    mutationFn: (name: string): Promise<null> => unwrap(commands.codexMarketplaceRemove(name)),
+    onSuccess: refresh,
+  });
+  const upgrade = useMutation({
+    mutationFn: (name: string): Promise<null> => unwrap(commands.codexMarketplaceUpgrade(name)),
+    onSuccess: refresh,
+  });
+  return { add, remove, upgrade };
+}
+
 /**
  * Read a skill's `SKILL.md` / a sub-agent's `.md` (by absolute path) for the
  * markdown viewer. Reuses the editor's `read_file` (text, with binary/size guards).

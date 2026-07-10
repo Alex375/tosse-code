@@ -13,12 +13,14 @@ import { TosseMark } from "../../ui/TosseMark";
 import { UpdateSection } from "./UpdateSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { ConversationSection } from "./ConversationSection";
+import { AccountsSection } from "./AccountsSection";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { PageHead, SettingsGroup, ToggleRow } from "./SettingsKit";
 import styles from "./SettingsPanel.module.css";
 
 const TABS: Array<{ id: SettingsSection; label: string; icon: string }> = [
   { id: "general", label: "Général", icon: "cog" },
+  { id: "accounts", label: "Comptes", icon: "key" },
   { id: "conversation", label: "Conversation", icon: "chat" },
   { id: "shortcuts", label: "Raccourcis", icon: "key" },
   { id: "notifications", label: "Notifications", icon: "bell" },
@@ -134,6 +136,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             )}
 
+            {section === "accounts" && <AccountsSection />}
+
             {section === "conversation" && <ConversationSection />}
 
             {section === "shortcuts" && <ShortcutsSection />}
@@ -206,7 +210,7 @@ function DisplayPrefs() {
         hint={
           <>
             N'affiche que le message final de chaque réponse ; les outils, la réflexion et les
-            étapes intermédiaires sont repliés derrière un bloc « Travail de Claude », dépliable à
+            étapes intermédiaires sont repliés derrière un bloc « Work », dépliable à
             la demande. Réglage <strong>par défaut</strong> : chaque conversation peut le surcharger
             via son bouton « Clean output ».
           </>

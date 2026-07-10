@@ -30,6 +30,7 @@ const conv = (over: Partial<Conversation> = {}): Conversation => ({
   permissionMode: "default",
   pendingReminder: null,
   cleanOutput: null,
+  kind: "claude",
   ...over,
 });
 

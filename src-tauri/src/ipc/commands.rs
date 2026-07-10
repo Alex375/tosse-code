@@ -9,6 +9,7 @@ use tauri::Manager;
 
 use crate::ipc::events::TauriEmitter;
 use crate::store::{ConversationRecord, PersistedState, RepoRecord, Store};
+use crate::supervisor::codex::{self, CodexServer};
 use crate::supervisor::control::{self, PermissionDecision, PermissionMode};
 use crate::supervisor::history::{self, DiskConversation, IndexedConversation, SearchHit};
 use crate::supervisor::model::{
@@ -69,6 +70,18 @@ impl Sessions {
     }
 }
 
+/// Which agent backend a new conversation runs on — the IPC discriminant
+/// [`spawn_session`] dispatches on. Serialized lowercase to match the front's
+/// `conv.kind` (`"claude"` | `"codex"`). Defaults to Claude (the app's default backend
+/// and what a conversation with no explicit kind resolves to).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    #[default]
+    Claude,
+    Codex,
+}
+
 fn unknown_session() -> String {
     "unknown session".to_string()
 }
@@ -89,6 +102,7 @@ pub async fn spawn_session(
     effort: Option<String>,
     permission_mode: Option<String>,
     ultracode: bool,
+    backend: Backend,
 ) -> Result<String, String> {
     let id = sessions.next_id();
     let mut cfg = SpawnConfig::new(PathBuf::from(repo_path));
@@ -123,10 +137,314 @@ pub async fn spawn_session(
             app.state::<Sessions>().remove(&id);
         }) as Box<dyn FnOnce() + Send + 'static>
     };
-    let handle = session::spawn_session(id.clone(), cfg, initial, emitter, on_exit)
-        .map_err(|e| e.to_string())?;
+    // The ONE backend-specific point: which actor to start. Everything above (config,
+    // control defaults, emitter, on_exit) and everything downstream (send / interrupt /
+    // stop / … resolve a `SessionHandle` and push a `SessionCommand`) is backend-neutral.
+    let handle = match backend {
+        Backend::Codex => {
+            // The shared app-server is Tauri-managed as an Arc so the actor can hold it
+            // beyond this command's lifetime.
+            let server: Arc<CodexServer> = (*app.state::<Arc<CodexServer>>()).clone();
+            codex::spawn_session(id.clone(), cfg, initial, emitter, on_exit, server)
+        }
+        Backend::Claude => session::spawn_session(id.clone(), cfg, initial, emitter, on_exit),
+    }
+    .map_err(|e| e.to_string())?;
     sessions.insert(id.clone(), handle);
     Ok(id)
+}
+
+/// Whether a usable `codex` binary is installed on this machine. Gates the Codex
+/// backend selector in the UI so "new Codex conversation" is only offered when the
+/// CLI is present. Cheap: a `PATH` / well-known-location file check, never a spawn.
+#[tauri::command]
+#[specta::specta]
+pub fn codex_available() -> bool {
+    crate::supervisor::codex::codex_available()
+}
+
+/// List the Codex models the installed binary offers (`model/list`), for the composer's
+/// unified picker (its Codex section) + the data-driven effort gauge. Runs against a
+/// transient app-server (no conversation needed), so it works before any Codex chat.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_list_models() -> Result<Vec<codex::CodexModel>, String> {
+    codex::list_models().await.map_err(|e| e.to_string())
+}
+
+/// List the Codex skills for the given working directories (`skills/list`), for the
+/// composer's `/` menu on a Codex conversation. `cwds` empty → the server default.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_list_skills(cwds: Vec<String>) -> Result<Vec<codex::CodexSkill>, String> {
+    codex::list_skills(cwds).await.map_err(|e| e.to_string())
+}
+
+/// Compact a live Codex conversation's context (`thread/compact/start`). The Claude
+/// backend has no equivalent command — it compacts via the plain `/compact` text turn —
+/// so the composer only calls this for a Codex conversation. Errors "unknown session"
+/// when the conversation has no live app-server thread (the ring is only interactive
+/// after the first turn, so in practice a thread exists).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_compact(
+    sessions: tauri::State<'_, Sessions>,
+    session: String,
+) -> Result<(), String> {
+    let handle = sessions.get(&session).ok_or_else(unknown_session)?;
+    handle.compact().await.map_err(|e| e.to_string())
+}
+
+// Native Codex rewind/fork/archive. `codex_fork` powers BOTH the "fork here" (a new branch
+// conversation) and the "rewind here" (fork + swap the current conversation onto the branch)
+// controls: Codex has no in-place history truncation, and `thread/rollback` was DEPRECATED in
+// codex-cli 0.144.1, so both go through `thread/fork` cut at a `last_turn_id` turn boundary
+// (inclusive). `codex_archive` cleans up a discarded thread. Each `Err` is mapped to a String
+// so the caller always surfaces it (never a silent failure).
+
+/// Fork a Codex conversation into a NEW branch (`thread/fork`, cut at `last_turn_id` —
+/// forks THROUGH that turn, inclusive, so the branch ends AT the chosen boundary; `None`
+/// forks the whole thread). Non-destructive: the source thread is left intact. Returns the
+/// new thread id + resolved model, which the front materializes as a fresh Codex conversation
+/// (a branch) or swaps the current conversation onto (an in-place rewind). No live session
+/// needed (loaded from disk by id). Like the Claude rewind, it does NOT revert on-disk file
+/// changes — history only.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_fork(
+    thread_id: String,
+    cwd: String,
+    model: Option<String>,
+    last_turn_id: Option<String>,
+) -> Result<codex::CodexForkResult, String> {
+    codex::fork_thread(&thread_id, std::path::Path::new(&cwd), model.as_deref(), last_turn_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Archive a Codex conversation's thread (`thread/archive`) — the backend-native cleanup the
+/// front WILL run when a Codex conversation is discarded (the Claude backend just leaves its
+/// transcript on disk). NOT yet wired to the delete path (see the note above); when it is, a
+/// failure will be surfaced by the caller, never silently dropped.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_archive(thread_id: String, cwd: String) -> Result<(), String> {
+    codex::archive_thread(&thread_id, std::path::Path::new(&cwd))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Rebuild a Codex conversation's history from its on-disk ROLLOUT — the Codex analogue
+/// of [`load_session_history`]. Codex rendering is otherwise LIVE-only (a resumed thread
+/// re-streams nothing), so a cold-opened Codex conversation would show a blank thread.
+/// The front calls this (keyed on `conv.kind === "codex"`) after selecting a Codex
+/// conversation to replay its full timeline — messages AND tool cards — with no
+/// app-server spawned (the rollout has full tool fidelity; `thread/resume` omits tools).
+/// `thread_id` is the conversation's persisted `sessionId`. An absent rollout yields an
+/// empty list (not an error). File IO runs off the async runtime via `spawn_blocking`.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_load_history(thread_id: String) -> Result<Vec<ConversationItem>, String> {
+    tokio::task::spawn_blocking(move || codex::load_thread_history(&thread_id))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// List the CONFIGURED Codex extensions (declared MCP servers + installed plugins +
+/// on-disk skills), read from `~/.codex/config.toml` + `~/.codex/skills` — plus the
+/// repository's own `<cwd>/.codex/skills` when `cwd` is given — as the SAME
+/// `ExtensionsSnapshot` shape the Claude side uses so the Extensions view renders a Codex
+/// segment with the shared primitives. Secret-bearing fields are never surfaced (whitelist
+/// parse). Skill rows carry their `[[skills.config]]` toggle state; MCP rows their
+/// `enabled` flag. Best-effort; the blocking file IO runs off the async runtime.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_list_extensions(
+    cwd: Option<String>,
+) -> Result<crate::extensions::ExtensionsSnapshot, String> {
+    tokio::task::spawn_blocking(move || {
+        codex::list_extensions(cwd.as_deref().map(std::path::Path::new))
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+// ── Extensions v2 (Codex) — toggles + live inventories. Every mutation goes through
+// the BINARY's own config writer (surgical TOML edit, secrets/comments preserved);
+// every read is mapped through whitelisted structs (no raw wire Value crosses the IPC).
+
+/// Enable/disable a Codex SKILL (`skills/config/write`). `path` is the skill's
+/// `SKILL.md` (as carried by the snapshot rows); returns the server-resolved state.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_set_skill_enabled(path: String, enabled: bool) -> Result<bool, String> {
+    codex::extensions::set_skill_enabled(&path, enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Enable/disable a Codex MCP server (`config/value/write` on
+/// `mcp_servers.<name>.enabled`, then `config/mcpServer/reload`). Resolves to whether
+/// the LIVE sessions picked the change up — `false` means the config was written but
+/// the live reload failed (it applies on the next spawn); the front surfaces that as
+/// a non-blocking warning instead of showing a state the live sessions don't have.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_set_mcp_enabled(
+    app: tauri::AppHandle,
+    name: String,
+    enabled: bool,
+) -> Result<bool, String> {
+    // The reload half must reach the SHARED server (the live conversations' process),
+    // not just the transient writer — resolved from managed state like spawn_session.
+    let shared: Arc<CodexServer> = (*app.state::<Arc<CodexServer>>()).clone();
+    codex::extensions::set_mcp_enabled(&name, enabled, &shared)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Enable/disable a Codex PLUGIN (`config/value/write` on `plugins."<id>".enabled`).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_set_plugin_enabled(plugin_id: String, enabled: bool) -> Result<(), String> {
+    codex::extensions::set_plugin_enabled(&plugin_id, enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The authoritative INSTALLED Codex plugin inventory (`plugin/installed`) — richer
+/// than the config snapshot (bundled/runtime plugins, versions, display metadata,
+/// marketplace grouping). `cwds` lets repo-scoped marketplaces be discovered.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_list_plugins(cwds: Vec<String>) -> Result<codex::CodexPluginsLive, String> {
+    codex::extensions::list_plugins_live(cwds)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Everything ONE Codex plugin provides (`plugin/read`), as the SAME `PluginContents`
+/// shape the Claude explorer drills into. `marketplace_path` comes from the live
+/// inventory row; `plugin_id` tags the provenance on the returned items.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_plugin_contents(
+    plugin_name: String,
+    marketplace_path: Option<String>,
+    plugin_id: String,
+) -> Result<crate::extensions::PluginContents, String> {
+    codex::extensions::plugin_contents(&plugin_name, marketplace_path, &plugin_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The Codex hooks visible from `cwds` (`hooks/list`) — read-only view (Codex exposes
+/// no hook-toggle RPC); scan warnings/errors are surfaced alongside.
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_list_hooks(cwds: Vec<String>) -> Result<codex::CodexHooksSnapshot, String> {
+    codex::extensions::list_hooks(cwds).await.map_err(|e| e.to_string())
+}
+
+/// Register a Codex marketplace (`marketplace/add` — git URL / owner-repo / local path).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_marketplace_add(source: String) -> Result<(), String> {
+    codex::extensions::marketplace_add(&source).await.map_err(|e| e.to_string())
+}
+
+/// Unregister a Codex marketplace by name (`marketplace/remove`).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_marketplace_remove(name: String) -> Result<(), String> {
+    codex::extensions::marketplace_remove(&name).await.map_err(|e| e.to_string())
+}
+
+/// Refresh a Codex marketplace's pinned content (`marketplace/upgrade`; `None` → all).
+#[tauri::command]
+#[specta::specta]
+pub async fn codex_marketplace_upgrade(name: Option<String>) -> Result<(), String> {
+    codex::extensions::marketplace_upgrade(name).await.map_err(|e| e.to_string())
+}
+
+// ── Comptes (Claude & Codex) — statut / login / logout in-app. The credential stores
+// stay OWNED by the CLIs (`claude auth`, `codex app-server account/*`): the app never
+// reads/writes `~/.claude/.credentials.json`, the Keychain item, or `~/.codex/auth.json`.
+
+/// The signed-in Claude account (`claude auth status --json`), whitelisted.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_status() -> Result<crate::accounts::ClaudeAccountStatus, String> {
+    crate::accounts::status().await
+}
+
+/// Start a Claude login: spawns `claude auth login`, returns the OAuth URL to open.
+/// The flow completes when the user pastes the authorization code
+/// ([`account_claude_login_code`]) — or is dropped by [`account_claude_login_cancel`].
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_login_start() -> Result<String, String> {
+    crate::accounts::login_start().await
+}
+
+/// Submit the authorization code the user pasted; completes the in-flight Claude login.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_login_code(code: String) -> Result<(), String> {
+    crate::accounts::login_submit_code(&code).await
+}
+
+/// Abort the in-flight Claude login (kills the CLI child). Safe when none is running.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_login_cancel() -> Result<(), String> {
+    crate::accounts::login_cancel().await;
+    Ok(())
+}
+
+/// Log out of the Claude account (`claude auth logout`).
+#[tauri::command]
+#[specta::specta]
+pub async fn account_claude_logout() -> Result<(), String> {
+    crate::accounts::logout().await
+}
+
+/// The signed-in Codex account (`account/read` on a transient app-server), whitelisted.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_codex_status() -> Result<codex::CodexAccountStatus, String> {
+    codex::accounts::account_status().await.map_err(|e| e.to_string())
+}
+
+/// Start a Codex ChatGPT login (`account/login/start`): returns `{loginId, authUrl}`
+/// immediately; the OAuth callback is served by the DEDICATED app-server kept alive by
+/// the accounts module, and completion lands as an app-global [`AccountLoginEvent`]
+/// (`backend: "codex"`) when `account/login/completed` arrives.
+#[tauri::command]
+#[specta::specta]
+pub async fn account_codex_login_start(
+    app: tauri::AppHandle,
+) -> Result<codex::CodexLoginStart, String> {
+    codex::accounts::login_start(move |success, error| {
+        crate::ipc::events::emit_account_login(&app, "codex", success, error);
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Abort the in-flight Codex login (`account/login/cancel` + teardown of its server).
+#[tauri::command]
+#[specta::specta]
+pub async fn account_codex_login_cancel() -> Result<(), String> {
+    codex::accounts::login_cancel().await;
+    Ok(())
+}
+
+/// Log out of the Codex account (`account/logout`; the binary clears its own store).
+#[tauri::command]
+#[specta::specta]
+pub async fn account_codex_logout() -> Result<(), String> {
+    codex::accounts::logout().await.map_err(|e| e.to_string())
 }
 
 /// Fetch the slash commands available in `cwd` WITHOUT starting a persistent
@@ -435,9 +753,11 @@ pub async fn get_plan_usage() -> Result<PlanUsage, UsageError> {
     crate::usage::fetch_plan_usage().await
 }
 
-/// Send a user turn to a session: the typed `text` plus any joined `images` (sent as
-/// `image` blocks in the message `content` array). `images` is empty for a plain text
-/// turn.
+/// Send a user turn to a session: the typed `text` plus any joined `images`. For Claude
+/// the images are inline `image` blocks; for Codex they become `localImage` file inputs.
+/// `codex_controls` carries this conversation's composer controls (model / effort /
+/// approval / sandbox / …) applied as per-turn overrides — `None`/ignored for Claude,
+/// whose controls are pushed the moment they change.
 #[tauri::command]
 #[specta::specta]
 pub async fn send_message(
@@ -445,9 +765,13 @@ pub async fn send_message(
     session: String,
     text: String,
     images: Vec<ImageAttachment>,
+    codex_controls: Option<codex::CodexControls>,
 ) -> Result<(), String> {
     let handle = sessions.get(&session).ok_or_else(unknown_session)?;
-    handle.send_user(text, images).await.map_err(|e| e.to_string())
+    handle
+        .send_user(text, images, codex_controls)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Answer a pending `can_use_tool` permission prompt (allow / deny).
@@ -710,43 +1034,64 @@ pub async fn stop_session(
     Ok(())
 }
 
-/// Open the OS terminal on this conversation: resume it as an interactive
-/// `claude` session (`claude --resume <session_id>`) in its working directory.
+/// Open the OS terminal on this conversation: resume it as an interactive CLI session
+/// in its working directory — `claude --resume <id>` for a Claude conversation,
+/// `codex resume <id>` for a Codex one. Backend-aware because the two CLIs take a
+/// DIFFERENT resume syntax and a Codex `<id>` handed to `claude` (or vice-versa) opens a
+/// fresh empty session ("wrong id"). Both resume from the CLI's OWN on-disk history, so
+/// no live process is needed.
 ///
-/// This launches a *separate*, user-driven `claude` outside the app — the same
-/// session id the supervisor drives, resumed from Claude's on-disk transcript
-/// (not the live stream). macOS only for now (drives Terminal.app via
-/// AppleScript); other platforms return an error the UI can surface. The
-/// blocking `osascript` call runs off the async runtime via `spawn_blocking`.
+/// This launches a *separate*, user-driven CLI outside the app — the same session/thread
+/// id the supervisor drives. macOS only for now (drives Terminal.app via AppleScript);
+/// other platforms return an error the UI can surface. The blocking `osascript` call runs
+/// off the async runtime via `spawn_blocking`.
 #[tauri::command]
 #[specta::specta]
-pub async fn open_in_terminal(cwd: String, session_id: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || open_terminal_resume(&cwd, &session_id))
+pub async fn open_in_terminal(
+    cwd: String,
+    session_id: String,
+    backend: Backend,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || open_terminal_resume(&cwd, &session_id, backend))
         .await
         .map_err(|e| e.to_string())?
 }
 
+/// Build the CLI's OWN resume invocation for `backend`, resolving the SAME binary the
+/// supervisor spawns (honouring the `$TOSSE_*_BIN` override). `claude --resume <id>` vs
+/// `codex resume <id>` — the id is identical (Claude session id == Codex thread id), only
+/// the CLI syntax differs, so a Codex id handed to `claude` (the old bug) opens a fresh
+/// empty session. macOS-gated like the rest of the terminal-resume path (`sh_quote`), and
+/// unit-tested there.
 #[cfg(target_os = "macos")]
-fn open_terminal_resume(cwd: &str, session_id: &str) -> Result<(), String> {
-    // Resolve the same binary the supervisor uses ($TOSSE_CLAUDE_BIN, else
-    // `claude` on PATH) so the terminal runs exactly what the app runs.
-    let bin = std::env::var("TOSSE_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
-    // `claude --resume <id>` is scoped to the current PROJECT, which the CLI
-    // derives from the working directory. So the terminal must `cd` into the
-    // exact directory the session was spawned in — otherwise resume finds
-    // nothing and opens a fresh, empty session. A relative cwd (e.g. "." for the
-    // default local project) is resolved against the app process's own working
-    // directory: the same base the supervisor passed to `current_dir` at spawn,
-    // so the resumed project matches.
+fn resume_invocation(backend: Backend, session_id: &str) -> String {
+    match backend {
+        Backend::Claude => {
+            let bin = std::env::var("TOSSE_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
+            format!("{} --resume {}", sh_quote(&bin), sh_quote(session_id))
+        }
+        Backend::Codex => {
+            let bin = crate::supervisor::codex::default_codex_bin()
+                .to_string_lossy()
+                .into_owned();
+            format!("{} resume {}", sh_quote(&bin), sh_quote(session_id))
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_terminal_resume(cwd: &str, session_id: &str, backend: Backend) -> Result<(), String> {
+    let resume_cmd = resume_invocation(backend, session_id);
+    // The resume is scoped to the current PROJECT, which the CLI derives from the working
+    // directory. So the terminal must `cd` into the exact directory the session was
+    // spawned in — otherwise resume finds nothing and opens a fresh, empty session. A
+    // relative cwd (e.g. "." for the default local project) is resolved against the app
+    // process's own working directory: the same base the supervisor passed to
+    // `current_dir` at spawn, so the resumed project matches.
     let cwd_abs = resolve_cwd(cwd);
-    // The command Terminal.app runs in a fresh login shell. No `exec`: when
-    // claude exits the user is left at a usable prompt rather than a dead tab.
-    let shell_cmd = format!(
-        "cd {} && {} --resume {}",
-        sh_quote(&cwd_abs),
-        sh_quote(&bin),
-        sh_quote(session_id),
-    );
+    // The command Terminal.app runs in a fresh login shell. No `exec`: when the CLI
+    // exits the user is left at a usable prompt rather than a dead tab.
+    let shell_cmd = format!("cd {} && {}", sh_quote(&cwd_abs), resume_cmd);
     let script = format!(
         "tell application \"Terminal\"\n  activate\n  do script \"{}\"\nend tell",
         applescript_escape(&shell_cmd),
@@ -764,7 +1109,7 @@ fn open_terminal_resume(cwd: &str, session_id: &str) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn open_terminal_resume(_cwd: &str, _session_id: &str) -> Result<(), String> {
+fn open_terminal_resume(_cwd: &str, _session_id: &str, _backend: Backend) -> Result<(), String> {
     Err("« Ouvrir dans le terminal » n'est pris en charge que sur macOS pour l'instant.".to_string())
 }
 
@@ -1443,6 +1788,22 @@ mod tests {
         assert!(pong.ok);
         assert_eq!(pong.echo, "hello");
         assert!(pong.at_ms > 0, "timestamp should be populated");
+    }
+
+    /// The resume invocation is BACKEND-AWARE: Claude uses `--resume`, Codex uses the
+    /// `resume` subcommand. Handing a Codex thread id to `claude --resume` (the old,
+    /// backend-blind behavior) opened a fresh empty session — the "wrong id" bug.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resume_invocation_is_backend_aware() {
+        // Assert the SYNTAX (env-independent: the binary name varies with $TOSSE_*_BIN,
+        // but the resume grammar is what matters — and mutating process env would race
+        // the parallel bin-resolution tests).
+        let claude = super::resume_invocation(super::Backend::Claude, "abc-123");
+        assert!(claude.contains("--resume 'abc-123'"), "Claude uses --resume: {claude}");
+        let codex = super::resume_invocation(super::Backend::Codex, "abc-123");
+        assert!(codex.contains(" resume 'abc-123'"), "Codex uses the `resume` subcommand: {codex}");
+        assert!(!codex.contains("--resume"), "Codex must NOT use --resume: {codex}");
     }
 
     /// A cwd with a space and a single quote must survive shell-quoting intact,

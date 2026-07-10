@@ -59,6 +59,14 @@
 .ag-card-tags { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
 /* The reasoning-effort chip (now the interactive EffortGauge, ChipBtn) sits here next
    to the worktree chip; it carries its own .wf-chip styling. */
+/* Backend badge: which agent runs this card (Claude vs Codex/OpenAI), legible at a glance
+   in a mixed fleet — the BARE LOGO (no pill, no border) to stay minimal. Claude keeps the
+   coral mark; Codex is neutral monochrome (the OpenAI logo is black & white — a tint would
+   misread as Anthropic branding). */
+.ag-backend { display:inline-flex; align-items:center; }
+.ag-backend .wf-claude, .ag-backend .wf-codex { width:14px; height:14px; }
+.ag-backend .wf-claude { color:var(--wf-accent); }
+.ag-backend.codex .wf-codex { color:var(--wf-tx-hi); }
 /* "Last message you sent" — a few-word summary (≤6 words) of the user's latest message,
    under the tags. A small self-hugging box (not full width) with a coral "reply" arrow
    marking it as YOUR voice, distinct from the agent's activity line below. Live-only. */

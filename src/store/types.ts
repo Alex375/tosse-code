@@ -107,6 +107,13 @@ export interface Turn {
    * rounds instead of collapsing into one fold.
    */
   injectedMidTurn?: boolean;
+  /**
+   * Codex only: the backend turn id this assistant turn belongs to (the app-server's
+   * `turn/start` id, live; the rollout's `turn_context.turn_id`, cold). Lets the thread
+   * target a Codex turn boundary by id for native rewind/fork (`thread/fork{lastTurnId}`)
+   * instead of Claude's prompt-text locator. Absent on Claude turns and on user turns.
+   */
+  codexTurnId?: string;
 }
 
 /** A tool result, joined to its tool_use by id. */

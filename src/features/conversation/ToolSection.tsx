@@ -22,6 +22,7 @@ import { useNow } from "../../ui/useNow";
 import { useWorkFold } from "../../store/workFold";
 import { Ico } from "../../ui/kit";
 import { DiffView } from "./DiffView";
+import { applyPatchChanges, parseUnifiedDiff } from "./unifiedDiff";
 import { MentionPathChip } from "./FileMention";
 import { QuestionnaireSummary } from "./QuestionnaireAsk";
 import { resultContentText } from "./resultText";
@@ -76,6 +77,22 @@ export function ToolDetail({
   const meta = toolMeta(name, input);
 
   if (name === "AskUserQuestion") return <QuestionnaireSummary input={input} result={result?.content} />;
+
+  // Codex's file-edit tool: `changes: [{path, kind, diff}]`, each `diff` a per-file unified
+  // diff. Parse each into DiffView's line model (the result is authoritative — the input can
+  // be frozen empty). No structured changes yet (still running) → fall through to the raw body.
+  if (name === "ApplyPatch") {
+    const changes = applyPatchChanges(input, result?.content);
+    if (changes.length > 0)
+      return (
+        <>
+          {changes.map((c, k) => (
+            <DiffView key={k} path={c.path || undefined} lines={parseUnifiedDiff(c.diff)} />
+          ))}
+        </>
+      );
+    return result ? <ToolResultBody content={result.content} isError={result.isError} /> : null;
+  }
 
   // The proposed plan (rare in a settled/sub-agent transcript, where the rich <PlanCard> is not
   // used): render the plan markdown so an expanded row isn't empty.
@@ -373,8 +390,9 @@ export function ClaudeWorkBlock({
   const onToggle = persisted
     ? () => toggleStore(foldConv!, foldKey!)
     : () => setLocalOpen((o) => !o);
-  const label =
-    count > 0 ? `Travail de Claude · ${count} étape${count > 1 ? "s" : ""}` : "Travail de Claude";
+  // Backend-neutral label (the fold serves both Claude and Codex conversations), in
+  // French like the neighbouring labels (« Exécuté N étapes »).
+  const label = count > 0 ? `Travail · ${count} étape${count > 1 ? "s" : ""}` : "Travail";
   return (
     <div className="cv-work">
       <button type="button" className="cv-work-h" onClick={onToggle} aria-expanded={open}>

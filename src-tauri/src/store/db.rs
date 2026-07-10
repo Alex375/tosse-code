@@ -26,7 +26,7 @@ use super::model::{ConversationRecord, PersistedState, RepoRecord};
 /// database is brought up to this version by applying every migration in
 /// [`MIGRATIONS`] whose target exceeds its stored `user_version`. Always equal to
 /// `MIGRATIONS.len()` (checked at compile time below).
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const ACTIVE_ID_KEY: &str = "active_id";
 
 /// A single schema migration: a forward, data-preserving step. It receives the
@@ -47,7 +47,7 @@ type Migration = fn(&Connection) -> rusqlite::Result<()>;
 /// OFF — and that pragma is a NO-OP inside a transaction. Since the runner wraps
 /// each migration in one, such a migration must toggle foreign-key enforcement
 /// outside it; do not assume you can flip it from inside a `migrate_vN` body.
-const MIGRATIONS: &[Migration] = &[migrate_v1, migrate_v2, migrate_v3, migrate_v4];
+const MIGRATIONS: &[Migration] = &[migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5];
 
 // SCHEMA_VERSION and the migration list must agree, or version bookkeeping drifts.
 const _: () = assert!(MIGRATIONS.len() == SCHEMA_VERSION as usize);
@@ -178,6 +178,20 @@ fn migrate_v4(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+/// v5 — the conversation's agent backend (`"claude"` or `"codex"`). NULLABLE with
+/// no default: a NULL means `"claude"` (the loader COALESCEs it), so every
+/// pre-existing conversation stays on Claude with no re-grant and no data change.
+/// New conversations always write a concrete value. Chosen at creation, immutable
+/// after — it is the discriminant the whole two-backend architecture keys off.
+fn migrate_v5(conn: &Connection) -> rusqlite::Result<()> {
+    add_column_if_absent(
+        conn,
+        "conversations",
+        "backend",
+        "ALTER TABLE conversations ADD COLUMN backend TEXT",
+    )
+}
+
 /// Bridge databases created before the versioned runner. They tracked the schema
 /// in `meta.schema_version` and left `user_version` at 0; seed `user_version` from
 /// that marker ONCE so already-applied migrations are not re-run. A brand-new
@@ -288,7 +302,8 @@ impl Store {
 
         let mut conv_stmt = conn.prepare(
             "SELECT id, name, repo_id, cwd, created_at, last_activity_at, session_id,
-                    model, effort, ultracode, permission_mode, pending_reminder, clean_output
+                    model, effort, ultracode, permission_mode, pending_reminder, clean_output,
+                    COALESCE(backend, 'claude')
              FROM conversations ORDER BY created_at ASC",
         )?;
         let conversations = conv_stmt
@@ -307,6 +322,8 @@ impl Store {
                     permission_mode: row.get(10)?,
                     pending_reminder: row.get(11)?,
                     clean_output: row.get(12)?,
+                    // NULL (pre-v5 rows) is COALESCEd to "claude" in SQL above.
+                    backend: row.get(13)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -350,8 +367,8 @@ impl Store {
         self.conn.lock().unwrap().execute(
             "INSERT INTO conversations
                  (id, name, repo_id, cwd, created_at, last_activity_at, session_id,
-                  model, effort, ultracode, permission_mode, pending_reminder, clean_output)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                  model, effort, ultracode, permission_mode, pending_reminder, clean_output, backend)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(id) DO UPDATE SET
                  name             = excluded.name,
                  repo_id          = excluded.repo_id,
@@ -364,7 +381,8 @@ impl Store {
                  ultracode        = excluded.ultracode,
                  permission_mode  = excluded.permission_mode,
                  pending_reminder = excluded.pending_reminder,
-                 clean_output     = excluded.clean_output",
+                 clean_output     = excluded.clean_output,
+                 backend          = excluded.backend",
             params![
                 c.id,
                 c.name,
@@ -378,7 +396,8 @@ impl Store {
                 c.ultracode,
                 c.permission_mode,
                 c.pending_reminder,
-                c.clean_output
+                c.clean_output,
+                c.backend
             ],
         )?;
         Ok(())
@@ -515,6 +534,10 @@ mod tests {
             // Default to created_at: a freshly created conversation is active "now".
             last_activity_at: created_at,
             session_id: session_id.map(str::to_string),
+            // Default helper conversations are Claude — the app's default backend and
+            // the value pre-v5 rows decode to, so existing round-trip/reopen assertions
+            // (which compare against this helper) keep holding unchanged.
+            backend: "claude".into(),
             model: None,
             effort: None,
             ultracode: false,
@@ -658,6 +681,72 @@ mod tests {
         c.clean_output = None;
         store.upsert_conversation(&c).unwrap();
         assert_eq!(store.load_state().unwrap().conversations[0].clean_output, None);
+    }
+
+    #[test]
+    fn backend_round_trips_and_defaults_to_claude() {
+        // The conversation's backend must survive the round-trip, and default to
+        // "claude" when unset (the helper's default) — the discriminant the whole
+        // two-backend architecture reads.
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_repo(&repo("r1")).unwrap();
+        let mut c = conv("c1", "r1", None);
+        assert_eq!(c.backend, "claude", "default backend is claude");
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(store.load_state().unwrap().conversations[0].backend, "claude");
+        // A Codex conversation persists its backend distinctly.
+        c.backend = "codex".into();
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(store.load_state().unwrap().conversations[0].backend, "codex");
+    }
+
+    #[test]
+    fn legacy_v4_db_gains_backend_defaulting_to_claude() {
+        // A db left by the v4-era shipped code (full v4 schema incl. clean_output, no
+        // `backend`): the v5 migration adds the column; existing rows have NULL, which
+        // the loader COALESCEs to "claude" — so every pre-existing conversation stays
+        // on Claude with no re-grant. Every prior value survives untouched.
+        let tmp = TempDb::new("legacy-v4-backend");
+        tmp.seed_raw(
+            "
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE repos (id TEXT PRIMARY KEY, path TEXT NOT NULL, added_at INTEGER NOT NULL);
+            CREATE TABLE conversations (
+                id               TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                repo_id          TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                cwd              TEXT NOT NULL,
+                created_at       INTEGER NOT NULL,
+                last_activity_at INTEGER NOT NULL DEFAULT 0,
+                session_id       TEXT,
+                model            TEXT,
+                effort           TEXT,
+                ultracode        INTEGER NOT NULL DEFAULT 0,
+                permission_mode  TEXT,
+                pending_reminder TEXT,
+                clean_output     INTEGER
+            );
+            INSERT INTO meta (key, value) VALUES ('schema_version', '4');
+            INSERT INTO repos (id, path, added_at) VALUES ('r1', '/tmp/r1', 1);
+            INSERT INTO conversations
+                (id, name, repo_id, cwd, created_at, last_activity_at, session_id, model, permission_mode)
+                VALUES ('c1', 'Legacy v4', 'r1', '/tmp/r1', 5, 9, 'sess-1', 'opus', 'plan');
+            ",
+        );
+
+        let store = tmp.open();
+        assert_eq!(store.schema_version(), SCHEMA_VERSION, "marker '4' bridged, v5 applied");
+        let c = store.load_state().unwrap().conversations.remove(0);
+        assert_eq!(c.name, "Legacy v4");
+        assert_eq!(c.backend, "claude", "pre-v5 rows decode as claude (COALESCE), no re-grant");
+        // Prior values survive.
+        assert_eq!(c.model.as_deref(), Some("opus"));
+        assert_eq!(c.permission_mode.as_deref(), Some("plan"));
+        // And the new column is fully usable after the in-place upgrade.
+        let mut c = c.clone();
+        c.backend = "codex".into();
+        store.upsert_conversation(&c).unwrap();
+        assert_eq!(store.load_state().unwrap().conversations[0].backend, "codex");
     }
 
     #[test]

@@ -35,7 +35,8 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { useBackgroundTasksStore, useTaskByToolUse, useRunningTaskCount } from "../../store/backgroundTasksStore";
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
-import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
+import { Avatar, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
+import { AiAvatar } from "./ConvMark";
 import { useNow } from "../../ui/useNow";
 import { QuestionnaireAsk } from "./QuestionnaireAsk";
 import { PlanCard } from "./PlanCard";
@@ -925,7 +926,7 @@ function MsgAI({
   const live = busy && !awaiting && turn.status === "streaming";
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai><ClaudeMark /></Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         {/* Finalized blocks accumulated so far, then the block currently being
             typed as a live tail. Both render together so an already-shown block is
@@ -992,9 +993,7 @@ function MsgAIGroup({
   );
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai>
-        <ClaudeMark />
-      </Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         {blocks.length > 0 && (
           <AssistantBlocks session={session} blocks={blocks} live={live} roundKey={turnIds[0]} />
@@ -1025,7 +1024,7 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
 
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai><ClaudeMark /></Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         <div className="cv-ask-turn">
           <div className="wf-ask">
@@ -1100,14 +1099,23 @@ export function ConductorThread({
   // Gated by the display pref, and only on a SETTLED conversation (both operate on the
   // on-disk transcript and rewind kills the live process — racing a live turn is unsafe),
   // and never in a lightweight surface (the reply modal). `session` is the STABLE conv id.
+  //
+  // Rewind/fork work on BOTH backends. Claude truncates its on-disk transcript by prompt text;
+  // Codex has no in-place truncation, so it FORKS the thread through the chosen turn
+  // (thread/fork{lastTurnId}) and swaps onto the branch — targeting by Codex turn id, not text.
+  // ⚠️ Neither reverts on-disk file changes — history only (spelled out in the confirm dialog).
+  const isCodex = useConversationsStore(
+    (s) => s.conversations.find((c) => c.id === session)?.kind === "codex",
+  );
   const messageControls = useDisplay((s) => s.messageControls);
   const runningBgTasks = useRunningTaskCount(session);
   const showControls = messageControls && !busy && !awaiting && !disableControls;
-  // { target message id, is-user, its clean composer text, occurrence } — set on click; the
-  // rewind opens a confirm. `text`/`occurrence` are the fallback locator for a LIVE turn
-  // (synthetic front id not on disk); occurrence disambiguates identical repeated prompts.
+  // { target message id, is-user, its clean composer text, occurrence, and — for Codex — the
+  // turn id to fork THROUGH } set on click; the rewind opens a confirm. `text`/`occurrence` are
+  // the Claude fallback locator for a LIVE turn (synthetic front id not on disk; occurrence
+  // disambiguates identical repeated prompts). `codexLastTurnId` is the Codex locator instead.
   const [rewindTarget, setRewindTarget] = useState<
-    { id: string; isUser: boolean; text: string | null; occurrence: number | null } | null
+    { id: string; isUser: boolean; text: string | null; occurrence: number | null; codexLastTurnId: string | null } | null
   >(null);
   const [rewinding, setRewinding] = useState(false);
   // The message whose fork is in flight (spins its icon; blocks a re-click). The thread
@@ -1155,12 +1163,52 @@ export function ConductorThread({
     },
     [session],
   );
+  // Codex ONLY: the turn id to fork THROUGH for a rewind/fork at plan index `idx`. Codex targets
+  // a turn boundary by id (not by text like Claude). An AI-response target keeps THROUGH its own
+  // turn → its Codex turn id. A user target removes that turn + everything after → keep through
+  // the PREVIOUS turn → the nearest preceding AI group's Codex turn id. `null` when unavailable
+  // (a Claude conv, or a turn with no surfaced id — e.g. the first turn, or a pre-`turn_context`
+  // cold line): the caller then does NOT offer the control, so we never fork the whole thread by
+  // accident.
+  const codexCutTurnId = useCallback(
+    (idx: number, isUser: boolean): string | null => {
+      if (!isCodex) return null;
+      const s = useConversationStore.getState().sessions[session];
+      // Every item of an AI group carries the SAME Codex turn id; scan the group for the
+      // first id that has one (the final agent_message reliably does, but a group's last id
+      // could be a tool card whose stamp raced) rather than trusting only the last.
+      const groupTurnId = (ids: string[]): string | null => {
+        for (const tid of ids) {
+          const t = s?.turns[tid]?.codexTurnId;
+          if (t) return t;
+        }
+        return null;
+      };
+      if (!isUser) {
+        const item = plan[idx];
+        return item && item.kind === "ai" ? groupTurnId(item.ids) : null;
+      }
+      for (let k = idx - 1; k >= 0; k--) {
+        const p = plan[k];
+        if (p.kind === "ai") return groupTurnId(p.ids);
+      }
+      return null;
+    },
+    [isCodex, plan, session],
+  );
   const doRewind = useCallback(async () => {
     const target = rewindTarget;
     if (!target) return;
     setRewinding(true);
     try {
-      await rewindConversation(session, target.id, target.isUser, target.text, target.occurrence);
+      await rewindConversation(
+        session,
+        target.id,
+        target.isUser,
+        target.text,
+        target.occurrence,
+        target.codexLastTurnId,
+      );
     } catch {
       /* the failure was already surfaced as an app error by rewindConversation */
     } finally {
@@ -1169,12 +1217,19 @@ export function ConductorThread({
     }
   }, [rewindTarget, session]);
   const doFork = useCallback(
-    async (id: string, isUser: boolean) => {
+    async (id: string, isUser: boolean, codexLastTurnId: string | null = null) => {
       if (forkingId) return; // guard a double-click (the thread unmounts on switch)
       setForkingId(id);
       const loc = isUser ? userTarget(id) : null;
       try {
-        await forkConversation(session, id, isUser, loc ? loc.text : null, loc ? loc.occurrence : null);
+        await forkConversation(
+          session,
+          id,
+          isUser,
+          loc ? loc.text : null,
+          loc ? loc.occurrence : null,
+          codexLastTurnId,
+        );
       } catch {
         /* already surfaced as an app error by forkConversation */
       } finally {
@@ -1215,18 +1270,33 @@ export function ConductorThread({
                     busy={busy}
                     awaiting={awaiting}
                     onRewind={
-                      showControls && hasUserAfter(idx)
-                        ? () => setRewindTarget({ id: aiId, isUser: false, text: null, occurrence: null })
+                      showControls && hasUserAfter(idx) && (!isCodex || codexCutTurnId(idx, false) != null)
+                        ? () =>
+                            setRewindTarget({
+                              id: aiId,
+                              isUser: false,
+                              text: null,
+                              occurrence: null,
+                              codexLastTurnId: codexCutTurnId(idx, false),
+                            })
                         : undefined
                     }
-                    onFork={showControls ? () => doFork(aiId, false) : undefined}
+                    onFork={
+                      showControls && (!isCodex || codexCutTurnId(idx, false) != null)
+                        ? () => doFork(aiId, false, codexCutTurnId(idx, false))
+                        : undefined
+                    }
                     forkBusy={forkingId === aiId}
                   />
                 );
               }
               if (item.kind === "user") {
                 // Not the first prompt, and not a mid-work injection (not a clean boundary).
-                const usable = showControls && idx !== firstUserIdx && !isInjected(item.id);
+                const usable =
+                  showControls &&
+                  idx !== firstUserIdx &&
+                  !isInjected(item.id) &&
+                  (!isCodex || codexCutTurnId(idx, true) != null);
                 return (
                   <TurnRow
                     key={item.id}
@@ -1236,11 +1306,17 @@ export function ConductorThread({
                       usable
                         ? () => {
                             const loc = userTarget(item.id);
-                            setRewindTarget({ id: item.id, isUser: true, text: loc.text, occurrence: loc.occurrence });
+                            setRewindTarget({
+                              id: item.id,
+                              isUser: true,
+                              text: loc.text,
+                              occurrence: loc.occurrence,
+                              codexLastTurnId: codexCutTurnId(idx, true),
+                            });
                           }
                         : undefined
                     }
-                    onFork={usable ? () => doFork(item.id, true) : undefined}
+                    onFork={usable ? () => doFork(item.id, true, codexCutTurnId(idx, true)) : undefined}
                     forkBusy={forkingId === item.id}
                   />
                 );
@@ -1286,6 +1362,15 @@ export function ConductorThread({
             conversation. La réponse elle-même est conservée.
           </>
         )}
+        {isCodex ? (
+          <div className="cv-rewind-warn">
+            <Ico name="alert" />
+            <span>
+              Seul l'historique de la conversation est rembobiné : les fichiers déjà modifiés sur le
+              disque ne sont pas restaurés.
+            </span>
+          </div>
+        ) : null}
         {runningBgTasks > 0 ? (
           <div className="cv-rewind-warn">
             <Ico name="alert" />

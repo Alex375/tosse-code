@@ -16,6 +16,7 @@ vi.mock("../ipc/client", () => {
       spawnSession: vi.fn(() => ok("session-1")),
       createWorktree: vi.fn(() => ok({ path: "/tmp/wt" })),
       loadSessionHistory: vi.fn(() => ok([])),
+      codexLoadHistory: vi.fn(() => ok([])),
       loadSessionContext: vi.fn(() => ok({ context_tokens: 0 })),
       deleteConversation: vi.fn(() => ok()),
       stopSession: vi.fn(() => ok()),
@@ -26,6 +27,7 @@ vi.mock("../ipc/client", () => {
 import { commands } from "../ipc/client";
 import {
   acknowledgeConversation,
+  createConversationInRepo,
   DEFAULT_CONV_NAME,
   ensureConversationSession,
   loadConversationHistory,
@@ -50,6 +52,7 @@ const baseConv = (over: Partial<Conversation> = {}): Conversation => ({
   permissionMode: "default",
   pendingReminder: null,
   cleanOutput: null,
+  kind: "claude",
   ...over,
 });
 
@@ -357,6 +360,132 @@ describe("conversationsStore — friction-free delete + undo", () => {
   });
 });
 
+describe("conversationsStore — backend (kind) branches", () => {
+  it("setConvBackend flips kind + model on a pristine conversation and persists", () => {
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("codex");
+    expect(conv0().model).toBe("gpt-5.5");
+    expect(commands.upsertConversation).toHaveBeenCalled();
+  });
+
+  it("setConvBackend is refused once a session EVER existed (sessionId set, handle off)", () => {
+    // A restarted app: the conversation is reloaded with its persisted sessionId but no
+    // live handle. Flipping here would hand a Codex thread id to `claude --resume`
+    // (fresh empty session) and orphan the whole history — the guard must hold on
+    // sessionId alone, not just on a live handle.
+    seed(baseConv({ sessionId: "sess-1", handle: null }));
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("claude");
+    expect(conv0().model).toBe("opus");
+    expect(commands.upsertConversation).not.toHaveBeenCalled();
+  });
+
+  it("setConvBackend is refused on a live session (handle bound)", () => {
+    seed(baseConv({ handle: "session-7" }));
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("claude");
+    expect(commands.upsertConversation).not.toHaveBeenCalled();
+  });
+
+  it("setConvBackend is refused while a spawn is IN FLIGHT (no sessionId/handle yet)", async () => {
+    // Freeze the spawn mid-flight: sessionId/handle are still null, but the actor being
+    // started already reads the kind captured at send time — flipping now would persist
+    // kind=codex over a Claude session (history invisible on reload, resume broken).
+    let releaseSpawn!: (v: unknown) => void;
+    vi.mocked(commands.spawnSession).mockReturnValueOnce(
+      new Promise((res) => {
+        releaseSpawn = res;
+      }) as never,
+    );
+    const inflight = ensureConversationSession("c1");
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("claude"); // refused, not queued
+    expect(conv0().model).toBe("opus");
+    releaseSpawn({ status: "ok", data: "session-1" });
+    await inflight;
+    // Once spawned it stays refused (handle guard takes over from the spawn guard).
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("claude");
+  });
+
+  it("createConversationInRepo seeds the backend's own defaults", () => {
+    // Codex: its own model + effort (a Claude alias would be rejected at thread/start).
+    const cx = createConversationInRepo("/tmp/r1", "codex");
+    const codexConv = useConversationsStore.getState().conversations.find((c) => c.id === cx)!;
+    expect(codexConv.kind).toBe("codex");
+    expect(codexConv.model).toBe("gpt-5.6-sol"); // DEFAULT_CODEX_MODEL
+    expect(codexConv.effort).toBe("xhigh"); // DEFAULT_CODEX_EFFORT
+    // Default (kind omitted) stays the pre-Codex Claude behaviour.
+    const cl = createConversationInRepo("/tmp/r1");
+    const claudeConv = useConversationsStore.getState().conversations.find((c) => c.id === cl)!;
+    expect(claudeConv.kind).toBe("claude");
+    expect(claudeConv.model).not.toBe("gpt-5.6-sol");
+  });
+
+  it("Codex model/effort changes persist but are NEVER pushed live (per-turn overrides)", () => {
+    seed(baseConv({ kind: "codex", model: "gpt-5.5", effort: "medium", handle: "session-7" }));
+    useConversationsStore.getState().setConvModel("c1", "gpt-5.4");
+    useConversationsStore.getState().setConvEffort("c1", "high");
+    expect(conv0().model).toBe("gpt-5.4"); // persisted…
+    expect(conv0().effort).toBe("high");
+    expect(commands.upsertConversation).toHaveBeenCalled();
+    // …but no live push: Codex has no set_model/set_effort channel — the values ride
+    // the next turn/start as overrides (buildCodexControls).
+    expect(commands.setModel).not.toHaveBeenCalled();
+    expect(commands.setEffortLevel).not.toHaveBeenCalled();
+  });
+
+  it("loadConversationHistory routes a Codex conversation to the rollout reader and skips the Claude context seed", async () => {
+    seed(baseConv({ id: "cx-hist", kind: "codex", sessionId: "thread-1" }));
+    const cs = useConversationStore.getState();
+    const ensureSession = vi.spyOn(cs, "ensureSession").mockImplementation(() => {});
+    const applyItem = vi.spyOn(cs, "applyItem").mockImplementation(() => {});
+    const applyContextFill = vi.spyOn(cs, "applyContextFill").mockImplementation(() => {});
+    const markSeen = vi.spyOn(cs, "markSeen").mockImplementation(() => {});
+    // Non-empty history so the loader runs past its early return, down to the seed gate.
+    vi.mocked(commands.codexLoadHistory).mockResolvedValueOnce({
+      status: "ok",
+      data: [{}],
+    } as never);
+
+    await loadConversationHistory("cx-hist");
+
+    expect(commands.codexLoadHistory).toHaveBeenCalledWith("thread-1");
+    expect(commands.loadSessionHistory).not.toHaveBeenCalled();
+    // Codex has no cold context source (its ring fills from the first live push) —
+    // the Claude transcript context seed must not run for a Codex thread id.
+    expect(commands.loadSessionContext).not.toHaveBeenCalled();
+
+    ensureSession.mockRestore();
+    applyItem.mockRestore();
+    applyContextFill.mockRestore();
+    markSeen.mockRestore();
+  });
+
+  it("loadConversationHistory seeds the context ring from the transcript for a CLAUDE conversation", async () => {
+    seed(baseConv({ id: "cl-hist", sessionId: "sess-cl" }));
+    const cs = useConversationStore.getState();
+    const ensureSession = vi.spyOn(cs, "ensureSession").mockImplementation(() => {});
+    const applyItem = vi.spyOn(cs, "applyItem").mockImplementation(() => {});
+    const applyContextFill = vi.spyOn(cs, "applyContextFill").mockImplementation(() => {});
+    const markSeen = vi.spyOn(cs, "markSeen").mockImplementation(() => {});
+    vi.mocked(commands.loadSessionHistory).mockResolvedValueOnce({
+      status: "ok",
+      data: [{}],
+    } as never);
+
+    await loadConversationHistory("cl-hist");
+
+    expect(commands.codexLoadHistory).not.toHaveBeenCalled();
+    expect(commands.loadSessionContext).toHaveBeenCalledWith("sess-cl");
+
+    ensureSession.mockRestore();
+    applyItem.mockRestore();
+    applyContextFill.mockRestore();
+    markSeen.mockRestore();
+  });
+});
+
 describe("conversationsStore — controls applied at spawn", () => {
   it("ensureConversationSession passes the persisted controls to spawn_session", async () => {
     seed(
@@ -364,8 +493,8 @@ describe("conversationsStore — controls applied at spawn", () => {
     );
     const handle = await ensureConversationSession("c1");
     expect(handle).toBe("session-1");
-    // (cwd, resume, model, effort, permissionMode, ultracode) — the conversation's
-    // own controls, NOT the old hardcoded opus/xhigh defaults.
+    // (cwd, resume, model, effort, permissionMode, ultracode, backend) — the
+    // conversation's own controls + its backend, NOT the old hardcoded defaults.
     expect(commands.spawnSession).toHaveBeenCalledWith(
       "/tmp/r1",
       null,
@@ -373,6 +502,7 @@ describe("conversationsStore — controls applied at spawn", () => {
       "high",
       "plan",
       false,
+      "claude",
     );
   });
 });

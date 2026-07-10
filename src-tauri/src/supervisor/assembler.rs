@@ -361,8 +361,8 @@ impl Assembler {
                 };
                 out.push(SessionEvent::RemoteControl(RemoteControlState {
                     status: status.to_string(),
-                    session_url: None,
                     error: if status == "error" { detail.clone() } else { None },
+                    ..RemoteControlState::default()
                 }));
             }
             // Other subtypes are discarded by the protocol layer's catch-all; we
@@ -784,6 +784,8 @@ impl Assembler {
             id,
             blocks,
             parent_tool_use_id: a.parent_tool_use_id.clone(),
+            // Claude has no Codex turn id — it targets rewind/fork by prompt text.
+            turn_id: None,
         }));
         // A sub-agent's assistant message carries the model it ran on — the wire's only
         // place a sub-agent's model appears (absent from every `task_*` event). Correlate

@@ -3,7 +3,7 @@
 // same todo summary, context fill and worktree badge. No bespoke data, no fake
 // chrome: every element is wired to the live store.
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Dot, Pill, Ico } from "../../ui/kit";
+import { Dot, Pill, Ico, ClaudeMark, CodexMark } from "../../ui/kit";
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { agentStatusToDot, backgroundCount, rowAttention } from "../../agent/status";
 import { useLastMessageSummary } from "../../store/lastMessageSummary";
@@ -85,6 +85,13 @@ export function StreamCard({
       </div>
 
       <div className="ag-card-tags">
+        <span
+          className={"ag-backend" + (conv.kind === "codex" ? " codex" : "")}
+          title={conv.kind === "codex" ? "Backend : Codex (OpenAI)" : "Backend : Claude"}
+          aria-label={conv.kind === "codex" ? "Codex" : "Claude"}
+        >
+          {conv.kind === "codex" ? <CodexMark /> : <ClaudeMark />}
+        </span>
         <WorktreeIndicator conv={conv} repoPath={repoPath} />
         {/* Reasoning effort — now a real, clickable slider (the composer's EffortGauge),
             set live per conversation. Renders nothing until an effort is known. */}
