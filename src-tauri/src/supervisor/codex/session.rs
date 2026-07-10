@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
@@ -218,6 +219,12 @@ struct CodexCore {
     /// turn-scoped notifications. `turn/interrupt` REQUIRES it alongside the threadId, so
     /// without it the stream-control button can't stop a Codex turn. `None` between turns.
     current_turn_id: Option<String>,
+    /// Wall-clock start of the live turn, stamped when we send `turn/start` (the same edge
+    /// as the front's `turnStartedAt`). Consumed at `turn/completed` to fill the timeline
+    /// `TurnResult.duration_ms` — Codex's `turn/completed` carries NO server-measured turn
+    /// duration (unlike Claude's `result`), so without this the finished-turn footer would
+    /// stay hidden on Codex. `None` between turns.
+    turn_started_at: Option<Instant>,
     /// The conversation's latest composer controls (model / effort / approval / sandbox
     /// / …), refreshed from each `SendUser` and re-asserted as per-turn overrides on
     /// every `turn/start` — the app-server has no separate settings channel.
@@ -242,6 +249,7 @@ impl CodexCore {
             open_tools: HashSet::new(),
             pending_approvals: HashSet::new(),
             current_turn_id: None,
+            turn_started_at: None,
             controls: CodexControls::default(),
             images_dir: std::env::temp_dir()
                 .join("flightdeck-codex-attachments")
@@ -392,6 +400,10 @@ impl CodexCore {
                 }
 
                 self.state.busy = true;
+                // Stamp the turn's wall-clock start (consumed at turn/completed for the
+                // footer duration). A steer that injected into a live turn returned earlier,
+                // so reaching here is always a fresh turn.
+                self.turn_started_at = Some(Instant::now());
                 self.push_state();
                 let mut params = TurnStartParams::new(thread_id.to_string(), input);
                 self.controls.apply_to(&mut params);
@@ -406,6 +418,9 @@ impl CodexCore {
                     }
                     Err(e) => {
                         self.state.busy = false;
+                        // No turn ran → drop the start stamp so it can't leak into the next
+                        // turn's measured duration.
+                        self.turn_started_at = None;
                         self.push_state();
                         self.emit_notice("send_failed", &e.to_string());
                     }
@@ -936,6 +951,13 @@ impl CodexCore {
         if let Some(msg) = &message {
             self.emit_notice("error", msg);
         }
+        // The turn's wall-clock, derived from the start we stamped at turn/start (Codex's
+        // turn/completed provides no server-measured duration). `None` if we somehow never
+        // stamped a start → the footer stays hidden rather than showing a bogus 0 ms.
+        let duration_ms = self
+            .turn_started_at
+            .take()
+            .map(|t| t.elapsed().as_millis() as u64);
         self.push_item(ConversationItem::TurnResult {
             subtype: if is_error { "error" } else { "success" }.into(),
             is_error,
@@ -943,9 +965,9 @@ impl CodexCore {
             api_error_status: None,
             total_cost_usd: None,
             num_turns: None,
-            duration_ms: None,
-            // Codex's turn/completed carries no cost/timing breakdown (like the other fields
-            // above) — the "N s de modèle" + TTFT are Claude-only; None keeps the UI honest.
+            duration_ms,
+            // Codex's turn/completed carries no MODEL-time breakdown — the "N s de modèle"
+            // rider + TTFT are Claude-only; None keeps that part of the footer honest.
             duration_api_ms: None,
             ttft_ms: None,
         });
@@ -1659,6 +1681,68 @@ mod tests {
         );
         assert!(!c.state.busy, "the current turn's completion settles busy");
         assert!(c.current_turn_id.is_none(), "current turn id cleared on its own completion");
+    }
+
+    /// The finished-turn footer duration (`TurnResult.duration_ms`) is derived from the
+    /// start stamped at turn/start — Codex's turn/completed carries no server duration, so
+    /// without this the footer would never show on Codex (parity with Claude's `result`).
+    #[test]
+    fn turn_completed_fills_duration_from_the_stamped_start() {
+        let (mut c, sink) = core();
+        c.state.busy = true;
+        c.current_turn_id = Some("u".into());
+        c.turn_started_at = Some(Instant::now());
+        c.on_notification(
+            "turn/completed",
+            json!({"threadId":"t","turn":{"id":"u","status":"completed"}}),
+        );
+        let dur = items(&sink).into_iter().find_map(|i| match i {
+            ConversationItem::TurnResult { duration_ms, .. } => Some(duration_ms),
+            _ => None,
+        });
+        assert!(
+            matches!(dur, Some(Some(_))),
+            "the turn footer must carry a derived duration_ms"
+        );
+        assert!(
+            c.turn_started_at.is_none(),
+            "the start stamp is consumed at completion"
+        );
+    }
+
+    /// ⚠️ No-fake-0ms guard: a completion with no stamped start (shouldn't happen in the
+    /// normal flow) leaves `duration_ms` None so the footer stays HIDDEN — never a bogus 0 ms.
+    #[test]
+    fn turn_completed_without_a_stamp_leaves_duration_none() {
+        let (mut c, sink) = core();
+        c.state.busy = true;
+        c.on_notification(
+            "turn/completed",
+            json!({"threadId":"t","turn":{"status":"completed"}}),
+        );
+        let dur = items(&sink).into_iter().find_map(|i| match i {
+            ConversationItem::TurnResult { duration_ms, .. } => Some(duration_ms),
+            _ => None,
+        });
+        assert_eq!(dur, Some(None), "no start stamp → no duration (footer hidden)");
+    }
+
+    /// A stale completion (a superseded turn's late notification) must NOT consume the live
+    /// turn's start stamp — otherwise the real completion would measure a bogus duration.
+    #[test]
+    fn stale_completion_preserves_the_start_stamp() {
+        let (mut c, _sink) = core();
+        c.current_turn_id = Some("T_new".into());
+        c.state.busy = true;
+        c.turn_started_at = Some(Instant::now());
+        c.on_notification(
+            "turn/completed",
+            json!({"threadId":"t","turn":{"id":"T_old","status":"completed"}}),
+        );
+        assert!(
+            c.turn_started_at.is_some(),
+            "a stale completion must not consume the live start stamp"
+        );
     }
 
     #[test]
