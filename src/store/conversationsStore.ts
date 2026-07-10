@@ -937,6 +937,45 @@ export function reactivateDiskConversation(d: DiskConversation): string {
 }
 
 /**
+ * Materialize a native Codex fork (a `thread/fork` result) as a real conversation. The Claude
+ * fork path (`reactivateDiskConversation`) hardcodes `kind:"claude"` and takes a transcript
+ * file, whereas a Codex branch is just a new thread id + resolved model — so it needs its own
+ * inserter. Lands in the SOURCE conversation's repo + cwd, with the forked thread as its
+ * `sessionId` (the resume key), so selecting it loads the branch's history via the
+ * `conv.kind==="codex"` cold-load path. `addConversation` auto-selects it. Returns the new id.
+ */
+export function materializeCodexBranch(
+  source: Conversation,
+  forkThreadId: string,
+  forkModel: string | null,
+  name: string,
+): string {
+  const id = uid();
+  const now = Date.now();
+  useConversationsStore.getState().addConversation({
+    id,
+    name,
+    repoId: source.repoId,
+    cwd: source.liveCwd ?? source.cwd,
+    createdAt: now,
+    lastActivityAt: now,
+    // The forked thread id IS the conversation's resume key (like Claude's session_id).
+    sessionId: forkThreadId,
+    handle: null,
+    liveCwd: null,
+    // The forked thread's resolved Codex model (fall back to the source's, then the default).
+    model: forkModel ?? source.model ?? DEFAULT_CODEX_MODEL,
+    effort: source.effort ?? DEFAULT_CODEX_EFFORT,
+    ultracode: false,
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    pendingReminder: null,
+    cleanOutput: null,
+    kind: "codex",
+  });
+  return id;
+}
+
+/**
  * Boot: hydrate the store from the core's persisted state. Called once at App
  * mount. The store starts empty — persistence lives in the Rust core, not in the
  * webview — so nothing is in memory until this runs.
@@ -1322,9 +1361,39 @@ export async function rewindConversation(
   targetIsUser: boolean,
   targetText: string | null,
   occurrence: number | null,
+  // Codex only: the Codex turn id to fork THROUGH (the new tip, inclusive); the thread
+  // computes it from the boundary's turn ids. Ignored on Claude (which cuts by prompt text).
+  codexLastTurnId: string | null = null,
 ): Promise<RewindOutcome | null> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return null;
+  if (conv.kind === "codex") {
+    // Native Codex rewind: Codex has no in-place truncation, so FORK the thread THROUGH the
+    // chosen turn (thread/fork{lastTurnId}, inclusive) and SWAP this conversation onto the
+    // branch; the stale original thread is archived. ⚠️ Like the Claude rewind, this does NOT
+    // revert on-disk file changes — history only. Stop any live session first so its in-memory
+    // thread can't diverge from the swapped branch.
+    await stopConversationSession(convId);
+    const cwd = conv.liveCwd ?? conv.cwd;
+    const res = await commands.codexFork(conv.sessionId, cwd, conv.model, codexLastTurnId);
+    if (res.status !== "ok") {
+      useAppErrors.getState().pushError("Impossible de rembobiner la conversation Codex.", res.error);
+      throw new Error(res.error);
+    }
+    const staleThread = conv.sessionId;
+    // Point the conversation at the rewound branch (its new resume key), then rebuild its
+    // (now shorter) timeline from the branch's rollout.
+    useConversationsStore.getState().noteSessionId(convId, res.data.threadId);
+    await reloadConversationHistory(convId);
+    // Best-effort: archive the abandoned original thread so it drops out of Codex's list.
+    // A failure is surfaced (console) but never blocks the rewind (the branch is already live).
+    void commands.codexArchive(staleThread, cwd).then((r) => {
+      if (r.status !== "ok") console.warn("[codex-rewind] archive of stale thread failed:", r.error);
+    });
+    // A user rewind hands the removed prompt back to the composer to edit and re-send.
+    if (targetIsUser && targetText) useComposerDrafts.getState().setDraft(convId, targetText);
+    return { removed_prompt: targetIsUser ? targetText : null, removed_lines: 1 };
+  }
   // 1. Kill the live process AND WAIT for it to be fully reaped (stopConversationSession →
   //    stop_session → shutdown_and_wait) so nothing re-writes the transcript from its
   //    in-memory state while / after we truncate.
@@ -1360,9 +1429,25 @@ export async function forkConversation(
   targetIsUser: boolean,
   targetText: string | null,
   occurrence: number | null,
+  // Codex only: the Codex turn id to fork THROUGH (the branch tip, inclusive). Ignored on Claude.
+  codexLastTurnId: string | null = null,
 ): Promise<string | null> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return null;
+  if (conv.kind === "codex") {
+    // Native Codex fork: branch the thread THROUGH the chosen turn into a NEW thread, then
+    // materialize it as a fresh Codex conversation (the source is left intact). Non-destructive.
+    const cwd = conv.liveCwd ?? conv.cwd;
+    const res = await commands.codexFork(conv.sessionId, cwd, conv.model, codexLastTurnId);
+    if (res.status !== "ok") {
+      useAppErrors.getState().pushError("Impossible de forker la conversation Codex.", res.error);
+      throw new Error(res.error);
+    }
+    const newId = materializeCodexBranch(conv, res.data.threadId, res.data.model, `${conv.name} (fork)`);
+    // A user fork seeds the new branch's composer with the removed prompt to edit and re-send.
+    if (targetIsUser && targetText) useComposerDrafts.getState().setDraft(newId, targetText);
+    return newId;
+  }
   const res = await commands.forkConversation(conv.sessionId, targetId, targetIsUser, targetText, occurrence);
   if (res.status !== "ok") {
     useAppErrors.getState().pushError("Impossible de forker la conversation.", res.error);

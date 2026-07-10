@@ -48,7 +48,7 @@ import {
 import { useContextData } from "../../store/contextData";
 import { useBackendUsage } from "./backendUsage";
 import { useUltraBlast } from "../../store/ultraBlast";
-import { EffortGauge, clampEffort, type EffortLevel } from "./EffortGauge";
+import { EffortGauge, clampEffort, effortLevelsForModel, type EffortLevel } from "./EffortGauge";
 import { RemoteControlChip } from "./RemoteControlChip";
 import {
   SlashCommandMenu,
@@ -820,18 +820,20 @@ export const ConductorComposer = forwardRef<
           ) : null}
         </Menu>
         {/* Effort gauge — BOTH backends (levels are backend-aware: Claude adds max/Ultra
-            code, Codex is low→xhigh; renders nothing when the model has no effort, e.g.
-            Haiku). Claude pushes it live; Codex applies it as the next turn's override. */}
+            code, Codex is low→xhigh, gpt-5.6 adds max+ultra; renders nothing when the model
+            has no effort, e.g. Haiku). Claude pushes it live; Codex applies it as the next
+            turn's override. */}
         <EffortGauge
           model={modelId}
           value={gaugeValue}
           onChange={chooseEffort}
           efforts={
             backend === "codex"
-              ? // Data-driven from the selected model; fall back to the verified static
-                // Codex ladder so a Codex conv NEVER shows Claude effort tiers (e.g. max),
-                // even if its persisted model id isn't in the dynamic list.
-                (codexEfforts[modelId] ?? ["low", "medium", "high", "xhigh"])
+              ? // Data-driven from the selected model; fall back to the per-model static
+                // ladder (gpt-5.6 → max+ultra, older gpt-5.x → low→xhigh) so a Codex conv
+                // shows the right rungs even if its persisted model id isn't in the dynamic
+                // list — and never Claude-only tiers.
+                (codexEfforts[modelId] ?? effortLevelsForModel(modelId))
               : undefined
           }
         />

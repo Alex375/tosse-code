@@ -5,7 +5,7 @@
 // the picker is never empty. Cached process-wide (models don't change per cwd).
 import { useQuery } from "@tanstack/react-query";
 import { commands } from "../../ipc/client";
-import type { EffortLevel } from "./EffortGauge";
+import { effortLevelsForModel, type EffortLevel } from "./EffortGauge";
 import { CODEX_MODELS, type ModelOption } from "./models";
 
 export interface CodexModelsData {
@@ -15,7 +15,7 @@ export interface CodexModelsData {
   effortsById: Record<string, EffortLevel[]>;
 }
 
-const VALID_EFFORTS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+const VALID_EFFORTS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const asEfforts = (xs: string[]): EffortLevel[] =>
   xs.filter((x): x is EffortLevel => (VALID_EFFORTS as string[]).includes(x));
 
@@ -39,9 +39,11 @@ export function useCodexModels(enabled: boolean): CodexModelsData {
 
   const list = q.data ?? [];
   if (list.length === 0) {
-    // Loading / error / empty → verified static fallback (uniform low→xhigh efforts).
+    // Loading / error / empty → verified static fallback. Per-model ladder (gpt-5.6
+    // gets max+ultra, older gpt-5.x low→xhigh) via effortLevelsForModel so the fallback
+    // never lies about a gpt-5.6 model's real steps.
     const effortsById: Record<string, EffortLevel[]> = {};
-    for (const m of CODEX_MODELS) effortsById[m.value] = ["low", "medium", "high", "xhigh"];
+    for (const m of CODEX_MODELS) effortsById[m.value] = effortLevelsForModel(m.value);
     return { models: CODEX_MODELS, effortsById };
   }
 
@@ -53,7 +55,7 @@ export function useCodexModels(enabled: boolean): CodexModelsData {
   const effortsById: Record<string, EffortLevel[]> = {};
   for (const m of list) {
     const steps = asEfforts(m.efforts);
-    effortsById[m.id] = steps.length ? steps : ["low", "medium", "high", "xhigh"];
+    effortsById[m.id] = steps.length ? steps : effortLevelsForModel(m.id);
   }
   return { models, effortsById };
 }

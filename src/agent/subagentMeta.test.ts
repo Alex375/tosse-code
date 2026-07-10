@@ -38,7 +38,7 @@ describe("effortLabel", () => {
 
   it("EFFORT_LABELS covers exactly the gauge's levels", () => {
     expect(Object.keys(EFFORT_LABELS).sort()).toEqual(
-      ["high", "low", "max", "medium", "ultracode", "xhigh"],
+      ["high", "low", "max", "medium", "ultra", "ultracode", "xhigh"],
     );
   });
 });

@@ -165,6 +165,12 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
     let mut items: Vec<ConversationItem> = Vec::new();
     let mut open_tools: Vec<String> = Vec::new();
     let mut msg_seq = 0u64;
+    // The Codex turn currently being read. `turn_context` lines carry the authoritative
+    // `turn_id` and precede their turn's events; most `event_msg`/`response_item` payloads
+    // also carry it. Tracking the latest lets us tag each assistant item with its turn — the
+    // cold analogue of the live actor's `current_turn_id` — so the front can target a turn
+    // boundary by id for native rewind/fork (`thread/fork{lastTurnId}`).
+    let mut current_turn: Option<String> = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -175,6 +181,9 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
             continue; // already counted in pass 1
         };
         let payload = entry.get("payload").unwrap_or(&Value::Null);
+        if let Some(t) = payload.get("turn_id").and_then(Value::as_str) {
+            current_turn = Some(t.to_string());
+        }
         match entry.get("type").and_then(Value::as_str) {
             Some("event_msg") => match payload.get("type").and_then(Value::as_str) {
                 Some("user_message") => {
@@ -191,14 +200,18 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
                     if let Some(text) = payload.get("message").and_then(Value::as_str) {
                         if !text.is_empty() {
                             msg_seq += 1;
+                            let before = items.len();
                             items.push(assistant_text(format!("cx-a{msg_seq}"), text.to_string()));
+                            stamp_turn(&mut items, before, current_turn.as_deref());
                         }
                     }
                 }
                 _ => {} // token_count, task_*, agent_reasoning, patch_apply_end (pass 1) …
             },
             Some("response_item") => {
-                push_response_item(payload, &patch_changes, &mut items, &mut open_tools)
+                let before = items.len();
+                push_response_item(payload, &patch_changes, &mut items, &mut open_tools);
+                stamp_turn(&mut items, before, current_turn.as_deref());
             }
             // session_meta, turn_context, compacted (compaction boundary — the pre-compaction
             // turns still precede it in the file, so the full history renders) …
@@ -354,6 +367,8 @@ fn push_tool_use(
             input,
         }],
         parent_tool_use_id: None,
+        // Filled by `stamp_turn` from the caller's tracked `current_turn` after this push.
+        turn_id: None,
     });
 }
 
@@ -390,6 +405,23 @@ fn assistant_text(id: String, text: String) -> ConversationItem {
         id,
         blocks: vec![NormalizedBlock::Text { text }],
         parent_tool_use_id: None,
+        turn_id: None,
+    }
+}
+
+/// Tag every `AssistantMessage` produced by ONE rollout line (those pushed at/after `from`)
+/// with the Codex `turn_id` of the turn being read — the cold analogue of the live actor
+/// stamping each emitted item with `current_turn_id`. Only fills a `None` (never overwrites
+/// an already-tagged item); a `None` `turn_id` (a line before any `turn_context`) is left as
+/// is, so the front simply can't offer rewind/fork on that boundary.
+fn stamp_turn(items: &mut [ConversationItem], from: usize, turn_id: Option<&str>) {
+    let Some(t) = turn_id else { return };
+    for item in &mut items[from..] {
+        if let ConversationItem::AssistantMessage { turn_id, .. } = item {
+            if turn_id.is_none() {
+                *turn_id = Some(t.to_string());
+            }
+        }
     }
 }
 

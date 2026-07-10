@@ -386,6 +386,8 @@
 .wf-eff-notch.ultra { width:5px; height:5px; background:var(--wf-ultra); }
 .wf-eff-thumb { position:absolute; top:2px; width:14px; height:14px; border-radius:50%; background:var(--wf-tx-hi); box-shadow:0 1px 3px #0007; transition:left .2s cubic-bezier(.2,.7,.2,1), box-shadow .25s ease, background .25s ease; pointer-events:none; }
 .wf-eff-thumb.ultra { background:#fff; box-shadow:0 0 0 2px var(--wf-ultra), 0 0 12px -1px var(--wf-ultra); animation:wf-ultra-thumb .9s ease both; }
+/* Note: the `.ultra` slider visuals above (fill gradient + pulse, thumb glow, notch) are shared
+   by the Claude `ultracode` tier AND the Codex `ultra` effort (see EffortGauge `ultraFx`). */
 
 @keyframes wf-ultra-pulse { 0%,100%{ box-shadow:0 0 14px -4px var(--wf-ultra); } 50%{ box-shadow:0 0 22px 0 var(--wf-ultra); } }
 @keyframes wf-ultra-thumb { 0%{ transform:scale(1); } 35%{ transform:scale(1.45); } 100%{ transform:scale(1); } }

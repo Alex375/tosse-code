@@ -31,20 +31,25 @@ export const CLAUDE_MODELS: ModelOption[] = [
   { label: "Haiku 4.5", value: "haiku", backend: "claude" },
 ];
 
-// The real Codex models, as reported by `codex app-server`'s `model/list` (codex-cli
-// 0.142.5): gpt-5.5 is the server default. STATIC for now — a follow-up wires
-// `model/list` so the section is populated live per cwd (and picks up new models +
-// their `supportedReasoningEfforts`). The ids are the true wire ids, so a pick takes
-// effect at `thread/start` (see the Rust `codex_model` plumbing) rather than lying.
+// The real Codex models, as reported by `codex app-server`'s `model/list`. STATIC
+// fallback used while the dynamic list loads or on error — the live `model/list` (see
+// codexModels.ts) supersedes it and picks up each model's real `supportedReasoningEfforts`.
+// The gpt-5.6 family (sol/terra/luna) supports the deeper max+ultra effort rungs
+// (assigned via effortLevelsForModel in codexModels.ts). The ids are the true wire ids,
+// so a pick takes effect at `thread/start` (see the Rust `codex_model` plumbing).
 export const CODEX_MODELS: ModelOption[] = [
+  { label: "GPT-5.6 Sol", value: "gpt-5.6-sol", backend: "codex" },
+  { label: "GPT-5.6 Terra", value: "gpt-5.6-terra", backend: "codex" },
+  { label: "GPT-5.6 Luna", value: "gpt-5.6-luna", backend: "codex" },
   { label: "GPT-5.5", value: "gpt-5.5", backend: "codex" },
   { label: "GPT-5.4", value: "gpt-5.4", backend: "codex" },
   { label: "GPT-5.4 Mini", value: "gpt-5.4-mini", backend: "codex" },
 ];
 
 /** The Codex backend's default model — seeds a Codex conversation so its persisted
- *  `model` is always a real Codex id (never a Claude alias the binary would reject). */
-export const DEFAULT_CODEX_MODEL = "gpt-5.5";
+ *  `model` is always a real Codex id (never a Claude alias the binary would reject).
+ *  gpt-5.6-sol: the top current family (adds the max/ultra effort rungs) — the default pick. */
+export const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 
 export const ALL_MODELS: ModelOption[] = [...CLAUDE_MODELS, ...CODEX_MODELS];
 

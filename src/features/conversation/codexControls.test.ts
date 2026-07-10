@@ -39,7 +39,7 @@ beforeEach(() => {
 describe("codexConvControls defaults", () => {
   it("returns the product defaults for an untouched conversation (network ON)", () => {
     expect(codexConvControls("nope")).toEqual({
-      preset: "standard",
+      preset: "auto",
       network: true,
       summary: "auto",
       personality: "none",
@@ -99,8 +99,8 @@ describe("buildCodexControls (wire payload)", () => {
   it("falls back to the Codex default model/effort when the record is empty", () => {
     const wire = buildCodexControls(codexConv({ id: "c1", model: null, effort: null }));
     expect(wire.model).toBe(DEFAULT_CODEX_MODEL);
-    expect(wire.effort).toBe("medium");
-    expect(wire.approvalPolicy).toBe("on-request"); // default "standard" preset
+    expect(wire.effort).toBe("xhigh"); // DEFAULT_CODEX_EFFORT (= "Extra")
+    expect(wire.approvalPolicy).toBe("never"); // default "auto" preset
     expect(wire.sandbox).toBe("workspaceWrite");
     expect(wire.networkAccess).toBe(true); // network ON by default
   });

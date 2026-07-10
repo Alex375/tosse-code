@@ -765,6 +765,70 @@ mod tests {
         server.shutdown_all().await;
     }
 
+    /// PROBE: what context window does the server actually report PER MODEL? The context ring's
+    /// denominator is `thread/tokenUsage/updated.tokenUsage.modelContextWindow`; a user reported
+    /// it reads the SAME (~353k) for every model, doubting gpt-5.6 is really that small. This
+    /// runs a one-token turn for gpt-5.6-sol vs gpt-5.5 and prints the reported window (plus any
+    /// model REROUTE / safety-buffer note), to tell a genuine bug from the wire's real value.
+    /// Run: `cargo test --lib -- --ignored --nocapture live_probe_model_context_window`.
+    #[tokio::test]
+    #[ignore = "spawns a real codex app-server (network + ChatGPT auth + a sliver of quota)"]
+    async fn live_probe_model_context_window() {
+        for model in ["gpt-5.6-sol", "gpt-5.5"] {
+            let server = CodexServer::new();
+            let cwd = std::env::temp_dir();
+            let (thread_id, mut inbound) = match server.start_thread(&cwd, Some(model)).await {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("CTX PROBE [{model}]: thread/start failed → {e}");
+                    server.shutdown_all().await;
+                    continue;
+                }
+            };
+            server
+                .request(
+                    "turn/start",
+                    serde_json::json!({ "threadId": thread_id, "input": [{"type":"text","text":"hi"}] }),
+                )
+                .await
+                .expect("turn/start accepted");
+            let mut window: Option<u64> = None;
+            let mut notes: Vec<String> = Vec::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+            loop {
+                match tokio::time::timeout_at(deadline, inbound.recv()).await {
+                    Ok(Some(Incoming::Notification { method, params })) => {
+                        if method == "thread/tokenUsage/updated" {
+                            if let Some(w) = params
+                                .get("tokenUsage")
+                                .and_then(|u| u.get("modelContextWindow"))
+                                .and_then(Value::as_u64)
+                            {
+                                window = Some(w);
+                            }
+                        } else if method.to_lowercase().contains("rerout")
+                            || method.to_lowercase().contains("safetybuffer")
+                        {
+                            notes.push(format!("{method}: {params}"));
+                        } else if method == "turn/completed" {
+                            break;
+                        }
+                    }
+                    Ok(Some(_)) => {}
+                    _ => break,
+                }
+            }
+            eprintln!("CTX PROBE [{model}]: modelContextWindow = {window:?}");
+            for n in &notes {
+                eprintln!("  note: {n}");
+            }
+            let _ = server
+                .request("thread/archive", serde_json::json!({ "threadId": thread_id }))
+                .await;
+            server.shutdown_all().await;
+        }
+    }
+
     /// End-to-end proof of RESUME-by-id (the cold-history continuation path): server A
     /// opens a thread and runs a turn (writing its rollout to disk), then a SEPARATE server
     /// B `resume_thread`s it by id and runs ANOTHER turn — proving a resumed thread keeps a

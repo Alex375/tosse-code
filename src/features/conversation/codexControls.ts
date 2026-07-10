@@ -80,15 +80,16 @@ export const PRESET_ORDER: CodexPreset[] = ["prudent", "standard", "auto", "dang
 // only through a deliberate menu pick (whose hint spells out the risk). Cycling FROM
 // danger (indexOf → -1) lands on the safest preset: ⇧Tab always steps back to safety.
 export const PRESET_CYCLE: CodexPreset[] = PRESET_ORDER.filter((p) => p !== "danger");
-export const DEFAULT_CODEX_PRESET: CodexPreset = "standard";
+export const DEFAULT_CODEX_PRESET: CodexPreset = "auto";
 export const DEFAULT_CODEX_SUMMARY: CodexSummary = "auto";
 export const DEFAULT_CODEX_PERSONALITY: CodexPersonality = "none";
 
-/** The Codex reasoning-effort steps, shared across current models (verified against
- *  `model/list`: gpt-5.x support low/medium/high/xhigh, default medium). No "ultracode"
- *  (a Claude-only tier) and no "max". */
+/** The baseline Codex reasoning-effort steps for older gpt-5.x (verified against
+ *  `model/list`: low/medium/high/xhigh, default medium). The gpt-5.6 family additionally
+ *  exposes `max` + the Codex-only `ultra` rung (data-driven via `model/list`, see
+ *  effortLevelsForModel). Never "ultracode" — that app tier is Claude-only. */
 export const CODEX_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
-export const DEFAULT_CODEX_EFFORT = "medium";
+export const DEFAULT_CODEX_EFFORT = "xhigh";
 
 /** The per-conversation Codex control state held HERE (model + effort live on the conv
  *  record). Absent fields fall back to the product defaults. */

@@ -204,6 +204,13 @@ pub enum ConversationItem {
         id: String,
         blocks: Vec<NormalizedBlock>,
         parent_tool_use_id: Option<String>,
+        /// The CODEX turn id this item belongs to (the app-server's `turn/start` id, live;
+        /// the rollout's `turn_context.turn_id`, cold). Lets the front target a Codex turn
+        /// boundary by id for native rewind/fork (`thread/fork{lastTurnId}`) instead of the
+        /// Claude text-match locator. Always `None` on the Claude backend (which has no such
+        /// id and targets by prompt text).
+        #[serde(default)]
+        turn_id: Option<String>,
     },
     /// A tool result, delivered by the CLI as a `user` message.
     ToolResult {

@@ -116,40 +116,26 @@ fn parse_skills(value: &Value) -> Vec<CodexSkill> {
     out
 }
 
-/// Rewind a Codex thread IN PLACE by dropping its last `num_turns` turns (`thread/rollback`
-/// — count-based, so the caller computes the count from the timeline). Operates on the
-/// thread on disk by id via a transient app-server, so no live conversation session is
-/// required (mirrors the Claude backend rewinding the on-disk transcript). ⚠️ Per the wire
-/// contract, rollback does NOT revert on-disk file changes the agent made — only the
-/// conversation history — exactly like the Claude rewind. `num_turns == 0` is a no-op.
-pub async fn rollback_thread(thread_id: &str, num_turns: u32, cwd: &Path) -> Result<(), CodexError> {
-    if num_turns == 0 {
-        return Ok(());
-    }
-    CodexServer::oneshot(
-        "thread/rollback",
-        json!({ "threadId": thread_id, "numTurns": num_turns }),
-        cwd,
-    )
-    .await
-    .map(|_| ())
-}
-
-/// Fork a Codex thread into a NEW thread (`thread/fork` — a full-thread branch loaded from
-/// disk by id), then, when `drop_last_turns > 0`, roll the NEW thread back by that many
-/// turns so the branch ends AT the chosen cut point (fork is whole-thread only, so a
-/// "fork here" is fork + rollback-of-the-fork). Returns the new thread id + resolved model
-/// for the front to materialize as a fresh Codex conversation. Non-destructive: the source
-/// thread is untouched. Transient app-server, no live session needed.
+/// Fork a Codex thread into a NEW thread (`thread/fork`), optionally cutting the branch at a
+/// turn boundary via `last_turn_id`: the app-server forks THROUGH that turn, inclusive (turns
+/// AFTER it are omitted), so a "fork here" / "rewind here" is a single call — no separate
+/// rollback. `None` forks the whole thread. This replaces the count-based `thread/rollback`
+/// path, DEPRECATED in codex-cli 0.144.1 ("will be removed soon"). Returns the new thread id +
+/// resolved model for the front to materialize as a fresh Codex conversation (or to swap the
+/// current conversation onto, for an in-place rewind). Non-destructive: the source thread is
+/// untouched. Transient app-server, no live session needed. ⚠️ Like the Claude rewind, this
+/// does NOT revert on-disk file changes the agent made — only the conversation history.
+/// ⚠️ `last_turn_id` MUST reference a SETTLED turn (the wire rejects an in-progress one); the
+/// front only offers the controls on non-busy turns.
 pub async fn fork_thread(
     thread_id: &str,
     cwd: &Path,
     model: Option<&str>,
-    drop_last_turns: u32,
+    last_turn_id: Option<&str>,
 ) -> Result<CodexForkResult, CodexError> {
     let value = CodexServer::oneshot(
         "thread/fork",
-        json!({ "threadId": thread_id, "model": model }),
+        json!({ "threadId": thread_id, "model": model, "lastTurnId": last_turn_id }),
         cwd,
     )
     .await?;
@@ -159,16 +145,6 @@ pub async fn fork_thread(
         .and_then(Value::as_str)
         .ok_or_else(|| CodexError::Rpc("thread/fork n'a pas renvoyé d'identifiant de thread".into()))?
         .to_string();
-    if drop_last_turns > 0 {
-        // Best-effort branch-at-point: the fork thread already EXISTS and is persisted, so a
-        // rollback failure must NOT discard it (a `?` here would return Err, orphaning the
-        // freshly-created branch with no id for the caller to reach — the opposite of what we
-        // want). Log the failure and return the (un-rolled-back) fork id so the branch stays
-        // reachable; the user can rewind the extra turns themselves.
-        if let Err(e) = rollback_thread(&new_id, drop_last_turns, cwd).await {
-            eprintln!("[codex-fork] rollback-of-branch {new_id} failed, returning un-rolled-back fork: {e}");
-        }
-    }
     let model = value.get("model").and_then(Value::as_str).map(str::to_string);
     Ok(CodexForkResult { thread_id: new_id, model })
 }
@@ -251,21 +227,28 @@ fn resolves_on_path(bin: &Path) -> bool {
     std::env::split_paths(&path).any(|dir| dir.join(bin).is_file())
 }
 
-/// Well-known install locations for the `codex` binary, most-specific first. Used
-/// ONLY as a fallback when a bare `codex` does not resolve on `PATH` — e.g. a
-/// Finder-launched bundle whose login-shell PATH probe failed (the same minimal-PATH
-/// trap the Claude backend guards against). `codex` ships via the npm package
-/// `@openai/codex`, typically symlinked into `/usr/local/bin` or a homebrew/npm bin.
+/// Well-known install locations for the `codex` binary, in the SAME precedence a real
+/// login-shell `PATH` would apply. Used ONLY as a fallback when a bare `codex` does not
+/// resolve on `PATH` — e.g. a Finder-launched bundle whose login-shell PATH probe failed
+/// (the same minimal-PATH trap the Claude backend guards against). `codex` ships via the
+/// standalone installer (which drops it in `~/.local/bin`, refreshed by `codex update`)
+/// or the npm package `@openai/codex` (symlinked into a homebrew/npm bin, often the
+/// root-owned `/usr/local/bin`).
+///
+/// ⚠️ Order matters when TWO installs coexist (e.g. a stale npm-global `/usr/local/bin`
+/// one alongside a freshly-updated `~/.local/bin` one): a real login PATH lists the
+/// user-scoped dirs AHEAD of `/usr/local`, so this fallback must pick the SAME binary
+/// PATH resolution would — user-home first, then homebrew, then `/usr/local` last.
+/// Listing `/usr/local` first would silently prefer an OLDER shadowed install.
 fn known_codex_locations() -> Vec<PathBuf> {
-    let mut v = vec![
-        PathBuf::from("/usr/local/bin/codex"),
-        PathBuf::from("/opt/homebrew/bin/codex"),
-    ];
+    let mut v = Vec::new();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        v.push(home.join(".npm-global/bin/codex"));
         v.push(home.join(".local/bin/codex"));
         v.push(home.join(".volta/bin/codex"));
+        v.push(home.join(".npm-global/bin/codex"));
     }
+    v.push(PathBuf::from("/opt/homebrew/bin/codex"));
+    v.push(PathBuf::from("/usr/local/bin/codex"));
     v
 }
 
@@ -488,7 +471,7 @@ mod tests {
             }
         }
 
-        let fork = fork_thread(&thread_id, &cwd, None, 0).await;
+        let fork = fork_thread(&thread_id, &cwd, None, None).await;
         eprintln!("HISTORY PROBE: thread/fork → {}", reaches(&fork));
         let archive = archive_thread(&thread_id, &cwd).await;
         eprintln!("HISTORY PROBE: thread/archive → {}", reaches(&archive));

@@ -90,29 +90,17 @@ async codexListExtensions(cwd: string | null) : Promise<Result<ExtensionsSnapsho
 }
 },
 /**
- * Rewind a Codex conversation IN PLACE (`thread/rollback`): drop the last `num_turns`
- * turns of its thread. Count-based (the front derives the count from the timeline), on the
- * thread on disk by id — no live session needed, mirroring the Claude backend rewinding the
- * on-disk transcript. `cwd` is the conversation's working directory (needed to start the
- * transient app-server). Like the Claude rewind, it does NOT revert on-disk file changes.
+ * Fork a Codex conversation into a NEW branch (`thread/fork`, cut at `last_turn_id` —
+ * forks THROUGH that turn, inclusive, so the branch ends AT the chosen boundary; `None`
+ * forks the whole thread). Non-destructive: the source thread is left intact. Returns the
+ * new thread id + resolved model, which the front materializes as a fresh Codex conversation
+ * (a branch) or swaps the current conversation onto (an in-place rewind). No live session
+ * needed (loaded from disk by id). Like the Claude rewind, it does NOT revert on-disk file
+ * changes — history only.
  */
-async codexRollback(threadId: string, numTurns: number, cwd: string) : Promise<Result<null, string>> {
+async codexFork(threadId: string, cwd: string, model: string | null, lastTurnId: string | null) : Promise<Result<CodexForkResult, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("codex_rollback", { threadId, numTurns, cwd }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Fork a Codex conversation into a NEW branch (`thread/fork`, then roll the fork back by
- * `drop_last_turns` so it ends AT the cut point). Non-destructive: the source thread is
- * left intact. Returns the new thread id + resolved model, which the front materializes as
- * a fresh Codex conversation (branch). No live session needed (loaded from disk by id).
- */
-async codexFork(threadId: string, cwd: string, model: string | null, dropLastTurns: number) : Promise<Result<CodexForkResult, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("codex_fork", { threadId, cwd, model, dropLastTurns }) };
+    return { status: "ok", data: await TAURI_INVOKE("codex_fork", { threadId, cwd, model, lastTurnId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1674,10 +1662,10 @@ summary: string | null;
  */
 personality: string | null }
 /**
- * The outcome of a native `thread/fork` (+ optional `thread/rollback` of the new thread
- * to the cut point): the id of the freshly forked thread + its resolved model. IPC OUTPUT
- * type (`specta::Type` + `Serialize`); the front turns `thread_id` into a new Codex
- * conversation record (like reactivating a disk conversation, but for a branch).
+ * The outcome of a native `thread/fork` (cut at a `lastTurnId` turn boundary, inclusive):
+ * the id of the freshly forked thread + its resolved model. IPC OUTPUT type
+ * (`specta::Type` + `Serialize`); the front turns `thread_id` into a new Codex conversation
+ * record (a branch), or swaps the current conversation onto it (an in-place rewind).
  */
 export type CodexForkResult = { threadId: string; model: string | null }
 /**
@@ -1826,7 +1814,7 @@ export type ConversationItem =
  * The authoritative assembled assistant message (text + tool_use blocks).
  * Carries the same `id` as the streamed `message_start` — the UI reconciles.
  */
-{ kind: "assistant_message"; id: string; blocks: NormalizedBlock[]; parent_tool_use_id: string | null } | 
+{ kind: "assistant_message"; id: string; blocks: NormalizedBlock[]; parent_tool_use_id: string | null; turn_id?: string | null } | 
 /**
  * A tool result, delivered by the CLI as a `user` message.
  */

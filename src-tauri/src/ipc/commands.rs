@@ -195,41 +195,29 @@ pub async fn codex_compact(
     handle.compact().await.map_err(|e| e.to_string())
 }
 
-// ⚠️ PROVEN-BUT-NOT-YET-WIRED (Phase 4.3): the three commands below (rollback / fork /
-// archive) are the verified backend foundation for native Codex rewind/fork, but NOTHING in
-// `src/` calls them yet — the UI is still gated OFF for Codex (`ConductorThread`: `!isCodex`).
-// Their former BLOCKER — no `thread/resume` by id + no cold-history reload, so a
-// rolled-back/forked thread couldn't be re-opened and the live-only timeline couldn't be
-// rebuilt — is now REMOVED (this file's `codex_load_history` + the actor's resume-by-id).
-// Un-gating the rewind/fork UI on top of them is the remaining follow-up. Kept because
-// they're tested + live-probed; their `Err` is mapped to a String so the caller can surface it.
+// Native Codex rewind/fork/archive. `codex_fork` powers BOTH the "fork here" (a new branch
+// conversation) and the "rewind here" (fork + swap the current conversation onto the branch)
+// controls: Codex has no in-place history truncation, and `thread/rollback` was DEPRECATED in
+// codex-cli 0.144.1, so both go through `thread/fork` cut at a `last_turn_id` turn boundary
+// (inclusive). `codex_archive` cleans up a discarded thread. Each `Err` is mapped to a String
+// so the caller always surfaces it (never a silent failure).
 
-/// Rewind a Codex conversation IN PLACE (`thread/rollback`): drop the last `num_turns`
-/// turns of its thread. Count-based (the front derives the count from the timeline), on the
-/// thread on disk by id — no live session needed, mirroring the Claude backend rewinding the
-/// on-disk transcript. `cwd` is the conversation's working directory (needed to start the
-/// transient app-server). Like the Claude rewind, it does NOT revert on-disk file changes.
-#[tauri::command]
-#[specta::specta]
-pub async fn codex_rollback(thread_id: String, num_turns: u32, cwd: String) -> Result<(), String> {
-    codex::rollback_thread(&thread_id, num_turns, std::path::Path::new(&cwd))
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Fork a Codex conversation into a NEW branch (`thread/fork`, then roll the fork back by
-/// `drop_last_turns` so it ends AT the cut point). Non-destructive: the source thread is
-/// left intact. Returns the new thread id + resolved model, which the front materializes as
-/// a fresh Codex conversation (branch). No live session needed (loaded from disk by id).
+/// Fork a Codex conversation into a NEW branch (`thread/fork`, cut at `last_turn_id` —
+/// forks THROUGH that turn, inclusive, so the branch ends AT the chosen boundary; `None`
+/// forks the whole thread). Non-destructive: the source thread is left intact. Returns the
+/// new thread id + resolved model, which the front materializes as a fresh Codex conversation
+/// (a branch) or swaps the current conversation onto (an in-place rewind). No live session
+/// needed (loaded from disk by id). Like the Claude rewind, it does NOT revert on-disk file
+/// changes — history only.
 #[tauri::command]
 #[specta::specta]
 pub async fn codex_fork(
     thread_id: String,
     cwd: String,
     model: Option<String>,
-    drop_last_turns: u32,
+    last_turn_id: Option<String>,
 ) -> Result<codex::CodexForkResult, String> {
-    codex::fork_thread(&thread_id, std::path::Path::new(&cwd), model.as_deref(), drop_last_turns)
+    codex::fork_thread(&thread_id, std::path::Path::new(&cwd), model.as_deref(), last_turn_id.as_deref())
         .await
         .map_err(|e| e.to_string())
 }

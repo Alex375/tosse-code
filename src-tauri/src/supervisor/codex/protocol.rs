@@ -523,10 +523,10 @@ pub struct CodexControls {
     pub personality: Option<String>,
 }
 
-/// The outcome of a native `thread/fork` (+ optional `thread/rollback` of the new thread
-/// to the cut point): the id of the freshly forked thread + its resolved model. IPC OUTPUT
-/// type (`specta::Type` + `Serialize`); the front turns `thread_id` into a new Codex
-/// conversation record (like reactivating a disk conversation, but for a branch).
+/// The outcome of a native `thread/fork` (cut at a `lastTurnId` turn boundary, inclusive):
+/// the id of the freshly forked thread + its resolved model. IPC OUTPUT type
+/// (`specta::Type` + `Serialize`); the front turns `thread_id` into a new Codex conversation
+/// record (a branch), or swaps the current conversation onto it (an in-place rewind).
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexForkResult {

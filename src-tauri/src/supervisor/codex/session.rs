@@ -229,6 +229,15 @@ struct CodexCore {
     /// / …), refreshed from each `SendUser` and re-asserted as per-turn overrides on
     /// every `turn/start` — the app-server has no separate settings channel.
     controls: CodexControls,
+    /// The controls the backend ACTUALLY consumed on the last `turn/start` we emitted.
+    /// Codex has no settings channel: a control change only takes effect (and is only
+    /// "confirmed") when the next turn carries it as an override — so this is diffed
+    /// against `controls` at each `turn/start` Ok to surface a `control_change` timeline
+    /// notice ONLY at that confirmed moment (never on the composer click, never on a
+    /// `turn/steer`, which carries no overrides). `None` until the first confirmed turn:
+    /// that turn seeds the baseline SILENTLY (no phantom transition), mirroring the Claude
+    /// assembler's `Announced` baseline logic.
+    applied_controls: Option<CodexControls>,
     /// This session's PRIVATE dir for materialized image attachments (Codex reads
     /// images from a file PATH, not base64 — see [`materialize_image`]). Created
     /// lazily on first image, removed best-effort at actor teardown
@@ -251,6 +260,7 @@ impl CodexCore {
             current_turn_id: None,
             turn_started_at: None,
             controls: CodexControls::default(),
+            applied_controls: None,
             images_dir: std::env::temp_dir()
                 .join("flightdeck-codex-attachments")
                 .join(uuid::Uuid::new_v4().to_string()),
@@ -302,6 +312,73 @@ impl CodexCore {
         self.push_item(ConversationItem::Notice {
             subtype: subtype.to_string(),
             detail: json!({ "message": message }),
+        });
+    }
+
+    /// Announce, in the timeline, each Codex control the backend JUST consumed on this
+    /// `turn/start`. The FIRST confirmed turn only SEEDS the baseline (no notice); every
+    /// later move emits a subtle `control_change` line — the SAME subtype + `{control,
+    /// icon, from, to}` detail shape the Claude backend's `change_notice` uses, so the
+    /// front's shared `NoticeRow` renders it identically (zero front divergence).
+    ///
+    /// The composer collapses sandbox × approval into ONE preset ("Prudent" / "Standard" /
+    /// "Auto" / "Accès total"), so those two axes are reported as a SINGLE "Permissions"
+    /// line (reconstructed from the pair) — never two lines for one preset flip.
+    fn announce_control_changes(&mut self) {
+        let cur = self.controls.clone();
+        // `replace` sets the new baseline and hands back the old one; `None` ⇒ first
+        // confirmed turn ⇒ baseline seeded, nothing to announce (no phantom transition).
+        let Some(prev) = self.applied_controls.replace(cur.clone()) else {
+            return;
+        };
+        self.diff_control(
+            "Modèle",
+            "diamond",
+            codex_model_label(prev.model.as_deref()),
+            codex_model_label(cur.model.as_deref()),
+        );
+        self.diff_control(
+            "Effort de réflexion",
+            "bolt",
+            codex_effort_label(prev.effort.as_deref()),
+            codex_effort_label(cur.effort.as_deref()),
+        );
+        self.diff_control(
+            "Permissions",
+            "shield",
+            codex_permissions_label(prev.sandbox.as_deref(), prev.approval_policy.as_deref()),
+            codex_permissions_label(cur.sandbox.as_deref(), cur.approval_policy.as_deref()),
+        );
+        self.diff_control(
+            "Accès réseau",
+            "globe",
+            codex_bool_label(prev.network_access),
+            codex_bool_label(cur.network_access),
+        );
+        self.diff_control(
+            "Résumé du raisonnement",
+            "list",
+            codex_summary_label(prev.summary.as_deref()),
+            codex_summary_label(cur.summary.as_deref()),
+        );
+        self.diff_control(
+            "Personnalité",
+            "wand",
+            codex_personality_label(prev.personality.as_deref()),
+            codex_personality_label(cur.personality.as_deref()),
+        );
+    }
+
+    /// Push a `control_change` notice IFF the friendly label actually moved. Same wire
+    /// (subtype + detail) as the Claude backend's `change_notice`, consumed by the shared
+    /// front `NoticeRow` — zero divergence.
+    fn diff_control(&self, control: &str, icon: &str, from: String, to: String) {
+        if from == to {
+            return;
+        }
+        self.push_item(ConversationItem::Notice {
+            subtype: "control_change".to_string(),
+            detail: json!({ "control": control, "icon": icon, "from": from, "to": to }),
         });
     }
 
@@ -415,6 +492,12 @@ impl CodexCore {
                         self.current_turn_id = serde_json::from_value::<TurnStartResult>(result)
                             .ok()
                             .and_then(|r| r.turn.id);
+                        // The backend has now CONSUMED this turn's control overrides — the
+                        // only confirmed moment for Codex (no settings channel). Announce any
+                        // control that moved. NOT reached on a failed turn/start (below) nor a
+                        // successful turn/steer (returns early above, carries no overrides), so
+                        // a pending change re-announces on the next confirmed turn.
+                        self.announce_control_changes();
                     }
                     Err(e) => {
                         self.state.busy = false;
@@ -735,12 +818,18 @@ impl CodexCore {
                     // Direct + authoritative — no model-name heuristic (unlike Claude).
                     self.state.context_window = Some(win);
                 }
-                if let Some(total) = usage
-                    .and_then(|u| u.get("total"))
-                    .and_then(|t| t.get("totalTokens"))
+                // Context OCCUPANCY = the LAST turn's input tokens (the full prompt = everything
+                // currently in the window), the analog of Claude's last-result input+cache. NOT
+                // `total.totalTokens`: that is the cumulative LIFETIME sum of input + output +
+                // reasoning across EVERY turn, which only ever grows — so the ring would creep
+                // toward "near full" turn after turn even on a mostly-empty window (a gpt-5.6
+                // conversation reading "near max" at ~350k against its own window is this bug).
+                if let Some(used) = usage
+                    .and_then(|u| u.get("last"))
+                    .and_then(|l| l.get("inputTokens"))
                     .and_then(Value::as_u64)
                 {
-                    self.state.context_tokens = Some(total);
+                    self.state.context_tokens = Some(used);
                 }
                 self.push_state();
             }
@@ -813,6 +902,13 @@ impl CodexCore {
     /// `tool_use` id and its `tool_result`'s `tool_use_id`, so the front's id-keyed store
     /// pairs them and clean-output folds the round.
     fn on_item(&mut self, params: Value, completed: bool) {
+        // The item's OWN turn id (every item/* notification carries `turnId`) — the
+        // authoritative turn this item belongs to. Assistant items are stamped with THIS,
+        // not `current_turn_id` (the latest-turn pointer): after a steer-race fallthrough
+        // started a new turn, a buffered tail item from the superseded turn is still drained
+        // here, and tagging it with the new turn would make native rewind/fork cut at the
+        // wrong boundary. Read before `from_value` consumes `params`.
+        let item_turn = params.get("turnId").and_then(Value::as_str).map(str::to_string);
         let Ok(env) = serde_json::from_value::<ItemEnvelope>(params) else {
             return;
         };
@@ -821,12 +917,12 @@ impl CodexCore {
             // emitted here; the live text arrived via deltas and the front reconciles by id.
             ThreadItem::AgentMessage { id, text } => {
                 if completed && !text.is_empty() {
-                    self.emit_message(id, NormalizedBlock::Text { text });
+                    self.emit_message(id, NormalizedBlock::Text { text }, item_turn.as_deref());
                 }
             }
             ThreadItem::Plan { id, text } => {
                 if completed && !text.is_empty() {
-                    self.emit_message(id, NormalizedBlock::Text { text });
+                    self.emit_message(id, NormalizedBlock::Text { text }, item_turn.as_deref());
                 }
             }
             ThreadItem::Reasoning {
@@ -837,7 +933,7 @@ impl CodexCore {
                 if completed {
                     let text = join_reasoning(&summary, &content);
                     if !text.is_empty() {
-                        self.emit_message(id, NormalizedBlock::Thinking { text });
+                        self.emit_message(id, NormalizedBlock::Thinking { text }, item_turn.as_deref());
                     }
                 }
             }
@@ -851,7 +947,7 @@ impl CodexCore {
                 exit_code,
                 status,
             } => {
-                self.ensure_tool_use(&id, "Bash", json!({ "command": command, "cwd": cwd }));
+                self.ensure_tool_use(&id, "Bash", json!({ "command": command, "cwd": cwd }), item_turn.as_deref());
                 if completed {
                     let is_error =
                         status_is_error(status.as_deref()) || exit_code.is_some_and(|c| c != 0);
@@ -864,7 +960,7 @@ impl CodexCore {
                 status,
             } => {
                 let changes_json = serde_json::to_value(&changes).unwrap_or(Value::Null);
-                self.ensure_tool_use(&id, "ApplyPatch", json!({ "changes": changes_json }));
+                self.ensure_tool_use(&id, "ApplyPatch", json!({ "changes": changes_json }), item_turn.as_deref());
                 if completed {
                     let is_error = status_is_error(status.as_deref());
                     // The per-file diffs ride on the result too, so they're visible even if
@@ -890,7 +986,7 @@ impl CodexCore {
                     server.as_deref().unwrap_or("server"),
                     tool.as_deref().unwrap_or("tool")
                 );
-                self.ensure_tool_use(&id, &name, json!({ "arguments": arguments }));
+                self.ensure_tool_use(&id, &name, json!({ "arguments": arguments }), item_turn.as_deref());
                 if completed {
                     let is_error = error.is_some() || status_is_error(status.as_deref());
                     let content = error.or(result).unwrap_or(Value::Null);
@@ -898,7 +994,7 @@ impl CodexCore {
                 }
             }
             ThreadItem::WebSearch { id, query } => {
-                self.ensure_tool_use(&id, "WebSearch", json!({ "query": query }));
+                self.ensure_tool_use(&id, "WebSearch", json!({ "query": query }), item_turn.as_deref());
                 if completed {
                     self.emit_tool_result(&id, json!({ "query": query }), false);
                 }
@@ -980,12 +1076,17 @@ impl CodexCore {
 
     /// Emit an authoritative assistant/reasoning message keyed by `item.id` (one block).
     /// The front reconciles it against the streamed deltas of the same id.
-    fn emit_message(&mut self, id: String, block: NormalizedBlock) {
+    fn emit_message(&mut self, id: String, block: NormalizedBlock, turn_id: Option<&str>) {
         self.streaming_ids.remove(&id);
         self.push_item(ConversationItem::AssistantMessage {
             id,
             blocks: vec![block],
             parent_tool_use_id: None,
+            // Tag with the item's OWN turn (the notification's `turnId`), so the front can
+            // target this boundary by Codex turn id for native rewind/fork. NOT
+            // `current_turn_id` (the latest-turn pointer) — a buffered tail item from a
+            // superseded turn (steer-race fallthrough) would otherwise be mis-tagged.
+            turn_id: turn_id.map(str::to_string),
         });
     }
 
@@ -994,7 +1095,7 @@ impl CodexCore {
     /// duplicate/late `item/*` can't re-card). Called on BOTH `item/started` and
     /// `item/completed` (from the completed item's fields) so a dropped `item/started`
     /// still yields a card to hang the result on.
-    fn ensure_tool_use(&mut self, id: &str, name: &str, input: Value) {
+    fn ensure_tool_use(&mut self, id: &str, name: &str, input: Value, turn_id: Option<&str>) {
         if self.carded.insert(id.to_string()) {
             self.open_tools.insert(id.to_string());
             self.push_item(ConversationItem::AssistantMessage {
@@ -1005,6 +1106,8 @@ impl CodexCore {
                     input,
                 }],
                 parent_tool_use_id: None,
+                // The item's OWN turn (notification `turnId`), not `current_turn_id` — see emit_message.
+                turn_id: turn_id.map(str::to_string),
             });
         }
     }
@@ -1042,6 +1145,123 @@ impl CodexCore {
 /// `CommandExecutionStatus` share these strings). `inProgress`/`completed` are not errors.
 fn status_is_error(status: Option<&str>) -> bool {
     matches!(status, Some(s) if s.eq_ignore_ascii_case("failed") || s.eq_ignore_ascii_case("declined") || s.eq_ignore_ascii_case("error"))
+}
+
+// ---------------------------------------------------------------------------
+// Friendly labels for the `control_change` timeline notices (see
+// `CodexCore::announce_control_changes`). They mirror the composer's own labels
+// so a line reads like exactly what the user just picked, and match the Claude
+// backend's English effort wording ("Extra high") for cross-backend parity.
+// `None` (a field the front didn't send) renders as "(défaut)" so a first-set
+// never reads as a move from an empty string. An unmodelled string passes
+// through verbatim rather than being dropped.
+// ---------------------------------------------------------------------------
+
+/// A Codex model id → the composer picker's friendly label: `gpt-5.6-sol` → `GPT-5.6 Sol`,
+/// `gpt-5.5` → `GPT-5.5`. Unknown shapes fall back to the raw id.
+fn codex_model_label(id: Option<&str>) -> String {
+    let Some(id) = id.map(str::trim).filter(|s| !s.is_empty()) else {
+        return "(défaut)".to_string();
+    };
+    let Some(rest) = id.strip_prefix("gpt-") else {
+        return id.to_string();
+    };
+    match rest.split_once('-') {
+        Some((ver, name)) if !name.is_empty() => {
+            let mut chars = name.chars();
+            let capitalized = match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => name.to_string(),
+            };
+            format!("GPT-{ver} {capitalized}")
+        }
+        _ => format!("GPT-{rest}"),
+    }
+}
+
+/// Reasoning effort → English label, matching the Claude backend's `effort_label`
+/// ("Extra high") plus the deeper `max`/`ultra` rungs the gpt-5.6 family exposes.
+fn codex_effort_label(effort: Option<&str>) -> String {
+    match effort {
+        Some("low") => "Low",
+        Some("medium") => "Medium",
+        Some("high") => "High",
+        Some("xhigh") => "Extra high",
+        Some("max") => "Max",
+        Some("ultra") => "Ultra",
+        Some(other) => other,
+        None => "(défaut)",
+    }
+    .to_string()
+}
+
+/// The sandbox × approval pair, folded back into the composer's preset label (the four
+/// combinations the picker offers). An unknown pairing degrades to describing both axes
+/// so the notice never lies.
+fn codex_permissions_label(sandbox: Option<&str>, approval: Option<&str>) -> String {
+    match (sandbox, approval) {
+        (Some("readOnly"), Some("on-request")) => "Prudent".to_string(),
+        (Some("workspaceWrite"), Some("on-request")) => "Standard".to_string(),
+        (Some("workspaceWrite"), Some("never")) => "Auto".to_string(),
+        (Some("dangerFullAccess"), Some("never")) => "Accès total".to_string(),
+        (None, None) => "(défaut)".to_string(),
+        (s, a) => format!("{} · {}", codex_sandbox_label(s), codex_approval_label(a)),
+    }
+}
+
+fn codex_sandbox_label(sandbox: Option<&str>) -> String {
+    match sandbox {
+        Some("readOnly") => "Lecture seule",
+        Some("workspaceWrite") => "Écriture workspace",
+        Some("dangerFullAccess") => "Accès total",
+        Some(other) => other,
+        None => "(défaut)",
+    }
+    .to_string()
+}
+
+fn codex_approval_label(approval: Option<&str>) -> String {
+    match approval {
+        Some("untrusted") => "Toujours demander",
+        Some("on-failure") => "Demander en cas d'échec",
+        Some("on-request") => "Demander si nécessaire",
+        Some("never") => "Jamais demander",
+        Some(other) => other,
+        None => "(défaut)",
+    }
+    .to_string()
+}
+
+fn codex_summary_label(summary: Option<&str>) -> String {
+    match summary {
+        Some("auto") => "Auto",
+        Some("concise") => "Concis",
+        Some("detailed") => "Détaillé",
+        Some("none") => "Aucun",
+        Some(other) => other,
+        None => "(défaut)",
+    }
+    .to_string()
+}
+
+fn codex_personality_label(personality: Option<&str>) -> String {
+    match personality {
+        Some("none") => "Neutre",
+        Some("friendly") => "Amical",
+        Some("pragmatic") => "Pragmatique",
+        Some(other) => other,
+        None => "(défaut)",
+    }
+    .to_string()
+}
+
+fn codex_bool_label(v: Option<bool>) -> String {
+    match v {
+        Some(true) => "Activé",
+        Some(false) => "Désactivé",
+        None => "(défaut)",
+    }
+    .to_string()
 }
 
 /// Derive a concise conversation title from the accumulated user intent — the Codex
@@ -1423,6 +1643,126 @@ mod tests {
         items
             .iter()
             .find(|i| matches!(i, ConversationItem::ToolResult { tool_use_id, .. } if tool_use_id == id))
+    }
+
+    fn notice<'a>(items: &'a [ConversationItem]) -> Vec<(&'a str, &'a str, &'a str)> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                ConversationItem::Notice { subtype, detail } if subtype == "control_change" => Some((
+                    detail["control"].as_str().unwrap_or(""),
+                    detail["from"].as_str().unwrap_or(""),
+                    detail["to"].as_str().unwrap_or(""),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn announce_control_changes_seeds_baseline_then_diffs_backend_confirmed() {
+        let (mut c, sink) = core();
+        // FIRST confirmed turn only SEEDS the baseline — never a phantom transition.
+        c.controls = CodexControls {
+            model: Some("gpt-5.5".into()),
+            effort: Some("high".into()),
+            sandbox: Some("workspaceWrite".into()),
+            approval_policy: Some("on-request".into()),
+            network_access: Some(true),
+            summary: Some("auto".into()),
+            personality: Some("none".into()),
+        };
+        c.announce_control_changes();
+        assert!(
+            notice(&items(&sink)).is_empty(),
+            "the first confirmed turn seeds the baseline and announces nothing"
+        );
+
+        // Effort moves high → low: exactly one line, English labels (Claude parity).
+        c.controls.effort = Some("low".into());
+        c.announce_control_changes();
+        assert_eq!(
+            notice(&items(&sink)),
+            vec![("Effort de réflexion", "High", "Low")],
+            "only the moved control announces, once, with the friendly English label"
+        );
+    }
+
+    #[test]
+    fn preset_flip_is_a_single_permissions_line_not_two() {
+        let (mut c, sink) = core();
+        // Baseline = "Standard" (workspaceWrite + on-request).
+        c.controls = CodexControls {
+            sandbox: Some("workspaceWrite".into()),
+            approval_policy: Some("on-request".into()),
+            ..Default::default()
+        };
+        c.announce_control_changes(); // seed
+        // "Standard" → "Auto" flips the approval axis, but it is ONE preset the user picked —
+        // so exactly ONE "Permissions" line, not a separate sandbox + approval pair.
+        c.controls.approval_policy = Some("never".into());
+        c.announce_control_changes();
+        assert_eq!(
+            notice(&items(&sink)),
+            vec![("Permissions", "Standard", "Auto")],
+        );
+    }
+
+    #[test]
+    fn codex_model_label_mirrors_the_composer_picker() {
+        assert_eq!(codex_model_label(Some("gpt-5.6-sol")), "GPT-5.6 Sol");
+        assert_eq!(codex_model_label(Some("gpt-5.4-mini")), "GPT-5.4 Mini");
+        assert_eq!(codex_model_label(Some("gpt-5.5")), "GPT-5.5");
+        assert_eq!(codex_model_label(None), "(défaut)");
+    }
+
+    #[test]
+    fn assistant_item_is_tagged_with_its_own_turn_not_the_latest_turn_pointer() {
+        // Guards the steer-race: a buffered tail item from turn A can be drained AFTER turn B
+        // has started (current_turn_id = B). It must be tagged with ITS OWN turn (A), not the
+        // latest-turn pointer (B), so native rewind/fork cuts at the right boundary.
+        let (mut c, sink) = core();
+        c.current_turn_id = Some("B".into());
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"agentMessage","id":"mA","text":"tail of turn A"},"threadId":"t","turnId":"A","completedAtMs":0}),
+        );
+        let tagged = items(&sink).into_iter().find_map(|i| match i {
+            ConversationItem::AssistantMessage { id, turn_id, .. } if id == "mA" => Some(turn_id),
+            _ => None,
+        });
+        assert_eq!(
+            tagged,
+            Some(Some("A".to_string())),
+            "tagged with its own turn (A), not the latest-turn pointer (B)"
+        );
+    }
+
+    #[test]
+    fn token_usage_ring_uses_last_turn_input_not_cumulative_total() {
+        // The context ring must show CURRENT occupancy (the last turn's input = the full
+        // prompt), not the cumulative lifetime `total.totalTokens` (which only grows → a false
+        // "near max"). Window is the authoritative wire `modelContextWindow`.
+        let (mut c, sink) = core();
+        c.on_notification(
+            "thread/tokenUsage/updated",
+            json!({
+                "threadId": "t",
+                "turnId": "u",
+                "tokenUsage": {
+                    "modelContextWindow": 400000,
+                    "total": { "cachedInputTokens": 0, "inputTokens": 900000, "outputTokens": 40000, "reasoningOutputTokens": 10000, "totalTokens": 950000 },
+                    "last": { "cachedInputTokens": 20000, "inputTokens": 42000, "outputTokens": 500, "reasoningOutputTokens": 100, "totalTokens": 42600 }
+                }
+            }),
+        );
+        let st = sink.states.lock().unwrap().last().cloned().expect("a state was emitted");
+        assert_eq!(st.context_window, Some(400_000), "window = authoritative modelContextWindow");
+        assert_eq!(
+            st.context_tokens,
+            Some(42_000),
+            "ring = last turn's input (current occupancy), NOT the 950k cumulative total"
+        );
     }
 
     #[test]

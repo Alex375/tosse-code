@@ -784,6 +784,8 @@ impl Assembler {
             id,
             blocks,
             parent_tool_use_id: a.parent_tool_use_id.clone(),
+            // Claude has no Codex turn id — it targets rewind/fork by prompt text.
+            turn_id: None,
         }));
         // A sub-agent's assistant message carries the model it ran on — the wire's only
         // place a sub-agent's model appears (absent from every `task_*` event). Correlate
