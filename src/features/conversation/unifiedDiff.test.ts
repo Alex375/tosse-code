@@ -97,12 +97,12 @@ describe("applyPatchChanges", () => {
   it("prefers the result's changes over the (possibly frozen-empty) input", () => {
     const input: JsonValue = { changes: [] };
     const result: JsonValue = { status: "completed", changes: [change("a.rs", "@@ -1 +1 @@\n-a\n+b")] };
-    expect(applyPatchChanges(input, result)).toEqual([{ path: "a.rs", diff: "@@ -1 +1 @@\n-a\n+b" }]);
+    expect(applyPatchChanges(input, result)).toEqual([{ path: "a.rs", diff: "@@ -1 +1 @@\n-a\n+b", kind: "modify" }]);
   });
 
   it("falls back to the input when there is no result yet (running card)", () => {
     const input: JsonValue = { changes: [change("b.rs", "@@ -1 +1 @@\n-x\n+y")] };
-    expect(applyPatchChanges(input, undefined)).toEqual([{ path: "b.rs", diff: "@@ -1 +1 @@\n-x\n+y" }]);
+    expect(applyPatchChanges(input, undefined)).toEqual([{ path: "b.rs", diff: "@@ -1 +1 @@\n-x\n+y", kind: "modify" }]);
   });
 
   it("returns [] for a malformed payload (no changes array anywhere)", () => {
@@ -113,8 +113,16 @@ describe("applyPatchChanges", () => {
   it("tolerates change entries missing path or diff", () => {
     const result: JsonValue = { changes: [{ kind: { type: "add" } }, change("c.rs", "@@ -0,0 +1 @@\n+z")] };
     expect(applyPatchChanges({ changes: [] } as JsonValue, result)).toEqual([
-      { path: "", diff: "" },
-      { path: "c.rs", diff: "@@ -0,0 +1 @@\n+z" },
+      { path: "", diff: "", kind: "add" },
+      { path: "c.rs", diff: "@@ -0,0 +1 @@\n+z", kind: "modify" },
+    ]);
+  });
+
+  it("unwraps the tagged kind so a delete (no diff) is still identifiable", () => {
+    // A delete ships an empty diff — the kind is the only signal it was a deletion.
+    const result: JsonValue = { changes: [{ path: "gone.rs", kind: { type: "delete" }, diff: "" }] };
+    expect(applyPatchChanges({ changes: [] } as JsonValue, result)).toEqual([
+      { path: "gone.rs", diff: "", kind: "delete" },
     ]);
   });
 });

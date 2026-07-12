@@ -84,11 +84,10 @@ export const DEFAULT_CODEX_PRESET: CodexPreset = "auto";
 export const DEFAULT_CODEX_SUMMARY: CodexSummary = "auto";
 export const DEFAULT_CODEX_PERSONALITY: CodexPersonality = "none";
 
-/** The baseline Codex reasoning-effort steps for older gpt-5.x (verified against
- *  `model/list`: low/medium/high/xhigh, default medium). The gpt-5.6 family additionally
- *  exposes `max` + the Codex-only `ultra` rung (data-driven via `model/list`, see
- *  effortLevelsForModel). Never "ultracode" — that app tier is Claude-only. */
-export const CODEX_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+/** The default Codex reasoning effort. The available steps per model are data-driven
+ *  (`effortLevelsForModel` / `VALID_EFFORTS`, from `model/list`): older gpt-5.x expose
+ *  low/medium/high/xhigh, the gpt-5.6 family additionally `max` + the Codex-only `ultra`
+ *  rung. Never "ultracode" — that app tier is Claude-only. */
 export const DEFAULT_CODEX_EFFORT = "xhigh";
 
 /** The per-conversation Codex control state held HERE (model + effort live on the conv

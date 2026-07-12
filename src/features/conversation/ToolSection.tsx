@@ -87,7 +87,7 @@ export function ToolDetail({
       return (
         <>
           {changes.map((c, k) => (
-            <DiffView key={k} path={c.path || undefined} lines={parseUnifiedDiff(c.diff)} />
+            <DiffView key={k} path={c.path || undefined} lines={parseUnifiedDiff(c.diff)} kind={c.kind} />
           ))}
         </>
       );

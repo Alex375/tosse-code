@@ -14,9 +14,21 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
+use tokio::sync::Mutex;
 
 use super::server::{CodexError, CodexServer};
 use crate::extensions::{ExtScope, McpServerInfo, PluginContents, SkillInfo};
+
+/// Serializes every operation that MUTATES `~/.codex/config.toml`. Each write spawns its
+/// OWN transient `codex app-server` (`CodexServer::oneshot`) that does a read-modify-write
+/// of the whole file — so two concurrent toggles (e.g. a skill and a plugin, whose front
+/// mutations are independent) would each compute a surgical edit from the SAME pre-edit
+/// bytes and the second write would clobber the first (a silent lost update, or a mangled
+/// file that then reads as "malformed" and can garble MCP `env` secrets). The official VS
+/// Code extension never hits this because it runs ONE long-lived server; our per-write
+/// transient-server design must serialize at the app layer. Same discipline as the login
+/// flow's `LOGIN_FLOW`, and the "never race a CLI config write" rule on the Claude side.
+static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// A TOML bare-key: the only server names we allow to be spliced into a
 /// `config/value/write` keyPath. Anything else (dots, quotes, spaces) could address a
@@ -41,6 +53,7 @@ fn is_safe_quoted_key(s: &str) -> bool {
 /// snapshot carries — the `SKILL.md` file — while the config selector is the skill DIR,
 /// so the parent is what goes on the wire. Returns the server-resolved effective state.
 pub async fn set_skill_enabled(skill_path: &str, enabled: bool) -> Result<bool, CodexError> {
+    let _write = CONFIG_WRITE_LOCK.lock().await;
     let p = Path::new(skill_path);
     let dir = if p.file_name().is_some_and(|f| f == "SKILL.md") {
         p.parent().unwrap_or(p)
@@ -76,6 +89,7 @@ pub async fn set_mcp_enabled(
     enabled: bool,
     shared: &CodexServer,
 ) -> Result<bool, CodexError> {
+    let _write = CONFIG_WRITE_LOCK.lock().await;
     if !is_toml_bare_key(name) {
         return Err(CodexError::Rpc(format!(
             "nom de serveur MCP invalide pour un toggle : « {name} »"
@@ -118,6 +132,7 @@ pub async fn set_mcp_enabled(
 /// Enable/disable a Codex PLUGIN. The config key is the FULL id (`name@marketplace`),
 /// quoted (verified live: `plugins."x@mkt".enabled` writes the right block).
 pub async fn set_plugin_enabled(plugin_id: &str, enabled: bool) -> Result<(), CodexError> {
+    let _write = CONFIG_WRITE_LOCK.lock().await;
     if !is_safe_quoted_key(plugin_id) {
         return Err(CodexError::Rpc(format!(
             "identifiant de plugin invalide pour un toggle : « {plugin_id} »"
@@ -381,6 +396,7 @@ pub async fn list_hooks(cwds: Vec<String>) -> Result<CodexHooksSnapshot, CodexEr
 
 /// Register a Codex marketplace (`marketplace/add` — a git URL / owner-repo / local path).
 pub async fn marketplace_add(source: &str) -> Result<(), CodexError> {
+    let _write = CONFIG_WRITE_LOCK.lock().await;
     CodexServer::oneshot(
         "marketplace/add",
         json!({ "source": source }),
@@ -392,6 +408,7 @@ pub async fn marketplace_add(source: &str) -> Result<(), CodexError> {
 
 /// Unregister a Codex marketplace by name (`marketplace/remove`).
 pub async fn marketplace_remove(name: &str) -> Result<(), CodexError> {
+    let _write = CONFIG_WRITE_LOCK.lock().await;
     CodexServer::oneshot(
         "marketplace/remove",
         json!({ "marketplaceName": name }),
@@ -403,6 +420,7 @@ pub async fn marketplace_remove(name: &str) -> Result<(), CodexError> {
 
 /// Refresh a Codex marketplace's pinned content (`marketplace/upgrade`); `None` → all.
 pub async fn marketplace_upgrade(name: Option<String>) -> Result<(), CodexError> {
+    let _write = CONFIG_WRITE_LOCK.lock().await;
     CodexServer::oneshot(
         "marketplace/upgrade",
         json!({ "marketplaceName": name }),

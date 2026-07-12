@@ -856,7 +856,7 @@ function ContextUsageBody({
               {usageBackend ? (
                 <>
                   {" · "}
-                  <span style={{ color: usageBackend === "codex" ? "#10a37f" : "var(--wf-accent)", fontWeight: 600 }}>
+                  <span style={{ color: usageBackend === "codex" ? "var(--wf-codex-accent)" : "var(--wf-accent)", fontWeight: 600 }}>
                     {usageBackend === "codex" ? "Codex" : "Claude"}
                   </span>
                 </>

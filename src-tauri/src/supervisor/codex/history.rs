@@ -446,6 +446,11 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
     // rendering "running" forever (mirrors the live actor's `close_dangling_tools`).
     let mut items: Vec<ConversationItem> = Vec::new();
     let mut open_tools: Vec<String> = Vec::new();
+    // `view_image` calls, keyed by call_id → the image path from its arguments. The function
+    // call precedes its output in the file, so this local map is populated in time for the
+    // output line to replace the model-facing text with the base64 image thumbnail (the cold
+    // analogue of the live `imageView` mapping).
+    let mut view_image_calls: HashMap<String, String> = HashMap::new();
     let mut msg_seq = 0u64;
     // The Codex turn currently being read. `turn_context` lines carry the authoritative
     // `turn_id` and precede their turn's events; most `event_msg`/`response_item` payloads
@@ -453,6 +458,11 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
     // cold analogue of the live actor's `current_turn_id` — so the front can target a turn
     // boundary by id for native rewind/fork (`thread/fork{lastTurnId}`).
     let mut current_turn: Option<String> = None;
+    // The session's working directory (from `session_meta`), used to resolve a RELATIVE
+    // `view_image` path the same way the live actor resolves it against `state.cwd` — so a
+    // reloaded image renders the thumbnail, not a "not found" note. `session_meta` precedes
+    // every tool line, so it is captured in time.
+    let mut rollout_cwd: Option<String> = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -465,6 +475,11 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
         let payload = entry.get("payload").unwrap_or(&Value::Null);
         if let Some(t) = payload.get("turn_id").and_then(Value::as_str) {
             current_turn = Some(t.to_string());
+        }
+        if entry.get("type").and_then(Value::as_str) == Some("session_meta") {
+            if let Some(cwd) = payload.get("cwd").and_then(Value::as_str) {
+                rollout_cwd = Some(cwd.to_string());
+            }
         }
         match entry.get("type").and_then(Value::as_str) {
             Some("event_msg") => match payload.get("type").and_then(Value::as_str) {
@@ -492,7 +507,14 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
             },
             Some("response_item") => {
                 let before = items.len();
-                push_response_item(payload, &patch_changes, &mut items, &mut open_tools);
+                push_response_item(
+                    payload,
+                    &patch_changes,
+                    &mut view_image_calls,
+                    rollout_cwd.as_deref(),
+                    &mut items,
+                    &mut open_tools,
+                );
                 stamp_turn(&mut items, before, current_turn.as_deref());
             }
             // session_meta, turn_context, compacted (compaction boundary — the pre-compaction
@@ -519,6 +541,8 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
 fn push_response_item(
     payload: &Value,
     patch_changes: &HashMap<String, (Vec<Value>, bool)>,
+    view_image_calls: &mut HashMap<String, String>,
+    cwd: Option<&str>,
     items: &mut Vec<ConversationItem>,
     open_tools: &mut Vec<String>,
 ) {
@@ -550,6 +574,16 @@ fn push_response_item(
                     .to_string();
                 let cwd = args.get("workdir").and_then(Value::as_str).map(str::to_string);
                 push_tool_use(items, open_tools, call_id, "Bash", json!({ "command": command, "cwd": cwd }));
+            } else if name == "view_image" {
+                // The `view_image` tool → a Read card; its result is replaced with the
+                // base64 image thumbnail in the paired `function_call_output` below (the path
+                // is remembered by call_id), mirroring the live `imageView` mapping so a
+                // reloaded conversation shows the image, not just the tool name.
+                let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+                push_tool_use(items, open_tools, call_id, "Read", json!({ "file_path": path }));
+                if !path.is_empty() {
+                    view_image_calls.insert(call_id.to_string(), path);
+                }
             } else {
                 // Unknown/non-shell function tool → a generic card with its parsed args (or the
                 // raw arguments string if they don't parse). Never mislabeled as Bash.
@@ -565,9 +599,18 @@ fn push_response_item(
             let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
                 return;
             };
-            let raw = payload.get("output").and_then(Value::as_str).unwrap_or("");
-            let (clean, is_error) = split_exec_output(raw);
-            push_tool_result(items, open_tools, call_id, json!(clean), is_error);
+            if let Some(path) = view_image_calls.get(call_id) {
+                // A `view_image` result → the image thumbnail (re-read from the path), not the
+                // model-facing confirmation text. A relative path resolves against the session
+                // cwd (as the live actor does); an unreadable path degrades to a text note
+                // (never a blank card).
+                let content = super::image_result_content(path, cwd);
+                push_tool_result(items, open_tools, call_id, content, false);
+            } else {
+                let raw = payload.get("output").and_then(Value::as_str).unwrap_or("");
+                let (clean, is_error) = split_exec_output(raw);
+                push_tool_result(items, open_tools, call_id, json!(clean), is_error);
+            }
         }
         // A custom (freeform) tool call. `apply_patch` → an ApplyPatch card whose per-file
         // diffs come from the paired `patch_apply_end` (pass 1). ANY OTHER custom tool → a
@@ -972,6 +1015,61 @@ mod tests {
         assert_eq!(name, "update_plan", "named after the tool, not Bash");
         assert!(input.get("plan").is_some(), "parsed args carried through, not a fake command");
         assert!(tool_result(&items, "u1").is_some(), "its output pairs by call_id");
+    }
+
+    #[test]
+    fn view_image_function_call_reloads_as_a_read_card_with_the_image_thumbnail() {
+        // A `view_image` tool call on disk (a function_call whose arguments carry the path) →
+        // a Read card whose result is the base64 image thumbnail (re-read from the path), the
+        // cold analogue of the live `imageView` mapping, so a reloaded Codex conversation shows
+        // the image instead of just the tool name.
+        let path = std::env::temp_dir().join("tosse_codex_history_view_image.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nreload-bytes").expect("write temp image");
+        let args = json!({ "path": path.to_string_lossy(), "detail": "original" }).to_string();
+        let content = [
+            line("response_item", json!({ "type": "function_call", "name": "view_image", "call_id": "vi1", "arguments": args })),
+            line("response_item", json!({ "type": "function_call_output", "call_id": "vi1", "output": "attached image" })),
+        ]
+        .join("\n");
+        let (items, _) = parse_rollout_str(&content);
+        let (name, input) = tool_use(&items, "vi1").expect("a Read card for the viewed image");
+        assert_eq!(name, "Read");
+        assert!(input.get("file_path").is_some(), "the path rides the card input");
+        match tool_result(&items, "vi1") {
+            Some(ConversationItem::ToolResult { content, .. }) => {
+                let arr = content.as_array().expect("image thumbnail is an array");
+                assert_eq!(arr[0]["type"], "image");
+                assert_eq!(arr[0]["source"]["media_type"], "image/png");
+                assert!(arr[0]["source"]["data"].as_str().is_some_and(|d| !d.is_empty()));
+            }
+            _ => panic!("expected an image ToolResult for vi1"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn view_image_relative_path_resolves_against_session_cwd_on_reload() {
+        // Mirror the live actor: a RELATIVE view_image path resolves against the session cwd
+        // (from session_meta), so the thumbnail renders instead of a "not found" note.
+        let dir = std::env::temp_dir().join("tosse_codex_hist_rel");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("shot.png"), b"rel-bytes").expect("write");
+        let args = json!({ "path": "shot.png", "detail": "original" }).to_string();
+        let content = [
+            line("session_meta", json!({ "id": "t1", "cwd": dir.to_string_lossy() })),
+            line("response_item", json!({ "type": "function_call", "name": "view_image", "call_id": "vr1", "arguments": args })),
+            line("response_item", json!({ "type": "function_call_output", "call_id": "vr1", "output": "attached" })),
+        ]
+        .join("\n");
+        let (items, _) = parse_rollout_str(&content);
+        match tool_result(&items, "vr1") {
+            Some(ConversationItem::ToolResult { content, .. }) => {
+                let arr = content.as_array().expect("image array — relative path resolved via session cwd");
+                assert_eq!(arr[0]["type"], "image");
+            }
+            _ => panic!("expected an image ToolResult for vr1"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

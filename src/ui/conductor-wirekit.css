@@ -17,8 +17,9 @@
   --wf-tx-lo:     #6a6a76;   /* texte faible */
   --wf-tx-xlo:    #4a4a55;   /* labels discrets */
 
-  --wf-accent:    #d97757;   /* marque (coral) — usage rare */
+  --wf-accent:    #d97757;   /* marque Claude (coral) — usage rare */
   --wf-accent-dim:#3a2a24;
+  --wf-codex-accent:#10a37f; /* marque Codex (vert OpenAI) — cartes Comptes, onglet Extensions, pilule Forfait */
   --wf-ultra:     #b483e0;   /* tier « Ultra code » — violet premium */
   --wf-ultra-dim: #2e2440;
 

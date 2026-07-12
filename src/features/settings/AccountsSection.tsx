@@ -14,14 +14,17 @@ import {
   useCodexAccountActions,
 } from "../../ipc/useAccounts";
 import { useCodexAvailable } from "../../store/codexAvailable";
+import { useAccountLoginStore } from "../../store/accountLogin";
 import { ClaudeMark, CodexMark } from "../../ui/kit";
 import { PageHead } from "./SettingsKit";
 import s from "./AccountsSection.module.css";
 
 // The brand accent each card is themed with (drives the glow, tile, plan pill, CTA).
+// Shared design tokens (conductor-wirekit.css), never raw hex — so a brand tweak is
+// one edit and the Comptes card / Extensions tab / Forfait pill never diverge.
 const BRAND: Record<"claude" | "codex", string> = {
-  claude: "#d97757", // coral
-  codex: "#10a37f", // OpenAI green
+  claude: "var(--wf-accent)", // coral
+  codex: "var(--wf-codex-accent)", // OpenAI green
 };
 
 export function AccountsSection() {
@@ -333,6 +336,18 @@ function CodexAccountGroup() {
     };
   }, []);
 
+  // Surface a failure that landed while this panel was CLOSED: the async Codex login can
+  // complete minutes after the user navigated away, so the in-panel listener above misses
+  // it. The always-mounted global handler stashed the reason — read it on mount and consume
+  // it, so the reopened panel explains the failure instead of a bare "Non connecté".
+  useEffect(() => {
+    const stashed = useAccountLoginStore.getState().failures.codex;
+    if (stashed) {
+      setLoginErr(stashed.error ?? "la connexion a échoué");
+      useAccountLoginStore.getState().clear("codex");
+    }
+  }, []);
+
   const err =
     loginErr ??
     (loginStart.error as Error | null)?.message ??
@@ -340,6 +355,7 @@ function CodexAccountGroup() {
     null;
   const startLogin = () => {
     setLoginErr(null);
+    useAccountLoginStore.getState().clear("codex"); // a new attempt supersedes any stashed failure
     loginStart.mutate(undefined, {
       onSuccess: (res) => {
         setWaiting(true);

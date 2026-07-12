@@ -234,7 +234,7 @@
   color: var(--wf-accent);
 }
 .tabMarkCodex {
-  color: #10a37f;
+  color: var(--wf-codex-accent);
 }
 
 .body {

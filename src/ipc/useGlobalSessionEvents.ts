@@ -42,6 +42,7 @@ import { useRemoteControlStore } from "../store/remoteControl";
 import { useCodexPlanUsageStore } from "../store/codexPlanUsage";
 import { useLastMessageSummaryStore } from "../store/lastMessageSummary";
 import { setCachedWindow } from "../store/contextWindowCache";
+import { useAccountLoginStore } from "../store/accountLogin";
 import { dispatchAgentNotification } from "../notifications/notify";
 import { agentEventFor } from "../notifications/transition";
 import { syncReminderFromLive } from "../agent/reminderSync";
@@ -409,8 +410,13 @@ export function useGlobalSessionEvents(): void {
 
     // An in-app account login flow finished (today: the async Codex OAuth flow).
     // Refresh the account panels; the Comptes tab (when open) also listens to show
-    // the outcome inline.
-    function onAccountLogin(_payload: AccountLoginEvent) {
+    // the outcome inline. Stash a FAILURE reason here (always-mounted) so it survives the
+    // panel being closed when the async outcome lands — otherwise the reason is lost and the
+    // reopened panel only shows "Non connecté".
+    function onAccountLogin(payload: AccountLoginEvent) {
+      useAccountLoginStore
+        .getState()
+        .recordOutcome(payload.backend, payload.success, payload.error);
       void queryClient.invalidateQueries({ queryKey: ["account-status"] });
     }
 

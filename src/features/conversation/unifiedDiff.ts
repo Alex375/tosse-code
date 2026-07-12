@@ -63,6 +63,9 @@ export function parseUnifiedDiff(diff: string): DiffLine[] {
 export interface PatchChange {
   path: string;
   diff: string;
+  /** The tagged `kind.type` from the wire (`add` | `update` | `delete`). A `delete` ships
+   *  no diff, so this is the ONLY signal it was a deletion — drives DiffView's marker. */
+  kind?: string;
 }
 
 /**
@@ -79,7 +82,9 @@ export function applyPatchChanges(
   return fromResult.length ? fromResult : extractChanges(input);
 }
 
-/** Pull a `{ changes: [{path, diff}, …] }` array out of an arbitrary JSON value. */
+/** Pull a `{ changes: [{path, kind:{type}, diff}, …] }` array out of an arbitrary JSON
+ *  value. `kind` is a TAGGED OBJECT on the wire (`{"type":"delete"}`, mirroring the Rust
+ *  `FileUpdateChange.kind`), so its `.type` is unwrapped here. */
 function extractChanges(v: JsonValue | undefined): PatchChange[] {
   if (!v || typeof v !== "object" || Array.isArray(v)) return [];
   const changes = (v as Record<string, JsonValue>).changes;
@@ -88,9 +93,15 @@ function extractChanges(v: JsonValue | undefined): PatchChange[] {
   for (const c of changes) {
     if (!c || typeof c !== "object" || Array.isArray(c)) continue;
     const rec = c as Record<string, JsonValue>;
+    const kindRec = rec.kind;
+    const kindType =
+      kindRec && typeof kindRec === "object" && !Array.isArray(kindRec)
+        ? (kindRec as Record<string, JsonValue>).type
+        : undefined;
     out.push({
       path: typeof rec.path === "string" ? rec.path : "",
       diff: typeof rec.diff === "string" ? rec.diff : "",
+      kind: typeof kindType === "string" ? kindType : undefined,
     });
   }
   return out;
