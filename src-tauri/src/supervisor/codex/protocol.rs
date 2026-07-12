@@ -446,13 +446,33 @@ pub struct Turn {
 
 /// `error` — a server-side error notification. `will_retry` distinguishes a
 /// transient error (the turn continues) from a terminal one.
+///
+/// ⚠️ The human-readable message is NESTED under `error.message` on the wire
+/// (`{ error: TurnError, willRetry, threadId, turnId }`, verified against
+/// `codex app-server generate-ts` on BOTH 0.142.5 and 0.144.1) — there is NO top-level
+/// `message`. An earlier decode read `message` at the top level, so every Codex `error`
+/// dropped its real text and rendered the generic fallback; this shape fixes that. Every
+/// field is `Option` so a partial/absent payload still parses (tolerance rule 2).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorNotification {
     #[serde(default)]
-    pub message: Option<String>,
+    pub error: Option<TurnError>,
     #[serde(default)]
     pub will_retry: Option<bool>,
+}
+
+/// The nested error body of an [`ErrorNotification`]: the real message plus the structured
+/// `codexErrorInfo` cause. `codex_error_info` is kept as a permissive `Value` — only the
+/// bare-string variant `"sessionBudgetExceeded"` is matched (it earns a dedicated notice),
+/// so modelling the full ~14-variant `CodexErrorInfo` union would be needless drift.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnError {
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub codex_error_info: Option<Value>,
 }
 
 /// The subscription rate-limit snapshot, carried by the `account/rateLimits/updated`

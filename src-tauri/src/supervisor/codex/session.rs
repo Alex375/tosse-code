@@ -11,7 +11,7 @@
 //! the registry → fire the shutdown ack LAST (the synchronous-stop contract a rewind
 //! relies on). The SOCLE emits enough to "answer text"; rich item rendering is 4.1.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -193,6 +193,20 @@ async fn run_codex_actor(
 /// Per-conversation protocol state + the mapping app-server ⇄ [`SessionEvent`]. Holds
 /// its OWN small [`SessionStatePayload`]; it never reuses the Claude `Assembler`
 /// (which parses stream-json), per invariant #8.
+/// The last `mcpServer/startupStatus/updated` push we saw for one MCP server, kept per
+/// actor so the on-demand `mcpServerStatus/list` fetch — whose entries carry NO
+/// status/failure field — can be enriched with WHY a server failed to start. Overwritten
+/// on each push, so a later `ready`/`starting` clears a stale `failed`.
+#[derive(Debug, Clone)]
+struct McpStartupStatus {
+    /// `starting` / `ready` / `failed` / `cancelled` (`McpServerStartupState`).
+    state: String,
+    /// Structured failure reason (`reauthenticationRequired`), present when `state==failed`.
+    failure_reason: Option<String>,
+    /// Free-text error the server reported alongside a failure, when present.
+    error: Option<String>,
+}
+
 struct CodexCore {
     id: String,
     emitter: Arc<dyn SessionEmitter>,
@@ -245,6 +259,11 @@ struct CodexCore {
     /// don't linger. Uuid-suffixed: unique across app restarts AND concurrent builds
     /// sharing `$TMPDIR`.
     images_dir: PathBuf,
+    /// Per-server last-known startup status from the `mcpServer/startupStatus/updated`
+    /// push, keyed by server name. Merged into the `McpServerLive` rows on the next
+    /// `mcp_status` fetch so a server that failed to start shows its reason instead of a
+    /// mute "disconnected" (the `mcpServerStatus/list` entry has no failure field).
+    mcp_startup_status: HashMap<String, McpStartupStatus>,
 }
 
 impl CodexCore {
@@ -264,6 +283,7 @@ impl CodexCore {
             images_dir: std::env::temp_dir()
                 .join("flightdeck-codex-attachments")
                 .join(uuid::Uuid::new_v4().to_string()),
+            mcp_startup_status: HashMap::new(),
         }
     }
 
@@ -569,8 +589,11 @@ impl CodexCore {
             SessionCommand::McpStatus(tx) => {
                 let server = Arc::clone(server);
                 let thread_id = thread_id.to_string();
+                // Snapshot the per-server startup statuses so the detached fetch can enrich
+                // a `failed` server with its reason (the `mcpServerStatus/list` entry lacks it).
+                let startup = self.mcp_startup_status.clone();
                 tokio::spawn(async move {
-                    let _ = tx.send(fetch_mcp_status(&server, &thread_id).await);
+                    let _ = tx.send(fetch_mcp_status(&server, &thread_id, &startup).await);
                 });
             }
             SessionCommand::McpAuthenticate { reply, .. } => {
@@ -805,7 +828,28 @@ impl CodexCore {
             // normal read commands (whitelisted shapes), never from the raw wire.
             "skills/changed" => self.emitter.emit_extensions_changed(&self.id, "skills"),
             "mcpServer/startupStatus/updated" => {
-                self.emitter.emit_extensions_changed(&self.id, "mcp")
+                // Capture WHY a server failed BEFORE invalidating — the on-demand
+                // `mcpServerStatus/list` the front then refetches has no failure field, so
+                // this push is the only source of the reason. Overwrite per push so a later
+                // `ready` clears a stale `failed`.
+                if let Some(name) = params.get("name").and_then(Value::as_str) {
+                    self.mcp_startup_status.insert(
+                        name.to_string(),
+                        McpStartupStatus {
+                            state: params
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            failure_reason: params
+                                .get("failureReason")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            error: params.get("error").and_then(Value::as_str).map(str::to_string),
+                        },
+                    );
+                }
+                self.emitter.emit_extensions_changed(&self.id, "mcp");
             }
             "account/updated" => self.emitter.emit_extensions_changed(&self.id, "accounts"),
 
@@ -842,11 +886,24 @@ impl CodexCore {
                 // failure rule forbids. An undecodable payload is treated as terminal (settle)
                 // rather than risk a permanent hang.
                 let parsed = serde_json::from_value::<ErrorNotification>(params).ok();
-                let msg = parsed
-                    .as_ref()
-                    .and_then(|e| e.message.clone())
+                let turn_err = parsed.as_ref().and_then(|e| e.error.as_ref());
+                let msg = turn_err
+                    .and_then(|t| t.message.clone())
                     .unwrap_or_else(|| "erreur codex app-server".into());
-                self.emit_notice("protocol_error", &msg);
+                // A `sessionBudgetExceeded` cause (a bare-string `codexErrorInfo`) earns a
+                // dedicated notice — distinct from a plan rate-limit or a generic protocol
+                // error — so the UI can name it ("Budget de session Codex dépassé"). Only
+                // that one variant is matched; the rest stay `protocol_error`.
+                let subtype = if turn_err
+                    .and_then(|t| t.codex_error_info.as_ref())
+                    .and_then(|c| c.as_str())
+                    == Some("sessionBudgetExceeded")
+                {
+                    "session_budget_exceeded"
+                } else {
+                    "protocol_error"
+                };
+                self.emit_notice(subtype, &msg);
                 // A transient (will-retry) error keeps the turn going; a terminal one — or an
                 // undecodable one — ends it, and a terminal `error` may NOT be followed by
                 // `turn/completed`, so it runs the same close-out: settle `busy`, reset the turn
@@ -1845,6 +1902,7 @@ fn codex_remote_status(v: &Value) -> String {
 async fn fetch_mcp_status(
     server: &CodexServer,
     thread_id: &str,
+    startup: &HashMap<String, McpStartupStatus>,
 ) -> Result<Vec<McpServerLive>, String> {
     let params = json!({ "threadId": thread_id, "detail": "toolsAndAuthOnly" });
     let value = server
@@ -1856,15 +1914,18 @@ async fn fetch_mcp_status(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    Ok(data.iter().map(mcp_server_live).collect())
+    Ok(data.iter().map(|v| mcp_server_live(v, startup)).collect())
 }
 
 /// Map one `mcpServerStatus/list` entry to a [`McpServerLive`] row. Codex's list has no
 /// top-level status field, so status is INFERRED: a not-logged-in auth status → needs-auth,
 /// a present `serverInfo` (the server answered `initialize`) → connected, else disconnected.
-/// Codex MCP servers are user-global (`~/.codex/config.toml`), hence scope `user`; the
-/// launch command/url live in the config, not this live entry, so they stay `None` here.
-fn mcp_server_live(v: &Value) -> McpServerLive {
+/// A live `failed` startup status (captured from the `mcpServer/startupStatus/updated`
+/// push into `startup`) OVERRIDES that inference and carries its reason, so a server that
+/// failed to start shows "Échec · <reason>" instead of a mute "Déconnecté". Codex MCP
+/// servers are user-global (`~/.codex/config.toml`), hence scope `user`; the launch
+/// command/url live in the config, not this live entry, so they stay `None` here.
+fn mcp_server_live(v: &Value, startup: &HashMap<String, McpStartupStatus>) -> McpServerLive {
     let name = v.get("name").and_then(Value::as_str).unwrap_or("").to_string();
     let auth = v.get("authStatus").and_then(Value::as_str);
     let has_info = v.get("serverInfo").map(|s| !s.is_null()).unwrap_or(false);
@@ -1873,22 +1934,32 @@ fn mcp_server_live(v: &Value) -> McpServerLive {
         .and_then(Value::as_object)
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
-    let status = if auth == Some("notLoggedIn") {
+    let inferred = if auth == Some("notLoggedIn") {
         "needs-auth"
     } else if has_info {
         "connected"
     } else {
         "disconnected"
     };
+    // A recorded `failed` startup wins over the inference and supplies the reason
+    // (the structured `reauthenticationRequired`, or the free-text error as a fallback).
+    let (status, failure_reason) = match startup.get(name.as_str()) {
+        Some(s) if s.state == "failed" => (
+            "failed".to_string(),
+            s.failure_reason.clone().or_else(|| s.error.clone()),
+        ),
+        _ => (inferred.to_string(), None),
+    };
     McpServerLive {
         name,
-        status: status.to_string(),
+        status,
         scope: Some("user".to_string()),
         transport: None,
         command: None,
         url: None,
         tool_count: tools.len() as u32,
         tools,
+        failure_reason,
     }
 }
 
@@ -2824,7 +2895,7 @@ mod tests {
             "item/started",
             json!({"item":{"type":"commandExecution","id":"c1","command":"x","status":"inProgress"},"threadId":"t","turnId":"u","startedAtMs":0}),
         );
-        c.on_notification("error", json!({"message":"boom","willRetry":false}));
+        c.on_notification("error", json!({"error":{"message":"boom"},"willRetry":false}));
         let items = items(&sink);
         assert!(matches!(tool_result(&items, "c1"), Some(ConversationItem::ToolResult { is_error: true, .. })));
         assert!(!c.state.busy);
@@ -2839,9 +2910,30 @@ mod tests {
             "item/started",
             json!({"item":{"type":"commandExecution","id":"c1","command":"x","status":"inProgress"},"threadId":"t","turnId":"u","startedAtMs":0}),
         );
-        c.on_notification("error", json!({"message":"retrying","willRetry":true}));
+        c.on_notification("error", json!({"error":{"message":"retrying"},"willRetry":true}));
         assert!(c.state.busy, "a retryable error keeps the turn busy");
         assert!(tool_result(&items(&sink), "c1").is_none(), "the open card stays open");
+    }
+
+    #[test]
+    fn error_reads_the_nested_message_and_names_session_budget_exceeded() {
+        // The real message is NESTED under `error.message` (fixing the latent top-level-message
+        // bug), and a `codexErrorInfo:"sessionBudgetExceeded"` cause earns its OWN notice
+        // subtype so the UI can name it, rather than the generic `protocol_error`.
+        let (mut c, sink) = core();
+        c.state.busy = true;
+        c.on_notification(
+            "error",
+            json!({"error":{"message":"budget de session dépassé","codexErrorInfo":"sessionBudgetExceeded"},"willRetry":false}),
+        );
+        let items = items(&sink);
+        assert!(
+            items.iter().any(|i| matches!(i, ConversationItem::Notice { subtype, detail }
+                if subtype == "session_budget_exceeded"
+                    && detail.get("message").and_then(Value::as_str) == Some("budget de session dépassé"))),
+            "sessionBudgetExceeded must emit a dedicated notice carrying the real nested message"
+        );
+        assert!(!c.state.busy, "a terminal budget error settles the turn");
     }
 
     #[test]
@@ -2904,22 +2996,63 @@ mod tests {
 
     #[test]
     fn mcp_server_live_infers_status_and_counts_tools() {
+        let none = HashMap::new();
         // A connected server: serverInfo present, two tools, auth ok → connected + tools.
-        let connected = mcp_server_live(&json!({
-            "name":"tosse","authStatus":"oAuth","serverInfo":{"name":"tosse"},
-            "tools":{"get_tasks":{},"create_task":{}}
-        }));
+        let connected = mcp_server_live(
+            &json!({
+                "name":"tosse","authStatus":"oAuth","serverInfo":{"name":"tosse"},
+                "tools":{"get_tasks":{},"create_task":{}}
+            }),
+            &none,
+        );
         assert_eq!(connected.status, "connected");
         assert_eq!(connected.tool_count, 2);
         assert_eq!(connected.scope.as_deref(), Some("user"));
         assert!(connected.tools.contains(&"get_tasks".to_string()));
+        assert_eq!(connected.failure_reason, None);
         // Not logged in → needs-auth (takes precedence over serverInfo).
-        let unauth = mcp_server_live(&json!({"name":"x","authStatus":"notLoggedIn","serverInfo":{"name":"x"}}));
+        let unauth = mcp_server_live(
+            &json!({"name":"x","authStatus":"notLoggedIn","serverInfo":{"name":"x"}}),
+            &none,
+        );
         assert_eq!(unauth.status, "needs-auth");
         // No serverInfo → disconnected.
-        let down = mcp_server_live(&json!({"name":"y","authStatus":"unsupported","serverInfo":null}));
+        let down = mcp_server_live(&json!({"name":"y","authStatus":"unsupported","serverInfo":null}), &none);
         assert_eq!(down.status, "disconnected");
         assert_eq!(down.tool_count, 0);
+    }
+
+    #[test]
+    fn mcp_server_live_surfaces_a_recorded_startup_failure() {
+        // A `failed` startup status recorded from the push OVERRIDES the inferred status
+        // (would otherwise be a mute "disconnected") and carries its structured reason.
+        let mut startup = HashMap::new();
+        startup.insert(
+            "gh".to_string(),
+            McpStartupStatus {
+                state: "failed".to_string(),
+                failure_reason: Some("reauthenticationRequired".to_string()),
+                error: None,
+            },
+        );
+        let row = mcp_server_live(&json!({"name":"gh","authStatus":"oAuth","serverInfo":null}), &startup);
+        assert_eq!(row.status, "failed");
+        assert_eq!(row.failure_reason.as_deref(), Some("reauthenticationRequired"));
+        // The free-text error is the fallback when no structured reason is present.
+        startup.insert(
+            "gh".to_string(),
+            McpStartupStatus { state: "failed".to_string(), failure_reason: None, error: Some("boom".to_string()) },
+        );
+        let row = mcp_server_live(&json!({"name":"gh","serverInfo":null}), &startup);
+        assert_eq!(row.failure_reason.as_deref(), Some("boom"));
+        // A non-failed recorded state does NOT override the normal inference.
+        startup.insert(
+            "gh".to_string(),
+            McpStartupStatus { state: "ready".to_string(), failure_reason: None, error: None },
+        );
+        let row = mcp_server_live(&json!({"name":"gh","serverInfo":{"name":"gh"}}), &startup);
+        assert_eq!(row.status, "connected");
+        assert_eq!(row.failure_reason, None);
     }
 
     #[test]

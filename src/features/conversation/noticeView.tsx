@@ -55,6 +55,7 @@ export const NOTICE_ERROR_HEADINGS: Record<string, string> = {
   session_crashed: "La session Claude Code a planté",
   send_failed: "Message non transmis à Claude Code",
   protocol_error: "Erreur de protocole",
+  session_budget_exceeded: "Budget de session Codex dépassé",
   permission_error: "Demande d'autorisation illisible",
   task_failed: "Une tâche de fond a échoué",
   history_error: "Problème de restauration de l'historique",

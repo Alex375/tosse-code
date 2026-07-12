@@ -126,6 +126,17 @@ function liveBadge(scope: string | null | undefined): { label: string; cls: stri
 }
 
 /** Clear status word + dot tone for a live MCP status. */
+/** Human label for a Codex MCP `failure_reason` (from the `mcpServer/startupStatus/updated`
+ *  push). Unknown reasons fall back to the raw wire value so a new reason is never swallowed. */
+function mcpFailureLabel(reason: string): string {
+  switch (reason) {
+    case "reauthenticationRequired":
+      return "Ré-authentification requise";
+    default:
+      return reason;
+  }
+}
+
 function statusInfo(status: string | null): { cls: string; label: string } {
   switch (status) {
     case "connected":
@@ -1653,6 +1664,14 @@ function McpLiveRow({ mcp, actions }: { mcp: McpServerLive; actions: ReturnType<
       </div>
       <div className={styles.mcpSub}>
         <span className={`${styles.statusWord} ${tone.cls}`}>{tone.label}</span>
+        {/* Why it failed to start (Codex `mcpServer/startupStatus/updated` push) — turns a
+            mute "Échec" into a named cause, e.g. "Échec · Ré-authentification requise". */}
+        {mcp.failure_reason ? (
+          <>
+            <span className={styles.subSep}>·</span>
+            <span className={styles.subDetail}>{mcpFailureLabel(mcp.failure_reason)}</span>
+          </>
+        ) : null}
         {conn ? (
           <>
             <span className={styles.subSep}>·</span>

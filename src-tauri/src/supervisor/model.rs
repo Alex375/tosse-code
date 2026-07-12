@@ -87,6 +87,12 @@ pub struct McpServerLive {
     /// Names of the tools the server exposes (empty unless connected) — shown when
     /// the user expands a server row.
     pub tools: Vec<String>,
+    /// Why a Codex MCP server failed to start (e.g. `reauthenticationRequired`), captured
+    /// from the `mcpServer/startupStatus/updated` push. Turns a mute "disconnected" into a
+    /// named "failed" reason. `None` for Claude servers and for Codex servers that started
+    /// fine.
+    #[serde(default)]
+    pub failure_reason: Option<String>,
 }
 
 /// Result of an `mcp_authenticate` control request (OAuth start for an http/sse

@@ -450,6 +450,8 @@ pub fn parse_mcp_status(line: &Value) -> Vec<McpServerLive> {
                 url: field("url").as_deref().map(strip_url_query),
                 tool_count: tools.len() as u32,
                 tools,
+                // Claude's live MCP status has no structured startup-failure reason.
+                failure_reason: None,
             })
         })
         .collect()

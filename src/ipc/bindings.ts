@@ -2252,7 +2252,14 @@ tool_count: number;
  * Names of the tools the server exposes (empty unless connected) — shown when
  * the user expands a server row.
  */
-tools: string[] }
+tools: string[]; 
+/**
+ * Why a Codex MCP server failed to start (e.g. `reauthenticationRequired`), captured
+ * from the `mcpServer/startupStatus/updated` push. Turns a mute "disconnected" into a
+ * named "failed" reason. `None` for Claude servers and for Codex servers that started
+ * fine.
+ */
+failure_reason?: string | null }
 /**
  * One authoritative content block of an assistant message.
  */
