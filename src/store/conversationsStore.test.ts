@@ -25,15 +25,19 @@ vi.mock("../ipc/client", () => {
 });
 
 import { commands } from "../ipc/client";
+import type { DiskConversation } from "../ipc/client";
 import {
   acknowledgeConversation,
   createConversationInRepo,
   DEFAULT_CONV_NAME,
+  DEFAULT_MODEL,
   ensureConversationSession,
   loadConversationHistory,
+  reactivateDiskConversation,
   useConversationsStore,
   type Conversation,
 } from "./conversationsStore";
+import { DEFAULT_CODEX_MODEL } from "../features/conversation/models";
 import { useConversationStore } from "./conversationStore";
 
 const baseConv = (over: Partial<Conversation> = {}): Conversation => ({
@@ -504,5 +508,47 @@ describe("conversationsStore — controls applied at spawn", () => {
       false,
       "claude",
     );
+  });
+});
+
+describe("reactivateDiskConversation — backend-aware", () => {
+  const diskConv = (over: Partial<DiskConversation>): DiskConversation => ({
+    session_id: "s-x",
+    cwd: "/tmp/disk-repo",
+    repo_root: "/tmp/disk-repo",
+    git_branch: null,
+    title: null,
+    excerpt: "salut",
+    mtime_ms: 100,
+    backend: "claude",
+    ...over,
+  });
+
+  beforeEach(() => {
+    // Seed a repo the disk cwd already belongs to so reactivation reuses it (the auto-add
+    // path would call the un-mocked commands.upsertRepo — not what this test exercises).
+    useConversationsStore.setState({
+      repos: [{ id: "disk-r", path: "/tmp/disk-repo", addedAt: 1 }],
+      conversations: [],
+      activeId: null,
+    });
+  });
+
+  it("brings a Codex disk row back as a Codex conversation with Codex defaults", () => {
+    const id = reactivateDiskConversation(diskConv({ session_id: "cx-1", backend: "codex" }));
+    const conv = useConversationsStore.getState().conversations.find((c) => c.id === id)!;
+    // Backend, its default model, and the resume id all come from the disk row — a Codex
+    // thread must not be reactivated as a Claude conversation (else the next message would
+    // spawn the wrong CLI and the rollout history wouldn't load).
+    expect(conv.kind).toBe("codex");
+    expect(conv.model).toBe(DEFAULT_CODEX_MODEL);
+    expect(conv.sessionId).toBe("cx-1");
+  });
+
+  it("brings a Claude disk row back as a Claude conversation with Claude defaults", () => {
+    const id = reactivateDiskConversation(diskConv({ session_id: "cl-1", backend: "claude" }));
+    const conv = useConversationsStore.getState().conversations.find((c) => c.id === id)!;
+    expect(conv.kind).toBe("claude");
+    expect(conv.model).toBe(DEFAULT_MODEL);
   });
 });

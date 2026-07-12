@@ -635,6 +635,7 @@ export const mockCommands = {
         title: null,
         excerpt: "fork (mock)",
         mtime_ms: 0,
+        backend: "claude",
       },
       removed_prompt: null,
     });
@@ -1178,6 +1179,7 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     title: "Refonte de l'authentification",
     excerpt: "Le déploiement casse au login, il faut revoir l'auth du serveur",
     mtime_ms: Date.now() - 3_600_000,
+    backend: "claude",
   },
   {
     session_id: "demo-orphan-2222",
@@ -1187,6 +1189,7 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     title: null,
     excerpt: "Ajoute un toggle de dark mode dans les réglages",
     mtime_ms: Date.now() - 4 * 86_400_000,
+    backend: "claude",
   },
   {
     session_id: "demo-other-3333",
@@ -1196,6 +1199,19 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     title: "Script d'import CSV",
     excerpt: "Parser le CSV et insérer les lignes en base",
     mtime_ms: Date.now() - 20 * 86_400_000,
+    backend: "claude",
+  },
+  {
+    // A Codex thread on disk (backend badge + rollout-backed preview via codexLoadHistory).
+    // Its session_id matches the mock's `codex-thread-demo` cold timeline.
+    session_id: "codex-thread-demo",
+    cwd: "/Users/dev/demo-repo",
+    repo_root: "/Users/dev/demo-repo",
+    git_branch: "main",
+    title: null,
+    excerpt: "Fais-moi un petit tour du projet",
+    mtime_ms: Date.now() - 2 * 3_600_000,
+    backend: "codex",
   },
 ];
 

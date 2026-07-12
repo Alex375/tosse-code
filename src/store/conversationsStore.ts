@@ -909,6 +909,12 @@ export function reactivateDiskConversation(d: DiskConversation): string {
   // `--resume` fail silently (the fallback's `cwd` guard wouldn't trigger), so don't.
   const cwd = d.cwd;
   const id = uid();
+  // Reactivate onto the SAME backend the conversation ran on (the disk row carries it),
+  // so a Codex thread comes back as a Codex conversation — its cold history reads from the
+  // rollout and the next message resumes via `thread/resume`, not `claude --resume`. Seed
+  // the backend's own default model/effort so a Codex conversation never carries a Claude
+  // alias its binary would reject at thread/start.
+  const kind: BackendKind = d.backend === "codex" ? "codex" : "claude";
   useConversationsStore.getState().addConversation({
     id,
     name: (d.title ?? "").trim() || d.excerpt.trim() || DEFAULT_CONV_NAME,
@@ -921,17 +927,15 @@ export function reactivateDiskConversation(d: DiskConversation): string {
     sessionId: d.session_id,
     handle: null, // no live process until the first message (lazy)
     liveCwd: null,
-    model: DEFAULT_MODEL,
-    effort: DEFAULT_EFFORT,
+    model: kind === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL,
+    effort: kind === "codex" ? DEFAULT_CODEX_EFFORT : DEFAULT_EFFORT,
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
     // null = inherit the global "clean output" default; the composer chip sets an
     // explicit per-conversation override.
     cleanOutput: null,
-    // Backend is chosen at creation and immutable; defaults to Claude here. The
-    // backend selector (composer "+") threads the chosen kind through instead.
-    kind: "claude",
+    kind,
   });
   return id;
 }

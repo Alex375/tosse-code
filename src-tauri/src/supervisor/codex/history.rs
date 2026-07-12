@@ -30,11 +30,15 @@
 //! as the live path does.
 
 use std::collections::HashMap;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
 use super::codex_home;
+use crate::supervisor::history::{
+    self, DiskConversation, IndexedConversation, EXCERPT_CHARS, HEAD_SCAN_LINES, INDEX_BODY_CAP,
+};
 use crate::supervisor::model::{ConversationItem, NormalizedBlock};
 
 /// Find the rollout file for `thread_id` under `<home>/sessions` (nested
@@ -93,6 +97,284 @@ pub fn load_thread_history(thread_id: &str) -> Vec<ConversationItem> {
         return Vec::new();
     };
     parse_rollout(&path)
+}
+
+// ---- Disk listing + search index (the Codex analogue of the Claude scan in
+// `crate::supervisor::history`) ---------------------------------------------------------
+//
+// The history panel lists EVERY past conversation found on disk, both backends. Claude's
+// side reads `~/.claude/projects/*/*.jsonl`; here we read Codex's rollouts at
+// `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` and normalize the header + first
+// prompt into the SAME [`DiskConversation`] shape (marked `backend: "codex"`), and the
+// full message text into the SAME [`IndexedConversation`] so a mixed history is one list
+// and one search. Reusing `history`'s helpers (excerpt cap, mtime, body cap, fold) keeps
+// the two backends' rows byte-for-byte consistent.
+
+/// `$CODEX_HOME/sessions` — the root of the date-nested rollout tree. `None` when no
+/// Codex home resolves (Codex never installed/used).
+fn codex_sessions_dir() -> Option<PathBuf> {
+    codex_home().map(|h| h.join("sessions"))
+}
+
+/// Recursively collect every `rollout-*.jsonl` path under `dir` (Codex nests them as
+/// `YYYY/MM/DD/`). Bounded depth — the date tree is 3 deep; a generous cap guards against
+/// surprises — and tolerant: an unreadable dir is logged and skipped, never fatal.
+fn collect_rollouts(dir: &Path, out: &mut Vec<PathBuf>, depth: u32) {
+    if depth > 6 {
+        return;
+    }
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            eprintln!("[codex-history] cannot read {}: {e}", dir.display());
+            return;
+        }
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rollouts(&path, out, depth + 1);
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+        {
+            out.push(path);
+        }
+    }
+}
+
+/// List every Codex thread found on disk as a [`DiskConversation`] row (backend
+/// `"codex"`), most-recent-first. The Codex analogue of the Claude scan in
+/// [`history::list_disk_conversations`]. An absent `~/.codex/sessions` (Codex never used)
+/// yields an empty vec — a normal state, not an error.
+pub fn list_codex_disk_conversations() -> Vec<DiskConversation> {
+    match codex_sessions_dir() {
+        Some(dir) => list_codex_disk_conversations_in(&dir),
+        None => Vec::new(),
+    }
+}
+
+fn list_codex_disk_conversations_in(sessions_dir: &Path) -> Vec<DiskConversation> {
+    let mut paths = Vec::new();
+    collect_rollouts(sessions_dir, &mut paths, 0);
+    let mut out: Vec<DiskConversation> = paths.iter().filter_map(|p| scan_codex_rollout(p)).collect();
+    out.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    out
+}
+
+/// Bounded head-read of one rollout → its listing row, or `None` for a thread with no
+/// human message (aborted/empty — filtered as noise, mirroring the Claude scan). Reads the
+/// `session_meta` header for the thread id / cwd / git branch and the first
+/// `event_msg{user_message}` for the excerpt. Codex has no `ai-title`, so `title` is always
+/// `None` (the excerpt labels the row) — matching the front's Codex auto-title-by-truncation.
+fn scan_codex_rollout(path: &Path) -> Option<DiskConversation> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let mtime_ms = history::file_mtime_ms(&meta);
+
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    let mut session_id: Option<String> = None;
+    let mut cwd: Option<String> = None;
+    let mut git_branch: Option<String> = None;
+    let mut excerpt: Option<String> = None;
+
+    for line in reader.lines().take(HEAD_SCAN_LINES) {
+        let Ok(line) = line else { break };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let payload = entry.get("payload").unwrap_or(&Value::Null);
+        match entry.get("type").and_then(Value::as_str) {
+            Some("session_meta") => {
+                // A spawned sub-agent / guardian thread is not a user conversation — drop it,
+                // the Codex analogue of Claude's `subagents/` + `isSidechain` filter.
+                if is_subagent_meta(payload) {
+                    return None;
+                }
+                if session_id.is_none() {
+                    session_id = thread_id_from_meta(payload);
+                }
+                if cwd.is_none() {
+                    if let Some(c) = payload.get("cwd").and_then(Value::as_str) {
+                        if !c.is_empty() {
+                            cwd = Some(c.to_string());
+                        }
+                    }
+                }
+                if git_branch.is_none() {
+                    git_branch = payload
+                        .get("git")
+                        .and_then(|g| g.get("branch"))
+                        .and_then(Value::as_str)
+                        .filter(|b| !b.is_empty())
+                        .map(str::to_string);
+                }
+            }
+            Some("event_msg") if excerpt.is_none() => {
+                if payload.get("type").and_then(Value::as_str) == Some("user_message") {
+                    let text = message_text(payload.get("message"), payload.get("images"));
+                    if !text.trim().is_empty() {
+                        excerpt = Some(history::flatten_truncate(&text, EXCERPT_CHARS));
+                    }
+                }
+            }
+            _ => {}
+        }
+        // Once id + cwd + excerpt are known nothing better lies further down (Codex writes
+        // no title line) — stop, keeping the common case cheap.
+        if session_id.is_some() && cwd.is_some() && excerpt.is_some() {
+            break;
+        }
+    }
+
+    // Noise filter, in lock-step with `index_codex_rollout`: no human message = an
+    // aborted/empty thread, never listed. The thread id is required to join a SQLite row
+    // and to reactivate (`thread/resume`) — a row without it is unusable.
+    let session_id = session_id?;
+    let excerpt = excerpt?;
+    let cwd = cwd.unwrap_or_default();
+    let repo_root = history::repo_root_from_cwd(&cwd);
+    Some(DiskConversation {
+        session_id,
+        cwd,
+        repo_root,
+        git_branch,
+        title: None,
+        excerpt,
+        mtime_ms,
+        backend: "codex".to_string(),
+    })
+}
+
+/// True when a `session_meta` payload describes a SPAWNED thread (a sub-agent / guardian /
+/// collaborator) rather than a top-level user conversation. Such threads carry a
+/// `parent_thread_id` and a STRUCTURED `source` (`{"subagent": …}`) instead of a plain
+/// client string (`"vscode"` / `"cli"` / `"exec"`). They are the Codex analogue of Claude's
+/// `isSidechain` sub-agent transcripts and must NOT surface as history rows. A user FORK
+/// stays listed — it carries `forked_from_id`, never `parent_thread_id` (verified across a
+/// real `~/.codex`: the two markers are disjoint). Either signal alone is conclusive; we
+/// check both defensively. A `null`-valued key counts as absent.
+fn is_subagent_meta(payload: &Value) -> bool {
+    let has_parent = payload
+        .get("parent_thread_id")
+        .is_some_and(|v| !v.is_null());
+    let structured_source = payload.get("source").is_some_and(Value::is_object);
+    has_parent || structured_source
+}
+
+/// The thread id from a `session_meta` payload — its `id` (the current thread, correct even
+/// for a fork whose `forked_from_id` differs), falling back to `session_id`. Equals the
+/// rollout's filename tail, so [`find_rollout`] can later locate this exact file on resume.
+fn thread_id_from_meta(payload: &Value) -> Option<String> {
+    payload
+        .get("id")
+        .or_else(|| payload.get("session_id"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Build the full-text search index over every Codex rollout on disk (the Codex half of
+/// [`history::build_search_index`]). Reads each rollout in full for its user + agent
+/// message text — heavy, so the caller runs it once, off the panel-open path, and caches it.
+pub fn build_codex_search_index() -> Vec<IndexedConversation> {
+    match codex_sessions_dir() {
+        Some(dir) => build_codex_search_index_in(&dir),
+        None => Vec::new(),
+    }
+}
+
+fn build_codex_search_index_in(sessions_dir: &Path) -> Vec<IndexedConversation> {
+    let mut paths = Vec::new();
+    collect_rollouts(sessions_dir, &mut paths, 0);
+    paths.iter().filter_map(|p| index_codex_rollout(p)).collect()
+}
+
+/// Read + fold ONE rollout into its searchable index row, or `None` for a human-less
+/// thread (same noise filter as the list). Only the real message text is indexed
+/// (`event_msg` user/agent messages) — tool output and opaque reasoning are excluded,
+/// matching the Claude indexer's main-thread-text scope.
+fn index_codex_rollout(path: &Path) -> Option<IndexedConversation> {
+    let mtime_ms = std::fs::metadata(path)
+        .ok()
+        .map(|m| history::file_mtime_ms(&m))
+        .unwrap_or(0);
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+
+    let mut session_id: Option<String> = None;
+    let mut excerpt = String::new();
+    let mut body = String::new();
+    let mut truncated = false;
+
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let payload = entry.get("payload").unwrap_or(&Value::Null);
+        match entry.get("type").and_then(Value::as_str) {
+            Some("session_meta") => {
+                // Keep the index in lock-step with the list: a sub-agent thread is never
+                // listed, so it must never be indexed (else a hit would orphan).
+                if is_subagent_meta(payload) {
+                    return None;
+                }
+                if session_id.is_none() {
+                    session_id = thread_id_from_meta(payload);
+                }
+            }
+            Some("event_msg") => match payload.get("type").and_then(Value::as_str) {
+                Some("user_message") => {
+                    let text = message_text(payload.get("message"), payload.get("images"));
+                    if !text.trim().is_empty() {
+                        if excerpt.is_empty() {
+                            excerpt = history::flatten_truncate(&text, EXCERPT_CHARS);
+                        }
+                        history::append_capped(&mut body, &text, INDEX_BODY_CAP, &mut truncated);
+                    }
+                }
+                Some("agent_message") => {
+                    if let Some(text) = payload.get("message").and_then(Value::as_str) {
+                        if !text.is_empty() {
+                            history::append_capped(&mut body, text, INDEX_BODY_CAP, &mut truncated);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    let session_id = session_id?;
+    if truncated {
+        eprintln!("[codex-history] search index: body for {session_id} capped at {INDEX_BODY_CAP} bytes");
+    }
+    // Same noise filter as `scan_codex_rollout` — a thread with no human message never
+    // enters the index, so a search hit is never orphaned from the list.
+    if excerpt.trim().is_empty() {
+        return None;
+    }
+    Some(IndexedConversation::from_text(
+        session_id,
+        "", // Codex writes no ai-title; the excerpt is the only label.
+        &excerpt,
+        body,
+        mtime_ms,
+    ))
 }
 
 /// A history-restore notice (unreadable / partially-corrupt rollout). Rendered as a
@@ -783,5 +1065,229 @@ mod tests {
         assert!(!items.is_empty(), "a real rollout must produce items");
         // Every tool card must be paired with a result (none left 'running').
         assert_eq!(tool_uses, tool_results, "each tool card should have exactly one result");
+    }
+
+    // ---- Disk listing + search index ----------------------------------------------
+
+    use std::io::Write;
+
+    /// Write a rollout `<name>.jsonl` under a fake `<base>/YYYY/MM/DD/` sessions tree.
+    fn write_rollout(base: &Path, day: &str, name: &str, lines: &[String]) {
+        let dir = base.join("2026").join("07").join(day);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut f = std::fs::File::create(dir.join(format!("{name}.jsonl"))).unwrap();
+        for l in lines {
+            writeln!(f, "{l}").unwrap();
+        }
+    }
+
+    #[test]
+    fn codex_disk_listing_reads_backend_cwd_git_and_first_prompt() {
+        let base = std::env::temp_dir().join(format!("tosse-codex-list-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        // A normal thread: header (id/cwd/git.branch) + first user prompt + a reply.
+        write_rollout(
+            &base,
+            "10",
+            "rollout-2026-07-10T01-00-00-aaaaaaaa-1111-2222-3333-444444444444",
+            &[
+                line("session_meta", json!({ "id": "aaaaaaaa-1111-2222-3333-444444444444", "cwd": "/Users/me/Repos/app", "git": { "branch": "main" } })),
+                line("response_item", json!({ "type": "message", "role": "developer", "content": [{ "type": "input_text", "text": "<permissions>…" }] })),
+                line("event_msg", json!({ "type": "user_message", "message": "Fix the login scroll bug", "images": [] })),
+                line("event_msg", json!({ "type": "agent_message", "message": "On y va." })),
+            ],
+        );
+        // A thread whose cwd is an app WORKTREE → repo_root rolls up to the repo.
+        write_rollout(
+            &base,
+            "09",
+            "rollout-2026-07-09T02-00-00-bbbbbbbb-1111-2222-3333-444444444444",
+            &[
+                line("session_meta", json!({ "id": "bbbbbbbb-1111-2222-3333-444444444444", "cwd": "/Users/me/Repos/app/.claude/worktrees/feat-x" })),
+                line("event_msg", json!({ "type": "user_message", "message": "Add a dark mode toggle", "images": [] })),
+            ],
+        );
+        // An aborted thread: header + a reply but NO human message → filtered as noise.
+        write_rollout(
+            &base,
+            "10",
+            "rollout-2026-07-10T03-00-00-cccccccc-1111-2222-3333-444444444444",
+            &[
+                line("session_meta", json!({ "id": "cccccccc-1111-2222-3333-444444444444", "cwd": "/x" })),
+                line("event_msg", json!({ "type": "agent_message", "message": "orphelin" })),
+            ],
+        );
+        // A spawned sub-agent (guardian) thread: has a `parent_thread_id` + a structured
+        // `source` and its first user_message is an injected assessment prompt → filtered out
+        // (never a top-level conversation), even though it HAS a "human" message.
+        write_rollout(
+            &base,
+            "10",
+            "rollout-2026-07-10T04-00-00-dddddddd-1111-2222-3333-444444444444",
+            &[
+                line("session_meta", json!({ "id": "dddddddd-1111-2222-3333-444444444444", "cwd": "/Users/me/Repos/app", "parent_thread_id": "aaaaaaaa-1111-2222-3333-444444444444", "source": { "subagent": { "other": "guardian" } } })),
+                line("event_msg", json!({ "type": "user_message", "message": "The following is the Codex agent history whose request action you are assessing…", "images": [] })),
+            ],
+        );
+        // A user FORK (has `forked_from_id`, NOT `parent_thread_id`, plain string source) is a
+        // REAL conversation → stays listed.
+        write_rollout(
+            &base,
+            "10",
+            "rollout-2026-07-10T05-00-00-eeeeeeee-1111-2222-3333-444444444444",
+            &[
+                line("session_meta", json!({ "id": "eeeeeeee-1111-2222-3333-444444444444", "forked_from_id": "aaaaaaaa-1111-2222-3333-444444444444", "cwd": "/Users/me/Repos/app", "source": "vscode" })),
+                line("event_msg", json!({ "type": "user_message", "message": "Continue on the fork", "images": [] })),
+            ],
+        );
+        // A stray non-rollout file in the tree → ignored (only `rollout-*.jsonl` counts).
+        std::fs::write(base.join("2026").join("07").join("10").join("notes.jsonl"), "{}\n").unwrap();
+
+        let got = list_codex_disk_conversations_in(&base);
+        std::fs::remove_dir_all(&base).ok();
+
+        // Three real threads (normal + worktree + fork); the aborted one, the sub-agent, and
+        // the stray file are excluded.
+        assert_eq!(got.len(), 3, "got {got:#?}");
+        assert!(got.iter().all(|c| !c.session_id.starts_with("dddd")), "sub-agent thread is filtered out");
+        assert!(got.iter().any(|c| c.session_id.starts_with("eeee")), "a user fork stays listed");
+        // Most-recent-first: the 07-10 thread (mtime newer) sorts above the 07-09 one, but
+        // since both are written in the same test run mtimes are ~equal — assert by id.
+        let normal = got.iter().find(|c| c.session_id.starts_with("aaaa")).expect("normal thread");
+        assert_eq!(normal.backend, "codex");
+        assert_eq!(normal.title, None, "Codex has no ai-title");
+        assert_eq!(normal.excerpt, "Fix the login scroll bug");
+        assert_eq!(normal.cwd, "/Users/me/Repos/app");
+        assert_eq!(normal.repo_root, "/Users/me/Repos/app");
+        assert_eq!(normal.git_branch.as_deref(), Some("main"));
+
+        let worktree = got.iter().find(|c| c.session_id.starts_with("bbbb")).expect("worktree thread");
+        assert_eq!(worktree.cwd, "/Users/me/Repos/app/.claude/worktrees/feat-x");
+        assert_eq!(worktree.repo_root, "/Users/me/Repos/app", "worktree cwd rolls up to the repo");
+        assert_eq!(worktree.git_branch, None);
+        assert_eq!(worktree.excerpt, "Add a dark mode toggle");
+    }
+
+    #[test]
+    fn codex_search_index_finds_by_user_and_agent_text_and_skips_noise() {
+        let base = std::env::temp_dir().join(format!("tosse-codex-idx-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        write_rollout(
+            &base,
+            "10",
+            "rollout-2026-07-10T01-00-00-11111111-1111-1111-1111-111111111111",
+            &[
+                line("session_meta", json!({ "id": "11111111-1111-1111-1111-111111111111", "cwd": "/repo" })),
+                line("event_msg", json!({ "type": "user_message", "message": "revoir l'authentification serveur", "images": [] })),
+                line("event_msg", json!({ "type": "agent_message", "message": "Je remplace le middleware JWT." })),
+            ],
+        );
+        // Noise (no human message) → must NOT enter the index.
+        write_rollout(
+            &base,
+            "10",
+            "rollout-2026-07-10T02-00-00-22222222-2222-2222-2222-222222222222",
+            &[
+                line("session_meta", json!({ "id": "22222222-2222-2222-2222-222222222222", "cwd": "/repo" })),
+                line("event_msg", json!({ "type": "agent_message", "message": "middleware orphelin" })),
+            ],
+        );
+
+        let index = build_codex_search_index_in(&base);
+        std::fs::remove_dir_all(&base).ok();
+
+        assert_eq!(index.len(), 1, "the human-less thread is filtered out of the index");
+        // A term from the user prompt hits (excerpt), accent-folded.
+        let by_user = history::score_index(&index, "authentification");
+        assert_eq!(by_user.len(), 1);
+        assert_eq!(by_user[0].session_id, "11111111-1111-1111-1111-111111111111");
+        // A term found ONLY in the agent's reply hits the indexed body…
+        let by_agent = history::score_index(&index, "middleware");
+        assert_eq!(by_agent.len(), 1, "agent text is searchable and the orphan is absent");
+        assert_eq!(by_agent[0].session_id, "11111111-1111-1111-1111-111111111111");
+    }
+
+    /// PROBE (not hermetic): run the REAL disk scan + index against `~/.codex/sessions` and
+    /// report what it finds. Confirms the scanner produces sane, reactivatable rows on a live
+    /// install (each row's `session_id` must be locatable by [`find_rollout`], the same lookup
+    /// reactivation/preview use). Run:
+    /// `cargo test --lib -- --ignored --nocapture live_list_codex_disk_conversations`.
+    #[test]
+    #[ignore = "reads real ~/.codex rollouts off disk"]
+    fn live_list_codex_disk_conversations() {
+        let rows = list_codex_disk_conversations();
+        eprintln!("PROBE: {} Codex conversation(s) on disk", rows.len());
+        for r in rows.iter().take(10) {
+            eprintln!(
+                "  {} · backend={} · repo={} · branch={:?} · {:?}",
+                r.session_id, r.backend, r.repo_root, r.git_branch, r.excerpt
+            );
+        }
+        for r in &rows {
+            assert_eq!(r.backend, "codex", "every row from the Codex scan is backend=codex");
+            assert!(!r.session_id.is_empty(), "a listed row must carry a thread id");
+            assert!(!r.excerpt.is_empty(), "a listed row must carry an excerpt");
+            // The listed id must locate its own rollout — else preview/reactivation would
+            // come back empty.
+            assert!(
+                load_thread_history(&r.session_id).len() > 0 || r.excerpt == "[image]",
+                "the thread id {} must resolve to a readable rollout",
+                r.session_id
+            );
+        }
+        // The full merged listing must include the Codex rows too (both backends).
+        let merged = crate::supervisor::history::list_disk_conversations();
+        let codex_in_merged = merged.iter().filter(|c| c.backend == "codex").count();
+        eprintln!(
+            "PROBE: merged listing has {} rows, {} Codex",
+            merged.len(),
+            codex_in_merged
+        );
+        assert_eq!(codex_in_merged, rows.len(), "the merged list surfaces every Codex row");
+    }
+
+    // ---- Cold-restore silent-error contract (parse_rollout notices) ---------------
+
+    #[test]
+    fn parse_rollout_surfaces_a_history_error_notice_on_a_malformed_line() {
+        // The whole point of the notice: a partially-corrupt rollout must NOT silently drop
+        // turns. Mirrors the Claude side's `malformed_transcript_line_surfaces_a_history_error_notice`.
+        let dir = std::env::temp_dir().join(format!("tosse-codex-badline-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-badline.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "{}", line("event_msg", json!({ "type": "user_message", "message": "salut" }))).unwrap();
+        writeln!(f, "not json at all").unwrap();
+        drop(f);
+
+        let items = parse_rollout(&path);
+        std::fs::remove_dir_all(&dir).ok();
+
+        // The good turn still restores…
+        assert!(items.iter().any(|i| is_user(i, "salut")), "the well-formed turn must restore");
+        // …and the skipped malformed line surfaces a visible history_error notice (never silent).
+        assert!(
+            items.iter().any(|i| matches!(i, ConversationItem::Notice { subtype, .. } if subtype == "history_error")),
+            "a skipped malformed rollout line must surface a history_error notice, got {items:#?}"
+        );
+    }
+
+    #[test]
+    fn parse_rollout_surfaces_a_notice_when_the_file_is_unreadable() {
+        // Invalid UTF-8 → read_to_string errors with InvalidData (NOT NotFound) → the IO-error
+        // branch must surface a history_error notice, not a silently-empty conversation. (A
+        // truncated-mid-write kill that leaves invalid bytes is the realistic trigger.)
+        let dir = std::env::temp_dir().join(format!("tosse-codex-badutf8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-badutf8.jsonl");
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0x9f]).unwrap();
+
+        let items = parse_rollout(&path);
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(
+            items.iter().any(|i| matches!(i, ConversationItem::Notice { subtype, .. } if subtype == "history_error")),
+            "an unreadable rollout must surface a history_error notice, not an empty conversation"
+        );
     }
 }

@@ -656,11 +656,13 @@ fn fork_transcript_in(
 /// optional `ai-title`. The cwd and first human message sit in the first lines and
 /// trigger an early break; this only bounds the worst case of a title-less file, so
 /// we never read a whole (possibly huge) transcript just to LIST it.
-const HEAD_SCAN_LINES: usize = 256;
+/// Shared with the Codex rollout scanner ([`super::codex::history`]).
+pub(crate) const HEAD_SCAN_LINES: usize = 256;
 
 /// The identifying excerpt (first human message) is flattened to one line and capped
-/// at this many chars.
-const EXCERPT_CHARS: usize = 120;
+/// at this many chars. Shared with the Codex rollout scanner so both backends' rows
+/// truncate identically.
+pub(crate) const EXCERPT_CHARS: usize = 120;
 
 /// Once the cwd + first human message are known, how many more lines to read looking
 /// for the optional `ai-title` before stopping. The title line sits right after the
@@ -671,8 +673,8 @@ const TITLE_GRACE_LINES: usize = 24;
 
 /// Per-conversation searchable-body cap (bytes). Bounds the index's memory and
 /// per-query scan on a very long conversation; the overflow is dropped (logged once
-/// per build — never a silent truncation).
-const INDEX_BODY_CAP: usize = 200_000;
+/// per build — never a silent truncation). Shared with the Codex rollout indexer.
+pub(crate) const INDEX_BODY_CAP: usize = 200_000;
 
 /// One conversation discovered on disk — the cheap "head-read" row the history panel
 /// lists. NO full parse here (that's [`load_history`], used by the preview). Field
@@ -698,6 +700,11 @@ pub struct DiskConversation {
     pub excerpt: String,
     /// Transcript mtime (Unix ms) ≈ time of the last message. Recency sort key.
     pub mtime_ms: i64,
+    /// Agent backend this conversation ran on (`"claude"` | `"codex"`). Drives the
+    /// panel's backend badge and — on reactivation — which conversation `kind` (and
+    /// which cold-history reader) the front creates. Claude rows read from `~/.claude`
+    /// transcripts; Codex rows from `~/.codex` rollouts.
+    pub backend: String,
 }
 
 /// App convention: a worktree lives at `<repo>/.claude/worktrees/<branch>` (see the
@@ -711,13 +718,19 @@ pub fn repo_root_from_cwd(cwd: &str) -> String {
     }
 }
 
-/// List every conversation found on disk, most-recent-first. Env wrapper around
-/// [`list_disk_conversations_in`] (the testable core).
+/// List every conversation found on disk, most-recent-first — BOTH backends: Claude's
+/// transcripts (`~/.claude/projects`) and Codex's rollouts (`~/.codex/sessions`), merged
+/// and re-sorted so a mixed history reads as one recency-ordered list.
 pub fn list_disk_conversations() -> Vec<DiskConversation> {
-    match claude_config_dir() {
+    let mut out = match claude_config_dir() {
         Some(dir) => list_disk_conversations_in(&dir),
         None => Vec::new(),
-    }
+    };
+    out.extend(super::codex::list_codex_disk_conversations());
+    // Re-sort the merged set: each backend's scan is internally ordered, but the two
+    // interleave by time (a recent Codex thread must sit above an older Claude one).
+    out.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    out
 }
 
 fn list_disk_conversations_in(config_dir: &Path) -> Vec<DiskConversation> {
@@ -746,7 +759,7 @@ fn list_disk_conversations_in(config_dir: &Path) -> Vec<DiskConversation> {
 /// recency key shared by the disk listing ([`scan_disk_conversation`]) and the search
 /// index ([`index_one`]) — kept in one place so the two always order conversations the
 /// same way.
-fn file_mtime_ms(meta: &std::fs::Metadata) -> i64 {
+pub(crate) fn file_mtime_ms(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
         .ok()
         .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
@@ -842,6 +855,7 @@ fn scan_disk_conversation(path: &Path) -> Option<DiskConversation> {
         title,
         excerpt,
         mtime_ms,
+        backend: "claude".to_string(),
     })
 }
 
@@ -913,7 +927,7 @@ fn assistant_text(entry: &Value) -> String {
 }
 
 /// Collapse all whitespace to single spaces and cap at `max` chars (… elided).
-fn flatten_truncate(s: &str, max: usize) -> String {
+pub(crate) fn flatten_truncate(s: &str, max: usize) -> String {
     let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max {
         flat
@@ -940,6 +954,29 @@ pub struct IndexedConversation {
     mtime_ms: i64,
 }
 
+impl IndexedConversation {
+    /// Build an index row from raw (unfolded) `title`/`excerpt`/`body`. Used by the Codex
+    /// backend, which derives the same searchable shape from a rollout — keeping the
+    /// folding + field layout in ONE place so Claude and Codex rows score identically
+    /// (and the [`fold`] 1-char→1-char snippet invariant holds for both).
+    pub(crate) fn from_text(
+        session_id: String,
+        title: &str,
+        excerpt: &str,
+        body: String,
+        mtime_ms: i64,
+    ) -> Self {
+        IndexedConversation {
+            session_id,
+            title_fold: fold(title),
+            excerpt_fold: fold(excerpt),
+            body_fold: fold(&body),
+            body,
+            mtime_ms,
+        }
+    }
+}
+
 /// A search result: which conversation matched, its relevance score, and a short
 /// snippet around the first body hit (empty when only title/excerpt matched).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -949,13 +986,16 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
-/// Build the full-text index over every main-thread transcript. Heavy (reads each
-/// file in full) — callers run it once, off the panel-open path, and cache it.
+/// Build the full-text index over every main-thread transcript of BOTH backends
+/// (Claude transcripts + Codex rollouts). Heavy (reads each file in full) — callers run
+/// it once, off the panel-open path, and cache it.
 pub fn build_search_index() -> Vec<IndexedConversation> {
-    match claude_config_dir() {
+    let mut out = match claude_config_dir() {
         Some(dir) => build_search_index_in(&dir),
         None => Vec::new(),
-    }
+    };
+    out.extend(super::codex::build_codex_search_index());
+    out
 }
 
 fn build_search_index_in(config_dir: &Path) -> Vec<IndexedConversation> {
@@ -1050,8 +1090,9 @@ fn index_one(path: &Path) -> Option<IndexedConversation> {
 }
 
 /// Append `add` to `body` (space-separated) unless already at the byte cap. Caps at
-/// `cap` + at most one message — bounds memory without an O(n²) char recount.
-fn append_capped(body: &mut String, add: &str, cap: usize, truncated: &mut bool) {
+/// `cap` + at most one message — bounds memory without an O(n²) char recount. Shared
+/// with the Codex rollout indexer so both backends' bodies grow the same way.
+pub(crate) fn append_capped(body: &mut String, add: &str, cap: usize, truncated: &mut bool) {
     if body.len() >= cap {
         *truncated = true;
         return;

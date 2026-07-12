@@ -11,6 +11,7 @@ import { commands } from "../../ipc/client";
 import type { ConversationItem, DiskConversation, SearchHit } from "../../ipc/client";
 import { Ico } from "../../ui/kit";
 import { repoName, reactivateDiskConversation, useConversationsStore } from "../../store/conversationsStore";
+import { BackendMark } from "../conversation/ConvMark";
 import { SubAgentTranscript } from "../conversation/SubAgentTranscript";
 import { useHistoryUi } from "./historyUiStore";
 import {
@@ -146,7 +147,15 @@ export function HistoryPanel() {
     setPreviewLoading(true);
     setPreview(null);
     setPreviewError(null);
-    void commands.loadSessionHistory(selected.session_id).then((res) => {
+    // Read the cold history from the backend that wrote it: a Codex row parses its
+    // `~/.codex` rollout (`codexLoadHistory`), a Claude row its transcript. Routing by the
+    // row's own `backend` is required — the preview runs before reactivation, so there's no
+    // store conversation yet to carry the kind.
+    const load =
+      selected.backend === "codex"
+        ? commands.codexLoadHistory(selected.session_id)
+        : commands.loadSessionHistory(selected.session_id);
+    void load.then((res) => {
       if (!alive) return;
       // Distinguish a read failure from a genuinely empty transcript (don't render an
       // error as "no readable messages").
@@ -299,6 +308,9 @@ export function HistoryPanel() {
               <>
                 <div className={styles.previewHead}>
                   <div className={styles.previewTitle}>
+                    <span className={`${styles.backendBadge} ${styles.previewBadge}`}>
+                      <BackendMark kind={selected.backend} />
+                    </span>
                     {(selected.title ?? "").trim() || selected.excerpt || "Conversation"}
                   </div>
                   <div className={styles.previewMeta}>
@@ -379,6 +391,9 @@ function Row({
       onClick={onClick}
     >
       <div className={styles.rowName}>
+        <span className={styles.backendBadge} title={conv.backend === "codex" ? "Codex" : "Claude"}>
+          <BackendMark kind={conv.backend} />
+        </span>
         <span className={styles.rowTitle}>{label}</span>
         {present ? <span className={styles.presentTag}>déjà présente</span> : null}
       </div>

@@ -15,15 +15,19 @@ function useIsCodex(session: string): boolean {
   );
 }
 
+/** The brand mark for an EXPLICIT backend kind — the OpenAI glyph for Codex, the Claude
+ *  glyph otherwise. Use this where the backend is known directly rather than through an
+ *  in-store conversation id (e.g. the history panel's on-disk rows, which aren't store
+ *  conversations yet). Anything that isn't `"codex"` reads as Claude (the default backend). */
+export function BackendMark({ kind, className }: { kind: string; className?: string }) {
+  return kind === "codex" ? <CodexMark className={className} /> : <ClaudeMark className={className} />;
+}
+
 /** The conversation's brand mark: the OpenAI glyph for a Codex conversation, the Claude
  *  glyph otherwise. `className` passes through (e.g. `wf-spin` on the Flight Deck activity
  *  line), so this is a drop-in replacement for a bare `<ClaudeMark className=… />`. */
 export function ConvMark({ session, className }: { session: string; className?: string }) {
-  return useIsCodex(session) ? (
-    <CodexMark className={className} />
-  ) : (
-    <ClaudeMark className={className} />
-  );
+  return <BackendMark kind={useIsCodex(session) ? "codex" : "claude"} className={className} />;
 }
 
 /** The assistant-response avatar, backend-aware. Claude keeps its coral disc + Claude

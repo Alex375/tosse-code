@@ -1951,7 +1951,14 @@ excerpt: string;
 /**
  * Transcript mtime (Unix ms) ≈ time of the last message. Recency sort key.
  */
-mtime_ms: number }
+mtime_ms: number; 
+/**
+ * Agent backend this conversation ran on (`"claude"` | `"codex"`). Drives the
+ * panel's backend badge and — on reactivation — which conversation `kind` (and
+ * which cold-history reader) the front creates. Claude rows read from `~/.claude`
+ * transcripts; Codex rows from `~/.codex` rollouts.
+ */
+backend: string }
 /**
  * Where a configuration entry originates. Drives the "by scope" grouping in the
  * UI. Serialized snake_case so the TS union is `"user" | "project" | …`.

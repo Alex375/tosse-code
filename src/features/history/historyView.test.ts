@@ -20,6 +20,7 @@ function conv(over: Partial<DiskConversation> & { session_id: string }): DiskCon
     title: over.title ?? null,
     excerpt: over.excerpt ?? "",
     mtime_ms: over.mtime_ms ?? NOW,
+    backend: over.backend ?? "claude",
   };
 }
 

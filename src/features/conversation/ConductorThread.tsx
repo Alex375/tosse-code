@@ -63,6 +63,7 @@ import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
 import { SkillChip, UserText } from "./userText";
 import { parseSpecialMessage } from "./specialMessage";
 import { SpecialMessageCard } from "./SpecialMessageCard";
+import { ErrorBlock, NoticeBlock } from "./noticeView";
 import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
 import { WorkflowCard } from "./WorkflowCard";
@@ -242,128 +243,19 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
   );
 }
 
-/** The single, consistent way an error shows in the thread: a red `role=alert`
- *  bubble with an optional bold heading, a main message, and a collapsed
- *  "Détails techniques" disclosure for the raw payload (stderr / exit code / raw
- *  line) so the detail is one click away without polluting the stream. Used by
- *  client errors (MsgError), core error notices (NoticeRow) and failed turns
- *  (TurnResultRow) so they never diverge. */
-function ErrorBlock({
-  heading,
-  children,
-  detail,
-}: {
-  heading?: ReactNode;
-  children?: ReactNode;
-  /** Raw technical detail, hidden behind a disclosure (collapsed by default). */
-  detail?: string | null;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className={styles.errorBubble} role="alert">
-      <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
-      <div className={styles.errorBody}>
-        {heading ? <div className={styles.errorHeading}>{heading}</div> : null}
-        {children ? <div className={styles.errorText}>{children}</div> : null}
-        {detail ? (
-          <>
-            <button
-              type="button"
-              className={styles.errorToggle}
-              onClick={() => setOpen((o) => !o)}
-            >
-              {open ? "Masquer le détail" : "Détails techniques"}
-            </button>
-            {open ? <pre className={styles.errorDetail}>{detail}</pre> : null}
-          </>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 function MsgError({ session, errorId }: { session: string; errorId: string }) {
   const err = useError(session, errorId);
   if (!err) return null;
   return <ErrorBlock detail={err.detail}>{err.message}</ErrorBlock>;
 }
 
-/** French heading for each error-bearing notice subtype the core can emit. Any
- *  subtype listed here (plus the generic `error`) renders as a visible error
- *  bubble; subtypes absent from this map stay quiet (e.g. `control_change`). This
- *  is the front half of the "zero silent error" contract: a layer surfaces an
- *  error by emitting `Notice{subtype, detail:{message, detail?}}` and it shows up
- *  here with no extra plumbing. */
-const NOTICE_ERROR_HEADINGS: Record<string, string> = {
-  process_exited: "La session Claude Code s'est arrêtée de façon inattendue",
-  session_crashed: "La session Claude Code a planté",
-  send_failed: "Message non transmis à Claude Code",
-  protocol_error: "Erreur de protocole",
-  permission_error: "Demande d'autorisation illisible",
-  task_failed: "Une tâche de fond a échoué",
-  history_error: "Problème de restauration de l'historique",
-};
-
-/** Pull a human-readable detail string out of a notice's raw `detail` payload, for
- *  the collapsed "Détails techniques" disclosure. Prefers explicit `detail`, then
- *  any technical fields (stderr / exit code), else the whole payload as JSON. */
-function noticeDetailText(d: Record<string, JsonValue> | null): string | null {
-  if (!d) return null;
-  if (typeof d.detail === "string" && d.detail.trim()) return d.detail;
-  const lines: string[] = [];
-  if (typeof d.stderr === "string" && d.stderr.trim()) lines.push(d.stderr.trimEnd());
-  if (d.exit_code != null) lines.push(`exit code: ${String(d.exit_code)}`);
-  if (typeof d.signal === "string" && d.signal) lines.push(`signal: ${d.signal}`);
-  if (lines.length) return lines.join("\n");
-  return null;
-}
-
-/** Control-channel + error notices surfaced from the core:
- *  - `control_change`: a model/effort/permission change CONFIRMED by the CLI — a
- *    subtle inline line (like the VS Code extension). Emitted only on the model-felt
- *    transition (get_settings read-back / set_permission_mode ack / system/init),
- *    never on the optimistic click, so it is reliable.
- *  - `control_error` + every subtype in NOTICE_ERROR_HEADINGS (and the generic
- *    `error`): a real error — a visible red bubble, never silent.
- *  Other notice subtypes stay quiet. */
+/** Control-channel + error notices surfaced from the core, keyed off the live store. The
+ *  routing + visuals live in the pure `NoticeBlock` (`noticeView`) so the read-only
+ *  transcript preview renders an error notice identically. */
 function NoticeRow({ session, noticeId }: { session: string; noticeId: string }) {
   const notice = useNotice(session, noticeId);
   if (!notice) return null;
-  const d = (notice.detail ?? null) as Record<string, JsonValue> | null;
-  const get = (k: string): string | undefined => {
-    const v = d?.[k];
-    return typeof v === "string" ? v : undefined;
-  };
-
-  if (notice.subtype === "control_change") {
-    return (
-      <div className={styles.controlChange}>
-        <Ico name={get("icon") ?? "spark"} className="sm" />
-        <span>
-          {get("control")} : <b>{get("from")}</b> → <b>{get("to")}</b>
-        </span>
-      </div>
-    );
-  }
-
-  if (notice.subtype === "control_error") {
-    return (
-      <ErrorBlock detail={noticeDetailText(d)}>
-        Réglage « {get("control") ?? "contrôle"} » refusé par Claude Code
-        {get("message") ? ` : ${get("message")}` : ""}.
-      </ErrorBlock>
-    );
-  }
-
-  const heading = NOTICE_ERROR_HEADINGS[notice.subtype] ?? (notice.subtype === "error" ? "Erreur" : null);
-  if (heading) {
-    return (
-      <ErrorBlock heading={heading} detail={noticeDetailText(d)}>
-        {get("message") ?? null}
-      </ErrorBlock>
-    );
-  }
-  return null;
+  return <NoticeBlock subtype={notice.subtype} detail={notice.detail} />;
 }
 
 /** A turn that ended in error: the CLI sends a `result` with `is_error` (or an

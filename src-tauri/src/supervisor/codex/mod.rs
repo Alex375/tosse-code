@@ -22,7 +22,7 @@ mod transport;
 pub use accounts::{CodexAccountStatus, CodexLoginStart};
 pub use config::list_extensions;
 pub use extensions::{CodexHooksSnapshot, CodexPluginsLive};
-pub use history::load_thread_history;
+pub use history::{build_codex_search_index, list_codex_disk_conversations, load_thread_history};
 pub use protocol::{CodexControls, CodexForkResult, CodexModel, CodexSkill};
 pub use server::{CodexError, CodexServer};
 pub use session::spawn_session;
