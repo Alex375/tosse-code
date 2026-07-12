@@ -187,7 +187,12 @@ export const ConductorComposer = forwardRef<
   const locked = !isFresh || send.isPending;
   // Dynamic Codex model catalogue (`model/list`), with the verified static fallback —
   // feeds the picker's Codex section AND the data-driven effort gauge.
-  const { models: codexModels, effortsById: codexEfforts } = useCodexModels(codexAvailable);
+  const {
+    models: codexModels,
+    effortsById: codexEfforts,
+    tiersById: codexTiers,
+    defaultTierById: codexDefaultTier,
+  } = useCodexModels(codexAvailable);
   const pickerGroups = modelsForPicker(ctl.kind, { locked, codexAvailable, codexModels });
   // Account state per backend, for the picker's "non connecté" badges (definitive
   // logged-out only — cf. useAccountsLoggedOut). Shared cached queries, cost ~nil.
@@ -892,6 +897,48 @@ export const ConductorComposer = forwardRef<
                 </MenuItem>
               ))}
             </Menu>
+            {/* Service tier ("Fast") — a per-turn speed/priority override, shown ONLY when the
+                selected model advertises a real choice (≥2 tiers). Parity with the Codex-native
+                Fast tier; the chip lights up when a non-default (faster) tier is active. */}
+            {(() => {
+              const tiers = codexTiers[modelId] ?? [];
+              if (tiers.length < 2) return null;
+              const defaultTier = codexDefaultTier[modelId] ?? null;
+              const currentId = codexCtl.serviceTier ?? defaultTier;
+              const current = tiers.find((t) => t.id === currentId) ?? null;
+              const boosted = currentId != null && currentId !== defaultTier;
+              return (
+                <Menu
+                  up
+                  trigger={
+                    <ChipBtn
+                      icon="bolt"
+                      data-codex-fast={boosted ? "on" : undefined}
+                      title="Vitesse Codex (service tier) — override par tour"
+                    >
+                      {current?.name || "Vitesse"}
+                    </ChipBtn>
+                  }
+                >
+                  <MenuLabel>Vitesse Codex</MenuLabel>
+                  {tiers.map((t) => (
+                    <MenuItem
+                      key={t.id}
+                      on={currentId === t.id}
+                      hint={t.description || undefined}
+                      onClick={() =>
+                        useCodexControls.getState().set(session, {
+                          // Default tier → clear (follow the model default); else store the id.
+                          serviceTier: t.id === defaultTier ? undefined : t.id,
+                        })
+                      }
+                    >
+                      {t.name || t.id}
+                    </MenuItem>
+                  ))}
+                </Menu>
+              );
+            })()}
             {/* The remaining Codex-only settings folded into ONE menu to keep the composer
                 tidy: network access (sandbox), reasoning-summary verbosity, personality. */}
             <Menu

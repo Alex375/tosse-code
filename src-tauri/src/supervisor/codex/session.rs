@@ -2176,6 +2176,7 @@ mod tests {
             network_access: Some(true),
             summary: Some("auto".into()),
             personality: Some("none".into()),
+            service_tier: None,
         };
         c.announce_control_changes();
         assert!(

@@ -1660,7 +1660,12 @@ summary: string | null;
 /**
  * `Personality`: `none` | `friendly` | `pragmatic`.
  */
-personality: string | null }
+personality: string | null; 
+/**
+ * Service tier id (`priority` = the "Fast" 1.5× tier, or a model default). Overrides the
+ * speed/priority tier for this turn onward; unset leaves the server's current tier.
+ */
+serviceTier: string | null }
 /**
  * The outcome of a native `thread/fork` (cut at a `lastTurnId` turn boundary, inclusive):
  * the id of the freshly forked thread + its resolved model. IPC OUTPUT type
@@ -1707,7 +1712,16 @@ export type CodexModel = { id: string; displayName: string;
 /**
  * The reasoning-effort ids the model accepts (`supportedReasoningEfforts`).
  */
-efforts: string[]; defaultEffort: string | null; isDefault: boolean }
+efforts: string[]; defaultEffort: string | null; 
+/**
+ * The service tiers this model offers (`serviceTiers`); empty when it exposes none.
+ * A model with a non-default tier here gets a "Fast" chip in the composer.
+ */
+serviceTiers: CodexServiceTier[]; 
+/**
+ * The tier the backend applies when the turn names none (`defaultServiceTier`).
+ */
+defaultServiceTier: string | null; isDefault: boolean }
 /**
  * One plugin from the authoritative `plugin/installed` inventory — a WHITELIST of the
  * wire `PluginSummary` (no share context, no auth policy, no remote catalog internals).
@@ -1732,6 +1746,12 @@ export type CodexPluginsLive = { plugins: CodexPluginLive[];
  * Registered marketplace names (even empty ones), for the marketplaces view.
  */
 marketplaces: CodexMarketplaceLive[]; loadErrors: string[] }
+/**
+ * One service tier a model offers (`ModelServiceTier { id, name, description }`), e.g. a
+ * `priority` "Fast" tier ("1.5x speed, increased usage"). IPC OUTPUT type — feeds the
+ * composer's Fast chip. `name`/`description` are the backend's own display strings.
+ */
+export type CodexServiceTier = { id: string; name: string; description: string }
 /**
  * A Codex skill, flattened from `skills/list` into the shape the composer's `/` menu
  * reuses from the Claude slash-command catalogue (name + description).

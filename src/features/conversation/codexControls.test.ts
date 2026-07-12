@@ -93,7 +93,16 @@ describe("buildCodexControls (wire payload)", () => {
       approvalPolicy: "never", // from the "auto" preset
       summary: "concise",
       personality: "friendly",
+      serviceTier: null, // unset → follow the model's default tier
     });
+  });
+
+  it("folds a chosen service tier (null when unset)", () => {
+    useCodexControls.getState().set("c1", { serviceTier: "priority" });
+    expect(buildCodexControls(codexConv({ id: "c1" })).serviceTier).toBe("priority");
+    // Clearing it falls back to the model default (null on the wire).
+    useCodexControls.getState().set("c1", { serviceTier: undefined });
+    expect(buildCodexControls(codexConv({ id: "c1" })).serviceTier).toBeNull();
   });
 
   it("falls back to the Codex default model/effort when the record is empty", () => {

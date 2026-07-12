@@ -23,7 +23,7 @@ pub use accounts::{CodexAccountStatus, CodexLoginStart};
 pub use config::list_extensions;
 pub use extensions::{CodexHooksSnapshot, CodexPluginsLive};
 pub use history::{build_codex_search_index, list_codex_disk_conversations, load_thread_history};
-pub use protocol::{CodexControls, CodexForkResult, CodexModel, CodexSkill};
+pub use protocol::{CodexControls, CodexForkResult, CodexModel, CodexServiceTier, CodexSkill};
 pub use server::{CodexError, CodexServer};
 pub use session::spawn_session;
 
@@ -63,12 +63,39 @@ fn parse_model(m: &Value) -> Option<CodexModel> {
                 .collect()
         })
         .unwrap_or_default();
+    // Service tiers (`serviceTiers`): each `{id, name, description}`. A tier missing an id is
+    // skipped rather than half-built; name/description default to empty (the front hides an
+    // empty-labelled option). The deprecated `additionalSpeedTiers` (bare strings) is ignored.
+    let service_tiers = m
+        .get("serviceTiers")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| {
+                    Some(CodexServiceTier {
+                        id: t.get("id").and_then(Value::as_str)?.to_string(),
+                        name: t.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        description: t
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Some(CodexModel {
         id,
         display_name,
         efforts,
         default_effort: m
             .get("defaultReasoningEffort")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        service_tiers,
+        default_service_tier: m
+            .get("defaultServiceTier")
             .and_then(Value::as_str)
             .map(str::to_string),
         is_default: m.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
@@ -384,6 +411,12 @@ mod tests {
                 { "reasoningEffort": "medium", "description": "balanced" },
                 { "reasoningEffort": "high", "description": "deeper" },
                 { "reasoningEffort": "xhigh", "description": "deepest" }
+            ],
+            "defaultServiceTier": "default",
+            "additionalSpeedTiers": ["priority"],
+            "serviceTiers": [
+                { "id": "default", "name": "Standard", "description": "" },
+                { "id": "priority", "name": "Fast", "description": "1.5x speed, increased usage" }
             ]
         });
         let m = parse_model(&visible).expect("a visible model must parse");
@@ -392,16 +425,26 @@ mod tests {
         assert_eq!(m.efforts, vec!["low", "medium", "high", "xhigh"]);
         assert_eq!(m.default_effort.as_deref(), Some("medium"));
         assert!(m.is_default);
+        // Service tiers flattened; default tier captured.
+        assert_eq!(m.default_service_tier.as_deref(), Some("default"));
+        assert_eq!(
+            m.service_tiers.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["default", "priority"],
+        );
+        let fast = m.service_tiers.iter().find(|t| t.id == "priority").expect("priority tier");
+        assert_eq!(fast.name, "Fast");
+        assert_eq!(fast.description, "1.5x speed, increased usage");
 
         // A hidden model is dropped from the picker.
         assert!(parse_model(&json!({ "id": "gpt-internal", "hidden": true })).is_none());
         // No id → unusable → dropped (filter_map upstream).
         assert!(parse_model(&json!({ "displayName": "nameless" })).is_none());
-        // Missing displayName falls back to the id; missing efforts → empty ladder.
+        // Missing displayName falls back to the id; missing efforts/tiers → empty.
         let bare = parse_model(&json!({ "id": "gpt-5.4-mini" })).expect("bare model parses");
         assert_eq!(bare.display_name, "gpt-5.4-mini");
         assert!(bare.efforts.is_empty());
         assert!(bare.default_effort.is_none() && !bare.is_default);
+        assert!(bare.service_tiers.is_empty() && bare.default_service_tier.is_none());
     }
 
     #[test]

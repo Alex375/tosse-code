@@ -98,6 +98,10 @@ export interface CodexConvControls {
   network: boolean;
   summary: CodexSummary;
   personality: CodexPersonality;
+  /** Chosen service tier id (`serviceTiers[].id`, e.g. `priority` = the "Fast" 1.5× tier).
+   *  Absent → the model's default tier (the backend picks `defaultServiceTier`). Only
+   *  meaningful for models that expose more than one tier. */
+  serviceTier?: string;
 }
 
 const DEFAULTS: CodexConvControls = {
@@ -182,6 +186,9 @@ export function buildCodexControls(conv: Conversation): CodexControls {
     approvalPolicy: preset.approval,
     summary: cc.summary,
     personality: cc.personality,
+    // Unset → null → the backend keeps the model's default tier (Rust `apply_to` skips a
+    // `None` service tier). A chosen tier (e.g. `priority`) overrides it for this turn onward.
+    serviceTier: cc.serviceTier ?? null,
   };
 }
 

@@ -609,6 +609,10 @@ pub struct TurnStartParams {
     pub summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<String>,
+    /// The model's service tier id (e.g. `priority` for the "Fast" 1.5× tier). Accepted as a
+    /// per-turn override on `turn/start` (verified against `generate-ts` 0.144.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
 }
 
 impl TurnStartParams {
@@ -624,6 +628,7 @@ impl TurnStartParams {
             sandbox_policy: None,
             summary: None,
             personality: None,
+            service_tier: None,
         }
     }
 }
@@ -651,6 +656,9 @@ pub struct CodexControls {
     pub summary: Option<String>,
     /// `Personality`: `none` | `friendly` | `pragmatic`.
     pub personality: Option<String>,
+    /// Service tier id (`priority` = the "Fast" 1.5× tier, or a model default). Overrides the
+    /// speed/priority tier for this turn onward; unset leaves the server's current tier.
+    pub service_tier: Option<String>,
 }
 
 /// The outcome of a native `thread/fork` (cut at a `lastTurnId` turn boundary, inclusive):
@@ -664,6 +672,17 @@ pub struct CodexForkResult {
     pub model: Option<String>,
 }
 
+/// One service tier a model offers (`ModelServiceTier { id, name, description }`), e.g. a
+/// `priority` "Fast" tier ("1.5x speed, increased usage"). IPC OUTPUT type — feeds the
+/// composer's Fast chip. `name`/`description` are the backend's own display strings.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
 /// A Codex model, flattened from `model/list` for the composer's picker. IPC OUTPUT
 /// type (`specta::Type` + `Serialize`); parsed from the wire `Model` in `list_models`.
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -674,6 +693,11 @@ pub struct CodexModel {
     /// The reasoning-effort ids the model accepts (`supportedReasoningEfforts`).
     pub efforts: Vec<String>,
     pub default_effort: Option<String>,
+    /// The service tiers this model offers (`serviceTiers`); empty when it exposes none.
+    /// A model with a non-default tier here gets a "Fast" chip in the composer.
+    pub service_tiers: Vec<CodexServiceTier>,
+    /// The tier the backend applies when the turn names none (`defaultServiceTier`).
+    pub default_service_tier: Option<String>,
     pub is_default: bool,
 }
 
@@ -725,6 +749,9 @@ impl CodexControls {
         }
         if self.personality.is_some() {
             p.personality = self.personality.clone();
+        }
+        if self.service_tier.is_some() {
+            p.service_tier = self.service_tier.clone();
         }
     }
 }
@@ -971,6 +998,7 @@ mod tests {
             approval_policy: Some("never".into()),
             summary: Some("concise".into()),
             personality: Some("friendly".into()),
+            service_tier: Some("priority".into()),
         };
         let mut p = TurnStartParams::new("t".into(), vec![UserInput::text("hi")]);
         controls.apply_to(&mut p);
@@ -980,6 +1008,7 @@ mod tests {
         assert_eq!(v["approvalPolicy"], "never");
         assert_eq!(v["summary"], "concise");
         assert_eq!(v["personality"], "friendly");
+        assert_eq!(v["serviceTier"], "priority");
         // The sandbox is a TAGGED object (not a bare string), with network folded in.
         assert_eq!(v["sandboxPolicy"]["type"], "workspaceWrite");
         assert_eq!(v["sandboxPolicy"]["networkAccess"], true);
