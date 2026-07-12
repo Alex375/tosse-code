@@ -40,6 +40,15 @@ struct ActiveLogin {
 
 static ACTIVE_LOGIN: Mutex<Option<ActiveLogin>> = Mutex::const_new(None);
 
+/// Serializes the WHOLE login-start sequence (cancel → spawn → read URL → register), so two
+/// near-simultaneous `login_start` calls can't both pass the cancel and race: without it the
+/// second registration would clobber the first child WITHOUT tearing it down, leaving
+/// `ACTIVE_LOGIN` pointing at a DIFFERENT child than the URL the user authenticated against —
+/// so `login_submit_code` writes the pasted code to the wrong PKCE flow and the login fails
+/// confusingly. Mirrors the Codex sibling's `LOGIN_FLOW` (its acute reason is a callback-port
+/// race; here it's the child/URL mismatch, but the fix is the same).
+static LOGIN_FLOW: Mutex<()> = Mutex::const_new(());
+
 /// The `claude` binary, resolved like the session spawner (PATH, then well-known
 /// locations) so a Finder-launched bundle's minimal PATH still finds it.
 fn claude_bin() -> std::path::PathBuf {
@@ -110,7 +119,11 @@ pub async fn status() -> Result<ClaudeAccountStatus, String> {
 /// keep the child for the code submission, return the URL for the front to open.
 /// Any previous in-flight login is killed first (one at a time).
 pub async fn login_start() -> Result<String, String> {
-    login_cancel().await;
+    // Hold the flow lock across the WHOLE sequence (see LOGIN_FLOW). Call the INNER
+    // `cancel_current` (not the public `login_cancel`, which also takes LOGIN_FLOW) to avoid
+    // a self-deadlock, then keep the lock until ACTIVE_LOGIN is registered below.
+    let _flow = LOGIN_FLOW.lock().await;
+    cancel_current().await;
 
     let mut child = Command::new(claude_bin())
         .args(["auth", "login"])
@@ -196,6 +209,16 @@ pub async fn login_submit_code(code: &str) -> Result<(), String> {
 
 /// Cancel the in-flight login, if any (kills the child). Safe when none is running.
 pub async fn login_cancel() {
+    // Take the flow lock so a cancel arriving mid-start waits for that start to finish
+    // registering ACTIVE_LOGIN before tearing it down (rather than no-op'ing on an
+    // ACTIVE_LOGIN that isn't set yet). The kill itself is `cancel_current`.
+    let _flow = LOGIN_FLOW.lock().await;
+    cancel_current().await;
+}
+
+/// Kill the in-flight login child WITHOUT taking `LOGIN_FLOW` — for callers that already
+/// hold it (`login_start`). `login_cancel` is the lock-taking public entry point.
+async fn cancel_current() {
     if let Some(mut active) = ACTIVE_LOGIN.lock().await.take() {
         let _ = active.child.kill().await;
     }

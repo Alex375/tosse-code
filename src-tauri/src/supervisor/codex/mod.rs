@@ -193,6 +193,68 @@ fn clean_model_title(raw: &str) -> Option<String> {
     session::codex_title_from_description(unquoted)
 }
 
+/// A recognised image extension → its `media_type`, mirroring the front's `EXT_WIRE_MIME`
+/// (`composerAttachments.ts`). Codex routed an item here BECAUSE it is an image, so an
+/// unknown/absent extension still best-efforts to `image/png` rather than refusing to
+/// render.
+fn image_mime_from_path(path: &str) -> &'static str {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    }
+}
+
+/// Read an image the model viewed/produced and pack it into the
+/// `{type:"image",source:{type:"base64",media_type,data}}` block the front's
+/// `imageBlocksFromContent` (`ToolResultBody.tsx`) already renders — the SAME path a Claude
+/// `Read` of a screenshot takes. Relative paths resolve against the session `cwd`. Reuses
+/// the single fs service (`crate::fs::read_image`, 16 MiB guard). Returns the block on
+/// success, or a human note on missing / too-large / unreadable — the caller decides
+/// whether that becomes a text block or a plain-text result. Never panics, never a silent
+/// blank.
+pub(super) fn image_block(path: &str, cwd: Option<&str>) -> Result<Value, String> {
+    let resolved: PathBuf = {
+        let p = Path::new(path);
+        match (p.is_absolute(), cwd) {
+            (false, Some(base)) => Path::new(base).join(p),
+            _ => p.to_path_buf(),
+        }
+    };
+    let resolved = resolved.to_string_lossy();
+    match crate::fs::read_image(&resolved) {
+        Ok(img) if img.too_large => Err(format!("Image trop volumineuse pour l'aperçu ({} o)", img.size)),
+        Ok(img) if img.data_base64.is_empty() => Err("Image vide".to_string()),
+        Ok(img) => Ok(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image_mime_from_path(path),
+                "data": img.data_base64,
+            }
+        })),
+        Err(e) => Err(format!("Image non lisible ({e})")),
+    }
+}
+
+/// The `content` of a synthesized `tool_result` for a viewed image: a one-block image
+/// array on success, else a plain-text note (with the path). Shared by the live actor
+/// (`session.rs`, `imageView`) and the cold rollout reader (`history.rs`, `view_image`).
+pub(super) fn image_result_content(path: &str, cwd: Option<&str>) -> Value {
+    match image_block(path, cwd) {
+        Ok(block) => json!([block]),
+        Err(note) => json!(format!("{note} : {path}")),
+    }
+}
+
 /// Codex's home dir: `$CODEX_HOME` when set (a test build / non-default install), else
 /// `~/.codex`; `None` when neither resolves. The SINGLE definition shared by the
 /// rollout reader (`history.rs`) and the config snapshot (`config.rs`) so both always

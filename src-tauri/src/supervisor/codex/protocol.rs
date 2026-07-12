@@ -198,12 +198,14 @@ pub struct FileUpdateChange {
     pub diff: String,
 }
 
-/// A thread content item. Phase 4.1 models the item types a normal coding turn produces
-/// (assistant text, reasoning, shell commands, file edits, MCP tool calls, plan, web
-/// search); every other `type` (dynamicToolCall, collabAgentToolCall, imageView, review
-/// modes, …) decodes to [`ThreadItem::Unknown`] — rendered generically or ignored, never
-/// a hard parse error (tolerance rule 3). Field-level defaults keep a drifting item from
-/// failing the whole `item/*` decode.
+/// A thread content item. Models every item type a Codex turn produces: assistant text,
+/// reasoning, shell commands, file edits, MCP tool calls, plan, web search (enriched with
+/// its search action), image view/generation, dynamic + collab (multi-agent) tool calls,
+/// sub-agent activity, sleep, review-mode boundaries and context compaction. Only a genuine
+/// FUTURE type falls to [`ThreadItem::Unknown`] — which `on_item` STILL surfaces as a
+/// generic named card (never a silent drop). Field-level defaults + raw [`Value`] for
+/// nested tagged unions keep a drifting item from failing the whole `item/*` decode
+/// (tolerance rule 3).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ThreadItem {
@@ -270,13 +272,121 @@ pub enum ThreadItem {
         #[serde(default)]
         text: String,
     },
-    /// A web search → a `WebSearch` tool card.
+    /// A web search → a `WebSearch` tool card. `action` (a tagged `WebSearchAction`:
+    /// `search{query,queries}` / `open_page{url}` / `find_in_page{url,pattern}` / `other`)
+    /// is kept raw ([`Value`], tolerance rule 3) and folded into the card so the opened
+    /// page / searched queries surface instead of just the bare query string.
     WebSearch {
         id: String,
         #[serde(default)]
         query: String,
+        #[serde(default)]
+        action: Value,
     },
-    /// Any item type phase 4.1 does not specialize.
+    /// A local image the model viewed (the `view_image` tool). Carries the file PATH
+    /// (`LegacyAppPathString`), NOT bytes — the actor reads it and inlines a base64 image
+    /// block so the front's existing image renderer shows a thumbnail.
+    ImageView {
+        id: String,
+        #[serde(default)]
+        path: String,
+    },
+    /// An image the model PRODUCED (image-generation tool, on by default since 0.144.0).
+    /// `saved_path` is the file on disk (read → thumbnail); `result` may hold a data-URL or
+    /// an opaque id/url surfaced as text; `revised_prompt` is the prompt actually used.
+    #[serde(rename_all = "camelCase")]
+    ImageGeneration {
+        id: String,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        revised_prompt: Option<String>,
+        #[serde(default)]
+        result: Option<String>,
+        #[serde(default)]
+        saved_path: Option<String>,
+    },
+    /// A dynamic (plugin/namespaced) tool call → a generic card named `<namespace>:<tool>`.
+    /// `content_items` (text / image outputs) are kept raw and mapped to the tool_result.
+    #[serde(rename_all = "camelCase")]
+    DynamicToolCall {
+        id: String,
+        #[serde(default)]
+        namespace: Option<String>,
+        #[serde(default)]
+        tool: String,
+        #[serde(default)]
+        arguments: Value,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        content_items: Option<Vec<Value>>,
+        #[serde(default)]
+        success: Option<bool>,
+        #[serde(default)]
+        duration_ms: Option<i64>,
+    },
+    /// A multi-agent (collab) tool call → a generic `Collab:<tool>` card here. The unified
+    /// sub-agent bar + fleet integration (`agentsStates` / thread routing) is Phase 4.5,
+    /// blocked on 4.1 — this task's mandate is only "never a silent drop".
+    #[serde(rename_all = "camelCase")]
+    CollabAgentToolCall {
+        id: String,
+        #[serde(default)]
+        tool: String,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        sender_thread_id: Option<String>,
+        #[serde(default)]
+        receiver_thread_ids: Vec<String>,
+        #[serde(default)]
+        prompt: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        reasoning_effort: Option<String>,
+        #[serde(default)]
+        agents_states: Value,
+    },
+    /// A sub-agent lifecycle marker (started / interacted / interrupted) → a compact card.
+    #[serde(rename_all = "camelCase")]
+    SubAgentActivity {
+        id: String,
+        #[serde(default)]
+        kind: String,
+        #[serde(default)]
+        agent_thread_id: Option<String>,
+        #[serde(default)]
+        agent_path: Option<String>,
+    },
+    /// The agent pausing (a `wait`/`sleep` step) → a small card showing the duration.
+    #[serde(rename_all = "camelCase")]
+    Sleep {
+        id: String,
+        #[serde(default)]
+        duration_ms: Option<i64>,
+    },
+    /// Review-mode boundaries → compact marker cards (never silently dropped).
+    EnteredReviewMode {
+        id: String,
+        #[serde(default)]
+        review: String,
+    },
+    ExitedReviewMode {
+        id: String,
+        #[serde(default)]
+        review: String,
+    },
+    /// A context-compaction boundary → a compact marker card.
+    ContextCompaction { id: String },
+    /// The user's own message / a hook-injected prompt echoed as items. NOT model tool work
+    /// (the front already renders the user turn optimistically) → intentionally no-op, but
+    /// modelled explicitly so they never trip the generic residue card in `on_item`.
+    UserMessage,
+    HookPrompt,
+    /// Any FUTURE item type this build does not model. `on_item` still surfaces it as a
+    /// generic named card (from the raw `type`) — never a silent drop.
     #[serde(other)]
     Unknown,
 }
@@ -715,15 +825,33 @@ mod tests {
 
     #[test]
     fn unmodelled_thread_item_decodes_to_unknown_not_error() {
-        // An item type phase 4.1 does not specialize (dynamicToolCall) must decode, not fail.
+        // A GENUINELY unknown/future item type must decode to Unknown, not fail — the actor
+        // still surfaces it as a generic card (never a silent drop).
         let p: ItemEnvelope = serde_json::from_value(
-            json!({"item":{"type":"dynamicToolCall","id":"d1","tool":"x","arguments":{}}}),
+            json!({"item":{"type":"quantumTool","id":"q1","payload":42}}),
         )
         .unwrap();
         assert!(matches!(p.item, ThreadItem::Unknown));
-        // The assistant text item round-trips with its text.
+        // dynamicToolCall (previously Unknown) is now modelled with its camelCase fields.
+        let d: ItemEnvelope = serde_json::from_value(
+            json!({"item":{"type":"dynamicToolCall","id":"d1","namespace":"plugins","tool":"lint","arguments":{},"contentItems":[],"durationMs":5}}),
+        )
+        .unwrap();
+        assert!(matches!(d.item, ThreadItem::DynamicToolCall { tool, namespace, .. } if tool == "lint" && namespace.as_deref() == Some("plugins")));
+        // imageView carries the file path; the user echo / hook prompt decode to no-op variants.
+        let iv: ItemEnvelope = serde_json::from_value(
+            json!({"item":{"type":"imageView","id":"iv1","path":"/tmp/a.png"}}),
+        )
+        .unwrap();
+        assert!(matches!(iv.item, ThreadItem::ImageView { path, .. } if path == "/tmp/a.png"));
+        let um: ItemEnvelope = serde_json::from_value(
+            json!({"item":{"type":"userMessage","id":"u1","clientId":null,"content":[]}}),
+        )
+        .unwrap();
+        assert!(matches!(um.item, ThreadItem::UserMessage));
+        // The assistant text item round-trips with its text (extra wire fields ignored).
         let p2: ItemEnvelope =
-            serde_json::from_value(json!({"item":{"type":"agentMessage","id":"m1","text":"hi"}})).unwrap();
+            serde_json::from_value(json!({"item":{"type":"agentMessage","id":"m1","text":"hi","phase":"final_answer"}})).unwrap();
         assert!(matches!(p2.item, ThreadItem::AgentMessage { text, .. } if text == "hi"));
     }
 

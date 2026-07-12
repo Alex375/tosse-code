@@ -14,6 +14,10 @@ interface DiffViewProps {
    *  directly instead of computing an LCS line diff from old/new text — the diff is already
    *  authoritative, so this is the path for a backend that ships a unified diff string. */
   lines?: DiffLine[];
+  /** The change kind (`add` | `update` | `delete`). A `delete` ships no diff content, so
+   *  without this it would render as a misleading empty `+0 −0` — the marker makes it read
+   *  as a deletion. */
+  kind?: string;
 }
 
 /**
@@ -22,7 +26,7 @@ interface DiffViewProps {
  * pre-parsed `lines` (Codex ships a unified diff). Phase 2 swaps in the Monaco diff editor
  * once the editor pane ships it.
  */
-export function DiffView({ path, oldText, newText = "", lines: preParsed }: DiffViewProps) {
+export function DiffView({ path, oldText, newText = "", lines: preParsed, kind }: DiffViewProps) {
   const lines = useMemo(
     () => preParsed ?? (oldText == null ? [] : lineDiff(oldText, newText)),
     [preParsed, oldText, newText],
@@ -31,13 +35,19 @@ export function DiffView({ path, oldText, newText = "", lines: preParsed }: Diff
   // A diff is shown whenever there's a "before" (oldText) OR pre-parsed lines; only a bare
   // Write (new content, no diff) renders as a plain block.
   const hasDiff = preParsed != null || oldText != null;
+  // A deletion ships no diff content → render a distinct marker instead of a bogus +0 −0.
+  const isDelete = kind === "delete";
 
   return (
     <div className={styles.diff}>
       {path && (
         <div className={styles.header}>
           <MentionPathChip path={path} className={styles.path} display={basename(path)} />
-          {hasDiff ? (
+          {isDelete ? (
+            <span className={styles.summary}>
+              <span className={styles.removed}>fichier supprimé</span>
+            </span>
+          ) : hasDiff ? (
             <span className={styles.summary}>
               <span className={styles.added}>+{counts.added}</span>{" "}
               <span className={styles.removed}>−{counts.removed}</span>
@@ -50,7 +60,7 @@ export function DiffView({ path, oldText, newText = "", lines: preParsed }: Diff
 
       {!hasDiff ? (
         <pre className={styles.writePre}>{newText}</pre>
-      ) : (
+      ) : lines.length > 0 ? (
         <div className={styles.lines}>
           <div className={styles.linesInner}>
             {lines.map((l, idx) => (
@@ -64,7 +74,7 @@ export function DiffView({ path, oldText, newText = "", lines: preParsed }: Diff
             ))}
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

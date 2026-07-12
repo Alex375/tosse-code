@@ -909,7 +909,44 @@ impl CodexCore {
         // here, and tagging it with the new turn would make native rewind/fork cut at the
         // wrong boundary. Read before `from_value` consumes `params`.
         let item_turn = params.get("turnId").and_then(Value::as_str).map(str::to_string);
+        // Captured BEFORE `from_value` consumes `params`: the raw `type`/`id` let the
+        // `Unknown` arm surface a FUTURE (unmodelled) item as a generic card instead of a
+        // silent drop.
+        let raw_type = params
+            .get("item")
+            .and_then(|i| i.get("type"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let raw_id = params
+            .get("item")
+            .and_then(|i| i.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let Ok(env) = serde_json::from_value::<ItemEnvelope>(params) else {
+            // A KNOWN-tag item whose fields drifted on the wire (a present-but-wrong-typed
+            // field, or a missing required `id`) fails to decode. `#[serde(default)]` fills a
+            // MISSING field but never a wrong-TYPED one, and the `Unknown` arm below only
+            // catches an unknown TAG — so without this, such an item would be dropped in
+            // silence, violating this module's "never a silent drop" contract. Reuse the
+            // captured raw type/id to surface a generic card (keyed by the item's own id when
+            // present, else a visible protocol notice), marked as an error since the item is
+            // genuinely UNREADABLE, not merely unmodelled.
+            match raw_id.as_deref() {
+                Some(id) => {
+                    let name = raw_type.as_deref().unwrap_or("codexItem");
+                    self.ensure_tool_use(id, name, json!({}), item_turn.as_deref());
+                    if completed {
+                        self.emit_tool_result(id, json!(format!("Item Codex illisible : {name}")), true);
+                    }
+                }
+                None => {
+                    let ty = raw_type.as_deref().unwrap_or("inconnu");
+                    self.emit_notice(
+                        "protocol_error",
+                        &format!("Un élément Codex ({ty}) n'a pas pu être décodé et n'est pas affiché."),
+                    );
+                }
+            }
             return;
         };
         match env.item {
@@ -993,16 +1030,235 @@ impl CodexCore {
                     self.emit_tool_result(&id, content, is_error);
                 }
             }
-            ThreadItem::WebSearch { id, query } => {
-                self.ensure_tool_use(&id, "WebSearch", json!({ "query": query }), item_turn.as_deref());
+            ThreadItem::WebSearch { id, query, action } => {
+                self.ensure_tool_use(
+                    &id,
+                    "WebSearch",
+                    json!({ "query": query, "action": action }),
+                    item_turn.as_deref(),
+                );
                 if completed {
-                    self.emit_tool_result(&id, json!({ "query": query }), false);
+                    // The result TEXT is what `WebSearchDetail` parses for source chips, so
+                    // fold the query + opened page / searched queries into it (URLs as
+                    // markdown links → they render as sources).
+                    self.emit_tool_result(&id, json!(web_search_result_text(&query, &action)), false);
                 }
             }
 
-            // Unmodelled item types (dynamicToolCall, collabAgentToolCall, imageView, review
-            // modes, …) render generically or not at all in phase 4.1 — never a hard error.
-            ThreadItem::Unknown => {}
+            // A local image the model viewed → a `Read` card (its label surfaces the path)
+            // whose result carries the base64 image block, reusing the Claude screenshot
+            // renderer verbatim. Read on completion via the shared fs service.
+            ThreadItem::ImageView { id, path } => {
+                self.ensure_tool_use(&id, "Read", json!({ "file_path": path }), item_turn.as_deref());
+                if completed {
+                    let content = super::image_result_content(&path, self.state.cwd.as_deref());
+                    self.emit_tool_result(&id, content, false);
+                }
+            }
+            // An image the model produced → an `ImageGeneration` card with the revised
+            // prompt + the produced image (from `saved_path`, else the `result` payload).
+            ThreadItem::ImageGeneration {
+                id,
+                status,
+                revised_prompt,
+                result,
+                saved_path,
+            } => {
+                self.ensure_tool_use(
+                    &id,
+                    "ImageGeneration",
+                    json!({ "status": status, "revised_prompt": revised_prompt }),
+                    item_turn.as_deref(),
+                );
+                if completed {
+                    let mut blocks: Vec<Value> = Vec::new();
+                    if let Some(p) = revised_prompt.as_deref().filter(|p| !p.is_empty()) {
+                        blocks.push(json!({ "type": "text", "text": format!("Prompt : {p}") }));
+                    }
+                    match saved_path.as_deref() {
+                        Some(p) => match super::image_block(p, self.state.cwd.as_deref()) {
+                            Ok(b) => blocks.push(b),
+                            Err(note) => {
+                                blocks.push(json!({ "type": "text", "text": format!("{note} : {p}") }))
+                            }
+                        },
+                        None => {
+                            // No saved file: `result` may be a data-URL image or an opaque
+                            // id/url — inline the image if we can, else surface it as text.
+                            let r = result.unwrap_or_default();
+                            match data_url_image_block(&r) {
+                                Some(b) => blocks.push(b),
+                                None if !r.is_empty() => {
+                                    blocks.push(json!({ "type": "text", "text": format!("Résultat : {r}") }))
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                    let is_error = status_is_error(status.as_deref());
+                    let content = if blocks.is_empty() {
+                        json!("Image générée.")
+                    } else {
+                        json!(blocks)
+                    };
+                    self.emit_tool_result(&id, content, is_error);
+                }
+            }
+            // A dynamic (plugin/namespaced) tool call → a generic card named after the tool.
+            ThreadItem::DynamicToolCall {
+                id,
+                namespace,
+                tool,
+                arguments,
+                status,
+                content_items,
+                success,
+                ..
+            } => {
+                let name = match namespace.as_deref().filter(|ns| !ns.is_empty()) {
+                    Some(ns) => format!("{ns}:{tool}"),
+                    None => tool.clone(),
+                };
+                self.ensure_tool_use(&id, &name, json!({ "arguments": arguments }), item_turn.as_deref());
+                if completed {
+                    let is_error = success == Some(false) || status_is_error(status.as_deref());
+                    self.emit_tool_result(&id, dynamic_tool_content(content_items.as_deref()), is_error);
+                }
+            }
+            // A multi-agent (collab) tool call → a generic `Collab:<tool>` card. The unified
+            // sub-agent bar / fleet integration is Phase 4.5 (blocked on 4.1); here we only
+            // guarantee it is visible instead of silently dropped.
+            ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+                ..
+            } => {
+                let name = collab_action_fr(&tool);
+                self.ensure_tool_use(
+                    &id,
+                    &name,
+                    json!({
+                        "tool": tool,
+                        "model": model,
+                        "reasoning_effort": reasoning_effort,
+                        "receivers": receiver_thread_ids,
+                    }),
+                    item_turn.as_deref(),
+                );
+                if completed {
+                    let mut lines: Vec<String> = Vec::new();
+                    if let Some(p) = prompt.as_deref().filter(|p| !p.is_empty()) {
+                        lines.push(format!("Tâche confiée : {p}"));
+                    }
+                    let mut model_line = String::new();
+                    if let Some(m) = model.as_deref().filter(|m| !m.is_empty()) {
+                        model_line = format!("Modèle : {m}");
+                    }
+                    if let Some(e) = reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
+                        model_line.push_str(if model_line.is_empty() {
+                            ""
+                        } else {
+                            " · "
+                        });
+                        model_line.push_str(&format!("effort {e}"));
+                    }
+                    if !model_line.is_empty() {
+                        lines.push(model_line);
+                    }
+                    if let Some(summary) = collab_states_summary(&agents_states) {
+                        lines.push(summary);
+                    }
+                    let content = if lines.is_empty() {
+                        json!(name)
+                    } else {
+                        json!(lines.join("\n"))
+                    };
+                    self.emit_tool_result(&id, content, status_is_error(status.as_deref()));
+                }
+            }
+            // A sub-agent lifecycle marker → a compact card. Instantaneous, so the result is
+            // emitted unconditionally (idempotent) rather than gated on `completed`.
+            ThreadItem::SubAgentActivity {
+                id,
+                kind,
+                agent_path,
+                ..
+            } => {
+                self.ensure_tool_use(
+                    &id,
+                    "Sous-agent",
+                    json!({ "kind": kind, "agent_path": agent_path }),
+                    item_turn.as_deref(),
+                );
+                let kind_fr = subagent_kind_fr(&kind);
+                let path = agent_path.as_deref().unwrap_or("");
+                let name = agent_name(path);
+                let headline = if name.is_empty() {
+                    format!("Sous-agent {kind_fr}")
+                } else {
+                    format!("Sous-agent « {name} » {kind_fr}")
+                };
+                // Keep the full path as a second line when it adds info beyond the short name.
+                let body = if path.is_empty() || path == name {
+                    headline
+                } else {
+                    format!("{headline}\n{path}")
+                };
+                self.emit_tool_result(&id, json!(body), false);
+            }
+            // The agent pausing → a small card showing the duration.
+            ThreadItem::Sleep { id, duration_ms } => {
+                self.ensure_tool_use(&id, "Sleep", json!({ "duration_ms": duration_ms }), item_turn.as_deref());
+                if completed {
+                    let msg = match duration_ms {
+                        Some(ms) => format!("Pause de {:.1} s", ms as f64 / 1000.0),
+                        None => "Pause".to_string(),
+                    };
+                    self.emit_tool_result(&id, json!(msg), false);
+                }
+            }
+            // Review-mode boundaries + compaction → compact marker cards (instantaneous →
+            // result unconditional).
+            ThreadItem::EnteredReviewMode { id, review } => {
+                self.ensure_tool_use(&id, "ReviewMode", json!({ "review": review }), item_turn.as_deref());
+                self.emit_tool_result(&id, json!(format!("Entrée en mode revue : {review}").trim()), false);
+            }
+            ThreadItem::ExitedReviewMode { id, review } => {
+                self.ensure_tool_use(&id, "ReviewMode", json!({ "review": review }), item_turn.as_deref());
+                self.emit_tool_result(&id, json!(format!("Sortie du mode revue : {review}").trim()), false);
+            }
+            ThreadItem::ContextCompaction { id } => {
+                self.ensure_tool_use(&id, "Compaction", json!({}), item_turn.as_deref());
+                self.emit_tool_result(&id, json!("Conversation compactée."), false);
+            }
+
+            // The user's own echoed message / a hook-injected prompt: NOT model tool work
+            // (the front already renders the user turn). Intentionally no-op — modelled
+            // explicitly so they never trip the generic residue below.
+            ThreadItem::UserMessage | ThreadItem::HookPrompt => {}
+
+            // A FUTURE item type this build does not model → a generic card named after the
+            // raw wire `type`, keyed by the item's own id. Never a silent drop; a signal to
+            // model it. Emitted once (on completion) to avoid a duplicate on `started`.
+            ThreadItem::Unknown => {
+                if let Some(id) = raw_id.as_deref() {
+                    let name = raw_type.as_deref().unwrap_or("codexItem");
+                    self.ensure_tool_use(id, name, json!({}), item_turn.as_deref());
+                    if completed {
+                        self.emit_tool_result(
+                            id,
+                            json!(format!("Item Codex non modélisé : {name}")),
+                            false,
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -1145,6 +1401,184 @@ impl CodexCore {
 /// `CommandExecutionStatus` share these strings). `inProgress`/`completed` are not errors.
 fn status_is_error(status: Option<&str>) -> bool {
     matches!(status, Some(s) if s.eq_ignore_ascii_case("failed") || s.eq_ignore_ascii_case("declined") || s.eq_ignore_ascii_case("error"))
+}
+
+/// A `CollabAgentTool` action → a human card label. The full sub-agent-as-background-task
+/// treatment (transcript, live status, fleet) is Phase 4.5; here the card just reads clearly.
+fn collab_action_fr(tool: &str) -> String {
+    match tool {
+        "spawnAgent" => "Lancement d'un sous-agent".to_string(),
+        "sendInput" => "Message à un sous-agent".to_string(),
+        "resumeAgent" => "Reprise d'un sous-agent".to_string(),
+        "wait" => "Attente d'un sous-agent".to_string(),
+        "closeAgent" => "Fermeture d'un sous-agent".to_string(),
+        other => format!("Sous-agent : {other}"),
+    }
+}
+
+/// A `CollabAgentStatus` → a French word for the card body.
+fn collab_status_fr(status: &str) -> &'static str {
+    match status {
+        "pendingInit" => "en attente",
+        "running" => "en cours",
+        "interrupted" => "interrompu",
+        "completed" => "terminé",
+        "errored" => "en erreur",
+        "shutdown" => "arrêté",
+        "notFound" => "introuvable",
+        _ => "état inconnu",
+    }
+}
+
+/// A `SubAgentActivityKind` → a French verb for the card body.
+fn subagent_kind_fr(kind: &str) -> &'static str {
+    match kind {
+        "started" => "démarré",
+        "interacted" => "a interagi",
+        "interrupted" => "interrompu",
+        _ => "activité",
+    }
+}
+
+/// The readable tail of a sub-agent path (`/root/react_frontend` → `react_frontend`).
+fn agent_name(path: &str) -> &str {
+    let trimmed = path.trim_end_matches('/');
+    trimmed.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(trimmed)
+}
+
+/// Summarize a `collabAgentToolCall`'s `agentsStates` ({threadId:{status,message}}) as a
+/// count-by-status line ("Sous-agents (2) : 1 en cours, 1 terminé"). `None` when empty.
+fn collab_states_summary(states: &Value) -> Option<String> {
+    let obj = states.as_object().filter(|o| !o.is_empty())?;
+    let mut counts: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
+    for v in obj.values() {
+        let st = v.get("status").and_then(Value::as_str).unwrap_or("");
+        *counts.entry(collab_status_fr(st)).or_insert(0) += 1;
+    }
+    let detail = counts
+        .iter()
+        .map(|(label, n)| format!("{n} {label}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("Sous-agents ({}) : {detail}", obj.len()))
+}
+
+/// A `data:<mime>;base64,<data>` URL → the inline image block the front renders. Only a
+/// base64 data-URL is inlineable (an `http(s)` url would be skipped by the front's
+/// `source.type:"url"` guard) — returns `None` otherwise so the caller falls back to text.
+fn data_url_image_block(url: &str) -> Option<Value> {
+    let rest = url.strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(',')?;
+    if !meta.contains("base64") {
+        return None;
+    }
+    let media_type = meta.split(';').next().filter(|m| !m.is_empty()).unwrap_or("image/png");
+    Some(json!({
+        "type": "image",
+        "source": { "type": "base64", "media_type": media_type, "data": data },
+    }))
+}
+
+/// Map a `dynamicToolCall`'s `contentItems` (`inputText` / `inputImage`) to a `tool_result`
+/// content array: text blocks verbatim, data-URL images inlined (else surfaced as a text
+/// mention), so nothing the tool returned is dropped. Empty / absent → a neutral note.
+fn dynamic_tool_content(items: Option<&[Value]>) -> Value {
+    let Some(items) = items.filter(|i| !i.is_empty()) else {
+        return json!("(sans sortie)");
+    };
+    let mut out: Vec<Value> = Vec::new();
+    for it in items {
+        match it.get("type").and_then(Value::as_str) {
+            Some("inputText") => {
+                let text = it.get("text").and_then(Value::as_str).unwrap_or("");
+                out.push(json!({ "type": "text", "text": text }));
+            }
+            Some("inputImage") => {
+                let url = it.get("imageUrl").and_then(Value::as_str).unwrap_or("");
+                match data_url_image_block(url) {
+                    Some(block) => out.push(block),
+                    None => out.push(json!({ "type": "text", "text": format!("[image] {url}") })),
+                }
+            }
+            _ => out.push(json!({ "type": "text", "text": it.to_string() })),
+        }
+    }
+    json!(out)
+}
+
+/// Build the `WebSearch` card's result TEXT from the query + its `WebSearchAction`. The
+/// front's `WebSearchDetail` parses this text for markdown links → source chips, so an
+/// opened/searched page is emitted as `[host](url)`. Enriches the bare-query card
+/// (`webSearch` gained `action` in 0.144.1).
+fn web_search_result_text(query: &str, action: &Value) -> String {
+    // Emit the SAME shape a Claude WebSearch result takes so it flows through the identical
+    // `WebSearchDetail` renderer: a `Links: [{title,url}]` JSON array → favicon source chips,
+    // plus a text summary. Codex's item carries only the searched queries / opened URL (no
+    // result set), so a `search` yields a query summary (no chips) while `open_page` /
+    // `find_in_page` yield one source chip for the page the model actually visited.
+    let host = |url: &str| -> String {
+        url.split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(url)
+            .split('/')
+            .next()
+            .unwrap_or(url)
+            .to_string()
+    };
+    let links_line = |url: &str| format!("Links: {}", json!([{ "title": host(url), "url": url }]));
+    match action.get("type").and_then(Value::as_str) {
+        Some("open_page") => match action.get("url").and_then(Value::as_str) {
+            Some(url) => links_line(url),
+            None => String::new(),
+        },
+        Some("find_in_page") => {
+            let pattern = action.get("pattern").and_then(Value::as_str).unwrap_or("");
+            let note = if pattern.is_empty() {
+                String::new()
+            } else {
+                format!("\n\nRecherche « {pattern} » dans la page.")
+            };
+            match action.get("url").and_then(Value::as_str) {
+                Some(url) => format!("{}{note}", links_line(url)),
+                None if !pattern.is_empty() => format!("Recherche « {pattern} » dans la page."),
+                None => String::new(),
+            }
+        }
+        Some("search") => {
+            let queries: Vec<String> = action
+                .get("queries")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|q| q.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let list: Vec<String> = if !queries.is_empty() {
+                queries
+            } else {
+                action
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .filter(|q| !q.is_empty())
+                    .or(if query.is_empty() { None } else { Some(query) })
+                    .map(|q| vec![q.to_string()])
+                    .unwrap_or_default()
+            };
+            match list.len() {
+                0 => String::new(),
+                1 => format!("Recherche : {}", list[0]),
+                _ => format!(
+                    "Recherches :\n{}",
+                    list.iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
+                ),
+            }
+        }
+        // Unknown/absent action → fall back to the bare query (never blank if we know it).
+        _ => {
+            if query.is_empty() {
+                String::new()
+            } else {
+                format!("Recherche : {query}")
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1999,6 +2433,225 @@ mod tests {
         let items = items(&sink);
         assert!(has_tool_use(&items, "mcp__tosse__get_tasks", "x1"));
         assert!(matches!(tool_result(&items, "x1"), Some(ConversationItem::ToolResult { is_error: false, .. })));
+    }
+
+    /// The result `content` of the tool card keyed `id`, for asserting on synthesized cards.
+    fn result_content<'a>(items: &'a [ConversationItem], id: &str) -> Option<&'a Value> {
+        items.iter().find_map(|i| match i {
+            ConversationItem::ToolResult { tool_use_id, content, .. } if tool_use_id == id => Some(content),
+            _ => None,
+        })
+    }
+
+    /// A unique temp file holding `bytes`, so `read_image` has something real to encode.
+    fn temp_image(tag: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("tosse_codex_item_{tag}.png"));
+        std::fs::write(&p, bytes).expect("write temp image");
+        p
+    }
+
+    #[test]
+    fn image_view_maps_to_read_card_with_inline_image_block() {
+        let path = temp_image("iv", b"\x89PNG\r\n\x1a\nfake-bytes");
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"imageView","id":"iv1","path": path.to_string_lossy()}}),
+        );
+        let items = items(&sink);
+        // Rendered as a Read card (its label surfaces the path) — the SAME vehicle as a
+        // Claude screenshot read — carrying the base64 image block the front already renders.
+        assert!(has_tool_use(&items, "Read", "iv1"));
+        match result_content(&items, "iv1") {
+            Some(content) => {
+                let arr = content.as_array().expect("image result is an array");
+                assert_eq!(arr[0]["type"], "image");
+                assert_eq!(arr[0]["source"]["type"], "base64");
+                assert_eq!(arr[0]["source"]["media_type"], "image/png");
+                assert!(arr[0]["source"]["data"].as_str().is_some_and(|d| !d.is_empty()));
+            }
+            None => panic!("expected a ToolResult for iv1"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn image_view_missing_file_degrades_to_text_note_never_a_blank_card() {
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"imageView","id":"iv2","path":"/nope/does-not-exist.png"}}),
+        );
+        let items = items(&sink);
+        assert!(has_tool_use(&items, "Read", "iv2"));
+        let content = result_content(&items, "iv2").expect("a ToolResult for iv2");
+        // Not an image array — a human note that still names the path (never a silent blank).
+        assert!(content.as_str().is_some_and(|s| s.contains("does-not-exist.png")));
+    }
+
+    #[test]
+    fn image_generation_card_carries_prompt_and_produced_image() {
+        let path = temp_image("ig", b"generated-bytes");
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"imageGeneration","id":"ig1","status":"completed","revisedPrompt":"a red fox","result":"","savedPath": path.to_string_lossy()}}),
+        );
+        let items = items(&sink);
+        assert!(has_tool_use(&items, "ImageGeneration", "ig1"));
+        let arr = result_content(&items, "ig1").and_then(Value::as_array).expect("array content");
+        assert!(arr.iter().any(|b| b["type"] == "text" && b["text"].as_str().is_some_and(|t| t.contains("a red fox"))));
+        assert!(arr.iter().any(|b| b["type"] == "image"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dynamic_tool_call_maps_to_namespaced_generic_card() {
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"dynamicToolCall","id":"dt1","namespace":"plugins","tool":"lint","arguments":{"file":"a.rs"},"status":"completed","success":true,"contentItems":[{"type":"inputText","text":"no issues found"}]}}),
+        );
+        let items = items(&sink);
+        assert!(has_tool_use(&items, "plugins:lint", "dt1"));
+        let arr = result_content(&items, "dt1").and_then(Value::as_array).expect("array content");
+        assert!(arr.iter().any(|b| b["text"].as_str() == Some("no issues found")));
+        assert!(matches!(tool_result(&items, "dt1"), Some(ConversationItem::ToolResult { is_error: false, .. })));
+    }
+
+    #[test]
+    fn dynamic_tool_call_failure_marks_result_as_error() {
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"dynamicToolCall","id":"dt2","tool":"deploy","arguments":{},"status":"failed","success":false}}),
+        );
+        let items = items(&sink);
+        assert!(has_tool_use(&items, "deploy", "dt2"));
+        assert!(matches!(tool_result(&items, "dt2"), Some(ConversationItem::ToolResult { is_error: true, .. })));
+    }
+
+    #[test]
+    fn collab_agent_tool_call_renders_a_readable_spawn_card() {
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"collabAgentToolCall","id":"co1","tool":"spawnAgent","status":"completed","senderThreadId":"s","receiverThreadIds":["r1","r2"],"prompt":"refactor the auth module","model":"gpt-5.6","reasoningEffort":"ultra","agentsStates":{"r1":{"status":"running"},"r2":{"status":"completed"}}}}),
+        );
+        let items = items(&sink);
+        assert!(has_tool_use(&items, "Lancement d'un sous-agent", "co1"), "readable French action label");
+        let text = result_content(&items, "co1").and_then(Value::as_str).expect("collab card body");
+        assert!(text.contains("refactor the auth module"), "the delegated task is shown");
+        assert!(text.contains("gpt-5.6") && text.contains("ultra"), "model + effort shown");
+        assert!(text.contains("Sous-agents (2)") && text.contains("1 en cours") && text.contains("1 terminé"), "states summarized, not raw JSON");
+    }
+
+    #[test]
+    fn sleep_and_review_and_compaction_render_marker_cards() {
+        let (mut c, sink) = core();
+        c.on_notification("item/completed", json!({"item":{"type":"sleep","id":"sl1","durationMs":2500}}));
+        c.on_notification("item/completed", json!({"item":{"type":"enteredReviewMode","id":"rm1","review":"security"}}));
+        c.on_notification("item/completed", json!({"item":{"type":"contextCompaction","id":"cc1"}}));
+        c.on_notification("item/completed", json!({"item":{"type":"subAgentActivity","id":"sa1","kind":"started","agentThreadId":"t","agentPath":"agents/foo"}}));
+        let items = items(&sink);
+        assert!(has_tool_use(&items, "Sleep", "sl1"));
+        assert!(result_content(&items, "sl1").and_then(Value::as_str).is_some_and(|s| s.contains("2.5")));
+        assert!(has_tool_use(&items, "ReviewMode", "rm1"));
+        assert!(result_content(&items, "rm1").and_then(Value::as_str).is_some_and(|s| s.contains("security")));
+        assert!(has_tool_use(&items, "Compaction", "cc1"));
+        assert!(has_tool_use(&items, "Sous-agent", "sa1"));
+        // The bare path is turned into a readable name + a French verb.
+        assert!(result_content(&items, "sa1").and_then(Value::as_str).is_some_and(|s| s.contains("« foo »") && s.contains("démarré")));
+    }
+
+    #[test]
+    fn web_search_open_page_renders_a_claude_style_source_chip() {
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"webSearch","id":"ws1","query":"","action":{"type":"open_page","url":"https://serde.rs/enum-representations.html"}}}),
+        );
+        let items = items(&sink);
+        assert!(has_tool_use(&items, "WebSearch", "ws1"));
+        let text = result_content(&items, "ws1").and_then(Value::as_str).expect("web result text");
+        // Same `Links: [{title,url}]` shape a Claude WebSearch takes → parseWebSearch chips it.
+        assert!(text.starts_with("Links: ["), "emits the Claude Links array shape");
+        assert!(text.contains("\"url\":\"https://serde.rs/enum-representations.html\""), "carries the visited URL");
+        assert!(text.contains("\"title\":\"serde.rs\""), "host as the chip title");
+    }
+
+    #[test]
+    fn web_search_search_action_lists_the_queries() {
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"webSearch","id":"ws2","query":"","action":{"type":"search","query":"gpt-5.6 release","queries":["gpt-5.6 release","openai gpt-5.6 docs"]}}}),
+        );
+        let items = items(&sink);
+        assert!(has_tool_use(&items, "WebSearch", "ws2"));
+        let text = result_content(&items, "ws2").and_then(Value::as_str).expect("web result text");
+        // A search has no result set → the queries are surfaced as a summary (no fake chips).
+        assert!(!text.contains("Links:"), "a bare search emits no source chips");
+        assert!(text.contains("gpt-5.6 release") && text.contains("openai gpt-5.6 docs"), "lists the searched queries");
+    }
+
+    #[test]
+    fn unknown_future_item_surfaces_a_generic_card_never_a_silent_drop() {
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"quantumTool","id":"q1","payload":42}}),
+        );
+        let items = items(&sink);
+        // A type this build does not model still gets a named card keyed by its own id.
+        assert!(has_tool_use(&items, "quantumTool", "q1"));
+        assert!(result_content(&items, "q1").and_then(Value::as_str).is_some_and(|s| s.contains("non modélisé")));
+    }
+
+    #[test]
+    fn a_known_item_with_a_drifted_field_surfaces_a_card_not_a_silent_drop() {
+        // A future wire drift on a MODELED item (here commandExecution.exitCode arrives as a
+        // string, not an i64) makes ItemEnvelope decode fail. It must NOT vanish: the raw
+        // type/id surface a generic error card, honoring "never a silent drop" even when the
+        // whole-item decode fails (not just for an unknown tag).
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"commandExecution","id":"cx1","command":"ls","exitCode":"boom"}}),
+        );
+        let items = items(&sink);
+        assert!(!items.is_empty(), "a decode failure must not be a silent drop");
+        assert!(has_tool_use(&items, "commandExecution", "cx1"), "surfaced as a card named after the raw type");
+        match tool_result(&items, "cx1") {
+            Some(ConversationItem::ToolResult { is_error, content, .. }) => {
+                assert!(is_error, "an undecodable item is flagged as an error");
+                assert!(content.as_str().is_some_and(|s| s.contains("illisible")));
+            }
+            _ => panic!("expected an error ToolResult for cx1"),
+        }
+    }
+
+    #[test]
+    fn a_drifted_item_without_an_id_surfaces_a_protocol_notice() {
+        // No id to key a card on → a visible protocol_error notice rather than a silent drop.
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"commandExecution","exitCode":"boom"}}),
+        );
+        let items = items(&sink);
+        assert!(
+            items.iter().any(|i| matches!(i, ConversationItem::Notice { subtype, .. } if subtype == "protocol_error")),
+            "an undecodable id-less item surfaces a protocol_error notice"
+        );
+    }
+
+    #[test]
+    fn user_message_and_hook_prompt_items_are_not_surfaced() {
+        let (mut c, sink) = core();
+        c.on_notification("item/completed", json!({"item":{"type":"userMessage","id":"um1","clientId":null,"content":[]}}));
+        c.on_notification("item/completed", json!({"item":{"type":"hookPrompt","id":"hp1","fragments":[]}}));
+        assert!(items(&sink).is_empty(), "echoed user/hook items must not add timeline items");
     }
 
     #[test]
