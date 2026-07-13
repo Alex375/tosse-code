@@ -11,12 +11,12 @@ by `release.yml` and stays **only** on the GitHub page — it does not appear in
 
 ## v1.0.0
 
-- Codex (OpenAI) is now a full second backend alongside Claude: pick it when you create a conversation and drive it the same way — controls, fleet, history, and accounts all work.
-- Codex conversations bring their own background tasks and multi-agent sub-agents into the Flight Deck, a "Fast" speed mode, ultra/max effort on gpt-5.6, native rewind/fork, and a redesigned Accounts page with in-app sign-in for both backends.
+Flight Deck reaches 1.0 — the headline is Codex.
+
+- Codex (OpenAI) is now supported. When you create a conversation you pick the model between Claude and Codex; the conversation stays on that backend, with its background tasks, sub-agents, and History panel entries all handled just like Claude.
 - The whole app is now in English.
-- Flight Deck cards: delete a conversation straight from its card, and get stream controls (clean output, start/restart/stop) inside the reply modal. A subtle importance rail makes the cards that need a look stand out.
-- Clearer heads-up when the Claude or Codex CLI binary is missing, right where you need it.
-- Codex conversations now show up in the History panel (list + disk search) with per-backend badges.
+- New on Flight Deck cards: delete a conversation straight from its card, stream controls (clean output, start/restart/stop) in the reply modal, and an importance rail that surfaces the cards needing a look.
+- AI provider account management: sign in to your OpenAI and Claude accounts from the app and see each one's connection status at a glance.
 
 ## v0.28.0
 
