@@ -11,6 +11,7 @@
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { ConversationPane } from "../conversation/ConversationPane";
 import type { ComposerHandle } from "../conversation/ConductorComposer";
+import { StreamControl } from "../conversation/StreamControl";
 import { Dot, Ico } from "../../ui/kit";
 import { useAgentStatus } from "../../agent/useAgentStatus";
 import { agentStatusToDot } from "../../agent/status";
@@ -20,7 +21,9 @@ import {
   repoName,
   useConversationRepo,
   useConversations,
+  useConversationsStore,
 } from "../../store/conversationsStore";
+import { useEffectiveCleanOutput } from "../../store/display";
 import { effectiveCwd } from "../git/worktree";
 import { useFlightdeckModal } from "./flightdeckModalStore";
 import styles from "./FlightDeckReplyModal.module.css";
@@ -39,6 +42,10 @@ export function FlightDeckReplyModal({ onPromote }: { onPromote: (id: string) =>
   const repo = useConversationRepo(convId);
   const liveState = useSessionState(convId ?? "");
   const status = useAgentStatus(convId ?? "");
+  // Effective clean-output for THIS conversation (per-conv override ?? global default).
+  // The ⌘L shortcut is conversation-view-scoped and inert here, so the modal exposes
+  // its own toggle in the header.
+  const cleanOutput = useEffectiveCleanOutput(convId ?? "");
   const composerRef = useRef<ComposerHandle>(null);
 
   // Replay the on-disk transcript into the message store (idempotent, at most once
@@ -99,6 +106,26 @@ export function FlightDeckReplyModal({ onPromote }: { onPromote: (id: string) =>
           </span>
           {repo ? <span className={styles.repo}>· {repoName(repo.path)}</span> : null}
           <span className={styles.spacer} />
+          {/* Stream display controls, brought back from the classic conversation view:
+              the clean-output toggle (⌘L is inert in the modal) and the stream on/off
+              control. `portal` on the latter so its menu escapes the panel's overflow clip. */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={cleanOutput}
+            className={styles.iconBtn}
+            onClick={() =>
+              useConversationsStore.getState().setConvCleanOutput(convId, !cleanOutput)
+            }
+            title="Clean output — n'afficher que le message final de chaque réponse ; replier le travail intermédiaire (outils, réflexion, étapes)"
+            aria-label="Clean output"
+            style={
+              cleanOutput ? { borderColor: "var(--wf-accent)", color: "var(--wf-accent)" } : undefined
+            }
+          >
+            <Ico name="list" className="sm" />
+          </button>
+          <StreamControl conv={conv} portal />
           <button
             className={styles.headBtn}
             onClick={() => onPromote(convId)}

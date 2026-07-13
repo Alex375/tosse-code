@@ -2,13 +2,15 @@
 // status the sidebar shows (useAgentStatus → agentStatusToDot/rowAttention), the
 // same todo summary, context fill and worktree badge. No bespoke data, no fake
 // chrome: every element is wired to the live store.
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Dot, Pill, Ico, ClaudeMark, CodexMark } from "../../ui/kit";
 import { useAgentStatus } from "../../agent/useAgentStatus";
-import { agentStatusToDot, backgroundCount, rowAttention } from "../../agent/status";
+import { agentStatusToDot, backgroundCount, isActivelyRunning, railState, rowAttention } from "../../agent/status";
 import { useLastMessageSummary } from "../../store/lastMessageSummary";
+import { useRunningTaskCount } from "../../store/backgroundTasksStore";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { WorktreeIndicator } from "../git/WorktreeIndicator";
-import type { Conversation } from "../../store/conversationsStore";
+import { useConversationsStore, type Conversation } from "../../store/conversationsStore";
 import { StateBlock } from "./StateBlock";
 import { StateActions } from "./StateActions";
 import { BackgroundTaskBadge } from "./BackgroundTaskBadge";
@@ -49,11 +51,29 @@ export function StreamCard({
   // the activity line: it says what YOU last asked, not what the agent is doing now.
   const lastMsg = useLastMessageSummary(conv.id);
 
+  // Delete-from-card: reuses the sidebar ConvRow mechanics verbatim — the shared
+  // `removeConversation` (already snapshots for ⌘Z undo, kills the session, cleans up),
+  // gated by a ConfirmDialog only while the conversation is actively running so a live
+  // run is never killed by a stray click.
+  const remove = useConversationsStore((s) => s.removeConversation);
+  const runningBgTasks = useRunningTaskCount(conv.id);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const busyForDelete = isActivelyRunning(status) || runningBgTasks > 0;
+  // If the work settles while the confirm is open, close it (the danger is gone).
+  useEffect(() => {
+    if (confirmingDelete && !busyForDelete) setConfirmingDelete(false);
+  }, [confirmingDelete, busyForDelete]);
+
+  // The importance rail (left edge) lights up only for states that deserve a glance;
+  // `off` (éteinte) and `idle` (au repos) get no rail and recede — `dim` a touch more
+  // than `rest`, the only whisper between the two calm states (that + the dot shape).
+  const rail = railState(status);
   const cls =
     "wf-card ag-card ag-card-clickable" +
     (attn === "input" || attn === "error" ? " att" : "") +
     (attn === "review" ? " rev" : "") +
-    (status.kind === "off" ? " dim" : "");
+    (status.kind === "off" ? " dim" : "") +
+    (status.kind === "idle" ? " rest" : "");
 
   // Clicking the card BODY opens the conversation in the reply modal — the same as
   // the (now removed) plain "Ouvrir" button. The card TITLE stays the full-screen
@@ -75,13 +95,26 @@ export function StreamCard({
   };
 
   return (
-    <div className={cls} onClick={onCardClick}>
+    <div className={cls} data-rail={rail ?? undefined} onClick={onCardClick}>
       <div className="ag-card-h">
         <Dot s={dot} pulse ring={backgroundCount(status) > 0} />
         <button className="ag-card-name" onClick={() => onOpen(conv.id)} title={conv.name}>
           {conv.name}
         </button>
         <Pill s={dot} icon={false} />
+        <button
+          type="button"
+          className="ag-card-del"
+          title="Supprimer la conversation (⌘Z pour annuler)"
+          aria-label="Supprimer la conversation"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (busyForDelete) setConfirmingDelete(true);
+            else remove(conv.id);
+          }}
+        >
+          <Ico name="x" className="sm" />
+        </button>
       </div>
 
       <div className="ag-card-tags">
@@ -115,6 +148,26 @@ export function StreamCard({
       </div>
 
       <StateActions convId={conv.id} status={status} />
+
+      {/* Portaled to document.body (escapes the .ag-grid overflow clip), shown only while
+          the conversation is actively running — same copy as the sidebar's ConvRow. */}
+      {confirmingDelete ? (
+        <ConfirmDialog
+          open
+          danger
+          title={`Supprimer « ${conv.name} » ?`}
+          confirmLabel="Supprimer quand même"
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            remove(conv.id);
+          }}
+        >
+          Cette conversation est <strong>en cours d'exécution</strong>. La supprimer va{" "}
+          <strong>arrêter la session Claude</strong> et le travail non terminé peut être
+          perdu. La conversation reste récupérable avec ⌘Z, mais pas le run interrompu.
+        </ConfirmDialog>
+      ) : null}
     </div>
   );
 }

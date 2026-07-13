@@ -20,7 +20,7 @@ import { Dot, Ico, Menu, MenuItem, WF_STATUS } from "../../ui/kit";
  * it on here pre-spawns it without sending anything. The actions are contextual —
  * "allumer" when off, "relancer"/"éteindre" when on.
  */
-export function StreamControl({ conv }: { conv: Conversation }) {
+export function StreamControl({ conv, portal }: { conv: Conversation; portal?: boolean }) {
   // Rich status keyed by the conversation's stable id; the handle (reactive via
   // the prop) is the source of truth for on/off, folded into the status.
   const status = agentStatusToDot(useAgentStatus(conv.id));
@@ -54,6 +54,7 @@ export function StreamControl({ conv }: { conv: Conversation }) {
   return (
     <Menu
       align="right"
+      portal={portal}
       trigger={
         <button
           type="button"
