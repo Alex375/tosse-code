@@ -334,6 +334,11 @@ function CodexAccountGroup() {
       if (disposed || e.payload.backend !== "codex") return;
       setWaiting(false);
       setLoginErr(e.payload.success ? null : (e.payload.error ?? "sign-in failed"));
+      // The panel is open and has just surfaced this outcome live — consume the stash the
+      // always-mounted global handler writes for the panel-CLOSED case, so this same failure
+      // isn't replayed the next time the panel mounts (the mount effect below reads it). The
+      // global handler registers first, so its stash write has already landed here.
+      useAccountLoginStore.getState().clear("codex");
     });
     return () => {
       disposed = true;

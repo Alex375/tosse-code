@@ -164,8 +164,9 @@ export function StreamCard({
           }}
         >
           This conversation is <strong>running</strong>. Deleting it will{" "}
-          <strong>stop the Claude session</strong> and unfinished work may be lost. The
-          conversation can still be recovered with ⌘Z, but not the interrupted run.
+          <strong>stop the {conv.kind === "codex" ? "Codex" : "Claude"} session</strong> and
+          unfinished work may be lost. The conversation can still be recovered with ⌘Z, but
+          not the interrupted run.
         </ConfirmDialog>
       ) : null}
     </div>

@@ -10,7 +10,11 @@
 // first hint of either problem would be the NEXT message failing; this tells the user
 // before they type, with a direct jump to Settings → Accounts.
 import { useConversationsStore, type BackendKind } from "../../store/conversationsStore";
-import { useCodexAvailable, useBackendAvailabilityState } from "../../store/binaryAvailable";
+import {
+  useClaudeAvailable,
+  useCodexAvailable,
+  useBackendAvailabilityState,
+} from "../../store/binaryAvailable";
 import { useAccountsLoggedOut } from "../../ipc/useAccounts";
 import { useSettingsUi } from "../../store/settingsUi";
 
@@ -18,11 +22,12 @@ export function AuthWarningBar({ session }: { session: string }) {
   const kind = useConversationsStore(
     (s) => (s.conversations.find((c) => c.id === session)?.kind ?? "claude") as BackendKind,
   );
+  const claudeAvailable = useClaudeAvailable();
   const codexAvailable = useCodexAvailable();
   // The conversation's OWN backend availability, tri-state so we warn only on a resolved
   // `false` (never a flash before the check lands).
   const available = useBackendAvailabilityState(kind);
-  const loggedOut = useAccountsLoggedOut(codexAvailable);
+  const loggedOut = useAccountsLoggedOut(claudeAvailable, codexAvailable);
   const openSettings = useSettingsUi((s) => s.openSettings);
 
   const name = kind === "codex" ? "Codex" : "Claude";

@@ -376,7 +376,14 @@ export function Menu({
       setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        // Consume Escape so it dismisses ONLY this menu, not an outer overlay also listening
+        // on `window` (the Flight Deck reply modal, the Extensions manager) — the project's
+        // "one Escape = one layer" contract, matching the drill-in popovers. The fullscreen
+        // guard is capture-phase in App.tsx, so this bubble-phase stop never disturbs it.
+        e.stopPropagation();
+        setOpen(false);
+      }
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);

@@ -31,7 +31,7 @@ import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts"
 import { useEffectiveCleanOutput } from "../../store/display";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
 import { ChipBtn, ClaudeMark, CodexMark, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
-import { useCodexAvailable } from "../../store/binaryAvailable";
+import { useClaudeAvailable, useCodexAvailable } from "../../store/binaryAvailable";
 import { backendOfModel, modelFamily, modelLabel, modelsForPicker } from "./models";
 import { useCodexModels } from "./codexModels";
 import { useAccountsLoggedOut } from "../../ipc/useAccounts";
@@ -174,6 +174,7 @@ export const ConductorComposer = forwardRef<
   //    mark + which Claude-only controls render).
   //  - `locked`: a message has been sent (session engaged) → the picker can no longer
   //    cross backends, so it only offers the current backend's models.
+  const claudeAvailable = useClaudeAvailable();
   const codexAvailable = useCodexAvailable();
   // The backend AUTHORITY is the conversation's committed `kind` — NOT the model id.
   // (A fresh pick flips both together via setConvBackend; and a legacy Codex conv whose
@@ -196,7 +197,7 @@ export const ConductorComposer = forwardRef<
   const pickerGroups = modelsForPicker(ctl.kind, { locked, codexAvailable, codexModels });
   // Account state per backend, for the picker's "not connected" badges (definitive
   // logged-out only — cf. useAccountsLoggedOut). Shared cached queries, cost ~nil.
-  const loggedOut = useAccountsLoggedOut(codexAvailable);
+  const loggedOut = useAccountsLoggedOut(claudeAvailable, codexAvailable);
   // Codex-only composer controls (per-conv, localStorage). Read unconditionally (hook
   // rules); only rendered/consumed when the conversation runs on Codex. Model + effort
   // live on the conversation record (shared picker/gauge); these are the Codex-only axes.

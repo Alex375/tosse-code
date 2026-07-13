@@ -36,6 +36,12 @@ pub struct ClaudeAccountStatus {
 struct ActiveLogin {
     child: Child,
     stdin: ChildStdin,
+    /// The child's stdout reader, HELD (never read again) for the child's whole lifetime.
+    /// After printing the URL the CLI stays alive awaiting the pasted code; dropping this
+    /// would close the read end of the pipe, so a later write on the child's stdout (a
+    /// "paste code" prompt — stderr is nulled) could raise SIGPIPE and kill it before the
+    /// code is submitted. Keeping the read end open makes such a write a harmless no-op.
+    _stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
 }
 
 static ACTIVE_LOGIN: Mutex<Option<ActiveLogin>> = Mutex::const_new(None);
@@ -169,7 +175,7 @@ pub async fn login_start() -> Result<String, String> {
         }
     };
 
-    *ACTIVE_LOGIN.lock().await = Some(ActiveLogin { child, stdin });
+    *ACTIVE_LOGIN.lock().await = Some(ActiveLogin { child, stdin, _stdout: reader });
     Ok(url)
 }
 

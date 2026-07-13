@@ -288,6 +288,10 @@ struct CodexSubAgentMeta {
     /// (which carries no message) does not blank the live progress back to `None` between
     /// two collab snapshots.
     progress: Option<String>,
+    /// The last status we published for this sub-agent. Lets a turn end settle any that is
+    /// still `Running` (see [`CodexCore::settle_running_subagents`]) — Codex sub-agents run
+    /// in-turn, so a lingering "running" once the turn is over is stale (no fleet false-green).
+    last_status: Option<BackgroundTaskStatus>,
 }
 
 impl CodexCore {
@@ -347,7 +351,11 @@ impl CodexCore {
     /// keeps `atomStillRunning`'s foreground-safe `!tool_result` fallback (Bloc A). Terminal
     /// reconciliation rides the cumulative `agentsStates` snapshots; session-end (running→stopped)
     /// is the backstop.
-    fn emit_subagent_task(&self, thread_id: &str, status: BackgroundTaskStatus, message: Option<String>) {
+    fn emit_subagent_task(&mut self, thread_id: &str, status: BackgroundTaskStatus, message: Option<String>) {
+        // Track the last published status so a turn end can settle any sub-agent still flagged
+        // live (see settle_running_subagents). Done first, as its own borrow, so the reads below
+        // don't overlap this mutable borrow of `codex_subagents`.
+        self.codex_subagents.entry(thread_id.to_string()).or_default().last_status = Some(status);
         let meta = self.codex_subagents.get(thread_id);
         let name = meta.and_then(|m| m.name.clone());
         let model = meta.and_then(|m| m.model.clone());
@@ -1479,6 +1487,10 @@ impl CodexCore {
         // Close any card that never received its own completion (e.g. an interrupted
         // command), so the round is foldable instead of stuck "running".
         self.close_dangling_tools();
+        // Settle any sub-agent still flagged live: Codex sub-agents run in-turn, so once this
+        // turn is over (normally OR via interrupt, which also lands here) a lingering "running"
+        // fleet task is stale and would show a false green / inflate the running count.
+        self.settle_running_subagents();
         if let Some(msg) = &message {
             self.emit_notice("error", msg);
         }
@@ -1558,6 +1570,24 @@ impl CodexCore {
                 is_error,
                 parent_tool_use_id: None,
             });
+        }
+    }
+
+    /// Settle any sub-agent still flagged `Running` to `Stopped` at turn end. Codex sub-agents
+    /// run IN-TURN (the parent thread blocks on `wait`), so once the turn completes — normally or
+    /// via interrupt — a lingering "running" fleet task is stale: it would show a false green and
+    /// inflate the fleet's running count with no signal to ever clear it (the sub-agent thread is
+    /// unrouted). A later `resumeAgent` re-emits the sub-agent running through
+    /// `ingest_collab_states`, so this only clears the phantom, never a genuinely live one.
+    fn settle_running_subagents(&mut self) {
+        let stale: Vec<String> = self
+            .codex_subagents
+            .iter()
+            .filter(|(_, m)| matches!(m.last_status, Some(BackgroundTaskStatus::Running)))
+            .map(|(tid, _)| tid.clone())
+            .collect();
+        for tid in stale {
+            self.emit_subagent_task(&tid, BackgroundTaskStatus::Stopped, None);
         }
     }
 
@@ -2841,6 +2871,32 @@ mod tests {
         );
         let t = last_task(&sink, "z9").expect("a fleet task keyed by the sub-agent thread");
         assert!(matches!(t.status, BackgroundTaskStatus::Stopped), "interrupted → Stopped (no fake green backgrounding)");
+    }
+
+    #[test]
+    fn turn_end_settles_a_still_running_sub_agent_no_false_green() {
+        let (mut c, sink) = core();
+        // A spawn snapshot: sub1 is still running, sub2 already completed.
+        c.on_notification(
+            "item/started",
+            json!({"item":{"type":"collabAgentToolCall","id":"co1","tool":"spawnAgent","status":"inProgress","senderThreadId":"s","receiverThreadIds":["sub1","sub2"],"model":"gpt-5.6","agentsStates":{"sub1":{"status":"running"},"sub2":{"status":"completed"}}}}),
+        );
+        assert!(matches!(last_task(&sink, "sub1").unwrap().status, BackgroundTaskStatus::Running), "sub1 starts Running");
+
+        // The turn ends — a normal completion OR an interrupt both land in on_turn_completed.
+        c.on_turn_completed(json!({}));
+
+        // The still-running, in-turn sub-agent settles to a terminal status: no phantom fleet
+        // "running" (false-green) left once the turn is over and its thread is unrouted.
+        assert!(
+            matches!(last_task(&sink, "sub1").unwrap().status, BackgroundTaskStatus::Stopped),
+            "a still-running Codex sub-agent settles to Stopped at turn end",
+        );
+        // An already-terminal sub-agent is NOT downgraded — its real outcome is preserved.
+        assert!(
+            matches!(last_task(&sink, "sub2").unwrap().status, BackgroundTaskStatus::Completed),
+            "an already-terminal sub-agent keeps its real outcome",
+        );
     }
 
     #[test]

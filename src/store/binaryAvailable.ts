@@ -11,19 +11,25 @@ import type { BackendKind } from "./conversationsStore";
 // so each backend is resolved ONCE and cached process-wide — every consumer shares that
 // single check, no per-component IPC.
 const cached: Record<BackendKind, boolean | null> = { claude: null, codex: null };
-const inflight: Record<BackendKind, Promise<boolean> | null> = { claude: null, codex: null };
+const inflight: Record<BackendKind, Promise<boolean | null> | null> = { claude: null, codex: null };
 
-function probe(kind: BackendKind): Promise<boolean> {
+function probe(kind: BackendKind): Promise<boolean | null> {
   // Invoke inside the promise chain (NOT before it): if a binding is missing or throws
   // synchronously — e.g. a mock that forgot the twin method — the throw becomes a
   // rejection the `.catch` can trap, instead of a synchronous throw escaping this
   // function (which, called from a useEffect body, would crash the React subtree).
-  // A failed probe reads as "not available" — the surfaces fail safe: they warn only on a
-  // definitive false, never on a transient IPC glitch.
   return Promise.resolve()
     .then(() => (kind === "codex" ? commands.codexAvailable() : commands.claudeAvailable()))
     .then((v) => (cached[kind] = v))
-    .catch(() => (cached[kind] = false));
+    .catch(() => {
+      // A rejected probe is NOT a definitive "not installed" — the twin Rust checks answer
+      // Ok(false) for a genuinely absent binary; a rejection here means the IPC itself
+      // glitched. Leave `cached` at `null` (still-unknown) and drop the in-flight slot so a
+      // later mount re-probes, rather than sticking the scary "CLI not found" surfaces for
+      // the whole session on one transient failure (what the fail-safe surfaces promise).
+      inflight[kind] = null;
+      return null;
+    });
 }
 
 /**

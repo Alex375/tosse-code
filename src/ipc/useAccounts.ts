@@ -68,18 +68,23 @@ export function useClaudeAccountActions() {
  * surfaces (composer banner, model-picker badges). `true` only when the status
  * query answered `loggedIn: false` — loading, disabled, or a failed status probe
  * yield `false` so a transient error never shows a scary false "not connected".
- * Codex is only probed when its binary is installed. One shared cached query per
- * backend (30s staleTime + the global `account_login`/`account/updated`
- * invalidation), so mounting this in every composer costs nothing extra.
+ * EACH backend is probed only when its binary is installed — a machine with just one
+ * backend never fires the other's status command (which, absent its binary, would just
+ * fail on repeat). One shared cached query per backend (30s staleTime + the global
+ * `account_login`/`account/updated` invalidation), so mounting this in every composer
+ * costs nothing extra.
  */
-export function useAccountsLoggedOut(codexAvailable: boolean): {
+export function useAccountsLoggedOut(
+  claudeAvailable: boolean,
+  codexAvailable: boolean,
+): {
   claude: boolean;
   codex: boolean;
 } {
-  const claude = useClaudeAccount(true);
+  const claude = useClaudeAccount(claudeAvailable);
   const codex = useCodexAccount(codexAvailable);
   return {
-    claude: claude.data?.loggedIn === false,
+    claude: claudeAvailable && claude.data?.loggedIn === false,
     codex: codexAvailable && codex.data?.loggedIn === false,
   };
 }
