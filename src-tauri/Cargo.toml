@@ -1,6 +1,6 @@
 [package]
 name = "tosse-code"
-version = "0.28.0"
+version = "1.0.0"
 description = "Flight Deck — desktop app to pilot Claude Code"
 authors = ["Tosse"]
 edition = "2021"

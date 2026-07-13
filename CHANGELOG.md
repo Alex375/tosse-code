@@ -9,6 +9,15 @@ that section and uses it as the GitHub release description, which the app displa
 as-is. The install instructions block (after the `<!-- gh-only -->` marker) is added
 by `release.yml` and stays **only** on the GitHub page — it does not appear in the app.
 
+## v1.0.0
+
+- Codex (OpenAI) is now a full second backend alongside Claude: pick it when you create a conversation and drive it the same way — controls, fleet, history, and accounts all work.
+- Codex conversations bring their own background tasks and multi-agent sub-agents into the Flight Deck, a "Fast" speed mode, ultra/max effort on gpt-5.6, native rewind/fork, and a redesigned Accounts page with in-app sign-in for both backends.
+- The whole app is now in English.
+- Flight Deck cards: delete a conversation straight from its card, and get stream controls (clean output, start/restart/stop) inside the reply modal. A subtle importance rail makes the cards that need a look stand out.
+- Clearer heads-up when the Claude or Codex CLI binary is missing, right where you need it.
+- Codex conversations now show up in the History panel (list + disk search) with per-backend badges.
+
 ## v0.28.0
 
 - New PDF viewer built into the editor: zoom, fit-to-width, open in read-only mode.
