@@ -18,6 +18,7 @@ import { useToolResult } from "../../store/conversationStore";
 import type { BackgroundTask, BackgroundTaskKind } from "../../ipc/client";
 import { resolveAgentId, runIdFromResult, shortModel, taskStatusDot } from "../../agent/subagentMeta";
 import { TranscriptPopover } from "../conversation/TranscriptPopover";
+import { useIsCodex } from "../conversation/ConvMark";
 import { WorkflowDetail } from "../conversation/WorkflowDetail";
 
 const KIND_ICON: Record<BackgroundTaskKind, string> = {
@@ -40,6 +41,10 @@ const ORDER: BackgroundTaskKind[] = ["agent", "workflow", "monitor", "bash", "ot
 
 export function BackgroundTaskBadge({ convId }: { convId: string }) {
   const tasks = useSessionTasks(convId);
+  // Phase 4.5 (Bloc C): Codex sub-agents show here too (kind `agent`), but their threads
+  // aren't routed to us — no transcript to drill into. Gate drill OFF on Codex so a row is
+  // display-only (status + name), never a click into an empty transcript.
+  const isCodex = useIsCodex(convId);
   const claudeSessionId = useConversationsStore(
     (s) => s.conversations.find((c) => c.id === convId)?.sessionId ?? null,
   );
@@ -151,7 +156,7 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
                       <span className="wf-mono ag-bgpop-n">{g.items.length}</span>
                     </div>
                     {g.items.map((t) => {
-                      const drill = t.kind === "agent" || t.kind === "workflow";
+                      const drill = !isCodex && (t.kind === "agent" || t.kind === "workflow");
                       const meta = [t.subagent_type, t.model ? shortModel(t.model) : null]
                         .filter(Boolean)
                         .join(" · ");

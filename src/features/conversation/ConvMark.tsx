@@ -8,8 +8,10 @@ import { useConversationsStore } from "../../store/conversationsStore";
 
 /** True when this conversation runs on Codex. Cheap boolean selector (stable across
  *  renders), keyed by the STABLE conversation id — the same id every thread component
- *  already threads down as `session`. Defaults to Claude for an unknown id. */
-function useIsCodex(session: string): boolean {
+ *  already threads down as `session`. Defaults to Claude for an unknown id. Exported as
+ *  the SINGLE backend-kind discriminant reused by the background-task surfaces (bars +
+ *  Flight Deck badge) — Codex has no Workflow/Monitor/Bash background primitives (Phase 4.5). */
+export function useIsCodex(session: string): boolean {
   return useConversationsStore(
     (s) => s.conversations.find((c) => c.id === session)?.kind === "codex",
   );

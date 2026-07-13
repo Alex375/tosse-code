@@ -17,11 +17,17 @@ import { fmtDuration, resolveAgentId, shortModel } from "../../agent/subagentMet
 import { fmtTokens } from "../../store/contextData";
 import type { BackgroundTask } from "../../ipc/client";
 import { Ico, RunDots } from "../../ui/kit";
+import { useIsCodex } from "./ConvMark";
 import { TranscriptPopover } from "./TranscriptPopover";
 
 export function AgentBar({ session }: { session: string }) {
   const bgIds = useBackgroundAgentIds(session);
   const tasks = useSessionTasks(session);
+  // Phase 4.5 (Bloc C): Codex multi-agent (collab/subAgentActivity) is emitted as `agent`
+  // background tasks too — but there is no detached-launch ACK (`bgIds` is Claude-only) and
+  // no routed sub-agent thread. So on Codex we list EVERY running sub-agent, and render each
+  // display-only (no transcript to drill, no per-agent stop wire).
+  const isCodex = useIsCodex(session);
   // Sub-agents inherit the conversation's effort (not recorded per sub-agent), so the
   // parent's effort is the best available signal — same as the inline card.
   const effort = useSessionState(session)?.effort ?? null;
@@ -43,11 +49,12 @@ export function AgentBar({ session }: { session: string }) {
         (t) =>
           t.kind === "agent" &&
           t.status === "running" &&
-          t.tool_use_id != null &&
-          ids.has(t.tool_use_id),
+          // Claude: only DETACHED sub-agents (foreground ones render inline). Codex: every
+          // running sub-agent (there is no detached/foreground split, no ACK to key on).
+          (isCodex || (t.tool_use_id != null && ids.has(t.tool_use_id))),
       )
       .sort((a, b) => a.task_id.localeCompare(b.task_id));
-  }, [bgIds, tasks]);
+  }, [bgIds, tasks, isCodex]);
 
   // The open transcript is held by VALUE (not looked up in `rows`) so it stays open
   // even once the agent finishes and leaves the bar mid-read. Its id appears in the
@@ -75,6 +82,20 @@ export function AgentBar({ session }: { session: string }) {
         ]
           .filter(Boolean)
           .join(" · ");
+        // Codex sub-agent: display-only row (no routed thread → no transcript, no per-agent
+        // stop). Claude detached agent: drillable + stoppable, as before.
+        if (isCodex) {
+          return (
+            <div key={t.task_id} className="cv-bashrow">
+              <div className="cv-bgagent static">
+                <RunDots />
+                <span className="cv-bgagent-label">{t.label ?? "Sous-agent"}</span>
+                {meta ? <span className="cv-bgagent-meta wf-mono">{meta}</span> : null}
+                {stats ? <span className="cv-bgagent-stats wf-mono">{stats}</span> : null}
+              </div>
+            </div>
+          );
+        }
         return (
           <div key={t.task_id} className="cv-bashrow">
             <button
