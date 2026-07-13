@@ -39,7 +39,7 @@
 .ag-grid::-webkit-scrollbar { height:9px; }
 .ag-grid::-webkit-scrollbar-thumb { background:var(--wf-line-2); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
 .ag-grid::-webkit-scrollbar-track { background:transparent; }
-.ag-card { padding:14px; display:flex; flex-direction:column; gap:11px; }
+.ag-card { position:relative; padding:14px; display:flex; flex-direction:column; gap:11px; }
 /* The whole card body is clickable (→ opens the reply modal); the title and every
    action/badge inside handle their own click. Signal it with a pointer + a subtle
    border lift on hover, without competing with the attention/review accents. */
@@ -51,11 +51,34 @@
    the amber/blue accent on exactly the cards meant to stand out. `:not(.att):not(.rev)`
    keeps the lift for calm cards only. */
 .ag-card-clickable:not(.att):not(.rev):hover { border-color:var(--wf-line-2); }
-.ag-card.dim { opacity:.58; }
+/* The two CALM states recede together (see agent/status.ts `railState`): `dim` (éteinte)
+   a touch more than `rest` (au repos) — the only whisper between them, alongside the dot
+   shape (hollow vs filled). Neither carries a rail. */
+.ag-card.dim { opacity:.5; }
+.ag-card.rest { opacity:.7; }
 .ag-card.rev { border-color:#314463; }
+
+/* The importance rail: a lit left edge for the states that deserve a glance. Colour comes
+   from the existing semantic tokens (no new colour) — all STATIC, no motion (a moving rail
+   was distracting). `pointer-events:none` so the 3px strip never intercepts the card's
+   open-on-click. */
+.ag-card[data-rail]::before {
+  content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+  border-radius:var(--wf-r-l) 0 0 var(--wf-r-l); pointer-events:none;
+}
+.ag-card[data-rail="run"]::before    { background:var(--wf-run); }
+.ag-card[data-rail="bg"]::before     { background:linear-gradient(var(--wf-run), #a78bfa); }
+.ag-card[data-rail="review"]::before { background:var(--wf-wait); }
+.ag-card[data-rail="att"]::before    { background:var(--wf-att); }
+.ag-card[data-rail="err"]::before    { background:var(--wf-err); }
 .ag-card-h { display:flex; align-items:center; gap:9px; }
 .ag-card-name { font:inherit; font-size:13px; font-weight:600; flex:1; min-width:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--wf-tx-hi); background:transparent; border:0; cursor:pointer; padding:0; }
 .ag-card-name:hover { text-decoration:underline; }
+/* Delete-from-card affordance (mirrors the sidebar's .cv-sess-del): a reveal-on-hover
+   × that stays danger-tinted on hover. Fixed width so revealing it shifts no layout. */
+.ag-card-del { flex:0 0 auto; width:22px; height:22px; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease; }
+.ag-card:hover .ag-card-del, .ag-card-del:focus-visible { opacity:1; }
+.ag-card-del:hover { background:var(--wf-err-bg); color:var(--wf-err); }
 .ag-card-tags { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
 /* The reasoning-effort chip (now the interactive EffortGauge, ChipBtn) sits here next
    to the worktree chip; it carries its own .wf-chip styling. */

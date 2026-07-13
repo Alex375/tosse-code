@@ -286,6 +286,39 @@ export function rowAttention(s: AgentStatus): "input" | "review" | "error" | nul
 }
 
 /**
+ * The importance "rail": which conversations light up their left rail (Flight Deck
+ * card + sidebar row) because they deserve a glance — actively working, or waiting on
+ * the user. The two CALM states (`idle` = allumée-au-repos, `off` = éteinte) return
+ * null: they recede together, since a live-but-idle conversation is no more important
+ * to the eye than a stopped one. Distinct from `rowAttention` (which tints the whole
+ * sidebar row background): the rail ALSO covers `running`/`backgrounding`, which stay
+ * background-calm but earn a lit edge. Each token maps to a semantic colour already in
+ * the palette — no new colour is introduced.
+ */
+export function railState(
+  s: AgentStatus,
+): "run" | "bg" | "review" | "att" | "err" | null {
+  switch (s.kind) {
+    case "running":
+      return "run"; // green, flowing (most alive)
+    case "backgrounding":
+      return "bg"; // green → violet (working in the background)
+    case "review":
+      return "review"; // blue (finished, worth a look)
+    case "needInput":
+    case "needIntervention":
+      return "att"; // orange, pulsed (needs you)
+    case "error":
+      return "err"; // red, pulsed (needs you)
+    // Calm states: no rail. Listed explicitly (not a `default`) so a future status kind
+    // is a compile error here until it's classified — matching the other classifiers.
+    case "idle":
+    case "off":
+      return null;
+  }
+}
+
+/**
  * Whether the conversation is actively doing work right now — a turn in flight
  * (`running`) or background tools still running (`backgrounding`). Deleting it in
  * these states kills live work, so the sidebar gates the otherwise friction-free,
