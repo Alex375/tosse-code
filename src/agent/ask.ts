@@ -31,7 +31,7 @@ export function classifyAsk(req: PermissionRequestPayload): Ask {
   if (req.tool_name === "Bash") {
     return {
       kind: "permission",
-      text: "Autoriser l'exécution de la commande ?",
+      text: "Allow running the command?",
       cmd: field(req.input, "command"),
     };
   }
@@ -40,6 +40,6 @@ export function classifyAsk(req: PermissionRequestPayload): Ask {
     kind: "permission",
     text:
       req.description ||
-      (target ? `Autoriser la modification de ${target} ?` : `Autoriser ${req.tool_name} ?`),
+      (target ? `Allow editing ${target}?` : `Allow ${req.tool_name}?`),
   };
 }

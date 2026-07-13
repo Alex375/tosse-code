@@ -6,7 +6,7 @@ import type { BackendKind } from "./conversationsStore";
 // Whether a usable CLI binary (`claude` / `codex`) is installed on this machine. ONE
 // parameterized layer over the twin Rust checks (`claude_available` / `codex_available`,
 // cheap PATH / well-known-location file checks, never a spawn). Powers the proactive
-// "CLI not detected" surfaces (the composer bar, the Réglages → Comptes card) and gates
+// "CLI not detected" surfaces (the composer bar, the Settings → Accounts card) and gates
 // the Codex option in the "+" backend selector. Availability can't change mid-session,
 // so each backend is resolved ONCE and cached process-wide — every consumer shares that
 // single check, no per-component IPC.

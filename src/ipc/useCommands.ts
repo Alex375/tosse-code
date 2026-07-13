@@ -40,7 +40,7 @@ export function useSendMessage(convId: string) {
     // `worktree` (first send only): spawn this conversation inside a freshly
     // created git worktree instead of the repo's main checkout. `queued`: the
     // agent was busy at send time, so the CLI will inject this mid-turn — flag the
-    // optimistic turn so the UI shows it as "en attente". `images`: files joined via
+    // optimistic turn so the UI shows it as "pending". `images`: files joined via
     // the composer's "+" / paste, sent as `image` blocks and shown as thumbnails.
     mutationFn: async ({
       text,
@@ -128,7 +128,7 @@ export function useAnswerPermission(convId: string) {
     // the agent stays blocked CLI-side with nothing in the thread — surface it.
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Réponse à la demande d'autorisation échouée : ${message}`);
+      addErrorTurn(convId, `Failed to answer the permission request: ${message}`);
     },
   });
 }
@@ -155,7 +155,7 @@ export function useInterrupt(convId: string) {
     // suppressed) — say it didn't take so the user knows the agent is still running.
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Interruption échouée : ${message}`);
+      addErrorTurn(convId, `Interrupt failed: ${message}`);
     },
   });
 }
@@ -175,7 +175,7 @@ export function useCodexCompact(convId: string) {
     },
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Compactage impossible : ${message}`);
+      addErrorTurn(convId, `Couldn't compact: ${message}`);
     },
   });
 }
@@ -190,7 +190,7 @@ export function useStop(convId: string) {
     },
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Arrêt de la session échoué : ${message}`);
+      addErrorTurn(convId, `Failed to stop the session: ${message}`);
     },
   });
 }
@@ -232,12 +232,12 @@ export function useSetRemoteControl(convId: string) {
       // throw, so `onError` never runs. Surface it in the thread too (not only the chip
       // dot) — every error stays visible, per the project's no-silent-failure rule.
       if (state.status === "error") {
-        addErrorTurn(convId, `Remote control échoué : ${state.error ?? "erreur inconnue"}`);
+        addErrorTurn(convId, `Remote control failed: ${state.error ?? "unknown error"}`);
       } else if (state.error) {
         // The bridge came UP but a secondary step failed (e.g. Codex enable succeeded yet
         // the pairing-code fetch failed): still surface it — the bridge is on but a device
         // can't be paired, and the user must know rather than see a silent no-code state.
-        addErrorTurn(convId, `Remote control : ${state.error}`);
+        addErrorTurn(convId, `Remote control: ${state.error}`);
       }
       return state;
     },
@@ -248,7 +248,7 @@ export function useSetRemoteControl(convId: string) {
       useRemoteControlStore
         .getState()
         .set(convId, { status: "error", session_url: null, error: message, pairing_code: null });
-      addErrorTurn(convId, `Remote control échoué : ${message}`);
+      addErrorTurn(convId, `Remote control failed: ${message}`);
     },
   });
 }
@@ -268,7 +268,7 @@ export function useStopTask(convId: string) {
     // background command is still running.
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Arrêt de la tâche de fond échoué : ${message}`);
+      addErrorTurn(convId, `Failed to stop the background task: ${message}`);
     },
   });
 }

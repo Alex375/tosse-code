@@ -1,5 +1,5 @@
-// Contextual card actions — ONLY the ones that need prominence: "Répondre" (answer a
-// permission / question) and "Vu" (acknowledge inline). Opening the conversation is no
+// Contextual card actions — ONLY the ones that need prominence: "Reply" (answer a
+// permission / question) and "Seen" (acknowledge inline). Opening the conversation is no
 // longer a button here: clicking the card BODY opens the reply modal, and the card
 // TITLE (in StreamCard) stays the full-screen entry point. A permission is
 // authorised/refused from inside that modal (its context is right there), not blindly
@@ -33,7 +33,7 @@ export function StateActions({
         <div className="ag-card-actions">
           <button className="wf-btn prim sm" onClick={reply}>
             <Ico name="arrow" className="sm" />
-            Répondre
+            Reply
           </button>
         </div>
       );
@@ -48,7 +48,7 @@ export function StateActions({
           <div className="ag-card-actions">
             <button className="wf-btn prim sm" onClick={reply}>
               <Ico name="arrow" className="sm" />
-              Répondre{n > 0 ? ` (${n})` : ""}
+              Reply{n > 0 ? ` (${n})` : ""}
             </button>
           </div>
         );
@@ -60,23 +60,23 @@ export function StateActions({
         <div className="ag-card-actions">
           <button className="wf-btn ghost sm" onClick={() => acknowledgeConversation(convId)}>
             <Ico name="check" className="sm" />
-            Vu
+            Seen
           </button>
           <button className="wf-btn prim sm" onClick={reply}>
             <Ico name="send" className="sm" />
-            Répondre
+            Reply
           </button>
         </div>
       );
     }
   } else if (status.kind === "error" || status.kind === "review") {
-    // "Vu" acknowledges inline. Opening is now the card BODY's job (it opens the
-    // reply modal), so the redundant "Ouvrir" is gone.
+    // "Seen" acknowledges inline. Opening is now the card BODY's job (it opens the
+    // reply modal), so the redundant "Open" is gone.
     return (
       <div className="ag-card-actions">
         <button className="wf-btn ghost sm" onClick={() => acknowledgeConversation(convId)}>
           <Ico name="check" className="sm" />
-          Vu
+          Seen
         </button>
       </div>
     );

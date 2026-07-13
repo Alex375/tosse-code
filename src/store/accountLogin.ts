@@ -8,8 +8,8 @@ export interface LoginFailure {
 interface AccountLoginState {
   /** The last UNACKNOWLEDGED login failure per backend, recorded from the app-global
    *  `AccountLoginEvent` by the always-mounted handler. Codex login completes async
-   *  (minutes later), so the outcome can land while the Comptes panel is unmounted — the
-   *  in-panel listener would miss it and the user would only see a bare "Non connecté".
+   *  (minutes later), so the outcome can land while the Accounts panel is unmounted — the
+   *  in-panel listener would miss it and the user would only see a bare "Not connected".
    *  Stashing it here lets the panel surface the reason when it reopens. Successes clear the
    *  entry (nothing to show); a new login attempt clears it too. */
   failures: Record<string, LoginFailure | undefined>;

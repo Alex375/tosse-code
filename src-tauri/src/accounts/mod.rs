@@ -61,7 +61,7 @@ fn first_line_capped(raw: &str) -> String {
     let line = raw.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
     let mut s: String = line.chars().take(200).collect();
     if s.is_empty() {
-        s = "erreur inconnue".into();
+        s = "unknown error".into();
     }
     s
 }
@@ -82,9 +82,9 @@ async fn run_bounded(label: &str, args: &[&str]) -> Result<std::process::Output,
         .output();
     match tokio::time::timeout(AUTH_CMD_TIMEOUT, fut).await {
         Ok(Ok(output)) => Ok(output),
-        Ok(Err(e)) => Err(format!("impossible de lancer `{label}` : {e}")),
+        Ok(Err(e)) => Err(format!("could not run `{label}`: {e}")),
         Err(_) => Err(format!(
-            "`{label}` n'a pas répondu à temps ({} s) — réessayez",
+            "`{label}` did not respond in time ({} s) — retry",
             AUTH_CMD_TIMEOUT.as_secs()
         )),
     }
@@ -98,7 +98,7 @@ pub async fn status() -> Result<ClaudeAccountStatus, String> {
         // The CLI answered something that isn't the JSON contract (crash text, update
         // notice…): bounded first line so the user sees WHY without a raw dump.
         format!(
-            "`claude auth status` a répondu de façon inattendue : {}",
+            "`claude auth status` responded unexpectedly: {}",
             first_line_capped(&stdout)
         )
     })?;
@@ -135,10 +135,10 @@ pub async fn login_start() -> Result<String, String> {
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("impossible de lancer `claude auth login` : {e}"))?;
+        .map_err(|e| format!("could not run `claude auth login`: {e}"))?;
 
-    let stdout = child.stdout.take().ok_or("stdout du login indisponible")?;
-    let stdin = child.stdin.take().ok_or("stdin du login indisponible")?;
+    let stdout = child.stdout.take().ok_or("login stdout unavailable")?;
+    let stdin = child.stdin.take().ok_or("login stdin unavailable")?;
 
     // The URL line arrives within a second or two; 20s covers a cold start. Reading
     // LINES is safe here: the URL line is newline-terminated (only the later "paste
@@ -155,17 +155,16 @@ pub async fn login_start() -> Result<String, String> {
             Ok(Ok(None)) => {
                 let _ = child.kill().await;
                 return Err(
-                    "`claude auth login` s'est terminé avant de fournir l'URL d'autorisation"
-                        .into(),
+                    "`claude auth login` exited before providing the authorization URL".into(),
                 );
             }
             Ok(Err(e)) => {
                 let _ = child.kill().await;
-                return Err(format!("lecture du login impossible : {e}"));
+                return Err(format!("could not read login output: {e}"));
             }
             Err(_) => {
                 let _ = child.kill().await;
-                return Err("`claude auth login` n'a pas fourni d'URL (délai dépassé)".into());
+                return Err("`claude auth login` did not provide a URL (timed out)".into());
             }
         }
     };
@@ -180,14 +179,14 @@ pub async fn login_start() -> Result<String, String> {
 pub async fn login_submit_code(code: &str) -> Result<(), String> {
     let code = code.trim();
     if code.is_empty() {
-        return Err("le code d'autorisation est vide".into());
+        return Err("the authorization code is empty".into());
     }
     let Some(mut active) = ACTIVE_LOGIN.lock().await.take() else {
-        return Err("aucune connexion Claude en cours — relancez « Se connecter »".into());
+        return Err("no Claude sign-in in progress — start \"Sign in\" again".into());
     };
     if let Err(e) = active.stdin.write_all(format!("{code}\n").as_bytes()).await {
         let _ = active.child.kill().await;
-        return Err(format!("envoi du code impossible : {e}"));
+        return Err(format!("could not send the code: {e}"));
     }
     let _ = active.stdin.flush().await;
     drop(active.stdin); // EOF: some readline paths only settle once stdin closes.
@@ -195,14 +194,14 @@ pub async fn login_submit_code(code: &str) -> Result<(), String> {
     match tokio::time::timeout(std::time::Duration::from_secs(90), active.child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
         Ok(Ok(status)) => Err(format!(
-            "`claude auth login` a échoué (code de sortie {}) — le code collé est peut-être \
-             invalide ou expiré",
+            "`claude auth login` failed (exit code {}) — the pasted code may be \
+             invalid or expired",
             status.code().unwrap_or(-1)
         )),
-        Ok(Err(e)) => Err(format!("attente du login impossible : {e}")),
+        Ok(Err(e)) => Err(format!("could not wait for login: {e}")),
         Err(_) => {
             let _ = active.child.kill().await;
-            Err("`claude auth login` n'a pas confirmé (délai dépassé)".into())
+            Err("`claude auth login` did not confirm (timed out)".into())
         }
     }
 }
@@ -236,7 +235,7 @@ pub async fn logout() -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).into_owned()
         };
         Err(format!(
-            "`claude auth logout` a échoué : {}",
+            "`claude auth logout` failed: {}",
             first_line_capped(&msg)
         ))
     }
@@ -250,7 +249,7 @@ mod tests {
     fn first_line_capped_bounds_and_falls_back() {
         assert_eq!(first_line_capped("boom\nrest"), "boom");
         assert_eq!(first_line_capped("\n\n  spaced  \n"), "spaced");
-        assert_eq!(first_line_capped(""), "erreur inconnue");
+        assert_eq!(first_line_capped(""), "unknown error");
         let long = "x".repeat(500);
         assert_eq!(first_line_capped(&long).chars().count(), 200);
     }
@@ -260,7 +259,7 @@ mod tests {
     #[tokio::test]
     async fn submit_code_rejects_an_empty_code() {
         let err = login_submit_code("   \n").await.expect_err("empty code must fail");
-        assert!(err.contains("vide"), "unexpected error: {err}");
+        assert!(err.contains("empty"), "unexpected error: {err}");
     }
 
     /// Submitting a code with no login in flight tells the user to restart the flow —
@@ -270,7 +269,7 @@ mod tests {
         let err = login_submit_code("sk-test-not-a-real-code")
             .await
             .expect_err("no in-flight login must fail");
-        assert!(err.contains("aucune connexion Claude en cours"), "unexpected error: {err}");
+        assert!(err.contains("no Claude sign-in in progress"), "unexpected error: {err}");
         assert!(!err.contains("sk-test-not-a-real-code"), "code leaked into error: {err}");
     }
 

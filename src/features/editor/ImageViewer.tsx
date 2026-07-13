@@ -3,9 +3,9 @@ import styles from "./editor.module.css";
 
 /** Human-readable byte size (B / KB / MB) for the info strip. */
 function formatBytes(n: number): string {
-  if (n < 1024) return `${n} o`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} Ko`;
-  return `${(n / (1024 * 1024)).toFixed(1)} Mo`;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -251,7 +251,7 @@ export function ImageViewer({ src, size, initialZoom, initialOffset, onViewChang
   };
 
   if (failed) {
-    return <div className={styles.placeholder}>Impossible d'afficher cette image.</div>;
+    return <div className={styles.placeholder}>Unable to display this image.</div>;
   }
 
   // "% of actual size": the fit ratio (fit/natural) times the current zoom. When
@@ -313,8 +313,8 @@ export function ImageViewer({ src, size, initialZoom, initialOffset, onViewChang
             className={styles.zoomBtn}
             onClick={() => zoomCentered(1 / ZOOM_BTN_STEP)}
             disabled={!canZoomOut}
-            title="Dézoomer"
-            aria-label="Dézoomer"
+            title="Zoom out"
+            aria-label="Zoom out"
           >
             −
           </button>
@@ -323,7 +323,7 @@ export function ImageViewer({ src, size, initialZoom, initialOffset, onViewChang
             className={styles.zoomPct}
             onClick={resetView}
             disabled={zoom <= ZOOM_MIN + 1e-3}
-            title="Réinitialiser (ajuster)"
+            title="Reset (fit)"
           >
             {pct}%
           </button>
@@ -332,8 +332,8 @@ export function ImageViewer({ src, size, initialZoom, initialOffset, onViewChang
             className={styles.zoomBtn}
             onClick={() => zoomCentered(ZOOM_BTN_STEP)}
             disabled={!canZoomIn}
-            title="Zoomer"
-            aria-label="Zoomer"
+            title="Zoom in"
+            aria-label="Zoom in"
           >
             +
           </button>

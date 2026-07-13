@@ -15,9 +15,9 @@ const TerminalView = lazy(() => import("../terminal/TerminalView"));
  * region's placement so the result reads naturally:
  *
  *  - Region on the right (sideBySide): a tall column → editor on top, terminal at
- *    the BOTTOM (a horizontal divider). "Terminal en bas à droite."
+ *    the BOTTOM (a horizontal divider). "Terminal at the bottom right."
  *  - Region below (stacked): a wide strip → editor on the left, terminal on the
- *    RIGHT (a vertical divider). "Terminal à droite."
+ *    RIGHT (a vertical divider). "Terminal on the right."
  *
  * With only one pane open it fills the region (terminal alone = the whole right
  * side). `terminalFraction` (draggable) sizes the terminal when both are open, so

@@ -77,7 +77,7 @@ export function AgentBar({ session }: { session: string }) {
         // reports mid-run usage. Effort (above) is the meaningful live addition.
         const stats = [
           t.tokens != null ? `${fmtTokens(t.tokens)} tk` : null,
-          t.tool_uses != null ? `${t.tool_uses} outils` : null,
+          t.tool_uses != null ? `${t.tool_uses} tools` : null,
           t.duration_ms != null ? fmtDuration(t.duration_ms) : null,
         ]
           .filter(Boolean)
@@ -89,7 +89,7 @@ export function AgentBar({ session }: { session: string }) {
             <div key={t.task_id} className="cv-bashrow">
               <div className="cv-bgagent static">
                 <RunDots />
-                <span className="cv-bgagent-label">{t.label ?? "Sous-agent"}</span>
+                <span className="cv-bgagent-label">{t.label ?? "Sub-agent"}</span>
                 {meta ? <span className="cv-bgagent-meta wf-mono">{meta}</span> : null}
                 {stats ? <span className="cv-bgagent-stats wf-mono">{stats}</span> : null}
               </div>
@@ -102,10 +102,10 @@ export function AgentBar({ session }: { session: string }) {
               type="button"
               className="cv-bgagent"
               onClick={() => setOpened(t)}
-              title="Ouvrir le transcript du sous-agent"
+              title="Open sub-agent transcript"
             >
               <RunDots />
-              <span className="cv-bgagent-label">{t.label ?? "Sous-agent"}</span>
+              <span className="cv-bgagent-label">{t.label ?? "Sub-agent"}</span>
               {meta ? <span className="cv-bgagent-meta wf-mono">{meta}</span> : null}
               {stats ? <span className="cv-bgagent-stats wf-mono">{stats}</span> : null}
               <Ico name="arrow" className="sm cv-bgagent-go" />
@@ -113,8 +113,8 @@ export function AgentBar({ session }: { session: string }) {
             <button
               type="button"
               className="cv-bgstop"
-              title="Arrêter le sous-agent"
-              aria-label="Arrêter le sous-agent"
+              title="Stop sub-agent"
+              aria-label="Stop sub-agent"
               onClick={() => stopTask.mutate(t.task_id)}
             >
               <Ico name="stopc" className="sm" />
@@ -130,7 +130,7 @@ export function AgentBar({ session }: { session: string }) {
         liveSession={session}
         toolUseId={opened?.tool_use_id ?? null}
         running={opened?.status === "running"}
-        label={opened?.label ?? "Sous-agent"}
+        label={opened?.label ?? "Sub-agent"}
         subtitle={
           opened
             ? [opened.subagent_type, opened.model ? shortModel(opened.model) : null]

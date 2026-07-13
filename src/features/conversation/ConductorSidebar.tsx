@@ -44,7 +44,7 @@ function StatusDot({ status }: { status: AgentStatus }) {
 function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
   // Rich status keyed by the conversation's stable id (the message store routes
   // live events back to it). Drives the dot colour, the whole-row highlight, and
-  // the "Vu" acknowledge button.
+  // the "Seen" acknowledge button.
   const status = useAgentStatus(conv.id);
   // Raw count of running background tools for this conversation. We gate the delete
   // confirm on this DIRECTLY (not just `isActivelyRunning(status)`), because a running
@@ -136,8 +136,8 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
         <button
           type="button"
           className="cv-sess-seen"
-          title="Marquer comme vu"
-          aria-label="Marquer comme vu"
+          title="Mark as seen"
+          aria-label="Mark as seen"
           onClick={(e) => {
             e.stopPropagation();
             acknowledgeConversation(conv.id);
@@ -148,7 +148,7 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
       ) : null}
       {/* Friction-free delete: one click removes the conversation immediately, no
           confirm dialog. It's reversible with ⌘Z (undoRemoveConversation) — the on-disk
-          transcript is never touched, so nothing is truly lost. Mirrors the "Vu" button
+          transcript is never touched, so nothing is truly lost. Mirrors the "Seen" button
           (cv-sess-seen) — revealed on row hover, danger-tinted. The × is the row's only
           inline affordance: rename is double-click on the name (startEdit).
           EXCEPTION: while the conversation is actively running (turn in flight or
@@ -158,8 +158,8 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
       <button
         type="button"
         className="cv-sess-del"
-        title="Supprimer la conversation (⌘Z pour annuler)"
-        aria-label="Supprimer la conversation"
+        title="Delete conversation (⌘Z to undo)"
+        aria-label="Delete conversation"
         onClick={(e) => {
           e.stopPropagation();
           if (busyForDelete) setConfirmingDelete(true);
@@ -172,17 +172,17 @@ function ConvRow({ conv, active }: { conv: Conversation; active: boolean }) {
         <ConfirmDialog
           open
           danger
-          title={`Supprimer « ${conv.name} » ?`}
-          confirmLabel="Supprimer quand même"
+          title={`Delete "${conv.name}"?`}
+          confirmLabel="Delete anyway"
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={() => {
             setConfirmingDelete(false);
             remove(conv.id);
           }}
         >
-          Cette conversation est <strong>en cours d'exécution</strong>. La supprimer va{" "}
-          <strong>arrêter la session Claude</strong> et le travail non terminé peut être
-          perdu. La conversation reste récupérable avec ⌘Z, mais pas le run interrompu.
+          This conversation is <strong>running</strong>. Deleting it will{" "}
+          <strong>stop the Claude session</strong> and unfinished work may be lost. The
+          conversation can still be restored with ⌘Z, but not the interrupted run.
         </ConfirmDialog>
       ) : null}
     </div>
@@ -225,8 +225,8 @@ function RepoGroup({
         <button
           type="button"
           className="cv-repo-title"
-          title={collapsed ? "Déplier ce dépôt" : "Replier ce dépôt"}
-          aria-label={collapsed ? "Déplier ce dépôt" : "Replier ce dépôt"}
+          title={collapsed ? "Expand this repository" : "Collapse this repository"}
+          aria-label={collapsed ? "Expand this repository" : "Collapse this repository"}
           aria-expanded={!collapsed}
           onClick={() => toggleFold(repo.id)}
         >
@@ -237,7 +237,7 @@ function RepoGroup({
         <button
           type="button"
           className="cv-repo-act cv-repo-reveal"
-          title="Ouvrir les worktrees de ce dépôt"
+          title="Open this repository's worktrees"
           onClick={() => openManager(repo.id)}
         >
           <Ico name="branch" className="sm" />
@@ -245,7 +245,7 @@ function RepoGroup({
         <button
           type="button"
           className="cv-repo-act cv-repo-reveal"
-          title="Extensions de ce dépôt — MCP, plugins, skills, sous-agents"
+          title="This repository's extensions — MCP, plugins, skills, sub-agents"
           onClick={() =>
             openExtensions({
               kind: "project",
@@ -268,8 +268,8 @@ function RepoGroup({
         <button
           type="button"
           className="cv-repo-act cv-repo-reveal cv-repo-del"
-          title="Supprimer ce dépôt de Flight Deck"
-          aria-label="Supprimer ce dépôt"
+          title="Remove this repository from Flight Deck"
+          aria-label="Remove this repository"
           onClick={() => setConfirming(true)}
         >
           <Ico name="trash" className="sm" />
@@ -282,7 +282,7 @@ function RepoGroup({
         <button
           type="button"
           className="cv-repo-act"
-          title="Nouvelle conversation dans ce dépôt"
+          title="New conversation in this repository"
           onClick={() => void createConversationInRepo(repo.path)}
         >
           <Ico name="plus" className="sm" />
@@ -291,8 +291,8 @@ function RepoGroup({
       <ConfirmDialog
         open={confirming}
         danger
-        title={`Supprimer « ${repoName(repo.path)} » ?`}
-        confirmLabel="Supprimer le dépôt"
+        title={`Remove "${repoName(repo.path)}"?`}
+        confirmLabel="Remove repository"
         onCancel={() => setConfirming(false)}
         onConfirm={() => {
           setConfirming(false);
@@ -300,15 +300,15 @@ function RepoGroup({
         }}
       >
         {items.length === 0
-          ? "Ce dépôt sera retiré de la sidebar. "
+          ? "This repository will be removed from the sidebar. "
           : items.length === 1
-            ? "Ce dépôt et sa conversation seront retirés de la sidebar. "
-            : `Ce dépôt et ses ${items.length} conversations seront retirés de la sidebar. `}
-        Le dossier et les transcripts sur le disque ne sont pas touchés. Contrairement à la
-        suppression d'une conversation, cette action n'est pas annulable (⌘Z).
+            ? "This repository and its conversation will be removed from the sidebar. "
+            : `This repository and its ${items.length} conversations will be removed from the sidebar. `}
+        The folder and the on-disk transcripts are left untouched. Unlike deleting a
+        conversation, this action cannot be undone (⌘Z).
       </ConfirmDialog>
       {collapsed ? null : items.length === 0 ? (
-        <div className="cv-repo-empty">Aucune conversation</div>
+        <div className="cv-repo-empty">No conversations</div>
       ) : (
         items.map((c) => <ConvRow key={c.id} conv={c} active={c.id === activeId} />)
       )}
@@ -361,19 +361,19 @@ export function ConductorSidebar() {
         <Menu
           align="right"
           trigger={
-            <button className="wf-icon-btn" title="Nouvelle conversation">
+            <button className="wf-icon-btn" title="New conversation">
               <Ico name="plus" className="sm" />
             </button>
           }
         >
-          <MenuLabel>Nouvelle conversation dans…</MenuLabel>
+          <MenuLabel>New conversation in…</MenuLabel>
           {groups.map(({ repo: r }) => (
             <MenuItem key={r.id} icon="folder" onClick={() => void createConversationInRepo(r.path)}>
               {repoName(r.path)}
             </MenuItem>
           ))}
           <MenuItem icon="plus" onClick={() => void newConversationInPickedFolder()}>
-            Ajouter un dossier…
+            Add a folder…
           </MenuItem>
         </Menu>
       </div>
@@ -381,19 +381,19 @@ export function ConductorSidebar() {
       <button
         type="button"
         className="cv-search"
-        title="Rechercher dans l'historique des conversations (tout le disque)"
+        title="Search the conversation history (entire disk)"
         onClick={() => openHistory()}
       >
         <Ico name="search" className="sm" />
         <span className="wf-xmuted" style={{ fontSize: 12 }}>
-          Historique
+          History
         </span>
       </button>
 
       <div className="cv-sess-scroll">
         {groups.length === 0 ? (
           <div style={{ padding: "20px 12px", color: "var(--wf-tx-lo)", fontSize: 12, lineHeight: 1.6 }}>
-            Aucun dépôt. Clique sur <span className="wf-hi">＋</span> pour ouvrir un dossier.
+            No repositories. Click <span className="wf-hi">＋</span> to open a folder.
           </div>
         ) : (
           groups.map(({ repo, conversations: items }) => (
@@ -402,9 +402,9 @@ export function ConductorSidebar() {
         )}
       </div>
 
-      {/* Compact whole-fleet readout, pinned just above the Réglages footer. Counts
+      {/* Compact whole-fleet readout, pinned just above the Settings footer. Counts
           span every conversation (not just this repo), so it matches the FlightDeck
-          bar. Hidden via Settings → Général (independent of the FlightDeck toggle). */}
+          bar. Hidden via Settings → General (independent of the FlightDeck toggle). */}
       {showFleet ? <FleetReadout variant="sidebar" /> : null}
 
       <button
@@ -424,7 +424,7 @@ export function ConductorSidebar() {
       >
         <Ico name="cog" className="sm" />
         <span className="wf-muted" style={{ fontSize: 12 }}>
-          Réglages
+          Settings
         </span>
       </button>
 

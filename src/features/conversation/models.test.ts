@@ -49,7 +49,7 @@ describe("modelLabel", () => {
   });
 
   it("falls back to the raw id / placeholder", () => {
-    expect(modelLabel(null)).toBe("Modèle");
+    expect(modelLabel(null)).toBe("Model");
     expect(modelLabel("weird-id")).toBe("weird-id");
   });
 });

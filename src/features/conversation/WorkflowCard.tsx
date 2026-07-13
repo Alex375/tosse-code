@@ -55,7 +55,7 @@ export function WorkflowCard({
         onClick={() => setOpen(true)}
         role="button"
         style={{ cursor: "pointer" }}
-        title="Ouvrir le détail du workflow"
+        title="Open workflow details"
       >
         <Ico name="layers" className="sm" />
         <span className="cv-tool-t">Workflow</span>

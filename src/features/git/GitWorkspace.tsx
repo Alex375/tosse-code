@@ -11,7 +11,7 @@
 //   │      │       │ │files│ │
 //
 // The diff pane only OPENS when the user clicks a file — until then the
-// conversation fills the space. The "Modifs" tab swaps the history section to
+// conversation fills the space. The "Changes" tab swaps the history section to
 // working-tree changes + a commit box. All selection is shared via gitViewStore;
 // every split is draggable (fractions persisted in the editor store).
 
@@ -151,14 +151,14 @@ export function GitWorkspace({
             className={`${styles.tab} ${isHistory ? styles.tabActive : ""}`}
             onClick={() => setTab(convId, "history")}
           >
-            <History size={13} /> Historique
+            <History size={13} /> History
           </button>
           <button
             type="button"
             className={`${styles.tab} ${!isHistory ? styles.tabActive : ""}`}
             onClick={() => setTab(convId, "changes")}
           >
-            <FileDiff size={13} /> Modifs
+            <FileDiff size={13} /> Changes
             {status.data && status.data.files.length > 0 ? (
               <span className={styles.count}>{status.data.files.length}</span>
             ) : null}

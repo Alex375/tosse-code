@@ -29,12 +29,12 @@ export function OpenInTerminalButton({
     const res = await commands.openInTerminal(cwd, sessionId, backend);
     setBusy(false);
     if (res.status === "error") {
-      // The core builds an actionable French message; surface it instead of burying
+      // The core builds an actionable message; surface it instead of burying
       // it in the console where the user never sees why nothing opened.
       console.error("openInTerminal failed:", res.error);
       useAppErrors
         .getState()
-        .pushError("Impossible d'ouvrir la conversation dans le terminal du système.", res.error);
+        .pushError("Couldn't open the conversation in the system terminal.", res.error);
     }
   };
 
@@ -46,10 +46,10 @@ export function OpenInTerminalButton({
       disabled={!sessionId || busy}
       title={
         sessionId
-          ? "Ouvrir la conversation dans le terminal du système"
-          : "Disponible une fois la session démarrée"
+          ? "Open the conversation in the system terminal"
+          : "Available once the session has started"
       }
-      aria-label="Ouvrir la conversation dans le terminal du système"
+      aria-label="Open the conversation in the system terminal"
     >
       <Ico name="arrow" className="sm" />
     </button>

@@ -28,7 +28,7 @@ export type CodexPersonality = "none" | "friendly" | "pragmatic";
  * (sandbox × approval) collapsed into the four meaningful combinations, mirroring
  * OpenAI's own VS Code dropdown (Read only / Auto / Agent / Full access). ⇧Tab cycles
  * the SAFE ones in the composer (`PRESET_CYCLE`), the analogue of Claude's
- * permission-mode cycle; « Accès total » is menu-only (see `PRESET_CYCLE`).
+ * permission-mode cycle; "Full access" is menu-only (see `PRESET_CYCLE`).
  */
 export type CodexPreset = "prudent" | "standard" | "auto" | "danger";
 
@@ -45,36 +45,36 @@ export interface CodexPresetDef {
 // full; ⇧Tab walks the restricted `PRESET_CYCLE` (both below).
 export const CODEX_PRESETS: Record<CodexPreset, CodexPresetDef> = {
   prudent: {
-    label: "Prudent",
-    hint: "Lecture seule · demande avant d'agir",
+    label: "Cautious",
+    hint: "Read-only · asks before acting",
     sandbox: "readOnly",
     approval: "on-request",
     tone: "var(--wf-perm-plan)",
   },
   standard: {
     label: "Standard",
-    hint: "Écrit dans le workspace · demande le reste",
+    hint: "Writes in the workspace · asks for the rest",
     sandbox: "workspaceWrite",
     approval: "on-request",
     tone: "var(--wf-perm-default)",
   },
   auto: {
     label: "Auto",
-    hint: "Écrit dans le workspace · sans demander",
+    hint: "Writes in the workspace · without asking",
     sandbox: "workspaceWrite",
     approval: "never",
     tone: "var(--wf-perm-accept)",
   },
   danger: {
-    label: "Accès total",
-    hint: "Aucun bac à sable · aucune demande",
+    label: "Full access",
+    hint: "No sandbox · no approvals",
     sandbox: "dangerFullAccess",
     approval: "never",
     tone: "var(--wf-perm-bypass)",
   },
 };
 export const PRESET_ORDER: CodexPreset[] = ["prudent", "standard", "auto", "danger"];
-// The presets ⇧Tab cycles blindly. « Accès total » (no sandbox, no approvals, persisted
+// The presets ⇧Tab cycles blindly. "Full access" (no sandbox, no approvals, persisted
 // per conversation) is EXCLUDED — mirroring how Claude keeps bypassPermissions out of
 // PERM_CYCLE — so one stray keystroke can never disarm the sandbox; it stays reachable
 // only through a deliberate menu pick (whose hint spells out the risk). Cycling FROM

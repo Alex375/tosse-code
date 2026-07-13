@@ -17,7 +17,7 @@ import { faviconUrl, hostOf, parseWebSearch } from "./webResults";
 
 /** Markdown body of a web result, height-capped like every other tool output
  *  (a fetched page is routinely thousands of lines — keep it from flooding the
- *  transcript, full content one "Voir plus" away). */
+ *  transcript, full content one "Show more" away). */
 function WebMarkdown({ text }: { text: string }) {
   return (
     <Expandable>
@@ -83,7 +83,7 @@ function WebSearchDetail({ text }: { text: string }) {
         </>
       ) : null}
       {summary ? <WebMarkdown text={summary} /> : null}
-      {empty ? <div className="cv-web-empty">Aucune source.</div> : null}
+      {empty ? <div className="cv-web-empty">No sources.</div> : null}
     </div>
   );
 }
@@ -99,7 +99,7 @@ function WebFetchDetail({ url, text }: { url: string | null; text: string }) {
       {text.trim() ? (
         <WebMarkdown text={text} />
       ) : (
-        <div className="cv-web-empty">Aucun contenu récupéré.</div>
+        <div className="cv-web-empty">No content fetched.</div>
       )}
     </div>
   );

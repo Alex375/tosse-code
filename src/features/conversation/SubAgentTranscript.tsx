@@ -5,7 +5,7 @@
 // It renders the SAME "clean output" shape as the live thread: each user message is its own
 // row, and every assistant turn until the next user message is concatenated into ONE
 // response whose intermediate work (tool runs, thinking, in-between prose, sub-agents) folds
-// behind a single "Travail de Claude" block, leaving only the concluding message in clear.
+// behind a single "Claude's work" block, leaving only the concluding message in clear.
 // Tool results arrive as their own `tool_result` items; we join them to their `tool_use` by
 // id locally. The grouped sections + the fold are shared VERBATIM with the live thread
 // (<ToolSection> / <StaticToolStep> / <ClaudeWorkBlock>), so disk and live never diverge.
@@ -63,7 +63,7 @@ function renderSegments(segments: Segment[], results: Map<string, JoinedResult>)
 }
 
 /** One Claude response (everything between two user messages): intermediate work folds into a
- *  single "Travail de Claude" block, leaving only the concluding message in clear. A response
+ *  single "Claude's work" block, leaving only the concluding message in clear. A response
  *  that ends on tools (no concluding prose) renders unfolded, so something always stays in
  *  clear — mirrors the live thread's settled clean-output behaviour. */
 function ClaudeResponse({

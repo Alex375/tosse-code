@@ -95,8 +95,8 @@ function promptMatchKey(text: string): string {
  * no background), on both the user's and Claude's messages. Revealed on hover of the parent
  * `.cv-msg` (see conductor-conversation.css). Two actions, each gated INDEPENDENTLY by the
  * caller (the handler is `undefined` → its icon doesn't render):
- *  - rewind ("reprendre ici"): rewind the conversation IN PLACE (destructive, confirmed);
- *  - fork ("forker ici"): branch a NEW conversation at this message (non-destructive).
+ *  - rewind ("resume here"): rewind the conversation IN PLACE (destructive, confirmed);
+ *  - fork ("fork here"): branch a NEW conversation at this message (non-destructive).
  * Both are hidden entirely when the `messageControls` pref is off or the agent is busy.
  */
 function MessageActions({
@@ -116,8 +116,8 @@ function MessageActions({
         <button
           type="button"
           className="cv-msg-action"
-          title="Reprendre la conversation à partir d'ici (rembobiner)"
-          aria-label="Reprendre la conversation à partir d'ici"
+          title="Resume the conversation from here (rewind)"
+          aria-label="Resume the conversation from here"
           onClick={onRewind}
         >
           <Ico name="restart" />
@@ -127,8 +127,8 @@ function MessageActions({
         <button
           type="button"
           className={"cv-msg-action" + (forkBusy ? " is-busy" : "")}
-          title="Forker une nouvelle conversation à partir d'ici"
-          aria-label="Forker une nouvelle conversation à partir d'ici"
+          title="Fork a new conversation from here"
+          aria-label="Fork a new conversation from here"
           onClick={onFork}
           disabled={forkBusy}
         >
@@ -166,9 +166,9 @@ export function MsgUser({
       <Avatar user><UserMark /></Avatar>
       <div className="cv-bubble">
         {queued ? (
-          <span className="cv-queued-tag" title="Envoyé pendant que l'agent travaille — sera traité en cours de route">
+          <span className="cv-queued-tag" title="Sent while the agent is working — will be handled along the way">
             <Ico name="clock" />
-            en attente
+            pending
           </span>
         ) : null}
         {images && images.length ? (
@@ -178,7 +178,7 @@ export function MsgUser({
                 key={i}
                 className="cv-user-image"
                 src={imageDataUrl(img)}
-                alt={img.name ?? "image jointe"}
+                alt={img.name ?? "attached image"}
                 title={img.name}
               />
             ))}
@@ -208,7 +208,7 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
   const special = text.trim() ? parseSpecialMessage(text) : null;
   if (special) return <SpecialMessageCard data={special} />;
   // Mirror MsgUser's affordance: while the message is still QUEUED (not yet delivered to the
-  // CLI) show "en attente", switching to "Message envoyé" once the badge clears on delivery.
+  // CLI) show "pending", switching to "Message sent" once the badge clears on delivery.
   const queued = turn?.queued ?? false;
   return (
     <div className={styles.injectedMsg}>
@@ -216,12 +216,12 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
         className={styles.injectedMsgTag}
         title={
           queued
-            ? "Envoyé pendant que l'agent travaille — sera traité en cours de route"
+            ? "Sent while the agent is working — will be handled along the way"
             : undefined
         }
       >
         <Ico name="clock" className="sm" />
-        {queued ? "en attente" : "Message envoyé"}
+        {queued ? "pending" : "Message sent"}
       </span>
       <div className={styles.injectedMsgBody}>
         {hasImages ? (
@@ -231,7 +231,7 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
                 key={i}
                 className="cv-user-image"
                 src={imageDataUrl(img)}
-                alt={img.name ?? "image jointe"}
+                alt={img.name ?? "attached image"}
                 title={img.name}
               />
             ))}
@@ -263,14 +263,14 @@ function NoticeRow({ session, noticeId }: { session: string; noticeId: string })
  *  rendered (it fell through the timeline switch). Now a persistent error bubble
  *  with a typed heading. Successful / interrupted turns render nothing here. */
 function turnErrorHeading(meta: { subtype: string; apiErrorStatus?: string | null }): string {
-  if (meta.apiErrorStatus) return `Erreur d'API : ${meta.apiErrorStatus}`;
+  if (meta.apiErrorStatus) return `API error: ${meta.apiErrorStatus}`;
   switch (meta.subtype) {
     case "error_max_turns":
-      return "Nombre maximum de tours atteint";
+      return "Turn limit reached";
     case "error_during_execution":
-      return "Erreur pendant l'exécution";
+      return "Error during execution";
     default:
-      return "La tâche s'est terminée en erreur";
+      return "The task ended in an error";
   }
 }
 
@@ -294,11 +294,11 @@ function TurnResultRow({ session, resultId }: { session: string; resultId: strin
   // (duration_ms) plus the model-time breakdown (duration_api_ms). No cost/TTFT shown.
   if (!showTurnDuration || meta.durationMs == null) return null;
   return (
-    <div className={styles.turnMeta + " wf-mono"} title="Durée de ce tour · dont temps de modèle">
+    <div className={styles.turnMeta + " wf-mono"} title="This turn's duration · including model time">
       <Ico name="clock" className="sm" />
       <span>{fmtDuration(meta.durationMs)}</span>
       {showModelTime && meta.durationApiMs != null && meta.durationApiMs > 0 && (
-        <span className={styles.turnMetaModel}>{fmtDuration(meta.durationApiMs)} modèle</span>
+        <span className={styles.turnMetaModel}>{fmtDuration(meta.durationApiMs)} model</span>
       )}
     </div>
   );
@@ -351,7 +351,7 @@ function SubAgentCard({
   );
 
   const status: BackgroundTaskStatus | null = task?.status ?? null;
-  const label = field(input, "description") ?? task?.label ?? "Sous-agent";
+  const label = field(input, "description") ?? task?.label ?? "Sub-agent";
   const subagentType = field(input, "subagent_type") ?? task?.subagent_type ?? null;
   const agentId = task?.agent_id ?? null;
   const model = task?.model ?? null;
@@ -379,7 +379,7 @@ function SubAgentCard({
       else setErr(res.error);
     } catch (e) {
       // A thrown IPC/transport error must NEVER be swallowed: surface it and clear the
-      // loading state (the `finally` guarantees we don't get stuck "Chargement…").
+      // loading state (the `finally` guarantees we don't get stuck "Loading…").
       console.error("loadSubagentTranscript threw:", e);
       setErr(String(e));
     } finally {
@@ -428,21 +428,21 @@ function SubAgentCard({
         body = <SubAgentTranscript items={disk!} />;
         break;
       case "loading":
-        body = <div className={styles.subEmpty}>Chargement du transcript…</div>;
+        body = <div className={styles.subEmpty}>Loading transcript…</div>;
         break;
       case "error":
-        body = <div className={styles.subEmpty}>Transcript illisible : {err}</div>;
+        body = <div className={styles.subEmpty}>Transcript unreadable: {err}</div>;
         break;
       case "working":
-        body = <div className={styles.subEmpty}>Le sous-agent travaille…</div>;
+        body = <div className={styles.subEmpty}>The sub-agent is working…</div>;
         break;
       case "unavailable":
         body = (
-          <div className={styles.subEmpty}>Transcript indisponible (conversation rouverte).</div>
+          <div className={styles.subEmpty}>Transcript unavailable (conversation reopened).</div>
         );
         break;
       case "empty":
-        body = <div className={styles.subEmpty}>Aucun transcript pour ce sous-agent.</div>;
+        body = <div className={styles.subEmpty}>No transcript for this sub-agent.</div>;
         break;
     }
   }
@@ -456,7 +456,7 @@ function SubAgentCard({
         style={{ cursor: "pointer" }}
       >
         <Ico name="spark" className="sm" />
-        <span className="cv-tool-t">Sous-agent</span>
+        <span className="cv-tool-t">Sub-agent</span>
         <span className="cv-tool-m" title={label}>
           {label}
         </span>
@@ -480,7 +480,7 @@ function SubAgentCard({
           {model ? <span title={model}>{shortModel(model)}</span> : null}
           {effort ? <span>effort {effort}</span> : null}
           {task?.tokens != null ? <span>{fmtTokens(task.tokens)} tk</span> : null}
-          {task?.tool_uses != null ? <span>{task.tool_uses} outils</span> : null}
+          {task?.tool_uses != null ? <span>{task.tool_uses} tools</span> : null}
           {task?.duration_ms != null ? <span>{fmtDuration(task.duration_ms)}</span> : null}
         </div>
       ) : null}
@@ -530,7 +530,7 @@ function FrozenThinkingBlock({ session, text }: { session: string; text: string 
 }
 
 /** The thinking block currently STREAMING, with a live counter that ticks each second once
- *  it passes ~1s (floored, à la {@link LiveElapsed}). Its own leaf so the 1 Hz tick doesn't
+ *  it passes ~1s (floored, like {@link LiveElapsed}). Its own leaf so the 1 Hz tick doesn't
  *  re-render the rest of the response. */
 function LiveThinkingBlock({ session, text }: { session: string; text: string }) {
   const show = useDisplay((s) => s.showThinkingTime);
@@ -912,7 +912,7 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
   const allow = () =>
     answer.mutate({ requestId: request.request_id, decision: { behavior: "allow", updated_input: null } });
   const deny = () =>
-    answer.mutate({ requestId: request.request_id, decision: { behavior: "deny", message: "Refusé." } });
+    answer.mutate({ requestId: request.request_id, decision: { behavior: "deny", message: "Rejected." } });
 
   return (
     <div className="cv-msg cv-ai">
@@ -922,18 +922,18 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
           <div className="wf-ask">
             <div className="wf-ask-h">
               <Ico name="key" className="sm" />
-              Demande une autorisation
+              Requesting permission
             </div>
             <div className="wf-ask-t">{ask.text}</div>
             {ask.cmd ? <code className="wf-ask-cmd wf-mono">$ {ask.cmd}</code> : null}
           </div>
           <div className="wf-row" style={{ gap: 8, justifyContent: "flex-end" }}>
             <button className="wf-btn ghost sm" onClick={deny}>
-              Refuser
+              Reject
             </button>
             <button className="wf-btn prim sm" onClick={allow}>
               <Ico name="check" className="sm" />
-              Autoriser
+              Allow
             </button>
           </div>
         </div>
@@ -1142,12 +1142,12 @@ export function ConductorThread({
       <StreamFollow session={session} onRender={onRender} />
       <div className="cv-thread-inner">
         {empty && !busy ? (
-          <div className={styles.empty}>Démarre la conversation en envoyant un message.</div>
+          <div className={styles.empty}>Start the conversation by sending a message.</div>
         ) : (
           <>
             <div className="cv-day">
               <span className="wf-line" />
-              aujourd'hui
+              today
               <span className="wf-line" />
             </div>
             {plan.map((item, idx) => {
@@ -1238,28 +1238,28 @@ export function ConductorThread({
         open={!!rewindTarget}
         danger
         busy={rewinding}
-        title="Reprendre la conversation à partir d'ici ?"
-        confirmLabel="Rembobiner"
+        title="Resume the conversation from here?"
+        confirmLabel="Rewind"
         onCancel={() => setRewindTarget(null)}
         onConfirm={doRewind}
       >
         {rewindTarget?.isUser ? (
           <>
-            Ce message et tout ce qui suit seront <strong>définitivement supprimés</strong> de la
-            conversation. Son texte revient dans la zone de saisie pour que tu puisses le renvoyer.
+            This message and everything after it will be <strong>permanently deleted</strong> from the
+            conversation. Its text returns to the input box so you can resend it.
           </>
         ) : (
           <>
-            Tout ce qui suit cette réponse sera <strong>définitivement supprimé</strong> de la
-            conversation. La réponse elle-même est conservée.
+            Everything after this response will be <strong>permanently deleted</strong> from the
+            conversation. The response itself is kept.
           </>
         )}
         {isCodex ? (
           <div className="cv-rewind-warn">
             <Ico name="alert" />
             <span>
-              Seul l'historique de la conversation est rembobiné : les fichiers déjà modifiés sur le
-              disque ne sont pas restaurés.
+              Only the conversation history is rewound: files already modified on disk are not
+              restored.
             </span>
           </div>
         ) : null}
@@ -1268,8 +1268,8 @@ export function ConductorThread({
             <Ico name="alert" />
             <span>
               {runningBgTasks === 1
-                ? "Une tâche de fond en cours sera arrêtée."
-                : `${runningBgTasks} tâches de fond en cours seront arrêtées.`}
+                ? "One running background task will be stopped."
+                : `${runningBgTasks} running background tasks will be stopped.`}
             </span>
           </div>
         ) : null}
@@ -1280,7 +1280,7 @@ export function ConductorThread({
 
 /** Below this many ms of a turn running, the live elapsed counter stays hidden — short
  *  turns don't need a stopwatch. Once a turn runs past it, the counter appears and ticks
- *  each second (à la CLI, which starts showing elapsed time on long-running turns). */
+ *  each second (like the CLI, which starts showing elapsed time on long-running turns). */
 const TURN_ELAPSED_MIN_MS = 40_000;
 
 /** The live elapsed counter (🕐 40s → 1m 04s) shown at the right of the working line once
@@ -1295,7 +1295,7 @@ function LiveElapsed({ session }: { session: string }) {
   const elapsed = now - startedAt;
   if (elapsed < TURN_ELAPSED_MIN_MS) return null;
   return (
-    <span className={styles.elapsed + " wf-mono"} title="Durée du tour en cours">
+    <span className={styles.elapsed + " wf-mono"} title="Current turn duration">
       <Ico name="clock" className="sm" />
       {fmtDuration(Math.floor(elapsed / 1000) * 1000)}
     </span>
@@ -1311,8 +1311,8 @@ function LiveElapsed({ session }: { session: string }) {
  */
 function WorkingIndicator({ session }: { session: string }) {
   const activity = useLiveActivity(session);
-  // Registre (1): when the live tool is a FOREGROUND shell command, show it
-  // terminal-style ("$ command…") rather than the generic "Exécute …" phrase — the
+  // Special case: when the live tool is a FOREGROUND shell command, show it
+  // terminal-style ("$ command…") rather than the generic "Running …" phrase — the
   // bottom-of-terminal feel of the CLI. Any other activity keeps the plain line.
   const bash = useLiveBashCommand(session);
   return (

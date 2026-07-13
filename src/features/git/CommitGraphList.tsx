@@ -38,7 +38,7 @@ export function CommitGraphList({ cwd, convId }: { cwd: string; convId: string }
   if (commits.length === 0) {
     return (
       <div className={styles.empty}>
-        {log.isLoading ? "Lecture de l'historique…" : "Aucun commit."}
+        {log.isLoading ? "Reading history…" : "No commits."}
       </div>
     );
   }
@@ -83,7 +83,7 @@ export function CommitGraphList({ cwd, convId }: { cwd: string; convId: string }
           disabled={log.isFetchingNextPage}
           onClick={() => log.fetchNextPage()}
         >
-          {log.isFetchingNextPage ? "Chargement…" : "Charger plus de commits"}
+          {log.isFetchingNextPage ? "Loading…" : "Load more commits"}
         </button>
       ) : null}
     </div>

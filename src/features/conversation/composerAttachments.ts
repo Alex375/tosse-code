@@ -55,8 +55,8 @@ export function clearComposerAttachments(convId: string): void {
   useComposerAttachments.getState().clear(convId);
 }
 
-/** Drop every conversation's attachments — call on a full data wipe ("Tout
- *  supprimer"). Mirrors clearAllComposerDrafts. */
+/** Drop every conversation's attachments — call on a full data wipe ("Delete
+ *  all"). Mirrors clearAllComposerDrafts. */
 export function clearAllComposerAttachments(): void {
   useComposerAttachments.getState().clearAll();
 }
@@ -136,8 +136,8 @@ export async function attachmentFromPath(path: string): Promise<PathAttachResult
   const mediaType = wireImageMimeForPath(path);
   if (!mediaType) return null;
   const res = await commands.readImage(path);
-  if (res.status === "error") return { error: `Lecture de l'image échouée : ${res.error}` };
-  if (res.data.too_large) return { error: `Image trop volumineuse : ${basename(path)}` };
+  if (res.status === "error") return { error: `Failed to read image: ${res.error}` };
+  if (res.data.too_large) return { error: `Image too large: ${basename(path)}` };
   return { id: uid(), name: basename(path), mediaType, dataBase64: res.data.data_base64 };
 }
 
@@ -155,7 +155,7 @@ export function attachmentFromBlob(blob: Blob, name: string): Promise<PathAttach
   if (!mediaType) return Promise.resolve(null);
   if (blob.size > MAX_ATTACH_BYTES) {
     const mib = Math.round(MAX_ATTACH_BYTES / (1024 * 1024));
-    return Promise.resolve({ error: `Image trop volumineuse (max ${mib} Mio) : ${name}` });
+    return Promise.resolve({ error: `Image too large (max ${mib} MiB): ${name}` });
   }
   return new Promise((resolve) => {
     const reader = new FileReader();

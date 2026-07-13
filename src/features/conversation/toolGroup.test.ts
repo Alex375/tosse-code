@@ -51,10 +51,10 @@ describe("groupBlocks", () => {
 
   it("splits runs around assistant prose (the boundary the user chose)", () => {
     const segs = groupBlocks([
-      text("Je vais explorer."),
+      text("Let me explore."),
       tool("a", "Read"),
       tool("b", "Grep"),
-      text("Bonne base."),
+      text("Good starting point."),
       tool("c", "Bash"),
     ]);
     expect(segs.map((s) => s.kind)).toEqual(["text", "run", "text", "run"]);
@@ -232,7 +232,7 @@ describe("groupBlocks — in-band markers (mid-turn separator)", () => {
 
   it("keeps the trailing text as the final message across an earlier marker (one round)", () => {
     const { work, final } = splitFinalMessage(
-      groupBlocks([tool("a", "Read"), mkMarker("uinj", "user"), tool("b", "Edit"), text("Fait.")]),
+      groupBlocks([tool("a", "Read"), mkMarker("uinj", "user"), tool("b", "Edit"), text("Done.")]),
     );
     // work = run + marker + run (ONE fold), final = the closing prose only.
     expect(work.map((s) => s.kind)).toEqual(["run", "marker", "run"]);
@@ -426,25 +426,25 @@ const segs = (blocks: NormalizedBlock[]): Segment[] => groupBlocks(blocks);
 describe("splitFinalMessage", () => {
   it("treats the trailing text as the final message, the rest as work", () => {
     const { work, final } = splitFinalMessage(
-      segs([tool("a", "Read"), tool("b", "Edit"), text("Voilà, c'est fait.")]),
+      segs([tool("a", "Read"), tool("b", "Edit"), text("There, all done.")]),
     );
     expect(work.map((s) => s.kind)).toEqual(["run"]);
     expect(final.map((s) => s.kind)).toEqual(["text"]);
-    if (final[0].kind === "text") expect(final[0].text).toBe("Voilà, c'est fait.");
+    if (final[0].kind === "text") expect(final[0].text).toBe("There, all done.");
   });
 
   it("keeps an INTERMEDIATE text (followed by tools) inside work", () => {
     const { work, final } = splitFinalMessage(
-      segs([text("Je commence."), tool("a", "Read"), text("Terminé.")]),
+      segs([text("Getting started."), tool("a", "Read"), text("Done.")]),
     );
     // Only the LAST text is the final message; the opening text stays work.
     expect(work.map((s) => s.kind)).toEqual(["text", "run"]);
     expect(final).toHaveLength(1);
-    if (final[0].kind === "text") expect(final[0].text).toBe("Terminé.");
+    if (final[0].kind === "text") expect(final[0].text).toBe("Done.");
   });
 
   it("only a final message (no work) → empty work", () => {
-    const { work, final } = splitFinalMessage(segs([text("Juste une réponse.")]));
+    const { work, final } = splitFinalMessage(segs([text("Just a reply.")]));
     expect(work).toEqual([]);
     expect(final).toHaveLength(1);
   });
@@ -457,7 +457,7 @@ describe("splitFinalMessage", () => {
 
   it("folds several trailing text segments together as the final message", () => {
     const { work, final } = splitFinalMessage(
-      segs([tool("a", "Read"), text("Première ligne."), text("Seconde ligne.")]),
+      segs([tool("a", "Read"), text("First line."), text("Second line.")]),
     );
     expect(work.map((s) => s.kind)).toEqual(["run"]);
     expect(final.map((s) => s.kind)).toEqual(["text", "text"]);

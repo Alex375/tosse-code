@@ -56,7 +56,7 @@ export function RemoteControlChip({
   // (If enable succeeds but pairing/start fails, the bridge is live server-side with no code;
   // gating on the code alone would render the chip as OFF and strand a live bridge with no way
   // to disable it.) Claude: connected. Codex: connecting or connected — the menu then shows the
-  // code, or "indisponible" + the error, and always keeps the Désactiver action reachable.
+  // code, or "unavailable" + the error, and always keeps the Disable action reachable.
   const active = isCodex ? status === "connected" || status === "connecting" : status === "connected";
 
   if (active) {
@@ -70,11 +70,11 @@ export function RemoteControlChip({
             icon="globe"
             className="cv-rc-chip"
             data-rc={status === "connected" ? "connected" : "active"}
-            aria-label="Remote control actif"
+            aria-label="Remote control active"
             title={
               isCodex
-                ? "Remote control Codex actif — appaire un appareil avec le code, puis pilote cette session depuis l'app Codex"
-                : "Remote control actif — cette session est pilotable depuis claude.ai/code et l'app Claude"
+                ? "Codex remote control active — pair a device with the code, then drive this session from the Codex app"
+                : "Remote control active — this session can be driven from claude.ai/code and the Claude app"
             }
           >
             <span className={`wf-dot ${dotCls}`} aria-hidden />
@@ -83,34 +83,34 @@ export function RemoteControlChip({
       >
         {isCodex ? (
           <>
-            <MenuLabel>Remote control Codex · {status === "connected" ? "actif" : "connexion…"}</MenuLabel>
-            <MenuLabel>Code d'appairage : {pairingCode ?? "indisponible"}</MenuLabel>
+            <MenuLabel>Codex remote control · {status === "connected" ? "active" : "connecting…"}</MenuLabel>
+            <MenuLabel>Pairing code: {pairingCode ?? "unavailable"}</MenuLabel>
             <MenuItem
               icon="copy"
               disabled={!pairingCode}
-              onClick={pairingCode ? () => void copyText(pairingCode, "Copie du code d'appairage impossible.") : undefined}
+              onClick={pairingCode ? () => void copyText(pairingCode, "Couldn't copy the pairing code.") : undefined}
             >
-              Copier le code
+              Copy code
             </MenuItem>
             <MenuItem icon="stop" onClick={() => remote.mutate({ enabled: false })}>
-              Désactiver
+              Disable
             </MenuItem>
           </>
         ) : (
           <>
-            <MenuLabel>Remote control · actif</MenuLabel>
+            <MenuLabel>Remote control · active</MenuLabel>
             <MenuItem icon="external" disabled={!url} onClick={url ? () => void openUrl(url) : undefined}>
-              Ouvrir dans le navigateur
+              Open in browser
             </MenuItem>
             <MenuItem
               icon="copy"
               disabled={!url}
-              onClick={url ? () => void copyText(url, "Copie du lien remote control impossible.") : undefined}
+              onClick={url ? () => void copyText(url, "Couldn't copy the remote control link.") : undefined}
             >
-              Copier le lien
+              Copy link
             </MenuItem>
             <MenuItem icon="stop" onClick={() => remote.mutate({ enabled: false })}>
-              Désactiver
+              Disable
             </MenuItem>
           </>
         )}
@@ -130,10 +130,10 @@ export function RemoteControlChip({
       aria-label="Remote control"
       title={
         isError && rc?.error
-          ? `Remote control échoué : ${rc.error} — cliquer pour réessayer`
+          ? `Remote control failed: ${rc.error} — click to retry`
           : isCodex
-            ? "Remote control — piloter/suivre cette conversation depuis l'app mobile Codex (appairage par code)"
-            : "Remote control — piloter/suivre cette conversation depuis claude.ai/code ou l'app mobile Claude"
+            ? "Remote control — drive/follow this conversation from the Codex mobile app (pairing by code)"
+            : "Remote control — drive/follow this conversation from claude.ai/code or the Claude mobile app"
       }
     >
       <Ico name="globe" className="sm" />

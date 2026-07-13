@@ -52,7 +52,7 @@ export function clearCachedWindow(convId: string): void {
   }
 }
 
-/** Drop every cached window — call on a full data wipe ("Tout supprimer"). */
+/** Drop every cached window — call on a full data wipe ("Delete all"). */
 export function clearAllCachedWindows(): void {
   try {
     localStorage.removeItem(KEY);

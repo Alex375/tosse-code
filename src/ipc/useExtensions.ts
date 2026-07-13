@@ -270,7 +270,7 @@ export function useMcpActions(handle: string | null) {
       // here. Surface that instead of leaving the server silently stuck in needs-auth.
       if (res.requires_user_action) {
         throw new Error(
-          "Termine l'authentification dans le navigateur. Ce serveur exige de recoller l'URL de redirection — un flux pas encore géré ici ; reconnecte le serveur une fois authentifié.",
+          "Finish authenticating in the browser. This server requires the redirect URL to be pasted back — a flow not yet handled here; reconnect the server once authenticated.",
         );
       }
       return res;
@@ -325,7 +325,7 @@ export function useMarketplaces(path: string | null) {
 }
 
 /**
- * Refresh marketplace(s) from upstream — the network "Vérifier les mises à jour"
+ * Refresh marketplace(s) from upstream — the network "Check for updates"
  * action (`claude plugin marketplace update`, all when `name` is omitted). On success
  * it invalidates BOTH the extensions snapshot (so per-plugin `update_available`
  * recomputes against the fresh pins) and the marketplace list. Can take a few seconds.

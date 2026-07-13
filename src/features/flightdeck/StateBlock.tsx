@@ -15,7 +15,7 @@ function BgChip({ n }: { n: number }) {
   return (
     <span className="wf-bgchip">
       <span className="sp" />
-      {n} en fond
+      {n} in background
     </span>
   );
 }
@@ -33,7 +33,7 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
     // The status can flip to needIntervention a beat BEFORE the permission request
     // actually lands (or linger a beat AFTER the user answered, until the state
     // event clears awaiting_permission). With no real request queued there's nothing
-    // to show — stay quiet instead of flashing a generic "Autoriser outil ?".
+    // to show — stay quiet instead of flashing a generic "Allow tool?".
     const req = pending[0];
     if (!req) return null;
     const ask = classifyAsk(req);
@@ -41,7 +41,7 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
       <div className="wf-ask compact">
         <div className="wf-ask-h">
           <Ico name="key" className="sm" />
-          Demande une autorisation
+          Requesting permission
         </div>
         <div className="wf-ask-t">{ask.text}</div>
         {ask.cmd ? <code className="wf-ask-cmd wf-mono">$ {ask.cmd}</code> : null}
@@ -58,7 +58,7 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
         <div className="wf-ask compact">
           <div className="wf-ask-h">
             <Ico name="form" className="sm" />
-            {n > 0 ? `${n} questions à répondre` : "Questionnaire"}
+            {n > 0 ? `${n} questions to answer` : "Questionnaire"}
           </div>
         </div>
       );
@@ -68,7 +68,7 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
       <div className="wf-ask compact">
         <div className="wf-ask-h">
           <Ico name="ask" className="sm" />
-          Pose une question
+          Asking a question
           <BgChip n={bg} />
         </div>
         {status.prompt ? <div className="wf-ask-t">{status.prompt}</div> : null}
@@ -81,7 +81,7 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
       <div className="wf-ask err compact">
         <div className="wf-ask-h">
           <Ico name="alert" className="sm" />
-          Erreur
+          Error
           <BgChip n={bg} />
         </div>
         <div className="wf-ask-t">{status.message}</div>
@@ -91,14 +91,14 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
 
   if (status.kind === "review") {
     // A clean finish with background work still running is NOT `review` (it routes to
-    // `backgrounding` below), so `review` always means "genuinely ready to relire" — no bg.
+    // `backgrounding` below), so `review` always means "genuinely ready to review" — no bg.
     return (
       <div className="wf-review compact">
         <div className="wf-review-h">
           <Ico name="check" className="sm" />
-          À relire
+          To review
         </div>
-        <div className="wf-review-t">Conversation terminée — prête à relire.</div>
+        <div className="wf-review-t">Conversation ended — ready to review.</div>
       </div>
     );
   }
@@ -111,10 +111,10 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
       <div className="wf-review bg compact">
         <div className="wf-review-h">
           <Ico name="layers" className="sm" />
-          Tâche de fond
+          Background task
         </div>
         <div className="wf-review-t">
-          {n > 1 ? `${n} tâches de fond en cours…` : "Tâche de fond en cours…"}
+          {n > 1 ? `${n} background tasks running…` : "Background task running…"}
         </div>
       </div>
     );

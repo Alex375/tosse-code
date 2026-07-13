@@ -76,14 +76,14 @@ export function ToolResultBody({
   // No textual output AND no image on SUCCESS (the common "command printed nothing"
   // case) → a discreet muted note instead of an empty <pre>.
   if (!isError && !hasText && images.length === 0) {
-    return <div className={styles.emptyNote}>Aucune sortie.</div>;
+    return <div className={styles.emptyNote}>No output.</div>;
   }
 
   // An errored result keeps its red bubble, but an empty body must still say something —
   // a blank red box would carry no information (the CLI almost always attaches a message,
   // but a null/empty error result is possible). An image-only error still shows the image.
   const errorPlaceholder = isError && !hasText && images.length === 0;
-  const shown = errorPlaceholder ? "(erreur sans message)" : text;
+  const shown = errorPlaceholder ? "(error with no message)" : text;
 
   return (
     <div className={styles.result}>
@@ -94,7 +94,7 @@ export function ToolResultBody({
               key={i}
               className={styles.resultImage}
               src={imageDataUrl(img)}
-              alt="Image lue par l'outil"
+              alt="Image read by the tool"
             />
           ))}
         </div>

@@ -24,10 +24,10 @@ import {
 import styles from "./HistoryPanel.module.css";
 
 const PERIODS: { key: Period; label: string }[] = [
-  { key: "all", label: "Tout" },
-  { key: "today", label: "Aujourd'hui" },
-  { key: "7d", label: "7 jours" },
-  { key: "30d", label: "30 jours" },
+  { key: "all", label: "All" },
+  { key: "today", label: "Today" },
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "30 days" },
 ];
 
 export function HistoryPanel() {
@@ -49,7 +49,7 @@ export function HistoryPanel() {
   const [period, setPeriod] = useState<Period>("all");
   const [selected, setSelected] = useState<DiskConversation | null>(null);
 
-  // Conversations already in the app — mark those rows as "déjà présente".
+  // Conversations already in the app — mark those rows as "already present".
   const conversations = useConversationsStore((s) => s.conversations);
   const existingIds = useMemo(
     () => new Set(conversations.map((c) => c.sessionId).filter((s): s is string => !!s)),
@@ -196,10 +196,10 @@ export function HistoryPanel() {
         <div className={styles.head}>
           <Ico name="search" className="sm" />
           <span className={styles.title}>
-            Historique des conversations
+            Conversation history
             <span className={styles.titleSub}>{totalShown} conversation(s)</span>
           </span>
-          <button className={styles.iconBtn} onClick={close} title="Fermer" aria-label="Fermer">
+          <button className={styles.iconBtn} onClick={close} title="Close" aria-label="Close">
             ✕
           </button>
         </div>
@@ -211,7 +211,7 @@ export function HistoryPanel() {
               <Ico name="search" className="sm" />
               <input
                 className={styles.searchInput}
-                placeholder="Rechercher dans toutes les conversations…"
+                placeholder="Search all conversations…"
                 value={query}
                 autoFocus
                 onChange={(e) => setQuery(e.target.value)}
@@ -224,9 +224,9 @@ export function HistoryPanel() {
                 className={styles.repoSelect}
                 value={repoRoot ?? ""}
                 onChange={(e) => setRepoRoot(e.target.value || null)}
-                title="Filtrer par dépôt"
+                title="Filter by repository"
               >
-                <option value="">Tous les dépôts</option>
+                <option value="">All repositories</option>
                 {repoOptions.map(([root, count]) => (
                   <option key={root} value={root}>
                     {repoName(root)} ({count})
@@ -248,16 +248,16 @@ export function HistoryPanel() {
 
             <div className={styles.list}>
               {loading ? (
-                <div className={styles.empty}>Lecture des conversations sur le disque…</div>
+                <div className={styles.empty}>Reading conversations from disk…</div>
               ) : error ? (
-                <div className={styles.error}>Impossible de lister les conversations : {error}</div>
+                <div className={styles.error}>Unable to list conversations: {error}</div>
               ) : searchError ? (
-                <div className={styles.error}>Échec de la recherche : {searchError}</div>
+                <div className={styles.error}>Search failed: {searchError}</div>
               ) : totalShown === 0 ? (
                 <div className={styles.empty}>
                   {query.trim()
-                    ? `Aucun résultat pour « ${query.trim()} ».`
-                    : "Aucune conversation trouvée sur le disque."}
+                    ? `No results for "${query.trim()}".`
+                    : "No conversations found on disk."}
                 </div>
               ) : ranked ? (
                 // Search active → flat ranked list (with repo label + snippet).
@@ -302,7 +302,7 @@ export function HistoryPanel() {
           <div className={styles.previewCol}>
             {!selected ? (
               <div className={styles.previewEmpty}>
-                Sélectionne une conversation pour la prévisualiser.
+                Select a conversation to preview it.
               </div>
             ) : (
               <>
@@ -331,26 +331,26 @@ export function HistoryPanel() {
                     onClick={() => reactivate(selected)}
                     title={
                       existingIds.has(selected.session_id)
-                        ? "Cette conversation est déjà dans l'app — l'ouvrir"
-                        : "Ajouter cette conversation à la barre latérale"
+                        ? "This conversation is already in the app — open it"
+                        : "Add this conversation to the sidebar"
                     }
                   >
                     <Ico name="plus" className="sm" />
-                    {existingIds.has(selected.session_id) ? "Ouvrir" : "Ajouter la conversation"}
+                    {existingIds.has(selected.session_id) ? "Open" : "Add conversation"}
                   </button>
                 </div>
                 <div className={styles.previewBody}>
                   {previewLoading ? (
-                    <div className={styles.previewEmpty}>Chargement du transcript…</div>
+                    <div className={styles.previewEmpty}>Loading transcript…</div>
                   ) : previewError ? (
                     <div className={styles.error}>
-                      Impossible de charger le transcript : {previewError}
+                      Unable to load transcript: {previewError}
                     </div>
                   ) : preview && preview.length > 0 ? (
                     <SubAgentTranscript items={preview} />
                   ) : (
                     <div className={styles.previewEmpty}>
-                      Cette conversation n'a aucun message lisible.
+                      This conversation has no readable messages.
                     </div>
                   )}
                 </div>
@@ -395,7 +395,7 @@ function Row({
           <BackendMark kind={conv.backend} />
         </span>
         <span className={styles.rowTitle}>{label}</span>
-        {present ? <span className={styles.presentTag}>déjà présente</span> : null}
+        {present ? <span className={styles.presentTag}>already present</span> : null}
       </div>
       {second && second !== label ? <div className={styles.rowExcerpt}>{second}</div> : null}
       <div className={styles.rowMeta}>

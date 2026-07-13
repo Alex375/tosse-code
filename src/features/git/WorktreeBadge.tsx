@@ -26,7 +26,7 @@ export function WorktreeBadge({ conv }: { conv: Conversation }) {
     <button
       type="button"
       className="cv-wt-badge"
-      title={`Worktree « ${worktreeLabel(wt)} »\nCliquer pour gérer les worktrees`}
+      title={`Worktree "${worktreeLabel(wt)}"\nClick to manage worktrees`}
       aria-label={`Worktree ${worktreeLabel(wt)}`}
       onClick={(e) => {
         e.stopPropagation();

@@ -170,7 +170,7 @@ fn read_config(path: &Path, snap: &mut ExtensionsSnapshot) -> Vec<(PathBuf, bool
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(e) => {
-            snap.warnings.push(format!("~/.codex/config.toml illisible : {e}"));
+            snap.warnings.push(format!("~/.codex/config.toml unreadable: {e}"));
             return Vec::new();
         }
     };
@@ -187,7 +187,7 @@ fn read_config(path: &Path, snap: &mut ExtensionsSnapshot) -> Vec<(PathBuf, bool
                 toml_error_log_detail(&e)
             );
             snap.warnings
-                .push("~/.codex/config.toml est malformé (erreur de syntaxe).".to_string());
+                .push("~/.codex/config.toml is malformed (syntax error).".to_string());
             return Vec::new();
         }
     };

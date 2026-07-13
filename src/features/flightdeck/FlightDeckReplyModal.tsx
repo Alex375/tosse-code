@@ -3,7 +3,7 @@
 // full Conversation view. It mounts the exact same `ConversationPane` the main view
 // uses (thread + pinned bars + composer), keyed by the STABLE conversation id, but
 // deliberately WITHOUT the editor/terminal side panel — it stays light, for quick
-// triage. A "Plein écran" escape hatch promotes it to the real Conversation view.
+// triage. A "Fullscreen" escape hatch promotes it to the real Conversation view.
 //
 // Store-driven (useFlightdeckModal): the attention actions on the stream cards open
 // it; App mounts it once. `onPromote` is the only prop, since promoting needs the
@@ -117,7 +117,7 @@ export function FlightDeckReplyModal({ onPromote }: { onPromote: (id: string) =>
             onClick={() =>
               useConversationsStore.getState().setConvCleanOutput(convId, !cleanOutput)
             }
-            title="Clean output — n'afficher que le message final de chaque réponse ; replier le travail intermédiaire (outils, réflexion, étapes)"
+            title="Clean output — show only the final message of each response; fold the intermediate work (tools, thinking, steps)"
             aria-label="Clean output"
             style={
               cleanOutput ? { borderColor: "var(--wf-accent)", color: "var(--wf-accent)" } : undefined
@@ -129,16 +129,16 @@ export function FlightDeckReplyModal({ onPromote }: { onPromote: (id: string) =>
           <button
             className={styles.headBtn}
             onClick={() => onPromote(convId)}
-            title="Ouvrir dans la vue conversation"
+            title="Open in the conversation view"
           >
             <Ico name="external" className="sm" />
-            Plein écran
+            Fullscreen
           </button>
           <button
             className={styles.iconBtn}
             onClick={close}
-            title="Fermer (Échap)"
-            aria-label="Fermer"
+            title="Close (Esc)"
+            aria-label="Close"
           >
             <Ico name="x" className="sm" />
           </button>

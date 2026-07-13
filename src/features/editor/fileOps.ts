@@ -50,12 +50,12 @@ export function isWithin(ancestor: string, child: string): boolean {
   return child === ancestor || child.startsWith(ancestor + "/");
 }
 
-/** Validate a name typed into the inline editor. Returns a French error string, or
+/** Validate a name typed into the inline editor. Returns an error string, or
  *  null when the name is acceptable: non-empty, no path separator, not "."/"..". */
 export function validateName(name: string): string | null {
   const t = name.trim();
-  if (!t) return "Le nom ne peut pas être vide.";
-  if (t === "." || t === "..") return "Nom réservé.";
-  if (t.includes("/")) return "Le nom ne peut pas contenir « / ».";
+  if (!t) return "Name cannot be empty.";
+  if (t === "." || t === "..") return "Reserved name.";
+  if (t.includes("/")) return 'Name cannot contain "/".';
   return null;
 }

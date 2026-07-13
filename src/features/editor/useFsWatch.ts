@@ -75,7 +75,7 @@ export function useFsWatch(convId: string, cwd: string | null, enabled: boolean)
         useAppErrors
           .getState()
           .pushError(
-            "Le suivi des fichiers s'est interrompu — l'arborescence et les fichiers ouverts peuvent ne pas se rafraîchir automatiquement.",
+            "File watching stopped — the tree and open files may not refresh automatically.",
             e.payload.message,
           );
       }),

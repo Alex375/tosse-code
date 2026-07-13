@@ -50,7 +50,7 @@ export function TranscriptPopover({
   // Live sub-thread fallback: when the agent_id can't be resolved (or the disk
   // transcript isn't written yet) but the agent streamed into the store, render that —
   // the same source the inline <SubAgentCard> uses. Fixes the FlightDeck drill-down
-  // showing "transcript indisponible" for an agent that renders fine in the thread.
+  // showing "transcript unavailable" for an agent that renders fine in the thread.
   const liveIds = useSubThread(liveSession ?? "", toolUseId ?? "");
   // The prompt the sub-agent was launched with — the live sub-thread carries only its
   // replies, so prepend it as the opening user turn (the disk transcript already has it).
@@ -73,7 +73,7 @@ export function TranscriptPopover({
       else setErr(res.error);
     } catch (e) {
       // Never swallow a thrown IPC/transport error: surface it, and the `finally`
-      // guarantees we never get stuck on "Chargement…".
+      // guarantees we never get stuck on "Loading…".
       console.error("loadSubagentTranscript threw:", e);
       setErr(String(e));
     } finally {
@@ -121,19 +121,19 @@ export function TranscriptPopover({
       body = <SubAgentTranscript items={items!} />;
       break;
     case "loading":
-      body = <div className={styles.note}>Chargement du transcript…</div>;
+      body = <div className={styles.note}>Loading transcript…</div>;
       break;
     case "error":
-      body = <div className={styles.note}>Transcript illisible : {err}</div>;
+      body = <div className={styles.note}>Transcript unreadable: {err}</div>;
       break;
     case "working":
-      body = <div className={styles.note}>Le sous-agent travaille…</div>;
+      body = <div className={styles.note}>The sub-agent is working…</div>;
       break;
     case "unavailable":
-      body = <div className={styles.note}>Transcript indisponible (conversation rouverte).</div>;
+      body = <div className={styles.note}>Transcript unavailable (conversation reopened).</div>;
       break;
     case "empty":
-      body = <div className={styles.note}>Le sous-agent n'a pas encore écrit de transcript.</div>;
+      body = <div className={styles.note}>The sub-agent hasn't written a transcript yet.</div>;
       break;
   }
 
@@ -151,7 +151,7 @@ export function TranscriptPopover({
             <div className={styles.title}>{label}</div>
             {subtitle ? <div className={styles.subtitle}>{subtitle}</div> : null}
           </div>
-          <button className={styles.close} onClick={onClose} aria-label="Fermer" title="Fermer (Échap)">
+          <button className={styles.close} onClick={onClose} aria-label="Close" title="Close (Esc)">
             <Ico name="x" className="sm" />
           </button>
         </div>

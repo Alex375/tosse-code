@@ -318,7 +318,7 @@
   color: var(--wf-tx-xlo);
 }
 
-/* ---- MCP buckets (dépôt / plugin / connecteurs cloud) ---- */
+/* ---- MCP buckets (repo / plugin / cloud connectors) ---- */
 .bucket {
   margin-bottom: 12px;
 }
@@ -1104,7 +1104,7 @@
   background: rgba(240, 177, 90, 0.08);
   white-space: nowrap;
 }
-/* "Mettre à jour" — an amber-tinted action, sitting between the row body and toggle. */
+/* "Update" — an amber-tinted action, sitting between the row body and toggle. */
 .updateBtn {
   flex: 0 0 auto;
   display: inline-flex;

@@ -41,7 +41,7 @@ export function AppErrorBanner() {
           <button
             type="button"
             onClick={() => dismiss(e.id)}
-            title="Masquer"
+            title="Hide"
             style={{
               flex: "none",
               background: "none",

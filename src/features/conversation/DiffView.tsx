@@ -45,7 +45,7 @@ export function DiffView({ path, oldText, newText = "", lines: preParsed, kind }
           <MentionPathChip path={path} className={styles.path} display={basename(path)} />
           {isDelete ? (
             <span className={styles.summary}>
-              <span className={styles.removed}>fichier supprimé</span>
+              <span className={styles.removed}>file deleted</span>
             </span>
           ) : hasDiff ? (
             <span className={styles.summary}>

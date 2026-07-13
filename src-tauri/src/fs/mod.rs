@@ -193,11 +193,11 @@ pub fn write_file(path: &str, content: &str) -> std::io::Result<()> {
 // lone exception and is deliberately the SAFE kind: it moves to the OS trash
 // (recoverable), never an irreversible unlink.
 
-/// French "already exists" error, shared by the create/rename/copy guards.
+/// The "already exists" error, shared by the create/rename/copy guards.
 fn already_exists() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
-        "un élément de ce nom existe déjà",
+        "an item with this name already exists",
     )
 }
 

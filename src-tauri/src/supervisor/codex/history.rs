@@ -396,7 +396,7 @@ fn parse_rollout(path: &Path) -> Vec<ConversationItem> {
             let (mut items, skipped) = parse_rollout_str(&content);
             if skipped > 0 {
                 items.push(history_notice(format!(
-                    "{skipped} ligne(s) de l'historique Codex étaient illisibles — des messages peuvent manquer."
+                    "{skipped} line(s) of this Codex history were unreadable — some messages may be missing."
                 )));
             }
             items
@@ -405,7 +405,7 @@ fn parse_rollout(path: &Path) -> Vec<ConversationItem> {
         Err(e) => {
             eprintln!("[codex-history] cannot read rollout {}: {e}", path.display());
             vec![history_notice(format!(
-                "Impossible de lire l'historique Codex de cette conversation : {e}"
+                "Unable to read this conversation's Codex history: {e}"
             ))]
         }
     }
@@ -527,7 +527,7 @@ pub(crate) fn parse_rollout_str(content: &str) -> (Vec<ConversationItem>, usize)
     for id in open_tools.drain(..) {
         items.push(ConversationItem::ToolResult {
             tool_use_id: id,
-            content: json!("(interrompu)"),
+            content: json!("(interrupted)"),
             is_error: true,
             parent_tool_use_id: None,
         });
@@ -718,7 +718,7 @@ fn push_tool_result(
 /// wire omits it — never empty (an empty tool name would render a nameless card).
 fn tool_label(name: &str) -> &str {
     if name.is_empty() {
-        "outil"
+        "tool"
     } else {
         name
     }

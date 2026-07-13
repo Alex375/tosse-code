@@ -126,7 +126,7 @@ const sessionRemoteControlEvent = new MockEmitter<SessionRemoteControlEvent>();
 // No real Codex app-server in the browser mock — never fires, but must exist so the
 // global event router can subscribe without crashing.
 const sessionCodexPlanUsageEvent = new MockEmitter<SessionCodexPlanUsageEvent>();
-// Extensions v2 + comptes: never fire in the mock, but the global router subscribes.
+// Extensions v2 + accounts: never fire in the mock, but the global router subscribes.
 const sessionExtensionsChangedEvent = new MockEmitter<SessionExtensionsChangedEvent>();
 const accountLoginEvent = new MockEmitter<AccountLoginEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
@@ -205,7 +205,7 @@ export const mockCommands = {
   // so the composer's backend-aware controls render without a real `claude`/`codex`
   // binary. Both twins MUST exist: `binaryAvailable.probe()` calls `commands.xxx()`
   // synchronously, so a missing method throws a TypeError before its `.catch` is attached
-  // → the always-mounted AuthWarningBar / Réglages → Comptes crash the mock UI.
+  // → the always-mounted AuthWarningBar / Settings → Accounts crash the mock UI.
   async claudeAvailable(): Promise<boolean> {
     return true;
   },
@@ -240,7 +240,7 @@ export const mockCommands = {
       ],
       skills: [
         { name: "imagegen", description: "Generate an image", scope: "user", source: null, path: "/Users/x/.codex/skills/.system/imagegen/SKILL.md", enabled: true },
-        { name: "off-skill", description: "Un skill désactivé (démo toggle)", scope: "user", source: null, path: "/Users/x/.codex/skills/off-skill/SKILL.md", enabled: false },
+        { name: "off-skill", description: "A disabled skill (toggle demo)", scope: "user", source: null, path: "/Users/x/.codex/skills/off-skill/SKILL.md", enabled: false },
       ],
       agents: [],
       warnings: [],
@@ -331,7 +331,7 @@ export const mockCommands = {
   async codexMarketplaceUpgrade(_name: string | null): Promise<Result<null, string>> {
     return ok(null);
   },
-  // ---- Comptes (Claude & Codex) — demo statuses ----------------------------------
+  // ---- Accounts (Claude & Codex) — demo statuses ----------------------------------
   async accountClaudeStatus(): Promise<Result<ClaudeAccountStatus, string>> {
     return ok({
       loggedIn: true,
@@ -494,7 +494,7 @@ export const mockCommands = {
     // auto-title behavior is exercised end to end in dev/Playwright.
     setTimeout(() => {
       const words = description.trim().replace(/\s+/g, " ").split(" ").slice(0, 6).join(" ");
-      const title = words ? words.charAt(0).toUpperCase() + words.slice(1) : "Nouvelle conversation";
+      const title = words ? words.charAt(0).toUpperCase() + words.slice(1) : "New conversation";
       sessionTitleEvent.emit({ session, title, seq });
     }, 40);
     return ok(null);
@@ -668,7 +668,7 @@ export const mockCommands = {
   },
 
   async getPlanUsage(): Promise<Result<PlanUsage, UsageError>> {
-    // No real OAuth endpoint in the browser; return plausible fills so the Forfait
+    // No real OAuth endpoint in the browser; return plausible fills so the Plan
     // section of the context popover renders in dev/Playwright. Reset ~2h / ~3d out,
     // as ISO 8601 strings (matching the live endpoint shape).
     const iso = (offsetSec: number) => new Date(Date.now() + offsetSec * 1000).toISOString();
@@ -698,7 +698,7 @@ export const mockCommands = {
       conversations: [
         {
           id: "conv-demo",
-          name: "Démo tâches de fond",
+          name: "Background tasks demo",
           repo_id: "repo-demo",
           cwd: "/Users/dev/demo-repo",
           created_at: now,
@@ -717,7 +717,7 @@ export const mockCommands = {
         // mock driver; only `backend` drives the brand marks.
         {
           id: "conv-demo-codex",
-          name: "Démo Codex",
+          name: "Codex demo",
           repo_id: "repo-demo",
           cwd: "/Users/dev/demo-repo",
           created_at: now - 1,
@@ -1182,8 +1182,8 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     cwd: "/Users/dev/demo-repo",
     repo_root: "/Users/dev/demo-repo",
     git_branch: "main",
-    title: "Refonte de l'authentification",
-    excerpt: "Le déploiement casse au login, il faut revoir l'auth du serveur",
+    title: "Authentication rework",
+    excerpt: "The deployment breaks at login, the server auth needs reworking",
     mtime_ms: Date.now() - 3_600_000,
     backend: "claude",
   },
@@ -1193,7 +1193,7 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     repo_root: "/Users/dev/demo-repo",
     git_branch: "feat/dark-mode",
     title: null,
-    excerpt: "Ajoute un toggle de dark mode dans les réglages",
+    excerpt: "Add a dark mode toggle in settings",
     mtime_ms: Date.now() - 4 * 86_400_000,
     backend: "claude",
   },
@@ -1202,8 +1202,8 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     cwd: "/Users/dev/other-project",
     repo_root: "/Users/dev/other-project",
     git_branch: null,
-    title: "Script d'import CSV",
-    excerpt: "Parser le CSV et insérer les lignes en base",
+    title: "CSV import script",
+    excerpt: "Parse the CSV and insert the rows into the database",
     mtime_ms: Date.now() - 20 * 86_400_000,
     backend: "claude",
   },
@@ -1215,7 +1215,7 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     repo_root: "/Users/dev/demo-repo",
     git_branch: "main",
     title: null,
-    excerpt: "Fais-moi un petit tour du projet",
+    excerpt: "Give me a quick tour of the project",
     mtime_ms: Date.now() - 2 * 3_600_000,
     backend: "codex",
   },
@@ -1229,11 +1229,11 @@ const HISTORY_DEMO_SESSION_IDS = new Set(MOCK_DISK_CONVERSATIONS.map((c) => c.se
 // its result by `tool_use_id`. Mirrors the real reader's output shape so the reload
 // rendering (tool cards, diff view) is verifiable in dev/Playwright without a real rollout.
 const DEMO_CODEX_HISTORY: ConversationItem[] = [
-  { kind: "user_message", id: "cx-u1", text: "Ajoute un fichier hello.txt et liste le dossier", parent_tool_use_id: null, replay: false },
-  { kind: "assistant_message", id: "cx-a1", parent_tool_use_id: null, blocks: [{ type: "text", text: "Je crée le fichier puis je liste le dossier." }] },
-  { kind: "assistant_message", id: "cx-p1", parent_tool_use_id: null, blocks: [{ type: "tool_use", id: "cx-p1", name: "ApplyPatch", input: { changes: [{ path: "/Users/dev/demo-repo/hello.txt", kind: { type: "add" }, diff: "@@ -0,0 +1,2 @@\n+bonjour\n+le monde\n" }] } }] },
-  { kind: "tool_result", tool_use_id: "cx-p1", is_error: false, parent_tool_use_id: null, content: { status: "completed", changes: [{ path: "/Users/dev/demo-repo/hello.txt", kind: { type: "add" }, diff: "@@ -0,0 +1,2 @@\n+bonjour\n+le monde\n" }] } },
+  { kind: "user_message", id: "cx-u1", text: "Add a hello.txt file and list the folder", parent_tool_use_id: null, replay: false },
+  { kind: "assistant_message", id: "cx-a1", parent_tool_use_id: null, blocks: [{ type: "text", text: "I'll create the file then list the folder." }] },
+  { kind: "assistant_message", id: "cx-p1", parent_tool_use_id: null, blocks: [{ type: "tool_use", id: "cx-p1", name: "ApplyPatch", input: { changes: [{ path: "/Users/dev/demo-repo/hello.txt", kind: { type: "add" }, diff: "@@ -0,0 +1,2 @@\n+hello\n+world\n" }] } }] },
+  { kind: "tool_result", tool_use_id: "cx-p1", is_error: false, parent_tool_use_id: null, content: { status: "completed", changes: [{ path: "/Users/dev/demo-repo/hello.txt", kind: { type: "add" }, diff: "@@ -0,0 +1,2 @@\n+hello\n+world\n" }] } },
   { kind: "assistant_message", id: "cx-t1", parent_tool_use_id: null, blocks: [{ type: "tool_use", id: "cx-t1", name: "Bash", input: { command: "ls -la", cwd: "/Users/dev/demo-repo" } }] },
-  { kind: "tool_result", tool_use_id: "cx-t1", is_error: false, parent_tool_use_id: null, content: "total 8\n-rw-r--r--  1 dev  staff  17 hello.txt\n" },
-  { kind: "assistant_message", id: "cx-a2", parent_tool_use_id: null, blocks: [{ type: "text", text: "C'est fait : `hello.txt` créé, dossier listé." }] },
+  { kind: "tool_result", tool_use_id: "cx-t1", is_error: false, parent_tool_use_id: null, content: "total 8\n-rw-r--r--  1 dev  staff  12 hello.txt\n" },
+  { kind: "assistant_message", id: "cx-a2", parent_tool_use_id: null, blocks: [{ type: "text", text: "Done: `hello.txt` created, folder listed." }] },
 ];

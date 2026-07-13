@@ -33,7 +33,7 @@ export function TodoBar({ session }: { session: string }) {
         aria-expanded={open}
       >
         <Ico name="list" className="sm" />
-        <span className="cv-todobar-title">Tâches</span>
+        <span className="cv-todobar-title">Tasks</span>
         <span className="cv-todobar-count wf-mono">
           {summary.completed}/{summary.total}
         </span>

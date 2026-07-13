@@ -20,7 +20,7 @@ import type { PlanUsage } from "../ipc/client";
 interface CodexPlanUsageStore {
   /** The latest merged snapshot, or null before the first push. */
   usage: PlanUsage | null;
-  /** Timestamp (ms) of the last push — drives the popover's "mis à jour …" line. */
+  /** Timestamp (ms) of the last push — drives the popover's "updated …" line. */
   updatedAt: number | null;
   /** Merge a (possibly sparse) push onto the current snapshot. */
   set: (usage: PlanUsage) => void;

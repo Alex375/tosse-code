@@ -77,7 +77,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* "Détails techniques" disclosure: a muted, borderless toggle that reveals the raw
+/* "Technical details" disclosure: a muted, borderless toggle that reveals the raw
    error payload (stderr / exit code / raw line) without polluting the stream. */
 .errorToggle {
   align-self: flex-start;
@@ -111,7 +111,7 @@
 }
 
 /* A confirmed control change (model / effort / permission): a subtle, centered
-   inline line, à la VS Code extension. Muted, with the from→to values emphasised. */
+   inline line, like the VS Code extension. Muted, with the from→to values emphasised. */
 .controlChange {
   display: flex;
   align-items: center;
@@ -222,7 +222,7 @@
 .turnMeta svg {
   opacity: 0.7;
 }
-/* The "· 18s modèle" breakdown after the total; the dot separates it from the total. */
+/* The "· 18s model" breakdown after the total; the dot separates it from the total. */
 .turnMetaModel {
   opacity: 0.8;
 }

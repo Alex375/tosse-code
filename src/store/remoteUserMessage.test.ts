@@ -67,16 +67,16 @@ describe("remote user_message rendering", () => {
   it("renders a remote-originated user turn (keyed by uuid)", () => {
     const s = "conv-1";
     store().ensureSession(s);
-    userMessage(s, "u-remote", "salut depuis le téléphone");
+    userMessage(s, "u-remote", "hello from the phone");
     expect(timelineIds(s)).toEqual(["u-remote"]);
-    expect(textOf(s, "u-remote")).toBe("salut depuis le téléphone");
+    expect(textOf(s, "u-remote")).toBe("hello from the phone");
   });
 
   it("dedupes a re-delivered user_message by id", () => {
     const s = "conv-2";
     store().ensureSession(s);
-    userMessage(s, "u-1", "coucou");
-    userMessage(s, "u-1", "coucou");
+    userMessage(s, "u-1", "hi there");
+    userMessage(s, "u-1", "hi there");
     expect(timelineIds(s)).toEqual(["u-1"]);
   });
 
@@ -85,10 +85,10 @@ describe("remote user_message rendering", () => {
     // genuine remote turn identical to a local one (different uuid) must still show.
     const s = "conv-3";
     store().ensureSession(s);
-    store().addUserTurn(s, "même texte");
-    userMessage(s, "u-remote-dup", "même texte");
+    store().addUserTurn(s, "same text");
+    userMessage(s, "u-remote-dup", "same text");
     expect(timelineIds(s).length).toBe(2);
-    expect(textOf(s, "u-remote-dup")).toBe("même texte");
+    expect(textOf(s, "u-remote-dup")).toBe("same text");
   });
 
   it("orders a remote turn BEFORE its response even when the reply streamed first", () => {
@@ -102,7 +102,7 @@ describe("remote user_message rendering", () => {
     // Turn 2 (remote): the assistant reply streams FIRST, then the phone message
     // arrives out of order.
     messageStarted(s, "asst-2");
-    userMessage(s, "remote-2", "question tapée sur le téléphone");
+    userMessage(s, "remote-2", "question typed on the phone");
     turnResult(s);
     const order = turnOrder(s);
     // The remote turn precedes the reply it triggered (asst-2), not the reverse.
@@ -116,8 +116,8 @@ describe("remote user_message rendering", () => {
     turnResult(s); // anchor at end
     // Two remote messages arrive before the next reply starts streaming.
     messageStarted(s, "asst-y");
-    userMessage(s, "remote-a", "premier");
-    userMessage(s, "remote-b", "deuxième");
+    userMessage(s, "remote-a", "first");
+    userMessage(s, "remote-b", "second");
     expect(turnOrder(s)).toEqual(["asst-x", "remote-a", "remote-b", "asst-y"]);
   });
 
@@ -148,7 +148,7 @@ describe("remote user_message rendering", () => {
     store().reanchorReplay(s);
     // A phone message now arrives while the next reply streams.
     messageStarted(s, "a2");
-    userMessage(s, "remote", "depuis le tel", true);
+    userMessage(s, "remote", "from the phone", true);
     // It sits after the restored history, before the new reply — not above everything.
     expect(turnOrder(s)).toEqual(["u1", "a1", "remote", "a2"]);
   });

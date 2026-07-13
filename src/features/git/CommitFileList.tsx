@@ -17,7 +17,7 @@ export function CommitFileList({ cwd, convId }: { cwd: string; convId: string })
   const commit = log.data?.pages.flat().find((c) => c.oid === selectedOid) ?? null;
 
   if (!selectedOid) {
-    return <div className={styles.empty}>Sélectionne un commit à gauche.</div>;
+    return <div className={styles.empty}>Select a commit on the left.</div>;
   }
 
   return (
@@ -59,7 +59,7 @@ export function CommitFileList({ cwd, convId }: { cwd: string; convId: string })
           })}
         </div>
       ) : (
-        <div className={styles.empty}>{files.isLoading ? "Lecture…" : "Aucun fichier."}</div>
+        <div className={styles.empty}>{files.isLoading ? "Reading…" : "No files."}</div>
       )}
     </div>
   );

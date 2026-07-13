@@ -4,7 +4,7 @@ import styles from "./editor.module.css";
 /**
  * Catches a render-time failure in the code editor — most importantly a failed
  * lazy chunk load (Monaco) or a Monaco init throw — so it surfaces as a visible
- * message instead of an endless "Chargement…" spinner (a silent failure). Reset
+ * message instead of an endless "Loading…" spinner (a silent failure). Reset
  * by remounting (the boundary is keyed by file path in EditorPane).
  */
 export class EditorErrorBoundary extends Component<
@@ -25,7 +25,7 @@ export class EditorErrorBoundary extends Component<
     if (this.state.error) {
       return (
         <div className={styles.placeholder}>
-          Impossible d'afficher l'éditeur de code.
+          Unable to display the code editor.
           <br />
           {this.state.error.message}
         </div>

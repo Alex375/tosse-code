@@ -30,7 +30,7 @@ export function LastMessagePeek({ convId, summary }: { convId: string; summary: 
         type="button"
         className="ag-lastmsg ag-lastmsg-btn"
         onClick={() => setOpen((o) => !o)}
-        title="Voir le message envoyé"
+        title="View sent message"
       >
         <Ico name="reply" className="sm" />
         <span className="ag-lastmsg-txt">
@@ -43,7 +43,7 @@ export function LastMessagePeek({ convId, summary }: { convId: string; summary: 
         open={open}
         onClose={() => setOpen(false)}
         width={340}
-        title="Dernier message envoyé"
+        title="Last message sent"
         icon="reply"
       >
         <div className="ag-pop-msg">

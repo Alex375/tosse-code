@@ -50,7 +50,7 @@ export function WorkflowBar({ session }: { session: string }) {
             type="button"
             className="cv-bashrow-main"
             onClick={() => setOpenedId(t.task_id)}
-            title="Ouvrir le détail du workflow"
+            title="Open workflow details"
           >
             <RunDots />
             <Ico name="layers" className="sm cv-monrow-ico" />
@@ -60,8 +60,8 @@ export function WorkflowBar({ session }: { session: string }) {
           <button
             type="button"
             className="cv-bgstop"
-            title="Arrêter le workflow"
-            aria-label="Arrêter le workflow"
+            title="Stop workflow"
+            aria-label="Stop workflow"
             onClick={() => stopTask.mutate(t.task_id)}
           >
             <Ico name="stopc" className="sm" />

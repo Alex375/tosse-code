@@ -43,7 +43,7 @@ export function BashBar({ session }: { session: string }) {
             type="button"
             className="cv-bashrow-main"
             onClick={() => setOpenedId(t.task_id)}
-            title="Voir la sortie de la commande"
+            title="View command output"
           >
             <RunDots />
             {t.label ? (
@@ -52,18 +52,18 @@ export function BashBar({ session }: { session: string }) {
               <span className="cv-bashrow-cmd">{t.label}</span>
             ) : (
               // No name → fall back to the raw `$ command` (mono), better than a generic
-              // "commande".
+              // "command".
               <span className="cv-bashrow-cmd wf-mono">
                 <span className="cv-bashrow-p" aria-hidden="true">$</span>
-                {t.command ?? "commande"}
+                {t.command ?? "command"}
               </span>
             )}
           </button>
           <button
             type="button"
             className="cv-bgstop"
-            title="Arrêter la commande"
-            aria-label="Arrêter la commande"
+            title="Stop command"
+            aria-label="Stop command"
             onClick={() => stopTask.mutate(t.task_id)}
           >
             <Ico name="stopc" className="sm" />

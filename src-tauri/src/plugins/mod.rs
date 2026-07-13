@@ -87,7 +87,7 @@ fn run_claude(args: &[String], cwd: Option<&Path>) -> Result<(), String> {
     }
     let child = cmd
         .spawn()
-        .map_err(|e| format!("lancement de « claude {joined} » impossible : {e}"))?;
+        .map_err(|e| format!("could not launch \"claude {joined}\": {e}"))?;
     let pid = child.id();
     // Drain + wait on a helper thread so a full stdout/stderr pipe can't deadlock the
     // wait; the main thread bounds it with a timeout.
@@ -97,16 +97,16 @@ fn run_claude(args: &[String], cwd: Option<&Path>) -> Result<(), String> {
     });
     let output = match rx.recv_timeout(CLAUDE_CLI_TIMEOUT) {
         Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(format!("« claude {joined} » a échoué : {e}")),
+        Ok(Err(e)) => return Err(format!("\"claude {joined}\" failed: {e}")),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             kill_group(pid);
             return Err(format!(
-                "« claude {joined} » a dépassé le délai ({} s) et a été interrompu.",
+                "\"claude {joined}\" timed out ({} s) and was interrupted.",
                 CLAUDE_CLI_TIMEOUT.as_secs()
             ));
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
-            return Err(format!("« claude {joined} » : le process a disparu sans résultat."));
+            return Err(format!("\"claude {joined}\": the process disappeared without a result."));
         }
     };
     if output.status.success() {
@@ -118,7 +118,7 @@ fn run_claude(args: &[String], cwd: Option<&Path>) -> Result<(), String> {
     let body = if stderr.trim().is_empty() { stdout } else { stderr };
     let tail = tail_lines(body.trim(), 8);
     Err(format!(
-        "« claude {joined} » a échoué ({}){}",
+        "\"claude {joined}\" failed ({}){}",
         output.status,
         if tail.is_empty() {
             String::new()

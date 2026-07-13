@@ -1,4 +1,4 @@
-/* Réglages → Comptes — graphical per-backend account cards. Each card carries a
+/* Settings → Accounts — graphical per-backend account cards. Each card carries a
    brand accent (--brand, set per backend) driving a soft top glow, the mark tile,
    the plan pill and the connect CTA. Three visual states via [data-state]:
    connected (rich identity + brand glow), disconnected (muted + red status), and

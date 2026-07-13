@@ -11,18 +11,18 @@ import { Ico } from "../../ui/kit";
  * an error to acknowledge, or an open question the heuristic flagged. It makes
  * the "mark as seen" action discoverable: the small ✓ on the sidebar row is a
  * shortcut, but a first-time user wouldn't know it exists, so the labelled button
- * here ("Marquer comme vu") is the obvious way to clear the conversation back to
+ * here ("Mark as seen") is the obvious way to clear the conversation back to
  * idle. Not shown for real blocks (questionnaire / permission) — those must be
  * answered in the thread, not dismissed (see `isDismissable`).
  */
 function reviewLabel(s: AgentStatus): string {
   switch (s.kind) {
     case "review":
-      return "Conversation terminée";
+      return "Conversation ended";
     case "error":
       return s.message;
     case "needInput":
-      return "En attente de ta réponse";
+      return "Waiting for your reply";
     default:
       return "";
   }
@@ -39,7 +39,7 @@ export function ReviewBar({ session }: { session: string }) {
   const send = useSendMessage(session);
   const dismissable = isDismissable(status);
 
-  // ⌘/Ctrl+Enter = "Marquer comme vu" for the visible reminder bar (review / error /
+  // ⌘/Ctrl+Enter = "Mark as seen" for the visible reminder bar (review / error /
   // open question), whatever its tone (blue / yellow / red). Captured at the window
   // level so it wins over the composer's Enter-to-send handler (same capture trick
   // the composer uses for Escape — WKWebView can swallow keys inside the textarea).
@@ -59,7 +59,7 @@ export function ReviewBar({ session }: { session: string }) {
   }, [dismissable, session]);
 
   // Background work still running while the main turn is done: a calm GREEN (running-family)
-  // bar, NOT the blue "à relire" — there is nothing to review yet, the agent resumes on its
+  // bar, NOT the blue "to review" — there is nothing to review yet, the agent resumes on its
   // own when the workflow / sub-agent finishes. Non-dismissable (no acknowledge button).
   if (status.kind === "backgrounding") {
     const n = status.count;
@@ -67,7 +67,7 @@ export function ReviewBar({ session }: { session: string }) {
       <div className="cv-reviewbar" data-tone="backgrounding">
         <span className="cv-reviewbar-dot" />
         <span className="cv-reviewbar-label">
-          {n > 1 ? `${n} tâches de fond en cours…` : "Tâche de fond en cours…"}
+          {n > 1 ? `${n} background tasks running…` : "Background task running…"}
         </span>
       </div>
     );
@@ -88,7 +88,7 @@ export function ReviewBar({ session }: { session: string }) {
           type="button"
           className="cv-reviewbar-btn"
           onClick={() => send.mutate({ text: "continue" })}
-          title="Renvoyer « continue » pour que Claude reprenne le travail"
+          title='Resend "continue" so Claude picks the work back up'
         >
           <Ico name="play" className="sm" />
           Continue
@@ -98,10 +98,10 @@ export function ReviewBar({ session }: { session: string }) {
         type="button"
         className="cv-reviewbar-btn"
         onClick={() => acknowledgeConversation(session)}
-        title="Repasser la conversation en gris (inactive) — ⌘↵"
+        title="Move the conversation back to grey (inactive) — ⌘↵"
       >
         <Ico name="check" className="sm" />
-        Marquer comme vu
+        Mark as seen
       </button>
     </div>
   );

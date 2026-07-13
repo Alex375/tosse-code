@@ -5,7 +5,7 @@
 //   send → busy → stream text → tool_use(Read, Grep, Glob) → tool_results → stream
 //        text + code → tool_use(Edit) → PERMISSION (pause) → [answer] → tool_result
 //        → final → turn_result → idle
-// The first message runs three consecutive tools so the grouped "Exécuté N étapes"
+// The first message runs three consecutive tools so the grouped "Ran N steps"
 // section (ToolSection) is exercised by the mock, not just a single-step run.
 //
 // Token-by-token deltas with small delays so Playwright can capture mid-stream.
@@ -64,7 +64,7 @@ export const DEMO_SUBAGENT_TRANSCRIPT: ConversationItem[] = [
     parent_tool_use_id: null,
     blocks: [
       { type: "thinking", text: "Let me list the supervisor directory first, then read the key files to map the data flow." },
-      { type: "text", text: "Je commence par lister le module `supervisor/`, puis je lis les fichiers clés." },
+      { type: "text", text: "I'll start by listing the `supervisor/` module, then read the key files." },
       { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls -1 src-tauri/src/supervisor", description: "list module" } },
     ],
   },
@@ -82,7 +82,7 @@ export const DEMO_SUBAGENT_TRANSCRIPT: ConversationItem[] = [
     blocks: [
       {
         type: "text",
-        text: "Voici la carte du module :\n\n- **protocol.rs** — types serde du fil stream-json\n- **assembler.rs** — normalisation + registre des tâches de fond\n- **session.rs** — acteur tokio par session\n- **subagents.rs** — lecteurs disque (transcript sous-agent, manifeste workflow)\n\nFlux des tâches de fond : `task_started → task_progress → task_updated → task_notification`, chaque event ré-émis comme un `BackgroundTask` complet.",
+        text: "Here's the module map:\n\n- **protocol.rs** — serde types for the stream-json wire\n- **assembler.rs** — normalization + background-task registry\n- **session.rs** — tokio actor per session\n- **subagents.rs** — disk readers (sub-agent transcript, workflow manifest)\n\nBackground-task flow: `task_started → task_progress → task_updated → task_notification`, each event re-emitted as a full `BackgroundTask`.",
       },
     ],
   },
@@ -224,14 +224,14 @@ export const idleState = (): SessionStatePayload => ({ ...baseState });
 // ---- Fixture content -------------------------------------------------------
 
 const M1_TEXT =
-  "Je vais inspecter `src/App.tsx` pour comprendre le bug de streaming, puis proposer un correctif.\n\n";
+  "I'll inspect `src/App.tsx` to understand the streaming bug, then propose a fix.\n\n";
 
 const READ_RESULT = `  9  useEffect(() => {
- 10    // s'abonne mais ne nettoie jamais -> fuite de listeners
+ 10    // subscribes but never cleans up -> listener leak
  11    events.sessionMessageEvent.listen((e) => apply(e.payload));
  12  }, []);`;
 
-const M2_TEXT = `Le problème : le \`useEffect\` s'abonne à l'événement mais ne **désabonne** jamais au démontage, ce qui fuite un listener à chaque montage. Voici le correctif :
+const M2_TEXT = `The problem: the \`useEffect\` subscribes to the event but never **unsubscribes** on unmount, which leaks a listener on every mount. Here's the fix:
 
 \`\`\`tsx
 useEffect(() => {
@@ -240,7 +240,7 @@ useEffect(() => {
 }, [session]);
 \`\`\`
 
-J'applique le changement.`;
+I'll apply the change.`;
 
 const EDIT_OLD = `  useEffect(() => {
     events.sessionMessageEvent.listen((e) => apply(e.payload));
@@ -258,10 +258,10 @@ const EDIT_INPUT = {
 };
 
 const M3_ALLOW =
-  "C'est corrigé ✓ L'abonnement est désormais nettoyé au démontage — plus de fuite de listeners. Veux-tu que je lance les tests ?";
+  "Fixed ✓ The subscription is now cleaned up on unmount — no more listener leak. Want me to run the tests?";
 
 const M3_DENY =
-  "Compris, je n'applique pas le changement. Dis-moi si tu préfères une autre approche.";
+  "Got it, I won't apply the change. Let me know if you'd prefer a different approach.";
 
 const PERMISSION: PermissionRequestPayload = {
   request_id: "perm_edit_1",
@@ -269,12 +269,12 @@ const PERMISSION: PermissionRequestPayload = {
   tool_use_id: "toolu_edit",
   input: EDIT_INPUT,
   title: "Edit src/App.tsx",
-  description: "Appliquer le correctif de nettoyage de l'abonnement",
+  description: "Apply the subscription-cleanup fix",
   suggestions: [],
 };
 
 const Q_INTRO =
-  "Avant de coder l'authentification, j'ai besoin de ton avis sur deux points :\n\n";
+  "Before coding the authentication, I need your input on two things:\n\n";
 
 const QUESTION: PermissionRequestPayload = {
   request_id: "ask_q_1",
@@ -283,38 +283,38 @@ const QUESTION: PermissionRequestPayload = {
   input: {
     questions: [
       {
-        header: "Approche",
-        question: "Quelle approche d'authentification préfères-tu ?",
+        header: "Approach",
+        question: "Which authentication approach do you prefer?",
         multiSelect: false,
         options: [
-          { label: "JWT (stateless)", description: "Jetons signés, pas d'état serveur, simple à scaler." },
-          { label: "Sessions serveur", description: "Cookie + store côté serveur, révocation facile." },
-          { label: "OAuth délégué", description: "Google / GitHub, aucun mot de passe à gérer." },
+          { label: "JWT (stateless)", description: "Signed tokens, no server state, easy to scale." },
+          { label: "Server sessions", description: "Cookie + server-side store, easy revocation." },
+          { label: "Delegated OAuth", description: "Google / GitHub, no passwords to manage." },
         ],
       },
       {
-        header: "Stockage",
-        question: "Où stocker le token côté client ?",
+        header: "Storage",
+        question: "Where to store the token on the client?",
         multiSelect: false,
         options: [
-          { label: "Cookie httpOnly", description: "Inaccessible au JS, recommandé." },
-          { label: "localStorage", description: "Simple, mais exposé au XSS." },
+          { label: "Cookie httpOnly", description: "Inaccessible to JS, recommended." },
+          { label: "localStorage", description: "Simple, but exposed to XSS." },
         ],
       },
       {
         header: "Extras",
-        question: "Quelles protections veux-tu activer ? (plusieurs choix possibles)",
+        question: "Which protections do you want to enable? (multiple choices allowed)",
         multiSelect: true,
         options: [
-          { label: "Rate limiting", description: "Limiter les tentatives de connexion." },
-          { label: "2FA", description: "Double authentification (TOTP)." },
-          { label: "Refresh tokens", description: "Renouvellement silencieux des sessions." },
+          { label: "Rate limiting", description: "Limit login attempts." },
+          { label: "2FA", description: "Two-factor authentication (TOTP)." },
+          { label: "Refresh tokens", description: "Silent session renewal." },
         ],
       },
     ],
   },
-  title: "Claude te pose une question",
-  description: "Ton choix oriente la suite de l'implémentation.",
+  title: "Claude is asking you a question",
+  description: "Your choice guides the rest of the implementation.",
   suggestions: [],
 };
 
@@ -471,7 +471,7 @@ export class ScenarioDriver {
     this.step(220, () =>
       this.emit.item({ kind: "message_started", id: "m1", role: "assistant", parent_tool_use_id: null }),
     );
-    const t1 = "Je lance un audit de sécurité via un sous-agent.\n\n";
+    const t1 = "I'm running a security audit via a sub-agent.\n\n";
     this.streamText("m1", t1);
     this.step(150, () =>
       this.emit.item({
@@ -485,10 +485,10 @@ export class ScenarioDriver {
             id: "toolu_fg",
             name: "Agent",
             input: {
-              description: "Audit sécurité",
+              description: "Security audit",
               subagent_type: "security",
               prompt:
-                "Audite la sécurité du module auth et liste les findings, classés par sévérité (haute / moyenne / basse), avec un correctif proposé pour chacun.",
+                "Audit the security of the auth module and list the findings, sorted by severity (high / medium / low), with a proposed fix for each.",
             },
           },
         ],
@@ -496,7 +496,7 @@ export class ScenarioDriver {
     );
     this.step(60, () =>
       this.emit.task?.(
-        taskOf({ task_id: "tk_fg", tool_use_id: "toolu_fg", label: "Audit sécurité", subagent_type: "security", model: "claude-haiku-4-5", status: "running" }),
+        taskOf({ task_id: "tk_fg", tool_use_id: "toolu_fg", label: "Security audit", subagent_type: "security", model: "claude-haiku-4-5", status: "running" }),
       ),
     );
     // live sub-thread content (scoped under toolu_fg)
@@ -511,25 +511,25 @@ export class ScenarioDriver {
         blocks: [
           {
             type: "text",
-            text: "3 findings : (1) pas de rate-limit sur `/login` [haute], (2) tokens en localStorage [moyenne], (3) pas de rotation des refresh tokens [moyenne].",
+            text: "3 findings: (1) no rate-limit on `/login` [high], (2) tokens in localStorage [medium], (3) no refresh-token rotation [medium].",
           },
         ],
       }),
     );
     this.step(200, () =>
       this.emit.task?.(
-        taskOf({ task_id: "tk_fg", tool_use_id: "toolu_fg", label: "Audit sécurité", subagent_type: "security", model: "claude-haiku-4-5", status: "completed", agent_id: "demoagent_fg", tokens: 18400, tool_uses: 7, duration_ms: 21000 }),
+        taskOf({ task_id: "tk_fg", tool_use_id: "toolu_fg", label: "Security audit", subagent_type: "security", model: "claude-haiku-4-5", status: "completed", agent_id: "demoagent_fg", tokens: 18400, tool_uses: 7, duration_ms: 21000 }),
       ),
     );
     this.step(120, () =>
-      this.emit.item({ kind: "tool_result", tool_use_id: "toolu_fg", content: "3 findings rapportés (1 haute, 2 moyennes).", is_error: false, parent_tool_use_id: null }),
+      this.emit.item({ kind: "tool_result", tool_use_id: "toolu_fg", content: "3 findings reported (1 high, 2 medium).", is_error: false, parent_tool_use_id: null }),
     );
 
     // --- background sub-agent: launched detached, stays running past the turn ---
     this.step(280, () =>
       this.emit.item({ kind: "message_started", id: "m2", role: "assistant", parent_tool_use_id: null }),
     );
-    const t2 = "Maintenant je lance un explorateur du code en arrière-plan. Je te préviens quand c'est fini — tu peux continuer à me parler entre-temps.";
+    const t2 = "Now I'm launching a code explorer in the background. I'll let you know when it's done — you can keep talking to me in the meantime.";
     this.streamText("m2", t2, 3, 18);
     this.step(150, () =>
       this.emit.item({
@@ -543,7 +543,7 @@ export class ScenarioDriver {
             id: "toolu_bg",
             name: "Agent",
             input: {
-              description: "Explorer le code",
+              description: "Explore the code",
               subagent_type: "Explore",
               run_in_background: true,
               prompt: "Explore the supervisor module and map its structure: protocol types, the assembler, and how background tasks flow.",
@@ -564,7 +564,7 @@ export class ScenarioDriver {
     );
     this.step(60, () =>
       this.emit.task?.(
-        taskOf({ task_id: "tk_bg", tool_use_id: "toolu_bg", label: "Explorer le code", subagent_type: "Explore", model: "claude-sonnet-4-6", status: "running" }),
+        taskOf({ task_id: "tk_bg", tool_use_id: "toolu_bg", label: "Explore the code", subagent_type: "Explore", model: "claude-sonnet-4-6", status: "running" }),
       ),
     );
     this.step(220, () =>
@@ -577,7 +577,7 @@ export class ScenarioDriver {
     // to idle. (Exercises the disappear-on-complete behaviour in dev.)
     this.step(14000, () =>
       this.emit.task?.(
-        taskOf({ task_id: "tk_bg", tool_use_id: "toolu_bg", label: "Explorer le code", subagent_type: "Explore", model: "claude-sonnet-4-6", status: "completed", agent_id: "demoagent_bg", tokens: 42000, tool_uses: 15, duration_ms: 38000 }),
+        taskOf({ task_id: "tk_bg", tool_use_id: "toolu_bg", label: "Explore the code", subagent_type: "Explore", model: "claude-sonnet-4-6", status: "completed", agent_id: "demoagent_bg", tokens: 42000, tool_uses: 15, duration_ms: 38000 }),
       ),
     );
   }
@@ -604,7 +604,7 @@ export class ScenarioDriver {
     this.step(220, () =>
       this.emit.item({ kind: "message_started", id: "m1", role: "assistant", parent_tool_use_id: null }),
     );
-    const t1 = "Je lance la suite de tests, puis quelques commandes en arrière-plan.\n\n";
+    const t1 = "I'm running the test suite, then a few background commands.\n\n";
     this.streamText("m1", t1);
     this.step(150, () =>
       this.emit.item({
@@ -632,7 +632,7 @@ export class ScenarioDriver {
     this.step(260, () =>
       this.emit.item({ kind: "message_started", id: "m2", role: "assistant", parent_tool_use_id: null }),
     );
-    const t2 = "Je démarre le serveur de dev en arrière-plan — tu peux continuer à me parler pendant ce temps.";
+    const t2 = "I'm starting the dev server in the background — you can keep talking to me in the meantime.";
     this.streamText("m2", t2, 3, 18);
     this.step(150, () =>
       this.emit.item({
@@ -722,7 +722,7 @@ export class ScenarioDriver {
     this.step(220, () =>
       this.emit.item({ kind: "message_started", id: "m1", role: "assistant", parent_tool_use_id: null }),
     );
-    const t1 = "Je mets en place deux watches en arrière-plan — tu peux continuer à me parler pendant ce temps.\n\n";
+    const t1 = "I'm setting up two watches in the background — you can keep talking to me in the meantime.\n\n";
     this.streamText("m1", t1);
     this.step(150, () =>
       this.emit.item({
@@ -731,7 +731,7 @@ export class ScenarioDriver {
         parent_tool_use_id: null,
         blocks: [
           { type: "text", text: t1 },
-          { type: "tool_use", id: "toolu_mon", name: "Monitor", input: { command: "tail -F /var/log/app.log", description: "watch des logs applicatifs", persistent: true, timeout_ms: 0 } },
+          { type: "tool_use", id: "toolu_mon", name: "Monitor", input: { command: "tail -F /var/log/app.log", description: "watch application logs", persistent: true, timeout_ms: 0 } },
         ],
       }),
     );
@@ -746,7 +746,7 @@ export class ScenarioDriver {
       }),
     );
     this.step(60, () =>
-      this.emitTask(taskOf({ task_id: "tk_mon", kind: "monitor", tool_use_id: "toolu_mon", label: "watch des logs applicatifs", status: "running", output_file: "tasks/tk_mon.output" })),
+      this.emitTask(taskOf({ task_id: "tk_mon", kind: "monitor", tool_use_id: "toolu_mon", label: "watch application logs", status: "running", output_file: "tasks/tk_mon.output" })),
     );
 
     // --- second watch: a build monitor that ENDS a few seconds later (stream ended) ---
@@ -756,7 +756,7 @@ export class ScenarioDriver {
         id: "m1b",
         parent_tool_use_id: null,
         blocks: [
-          { type: "tool_use", id: "toolu_mon2", name: "Monitor", input: { command: "pnpm build --watch", description: "watch du build", persistent: false, timeout_ms: 8000 } },
+          { type: "tool_use", id: "toolu_mon2", name: "Monitor", input: { command: "pnpm build --watch", description: "watch the build", persistent: false, timeout_ms: 8000 } },
         ],
       }),
     );
@@ -770,7 +770,7 @@ export class ScenarioDriver {
       }),
     );
     this.step(60, () =>
-      this.emitTask(taskOf({ task_id: "tk_mon2", kind: "monitor", tool_use_id: "toolu_mon2", label: "watch du build", status: "running", output_file: "tasks/tk_mon2.output" })),
+      this.emitTask(taskOf({ task_id: "tk_mon2", kind: "monitor", tool_use_id: "toolu_mon2", label: "watch the build", status: "running", output_file: "tasks/tk_mon2.output" })),
     );
 
     this.step(220, () =>
@@ -785,10 +785,10 @@ export class ScenarioDriver {
           task_id: "tk_mon2",
           kind: "monitor",
           tool_use_id: "toolu_mon2",
-          label: "watch du build",
+          label: "watch the build",
           status: "completed",
           duration_ms: 6400,
-          summary: 'Monitor "watch du build" stream ended',
+          summary: 'Monitor "watch the build" stream ended',
           output_file: "tasks/tk_mon2.output",
         }),
       ),
@@ -812,7 +812,7 @@ export class ScenarioDriver {
     this.step(220, () =>
       this.emit.item({ kind: "message_started", id: "m1", role: "assistant", parent_tool_use_id: null }),
     );
-    const t1 = "Je lance une revue multi-agents du diff via un workflow — tu peux continuer à me parler pendant ce temps.\n\n";
+    const t1 = "I'm launching a multi-agent review of the diff via a workflow — you can keep talking to me in the meantime.\n\n";
     this.streamText("m1", t1);
     this.step(150, () =>
       this.emit.item({
@@ -910,7 +910,7 @@ export class ScenarioDriver {
           .join(", ");
         const resultText = pairs
           ? `Your questions have been answered: ${pairs}. You can now continue with these answers in mind.`
-          : "L'utilisateur a ignoré le questionnaire sans répondre.";
+          : "The user skipped the questionnaire without answering.";
         this.step(120, () =>
           this.emit.item({
             kind: "assistant_message",
@@ -931,8 +931,8 @@ export class ScenarioDriver {
       }
 
       const txt = allowed
-        ? "Parfait, c'est noté — je pars sur cette approche et je commence l'implémentation."
-        : "Ok, je n'avance pas pour l'instant. Dis-moi quand tu veux qu'on en reparle.";
+        ? "Perfect, noted — I'll go with this approach and start the implementation."
+        : "Okay, I won't proceed for now. Let me know when you want to revisit this.";
       this.step(260, () =>
         this.emit.item({ kind: "message_started", id: "mq", role: "assistant", parent_tool_use_id: null }),
       );

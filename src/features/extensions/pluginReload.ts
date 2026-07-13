@@ -24,13 +24,13 @@ export interface ReloadTargets {
  * - Project (repo) lens: the repo is matched by `target.path`; there is no current
  *   conversation.
  *
- * "Live/allumée" means a live Rust session handle is bound (`handle != null`).
+ * "Live" means a live Rust session handle is bound (`handle != null`).
  *
  * CLAUDE conversations only: the bar hot-applies a Claude plugin toggle — a
  * settings.json write plus the `reload_plugins` control request, which the Codex actor
  * ignores as a no-op — and refetches the `/` menu by spawning an ephemeral `claude`.
  * A live Codex conversation neither reads settings.json nor answers the request, so
- * counting it would inflate « Toutes les conversations allumées (N) » and claim an
+ * counting it would inflate "All live conversations (N)" and claim an
  * application that never happens.
  */
 export function resolveReloadTargets(

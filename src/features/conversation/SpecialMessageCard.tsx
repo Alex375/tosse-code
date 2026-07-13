@@ -22,12 +22,12 @@ function shortId(id: string): string {
 
 function TaskNotificationCard({ n }: { n: TaskNotification }) {
   const st = taskNotificationStyle(n.status);
-  const headline = n.summary || "Tâche de fond terminée";
+  const headline = n.summary || "Background task finished";
 
   const metrics: string[] = [];
   if (n.usage?.tokens != null) metrics.push(`${fmtTokens(n.usage.tokens)} tokens`);
   if (n.usage?.toolUses != null)
-    metrics.push(`${n.usage.toolUses} outil${n.usage.toolUses > 1 ? "s" : ""}`);
+    metrics.push(`${n.usage.toolUses} tool${n.usage.toolUses > 1 ? "s" : ""}`);
   if (n.usage?.durationMs != null) metrics.push(fmtDuration(n.usage.durationMs));
   const metricLine = metrics.join("  ·  ");
 
@@ -67,7 +67,7 @@ function TaskNotificationCard({ n }: { n: TaskNotification }) {
 
 /** Render an injected special message. One kind today; the switch keeps future
  *  injected markers (system reminders, other injections) tidy to add. Task
- *  notifications are hidden unless the user opts in (Settings → Général) — the
+ *  notifications are hidden unless the user opts in (Settings → General) — the
  *  default-off gate that keeps the transcript clean on reload / history import. */
 export function SpecialMessageCard({ data }: { data: SpecialMessage }) {
   const showTaskNotifications = useDisplay((s) => s.showTaskNotifications);

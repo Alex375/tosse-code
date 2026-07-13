@@ -5,8 +5,8 @@ describe("accountLogin store", () => {
   beforeEach(() => useAccountLoginStore.setState({ failures: {} }));
 
   it("keeps a failure reason so a closed panel can surface it later", () => {
-    useAccountLoginStore.getState().recordOutcome("codex", false, "code expiré");
-    expect(useAccountLoginStore.getState().failures.codex).toEqual({ error: "code expiré" });
+    useAccountLoginStore.getState().recordOutcome("codex", false, "code expired");
+    expect(useAccountLoginStore.getState().failures.codex).toEqual({ error: "code expired" });
   });
 
   it("keeps a null-reason failure (still surfaces, never a silent drop)", () => {

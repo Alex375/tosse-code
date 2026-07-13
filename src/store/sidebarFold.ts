@@ -36,7 +36,7 @@ interface SidebarFoldState {
   toggle: (repoId: string) => void;
   /** Forget one repo's collapsed state — wired into removeRepo, like the other caches. */
   clearRepo: (repoId: string) => void;
-  /** Drop every remembered collapse — wired into "Tout supprimer" (wipeAllData). */
+  /** Drop every remembered collapse — wired into "Delete all" (wipeAllData). */
   clearAll: () => void;
 }
 

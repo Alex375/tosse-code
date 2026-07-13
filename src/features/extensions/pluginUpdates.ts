@@ -24,7 +24,7 @@ export function updateBadgeLabel(
   if (version && latestVersion && version !== latestVersion) {
     return `v${version} → v${latestVersion}`;
   }
-  return "Mise à jour dispo";
+  return "Update available";
 }
 
 /** How many installed plugins from `marketplace` have an update available. */

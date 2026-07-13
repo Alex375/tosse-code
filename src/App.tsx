@@ -85,7 +85,7 @@ export default function App() {
   }, [view, closeReplyModal]);
 
   // Focusing an agent from the FlightDeck = select it and switch to its thread. Also
-  // used to PROMOTE the reply modal to the full view (its "Plein écran" button).
+  // used to PROMOTE the reply modal to the full view (its "Fullscreen" button).
   const openConversation = (id: string) => {
     useConversationsStore.getState().selectConversation(id);
     changeView("conversation");

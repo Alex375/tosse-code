@@ -164,7 +164,7 @@ pub fn codex_available() -> bool {
 }
 
 /// Whether a usable `claude` binary is installed on this machine. Powers the proactive
-/// "CLI Claude introuvable" surfaces (composer bar + Réglages → Comptes) so the absence
+/// "Claude CLI not found" surfaces (composer bar + Settings → Accounts) so the absence
 /// is shown BEFORE the first message fails — the twin of [`codex_available`]. Cheap: a
 /// `PATH` / well-known-location file check, never a spawn.
 #[tauri::command]
@@ -377,7 +377,7 @@ pub async fn codex_marketplace_upgrade(name: Option<String>) -> Result<(), Strin
     codex::extensions::marketplace_upgrade(name).await.map_err(|e| e.to_string())
 }
 
-// ── Comptes (Claude & Codex) — statut / login / logout in-app. The credential stores
+// ── Accounts (Claude & Codex) — status / login / logout in-app. The credential stores
 // stay OWNED by the CLIs (`claude auth`, `codex app-server account/*`): the app never
 // reads/writes `~/.claude/.credentials.json`, the Keychain item, or `~/.codex/auth.json`.
 
@@ -531,7 +531,7 @@ pub async fn load_session_context(session_id: String) -> Result<ContextFill, Str
 
 /// Rewind a conversation IN PLACE by truncating its on-disk transcript at `target_id`,
 /// dropping that message (USER target) or everything after its response (ASSISTANT
-/// target). Destructive by design ("reprendre à partir d'ici"): the removed turns are
+/// target). Destructive by design ("resume from here"): the removed turns are
 /// gone from the transcript, so a `--resume` re-spawn reads the shortened history fresh
 /// (VERIFIED: resume honours the truncation — see [`history::rewind_transcript`]).
 ///
@@ -864,7 +864,7 @@ pub async fn set_effort_level(
 ) -> Result<(), String> {
     if !control::is_valid_effort_level(&level) {
         return Err(format!(
-            "niveau d'effort invalide « {level} » (attendu : low, medium, high, xhigh, max)"
+            "invalid effort level \"{level}\" (expected: low, medium, high, xhigh, max)"
         ));
     }
     let handle = sessions.get(&session).ok_or_else(unknown_session)?;
@@ -1120,7 +1120,7 @@ fn open_terminal_resume(cwd: &str, session_id: &str, backend: Backend) -> Result
 
 #[cfg(not(target_os = "macos"))]
 fn open_terminal_resume(_cwd: &str, _session_id: &str, _backend: Backend) -> Result<(), String> {
-    Err("« Ouvrir dans le terminal » n'est pris en charge que sur macOS pour l'instant.".to_string())
+    Err("\"Open in terminal\" is only supported on macOS for now.".to_string())
 }
 
 /// Turn a possibly-relative conversation cwd into an absolute path. Relative

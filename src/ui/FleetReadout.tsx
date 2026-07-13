@@ -62,7 +62,7 @@ export function FleetReadout({ variant }: { variant: "deck" | "sidebar" }) {
   if (c.total === 0) return null;
 
   if (variant === "sidebar") {
-    // Compact, single-line, footer-styled (like the Réglages row just below it) — the
+    // Compact, single-line, footer-styled (like the Settings row just below it) — the
     // merged three-stage view keeps it discreet in the narrow panel.
     return (
       <div className="fr-side">

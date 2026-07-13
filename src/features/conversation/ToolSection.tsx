@@ -1,5 +1,5 @@
-// Shared rendering for the grouped-steps transcript: a collapsible "Exécuté N
-// étapes" section (<ToolSection>) holding compact, individually-expandable step
+// Shared rendering for the grouped-steps transcript: a collapsible "Executed N
+// steps" section (<ToolSection>) holding compact, individually-expandable step
 // rows (<ToolStepRow>), plus the per-tool detail body (<ToolDetail>). Used VERBATIM
 // by the live thread (ConductorThread) and the off-thread transcript
 // (SubAgentTranscript) so the two never diverge — the live side feeds <LiveToolStep>
@@ -213,7 +213,7 @@ export function ToolStepRow({
         <span className="cv-step-end">
           {time}
           {running ? (
-            <span className="cv-step-run" aria-label="en cours" />
+            <span className="cv-step-run" aria-label="running" />
           ) : isError ? (
             <Ico name="alert" className="sm cv-step-errico" />
           ) : (
@@ -390,9 +390,9 @@ export function ClaudeWorkBlock({
   const onToggle = persisted
     ? () => toggleStore(foldConv!, foldKey!)
     : () => setLocalOpen((o) => !o);
-  // Backend-neutral label (the fold serves both Claude and Codex conversations), in
-  // French like the neighbouring labels (« Exécuté N étapes »).
-  const label = count > 0 ? `Travail · ${count} étape${count > 1 ? "s" : ""}` : "Travail";
+  // Backend-neutral label (the fold serves both Claude and Codex conversations),
+  // matching the neighbouring labels ("Executed N steps").
+  const label = count > 0 ? `Work · ${count} step${count > 1 ? "s" : ""}` : "Work";
   return (
     <div className="cv-work">
       <button type="button" className="cv-work-h" onClick={onToggle} aria-expanded={open}>
