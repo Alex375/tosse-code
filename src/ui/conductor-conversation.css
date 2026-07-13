@@ -670,6 +670,10 @@
 .cv-bgagent-stats { flex:0 0 auto; font-size:10.5px; color:var(--wf-tx-xlo); font-variant-numeric:tabular-nums; }
 .cv-bgagent-go { flex:0 0 auto; margin-left:auto; color:var(--wf-tx-xlo); opacity:0; transition:opacity .12s ease; }
 .cv-bgagent:hover .cv-bgagent-go { opacity:1; }
+/* Display-only variant: a Codex sub-agent (Phase 4.5, Bloc C) has no routed transcript to
+   drill and no per-agent stop wire, so its row is inert — no pointer, no hover affordance. */
+.cv-bgagent.static { cursor:default; }
+.cv-bgagent.static:hover { background:transparent; color:var(--wf-tx-lo); }
 
 /* The bouncing "thinking" dots for a running detached agent (mirrors the main
    thread's working indicator, scaled down). */

@@ -15,9 +15,13 @@ import { useState } from "react";
 import { useBackgroundMonitorTasks, useSessionTasks } from "../../store/backgroundTasksStore";
 import { useStopTask } from "../../ipc/useCommands";
 import { Ico, RunDots } from "../../ui/kit";
+import { useIsCodex } from "./ConvMark";
 import { TaskOutputPopover } from "./TaskOutputPopover";
 
 export function MonitorBar({ session }: { session: string }) {
+  // Bloc A (Phase 4.5): `Monitor` is a Claude-only background tool — Codex has no
+  // equivalent, so this bar is hidden on Codex (never a fake empty shell / false green).
+  const isCodex = useIsCodex(session);
   // The bar lists only RUNNING watches; a finished one drops out.
   const rows = useBackgroundMonitorTasks(session);
   // The full task map (running + finished) — so an open popover survives its watch ending
@@ -28,6 +32,7 @@ export function MonitorBar({ session }: { session: string }) {
 
   const opened = openedId ? allTasks[openedId] ?? null : null;
 
+  if (isCodex) return null;
   if (rows.length === 0 && !opened) return null;
 
   return (

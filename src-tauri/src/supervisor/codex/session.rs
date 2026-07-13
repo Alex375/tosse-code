@@ -21,8 +21,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::supervisor::control::PermissionDecision;
 use crate::supervisor::model::{
-    ConversationItem, McpAuthResult, McpServerLive, NormalizedBlock, PermissionRequestPayload,
-    RemoteControlState, SessionEmitter, SessionStatePayload,
+    BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ConversationItem, McpAuthResult,
+    McpServerLive, NormalizedBlock, PermissionRequestPayload, RemoteControlState, SessionEmitter,
+    SessionStatePayload,
 };
 use crate::supervisor::session::{InitialControls, SessionCommand, SessionError, SessionHandle};
 use crate::supervisor::transport::{ImageAttachment, SpawnConfig, TransportError};
@@ -264,6 +265,29 @@ struct CodexCore {
     /// `mcp_status` fetch so a server that failed to start shows its reason instead of a
     /// mute "disconnected" (the `mcpServerStatus/list` entry has no failure field).
     mcp_startup_status: HashMap<String, McpStartupStatus>,
+    /// Phase 4.5 (Bloc C) — per-sub-agent metadata, keyed by the sub-agent's THREAD id.
+    /// Codex's multi-agent (`collabAgentToolCall` / `subAgentActivity`) is in-turn fan-out
+    /// on separate threads our demux does NOT route; the only live signal is the parent's
+    /// cumulative `agentsStates` snapshot. This map carries what those snapshots omit — the
+    /// sub-agent's NAME (from `subAgentActivity.agentPath`) and the MODEL it was spawned on
+    /// (from the `spawnAgent` collab item) — so each `emit_subagent_task` re-emits a stable,
+    /// enriched [`BackgroundTask`] (kind `Agent`) keyed by that thread id. Session-scoped
+    /// (sub-agents persist across turns via `resumeAgent`); never reset per turn.
+    codex_subagents: HashMap<String, CodexSubAgentMeta>,
+}
+
+/// The bits of a Codex sub-agent a single `agentsStates` snapshot does not carry, accumulated
+/// across the collab/activity items that DO (see [`CodexCore::codex_subagents`]).
+#[derive(Default, Clone)]
+struct CodexSubAgentMeta {
+    /// Readable sub-agent name (tail of `subAgentActivity.agentPath`).
+    name: Option<String>,
+    /// Model the sub-agent was spawned on (`spawnAgent` collab item only).
+    model: Option<String>,
+    /// Last non-empty `agentsStates` message. Remembered so a `subAgentActivity` re-emit
+    /// (which carries no message) does not blank the live progress back to `None` between
+    /// two collab snapshots.
+    progress: Option<String>,
 }
 
 impl CodexCore {
@@ -284,6 +308,7 @@ impl CodexCore {
                 .join("flightdeck-codex-attachments")
                 .join(uuid::Uuid::new_v4().to_string()),
             mcp_startup_status: HashMap::new(),
+            codex_subagents: HashMap::new(),
         }
     }
 
@@ -310,6 +335,84 @@ impl CodexCore {
 
     fn push_item(&self, item: ConversationItem) {
         self.emitter.emit_item(&self.id, &item);
+    }
+
+    /// Phase 4.5 (Bloc C) — surface a Codex sub-agent as a fleet [`BackgroundTask`], so it is
+    /// counted + listed exactly like a Claude sub-agent (BackgroundTaskBadge / AgentBar / fleet
+    /// readout), reusing the whole shared background-task pipeline (`emit_task` → `session_task`).
+    /// Keyed by the sub-agent's THREAD id (stable across the collab items that reference it →
+    /// replace-by-`task_id` keeps the latest status). `tool_use_id`/`output_file` are `None`: the
+    /// sub-agent's own thread is NOT routed to us (no transcript to drill, no per-agent stop), so
+    /// the front renders these display-only — and a Codex tool card, having no correlated task,
+    /// keeps `atomStillRunning`'s foreground-safe `!tool_result` fallback (Bloc A). Terminal
+    /// reconciliation rides the cumulative `agentsStates` snapshots; session-end (running→stopped)
+    /// is the backstop.
+    fn emit_subagent_task(&self, thread_id: &str, status: BackgroundTaskStatus, message: Option<String>) {
+        let meta = self.codex_subagents.get(thread_id);
+        let name = meta.and_then(|m| m.name.clone());
+        let model = meta.and_then(|m| m.model.clone());
+        // A message-less emit (a `subAgentActivity` lifecycle marker) keeps the last known
+        // progress instead of blanking it — the agentsStates message only rides collab items.
+        let progress = message.or_else(|| meta.and_then(|m| m.progress.clone()));
+        self.emitter.emit_task(
+            &self.id,
+            &BackgroundTask {
+                task_id: thread_id.to_string(),
+                kind: BackgroundTaskKind::Agent,
+                tool_use_id: None,
+                // The sub-agent's name (agentPath tail) IS the prominent line; leaving
+                // `subagent_type` empty avoids echoing it a second time as a meta chip.
+                label: Some(name.unwrap_or_else(|| "Sous-agent".to_string())),
+                command: None,
+                subagent_type: None,
+                model,
+                agent_id: Some(thread_id.to_string()),
+                status,
+                progress,
+                tokens: None,
+                tool_uses: None,
+                duration_ms: None,
+                summary: None,
+                output_file: None,
+            },
+        );
+    }
+
+    /// Phase 4.5 (Bloc C) — promote a `collabAgentToolCall`'s per-sub-agent `agentsStates`
+    /// ({threadId → {status, message}}) into fleet tasks, one per sub-agent thread. Every collab
+    /// item (spawn / wait / closeAgent) carries the FULL cumulative snapshot, so re-emitting on
+    /// each keeps the store's replace-by-`task_id` current. A `spawnAgent` additionally pins the
+    /// receivers' model (later items don't re-carry it).
+    fn ingest_collab_states(
+        &mut self,
+        tool: &str,
+        model: Option<&str>,
+        receiver_thread_ids: &[String],
+        agents_states: &Value,
+    ) {
+        if tool == "spawnAgent" {
+            if let Some(m) = model.filter(|m| !m.is_empty()) {
+                for tid in receiver_thread_ids {
+                    self.codex_subagents.entry(tid.clone()).or_default().model = Some(m.to_string());
+                }
+            }
+        }
+        let Some(map) = agents_states.as_object() else {
+            return;
+        };
+        for (tid, state) in map {
+            let status = collab_status_to_task_status(state.get("status").and_then(Value::as_str));
+            let message = state
+                .get("message")
+                .and_then(Value::as_str)
+                .filter(|m| !m.is_empty())
+                .map(str::to_string);
+            // Remember a fresh progress so a later `subAgentActivity` re-emit preserves it.
+            if message.is_some() {
+                self.codex_subagents.entry(tid.clone()).or_default().progress = message.clone();
+            }
+            self.emit_subagent_task(tid, status, message);
+        }
     }
 
     /// Normalize a `rateLimits` snapshot (from the `account/rateLimits/updated` push or
@@ -1182,9 +1285,9 @@ impl CodexCore {
                     self.emit_tool_result(&id, dynamic_tool_content(content_items.as_deref()), is_error);
                 }
             }
-            // A multi-agent (collab) tool call → a generic `Collab:<tool>` card. The unified
-            // sub-agent bar / fleet integration is Phase 4.5 (blocked on 4.1); here we only
-            // guarantee it is visible instead of silently dropped.
+            // A multi-agent (collab) tool call → a generic `Collab:<tool>` card (kept as the
+            // in-thread record) PLUS, since Phase 4.5 (Bloc C), each sub-agent promoted into the
+            // fleet from this item's `agentsStates` snapshot (see `ingest_collab_states`).
             ThreadItem::CollabAgentToolCall {
                 id,
                 tool,
@@ -1208,6 +1311,9 @@ impl CodexCore {
                     }),
                     item_turn.as_deref(),
                 );
+                // Bloc C: reflect each sub-agent in the fleet from the cumulative agentsStates
+                // snapshot this item carries (present on both item/started and item/completed).
+                self.ingest_collab_states(&tool, model.as_deref(), &receiver_thread_ids, &agents_states);
                 if completed {
                     let mut lines: Vec<String> = Vec::new();
                     if let Some(p) = prompt.as_deref().filter(|p| !p.is_empty()) {
@@ -1244,8 +1350,8 @@ impl CodexCore {
             ThreadItem::SubAgentActivity {
                 id,
                 kind,
+                agent_thread_id,
                 agent_path,
-                ..
             } => {
                 self.ensure_tool_use(
                     &id,
@@ -1268,6 +1374,22 @@ impl CodexCore {
                     format!("{headline}\n{path}")
                 };
                 self.emit_tool_result(&id, json!(body), false);
+                // Bloc C: this is the ONLY item carrying the sub-agent's NAME (agentsStates
+                // omits it) — record it, then reflect the lifecycle in the fleet. `started`/
+                // `interacted` → running, `interrupted` → stopped. The richer agentsStates
+                // status from a collab item refines it later (replace-by-`task_id`).
+                if let Some(tid) = agent_thread_id.as_deref().filter(|t| !t.is_empty()) {
+                    if !name.is_empty() {
+                        self.codex_subagents.entry(tid.to_string()).or_default().name =
+                            Some(name.to_string());
+                    }
+                    let status = if kind == "interrupted" {
+                        BackgroundTaskStatus::Stopped
+                    } else {
+                        BackgroundTaskStatus::Running
+                    };
+                    self.emit_subagent_task(tid, status, None);
+                }
             }
             // The agent pausing → a small card showing the duration.
             ThreadItem::Sleep { id, duration_ms } => {
@@ -1484,6 +1606,19 @@ fn collab_status_fr(status: &str) -> &'static str {
         "shutdown" => "arrêté",
         "notFound" => "introuvable",
         _ => "état inconnu",
+    }
+}
+
+/// A `CollabAgentStatus` → the fleet [`BackgroundTaskStatus`] (Phase 4.5, Bloc C). `pendingInit`
+/// and `running` are live; an unknown/missing status is treated as `Running` (fail-safe: stays
+/// visible + counted, and the session-end backstop settles it) rather than silently dropped.
+fn collab_status_to_task_status(status: Option<&str>) -> BackgroundTaskStatus {
+    match status {
+        Some("completed") => BackgroundTaskStatus::Completed,
+        Some("errored") | Some("notFound") => BackgroundTaskStatus::Failed,
+        Some("interrupted") | Some("shutdown") => BackgroundTaskStatus::Stopped,
+        // "pendingInit" | "running" | unknown → still working.
+        _ => BackgroundTaskStatus::Running,
     }
 }
 
@@ -2106,6 +2241,7 @@ mod tests {
         perms: Mutex<Vec<PermissionRequestPayload>>,
         states: Mutex<Vec<SessionStatePayload>>,
         plan_usages: Mutex<Vec<crate::usage::PlanUsage>>,
+        tasks: Mutex<Vec<BackgroundTask>>,
     }
     impl SessionEmitter for Sink {
         fn emit_state(&self, _s: &str, state: &SessionStatePayload) {
@@ -2118,7 +2254,9 @@ mod tests {
             self.perms.lock().unwrap().push(r.clone());
         }
         fn emit_commands(&self, _s: &str, _c: &[SlashCommand]) {}
-        fn emit_task(&self, _s: &str, _t: &BackgroundTask) {}
+        fn emit_task(&self, _s: &str, t: &BackgroundTask) {
+            self.tasks.lock().unwrap().push(t.clone());
+        }
         fn emit_title(&self, _s: &str, _t: &str, _q: u32) {}
         fn emit_summary(&self, _s: &str, _t: &str, _q: u32) {}
         fn emit_remote_control(&self, _s: &str, _st: &RemoteControlState) {}
@@ -2616,6 +2754,93 @@ mod tests {
         assert!(text.contains("refactor the auth module"), "the delegated task is shown");
         assert!(text.contains("gpt-5.6") && text.contains("ultra"), "model + effort shown");
         assert!(text.contains("Sous-agents (2)") && text.contains("1 en cours") && text.contains("1 terminé"), "states summarized, not raw JSON");
+    }
+
+    fn tasks(sink: &Sink) -> Vec<BackgroundTask> {
+        sink.tasks.lock().unwrap().clone()
+    }
+    /// The LAST emitted task for a given task_id (the store keeps the latest via
+    /// replace-by-`task_id`), so assertions read the settled state.
+    fn last_task(sink: &Sink, task_id: &str) -> Option<BackgroundTask> {
+        tasks(sink).into_iter().rev().find(|t| t.task_id == task_id)
+    }
+
+    #[test]
+    fn collab_promotes_each_sub_agent_into_a_fleet_task_keyed_by_thread() {
+        let (mut c, sink) = core();
+        // A subAgentActivity carries the NAME (agentsStates omits it); it should enrich the
+        // fleet task for that thread.
+        c.on_notification(
+            "item/started",
+            json!({"item":{"type":"subAgentActivity","id":"sa1","kind":"started","agentThreadId":"r1","agentPath":"agents/reviewer"}}),
+        );
+        // spawnAgent: two receivers, one running one completed → two Agent tasks, keyed by
+        // their thread ids, with the spawned model pinned.
+        c.on_notification(
+            "item/started",
+            json!({"item":{"type":"collabAgentToolCall","id":"co1","tool":"spawnAgent","status":"inProgress","senderThreadId":"s","receiverThreadIds":["r1","r2"],"prompt":"refactor auth","model":"gpt-5.6","reasoningEffort":"ultra","agentsStates":{"r1":{"status":"running","message":"lecture des fichiers"},"r2":{"status":"pendingInit"}}}}),
+        );
+
+        let r1 = last_task(&sink, "r1").expect("a fleet task for sub-agent r1");
+        assert!(matches!(r1.kind, BackgroundTaskKind::Agent), "sub-agent counts as an Agent task");
+        assert!(matches!(r1.status, BackgroundTaskStatus::Running), "running → Running");
+        assert_eq!(r1.label.as_deref(), Some("reviewer"), "name enriched from subAgentActivity path");
+        assert_eq!(r1.model.as_deref(), Some("gpt-5.6"), "spawned model pinned onto the task");
+        assert_eq!(r1.progress.as_deref(), Some("lecture des fichiers"), "agentsStates message = live progress");
+        // No thread routing → nothing to drill / no per-agent stop wire: front renders these
+        // display-only, and a Codex tool card keeps its foreground-safe atomStillRunning fallback.
+        assert!(r1.tool_use_id.is_none() && r1.output_file.is_none(), "no anchor / no transcript file");
+
+        let r2 = last_task(&sink, "r2").expect("a fleet task for sub-agent r2");
+        assert!(matches!(r2.status, BackgroundTaskStatus::Running), "pendingInit → Running (still working)");
+        // r2 never got a subAgentActivity (its name is unknown) → a stable fallback label,
+        // never an empty string.
+        assert_eq!(r2.label.as_deref(), Some("Sous-agent"), "unnamed sub-agent falls back to a stable label");
+
+        // A later `wait` completing flips both to terminal via the cumulative snapshot.
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"collabAgentToolCall","id":"co2","tool":"wait","status":"completed","senderThreadId":"s","receiverThreadIds":[],"agentsStates":{"r1":{"status":"completed"},"r2":{"status":"errored"}}}}),
+        );
+        assert!(matches!(last_task(&sink, "r1").unwrap().status, BackgroundTaskStatus::Completed), "completed → Completed");
+        assert!(matches!(last_task(&sink, "r2").unwrap().status, BackgroundTaskStatus::Failed), "errored → Failed");
+        // The collab item itself is STILL rendered as an in-thread card (never dropped).
+        assert!(has_tool_use(&items(&sink), "Lancement d'un sous-agent", "co1"));
+    }
+
+    #[test]
+    fn spawn_before_activity_names_the_subagent_and_preserves_progress() {
+        let (mut c, sink) = core();
+        // Realistic Codex order: spawnAgent FIRST (carries agentsStates + a live message),
+        // THEN a subAgentActivity that only adds the sub-agent's name.
+        c.on_notification(
+            "item/started",
+            json!({"item":{"type":"collabAgentToolCall","id":"co1","tool":"spawnAgent","status":"inProgress","senderThreadId":"s","receiverThreadIds":["r9"],"prompt":"build","model":"gpt-5.6","reasoningEffort":"high","agentsStates":{"r9":{"status":"running","message":"compilation"}}}}),
+        );
+        let before = last_task(&sink, "r9").expect("task from the spawn snapshot");
+        assert_eq!(before.label.as_deref(), Some("Sous-agent"), "no name yet → stable fallback");
+        assert_eq!(before.progress.as_deref(), Some("compilation"), "agentsStates message = live progress");
+
+        // The subAgentActivity carries NO message — it must ENRICH the name WITHOUT wiping the
+        // live progress back to None (replace-by-task_id would otherwise clobber it).
+        c.on_notification(
+            "item/started",
+            json!({"item":{"type":"subAgentActivity","id":"sa1","kind":"started","agentThreadId":"r9","agentPath":"agents/builder"}}),
+        );
+        let after = last_task(&sink, "r9").expect("task after the activity marker");
+        assert_eq!(after.label.as_deref(), Some("builder"), "name enriched from agentPath");
+        assert_eq!(after.progress.as_deref(), Some("compilation"), "progress preserved, not blanked to None");
+    }
+
+    #[test]
+    fn interrupted_sub_agent_activity_stops_its_fleet_task() {
+        let (mut c, sink) = core();
+        c.on_notification(
+            "item/completed",
+            json!({"item":{"type":"subAgentActivity","id":"sa1","kind":"interrupted","agentThreadId":"z9","agentPath":"agents/foo"}}),
+        );
+        let t = last_task(&sink, "z9").expect("a fleet task keyed by the sub-agent thread");
+        assert!(matches!(t.status, BackgroundTaskStatus::Stopped), "interrupted → Stopped (no fake green backgrounding)");
     }
 
     #[test]
