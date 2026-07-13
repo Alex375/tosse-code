@@ -101,10 +101,10 @@ describe("applySearch", () => {
 });
 
 describe("timeAgo", () => {
-  it("renders coarse French buckets", () => {
-    expect(timeAgo(NOW, NOW)).toBe("à l'instant");
-    expect(timeAgo(NOW - 5 * 60_000, NOW)).toBe("il y a 5 min");
-    expect(timeAgo(NOW - 3 * 3_600_000, NOW)).toBe("il y a 3 h");
-    expect(timeAgo(NOW - 4 * DAY, NOW)).toBe("il y a 4 j");
+  it("renders coarse relative buckets", () => {
+    expect(timeAgo(NOW, NOW)).toBe("just now");
+    expect(timeAgo(NOW - 5 * 60_000, NOW)).toBe("5 min ago");
+    expect(timeAgo(NOW - 3 * 3_600_000, NOW)).toBe("3 h ago");
+    expect(timeAgo(NOW - 4 * DAY, NOW)).toBe("4 d ago");
   });
 });

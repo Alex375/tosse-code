@@ -75,7 +75,7 @@ export function CommitBox({ cwd }: { cwd: string }) {
 
       <textarea
         className={styles.commitInput}
-        placeholder="Message de commit…"
+        placeholder="Commit message…"
         value={message}
         onChange={(e) => setMessage(e.target.value)}
         onKeyDown={(e) => {

@@ -1,4 +1,4 @@
-// "Mise à jour" section of the Settings panel: current vs available version,
+// "Update" section of the Settings panel: current vs available version,
 // release notes (rendered as Markdown), a manual check button, download progress,
 // and the "install + restart" action — gated behind a relaunch confirmation so a
 // running conversation is never killed by surprise. All state lives in the updater
@@ -14,9 +14,9 @@ import { PageHead } from "./SettingsKit";
 import styles from "./SettingsPanel.module.css";
 
 function formatBytes(n: number): string {
-  if (n < 1024) return `${n} o`;
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} Ko`;
-  return `${(n / 1024 / 1024).toFixed(1)} Mo`;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export function UpdateSection() {
@@ -47,7 +47,7 @@ export function UpdateSection() {
 
   return (
     <div>
-      <PageHead title="Mises à jour" subtitle="Version installée, nouveautés et installation." />
+      <PageHead title="Updates" subtitle="Installed version, what's new, and installation." />
 
       {hasUpdate && update ? (
         <>
@@ -57,7 +57,7 @@ export function UpdateSection() {
               <Ico name="spark" />
             </span>
             <div className={styles.updateHeroText}>
-              <div className={styles.updateHeadline}>Nouvelle version disponible</div>
+              <div className={styles.updateHeadline}>New version available</div>
               <div className={styles.versionJump}>
                 <span className={styles.versionOld}>v{update.currentVersion}</span>
                 <Ico name="arrow" className="sm" />
@@ -68,13 +68,13 @@ export function UpdateSection() {
 
           {notes ? (
             <div className={styles.notesCard}>
-              <div className={styles.notesTitle}>Nouveautés</div>
+              <div className={styles.notesTitle}>What's new</div>
               <div className={styles.notesBody}>
                 <StreamMarkdown text={notes} />
               </div>
             </div>
           ) : (
-            <div className={styles.desc}>Améliorations et corrections diverses.</div>
+            <div className={styles.desc}>Various improvements and fixes.</div>
           )}
 
           {downloading && progress ? (
@@ -87,7 +87,7 @@ export function UpdateSection() {
               </div>
               <div className={styles.progressLabel}>
                 {status === "installing"
-                  ? "Installation, redémarrage imminent…"
+                  ? "Installing, restarting soon…"
                   : progress.total
                     ? `${formatBytes(progress.downloaded)} / ${formatBytes(progress.total)}${
                         pct != null ? ` (${pct}%)` : ""
@@ -105,12 +105,12 @@ export function UpdateSection() {
             >
               <Ico name="refresh" className="sm" />
               {status === "installing"
-                ? "Redémarrage…"
+                ? "Restarting…"
                 : status === "downloading"
-                  ? "Téléchargement…"
+                  ? "Downloading…"
                   : error
-                    ? "Réessayer l'installation"
-                    : "Mettre à jour et redémarrer"}
+                    ? "Retry installation"
+                    : "Update and restart"}
             </button>
           </div>
         </>
@@ -118,14 +118,14 @@ export function UpdateSection() {
         <>
           <div className={styles.desc}>
             {status === "uptodate"
-              ? "L'application est à jour."
+              ? "The app is up to date."
               : status === "error"
-                ? "La dernière vérification a échoué."
-                : "Vérifie si une nouvelle version signée est disponible."}
+                ? "The last check failed."
+                : "Check whether a new signed version is available."}
           </div>
           {status !== "error" && lastCheckError ? (
             <div className={styles.hintWarn}>
-              Dernière vérification automatique échouée : {lastCheckError}
+              Last automatic check failed: {lastCheckError}
             </div>
           ) : null}
           <div className={styles.row}>
@@ -134,7 +134,7 @@ export function UpdateSection() {
               onClick={() => void check()}
               disabled={checking}
             >
-              {checking ? "Recherche…" : "Vérifier les mises à jour"}
+              {checking ? "Checking…" : "Check for updates"}
             </button>
           </div>
         </>
@@ -144,35 +144,33 @@ export function UpdateSection() {
 
       {/* Relaunch confirmation — ALWAYS shown before installing, because installing
           relaunches the app and drops every live session. Reinforced (danger + count
-          + "Attendre") when conversations are actually running. */}
+          + "Wait") when conversations are actually running. */}
       <ConfirmDialog
         open={confirmingInstall}
         danger={liveSessions > 0}
-        title="Mettre à jour Flight Deck ?"
-        confirmLabel={liveSessions > 0 ? "Mettre à jour maintenant" : "Mettre à jour et redémarrer"}
-        cancelLabel={liveSessions > 0 ? "Attendre" : "Annuler"}
+        title="Update Flight Deck?"
+        confirmLabel={liveSessions > 0 ? "Update now" : "Update and restart"}
+        cancelLabel={liveSessions > 0 ? "Wait" : "Cancel"}
         onCancel={() => setConfirmingInstall(false)}
         onConfirm={() => {
           setConfirmingInstall(false);
           void install();
         }}
       >
-        L'application va <strong>redémarrer</strong> pour installer
-        {update ? ` la version ${update.version}` : " la mise à jour"}.
+        The app will <strong>restart</strong> to install
+        {update ? ` version ${update.version}` : " the update"}.
         {liveSessions > 0 ? (
           <>
             {" "}
             <strong>
-              {liveSessions} conversation{liveSessions > 1 ? "s" : ""} en cours
+              {liveSessions} running conversation{liveSessions > 1 ? "s" : ""}
             </strong>{" "}
-            {liveSessions > 1 ? "seront interrompues" : "sera interrompue"} — le travail non
-            terminé peut être perdu. Vous pouvez <strong>attendre</strong> qu'{liveSessions > 1
-              ? "elles se terminent"
-              : "elle se termine"}{" "}
-            avant de mettre à jour.
+            will be interrupted — unfinished work may be lost. You can{" "}
+            <strong>wait</strong> for {liveSessions > 1 ? "them to finish" : "it to finish"}{" "}
+            before updating.
           </>
         ) : (
-          " Aucune conversation n'est en cours."
+          " No conversations are running."
         )}
       </ConfirmDialog>
     </div>

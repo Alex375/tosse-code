@@ -14,7 +14,7 @@ describe("SubAgentTranscript.toRows — notices are never dropped", () => {
     ({ kind: "notice", subtype, detail: { message } }) as ConversationItem;
 
   it("emits a notice row for a history_error item (does not swallow it)", () => {
-    const rows = toRows([user("u1", "salut"), notice("history_error", "historique incomplet")]);
+    const rows = toRows([user("u1", "hi"), notice("history_error", "incomplete history")]);
     const n = rows.find((r) => r.kind === "notice");
     expect(n).toBeDefined();
     expect(n).toMatchObject({ kind: "notice", subtype: "history_error" });
@@ -23,16 +23,16 @@ describe("SubAgentTranscript.toRows — notices are never dropped", () => {
   it("renders even a notice-only transcript (the blank-preview bug)", () => {
     // parse_rollout can return a notice-only vec when a rollout is unreadable; that must
     // produce a visible row, not an empty render.
-    const rows = toRows([notice("history_error", "illisible")]);
+    const rows = toRows([notice("history_error", "unreadable")]);
     expect(rows).toHaveLength(1);
     expect(rows[0].kind).toBe("notice");
   });
 
   it("breaks the assistant run so the notice renders in place", () => {
     const rows = toRows([
-      assistant("a1", "avant"),
-      notice("history_error", "coupe ici"),
-      assistant("a2", "après"),
+      assistant("a1", "before"),
+      notice("history_error", "cut here"),
+      assistant("a2", "after"),
     ]);
     // Two distinct assistant rows split by the notice → the notice is not merged/lost.
     expect(rows.map((r) => r.kind)).toEqual(["assistant", "notice", "assistant"]);

@@ -173,14 +173,14 @@ fn load_workflow_run_in(
         // The file existed a moment ago; if it's now gone (a race with the writer), treat as
         // absent. Any other IO error on an existing file is a REAL failure → surface it.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("lecture du manifeste {} : {e}", path.display())),
+        Err(e) => return Err(format!("failed to read manifest {}: {e}", path.display())),
     };
     // A present-but-unparseable manifest (corrupt, truncated mid-write, or a CLI schema change)
     // is a REAL failure, NOT the normal "absent" state — surface it so the UI shows the error
-    // instead of a misleading "introuvable". Re-capture the fixture if the CLI shape changes.
+    // instead of a misleading "not found". Re-capture the fixture if the CLI shape changes.
     serde_json::from_str::<WorkflowRun>(&content)
         .map(Some)
-        .map_err(|e| format!("manifeste illisible {} : {e}", path.display()))
+        .map_err(|e| format!("unreadable manifest {}: {e}", path.display()))
 }
 
 /// Read a RUNNING workflow's live progress from its append-only journal
@@ -219,7 +219,7 @@ fn load_workflow_journal_in(
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             // An existing journal that won't read (permission/IO) is a REAL failure → surface.
-            Err(e) => return Err(format!("lecture du journal {} : {e}", path.display())),
+            Err(e) => return Err(format!("failed to read journal {}: {e}", path.display())),
         }
     }
     let Some(content) = content else {
@@ -298,7 +298,7 @@ fn load_workflow_phases_in(
         }
         if let Some(path) = exact.or(loose) {
             let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("lecture du script {} : {e}", path.display()))?;
+                .map_err(|e| format!("failed to read script {}: {e}", path.display()))?;
             let phases = extract_meta_phases(&content);
             if !phases.is_empty() {
                 return Ok(phases);

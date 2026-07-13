@@ -30,7 +30,7 @@ interface WorkFoldState {
   /** Forget one conversation's fold state — wired into removeConversation/removeRepo,
    *  same as the other per-conversation UI caches (composer draft, todo bar). */
   clearConversation: (conv: string) => void;
-  /** Drop every remembered fold state — wired into "Tout supprimer" (wipeAllData). */
+  /** Drop every remembered fold state — wired into "Delete all" (wipeAllData). */
   clearAll: () => void;
 }
 

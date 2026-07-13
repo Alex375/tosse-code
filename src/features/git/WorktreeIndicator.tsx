@@ -33,8 +33,8 @@ export function WorktreeIndicator({
 
   const linked = isLinked(wt);
   // The worktree's NAME (its directory) when in a linked worktree, else just
-  // "principal" for the main checkout. Branch names live in the manager, not here.
-  const label = linked ? worktreeName(wt) : "principal";
+  // "main" for the main checkout. Branch names live in the manager, not here.
+  const label = linked ? worktreeName(wt) : "main";
   const extra = worktrees.filter((w) => !w.is_bare).length - 1;
 
   // Colour carries the "am I in a worktree?" answer: accent = a linked worktree,
@@ -47,10 +47,10 @@ export function WorktreeIndicator({
       onClick={() => openManager(conv.repoId)}
       title={
         linked
-          ? `Worktree « ${worktreeName(wt)} »\n${wt.path}\nCliquer pour gérer les worktrees`
-          : `Arbre de travail principal (pas un worktree lié)${extra > 0 ? `\n${extra} worktree${extra > 1 ? "s" : ""} lié${extra > 1 ? "s" : ""} dans ce dépôt` : ""}\nCliquer pour gérer les worktrees`
+          ? `Worktree "${worktreeName(wt)}"\n${wt.path}\nClick to manage worktrees`
+          : `Main working tree (not a linked worktree)${extra > 0 ? `\n${extra} linked worktree${extra > 1 ? "s" : ""} in this repository` : ""}\nClick to manage worktrees`
       }
-      aria-label="Gérer les worktrees"
+      aria-label="Manage worktrees"
     >
       <Ico name="branch" className="sm" />
       <span className="wf-chip-t">{label}</span>

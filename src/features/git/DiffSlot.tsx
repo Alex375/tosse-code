@@ -24,17 +24,17 @@ export function DiffSlot({ path, diff, loading, error, emptyHint }: Props) {
   let body: React.ReactNode;
   if (!path) {
     body = (
-      <div className={styles.diffPlaceholder}>{emptyHint ?? "Sélectionne un fichier"}</div>
+      <div className={styles.diffPlaceholder}>{emptyHint ?? "Select a file"}</div>
     );
   } else if (error) {
     body = <div className={styles.error}>{error}</div>;
   } else if (loading || !diff) {
-    body = <div className={styles.diffPlaceholder}>Chargement du diff…</div>;
+    body = <div className={styles.diffPlaceholder}>Loading diff…</div>;
   } else if (diff.is_binary) {
-    body = <div className={styles.diffPlaceholder}>Fichier binaire — diff non affiché</div>;
+    body = <div className={styles.diffPlaceholder}>Binary file — diff not shown</div>;
   } else {
     body = (
-      <Suspense fallback={<div className={styles.diffPlaceholder}>Chargement de l'éditeur…</div>}>
+      <Suspense fallback={<div className={styles.diffPlaceholder}>Loading editor…</div>}>
         <RibbonDiff path={path} oldText={diff.old_text ?? ""} newText={diff.new_text ?? ""} />
       </Suspense>
     );

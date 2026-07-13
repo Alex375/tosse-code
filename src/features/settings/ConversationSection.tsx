@@ -10,27 +10,27 @@ import { ClaudeMark, Ico } from "../../ui/kit";
 import { PageHead } from "./SettingsKit";
 
 const MODES: Array<{ id: MarkdownMode; label: string; desc: string }> = [
-  { id: "classic", label: "Classic", desc: "Le rendu historique, encadré (GitHub)." },
-  { id: "warm", label: "Warm", desc: "Doux, accents coral, code coloré, nom de fichier saillant." },
-  { id: "minimal", label: "Minimal", desc: "Neutre, typographique, très aéré." },
+  { id: "classic", label: "Classic", desc: "The classic boxed rendering (GitHub)." },
+  { id: "warm", label: "Warm", desc: "Soft, coral accents, colored code, prominent file names." },
+  { id: "minimal", label: "Minimal", desc: "Neutral, typographic, very airy." },
 ];
 
 // A rich sample that exercises everything that differs between modes: headings, bold +
 // inline code + a file path with a line number, a fenced code block, a blockquote, a
 // table, ordered + unordered + task lists, and a link.
-const USER_MSG = "Explique le superviseur de sessions et montre un exemple.";
+const USER_MSG = "Explain the session supervisor and show an example.";
 const AI_MSG = [
-  "## Architecture du superviseur",
-  "Le superviseur maintient **un process `claude` par session**, piloté en *stream-json bidirectionnel*. Contrairement à `claude -p`, le process **vit toute la session**. Voir la [spec du protocole](https://example.com).",
+  "## Supervisor architecture",
+  "The supervisor keeps **one `claude` process per session**, driven over *bidirectional stream-json*. Unlike `claude -p`, the process **lives for the whole session**. See the [protocol spec](https://example.com).",
   "",
-  "### Composants clés",
+  "### Key components",
   "- **transport** — spawn + reader / writer / stderr",
-  "- **control** — canal `control_request` / `control_response`",
-  "- **assembler** — normalisation des messages UI",
+  "- **control** — `control_request` / `control_response` channel",
+  "- **assembler** — UI message normalization",
   "",
-  "> Note — le `cwd` n'est pas figé : l'agent peut le déplacer via les worktrees. L'UI suit toujours le `cwd` live.",
+  "> Note — the `cwd` is not fixed: the agent can move it via worktrees. The UI always follows the live `cwd`.",
   "",
-  "### Exemple",
+  "### Example",
   "```rust",
   "pub async fn spawn_session(cwd: &Path) -> Result<Session> {",
   '    let mut child = Command::new("claude")',
@@ -40,21 +40,21 @@ const AI_MSG = [
   "}",
   "```",
   "",
-  "La normalisation vit dans `src/features/conversation/StreamMarkdown.tsx:47`.",
+  "Normalization lives in `src/features/conversation/StreamMarkdown.tsx:47`.",
   "",
-  "| Mode | Persistant | Usage |",
+  "| Mode | Persistent | Usage |",
   "| --- | --- | --- |",
-  "| stream-json | oui | dialogue interactif |",
-  "| one-shot `-p` | non | scripts / CI |",
+  "| stream-json | yes | interactive dialogue |",
+  "| one-shot `-p` | no | scripts / CI |",
   "",
-  "### Cycle de vie",
-  "1. Spawn paresseux au premier message",
-  "2. Handshake `initialize`",
-  "3. Boucle d'events jusqu'à `result`",
+  "### Lifecycle",
+  "1. Lazy spawn on the first message",
+  "2. `initialize` handshake",
+  "3. Event loop until `result`",
   "",
-  "### Reste à faire",
-  "- [x] canal de contrôle",
-  "- [ ] tools IDE (`openDiff`, `getDiagnostics`)",
+  "### To do",
+  "- [x] control channel",
+  "- [ ] IDE tools (`openDiff`, `getDiagnostics`)",
 ].join("\n");
 
 export function ConversationSection() {
@@ -73,13 +73,13 @@ export function ConversationSection() {
         title="Conversation"
         subtitle={
           <>
-            Le style de rendu du Markdown, appliqué partout : conversations, sous-agents et aperçu
-            des fichiers <code>.md</code>. Choisis un mode — l'aperçu montre le résultat.
+            The Markdown rendering style, applied everywhere: conversations, sub-agents, and{" "}
+            <code>.md</code> file previews. Pick a mode — the preview shows the result.
           </>
         }
       />
       <div className="mdset-body">
-        <div className="mdset-rail" role="group" aria-label="Mode de rendu Markdown">
+        <div className="mdset-rail" role="group" aria-label="Markdown rendering mode">
           {MODES.map((m) => (
             <button
               key={m.id}
@@ -98,7 +98,7 @@ export function ConversationSection() {
           ))}
         </div>
 
-        <div className="mdset-stage" aria-label="Aperçu de la conversation">
+        <div className="mdset-stage" aria-label="Conversation preview">
           <div className="mdset-conv" ref={convRef}>
             <div className="mdset-umsg">{USER_MSG}</div>
             <div className="mdset-airow">

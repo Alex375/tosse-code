@@ -26,7 +26,7 @@ function truncate(s: string, n: number): string {
  * ("Read App.tsx", "Run pnpm test"). English by request — the tool action names
  * read like the claude.ai/code transcript, and the in-flight indicator and the
  * settled step row share this label so they stay identical. (The generic working
- * states — "Réfléchit…", "Rédige une réponse…" — remain French in describeActivity.)
+ * states — "Thinking…", "Writing a reply…" — live in describeActivity.)
  */
 export function toolActivityLabel(name: string, input: JsonValue): string {
   const fp = field(input, "file_path");
@@ -152,7 +152,7 @@ function isStreamingText(entry: SessionEntry): boolean {
  * reply → the last tool run → thinking. Never the raw protocol hint ("requesting").
  */
 export function describeActivity(entry: SessionEntry | undefined): string {
-  if (!entry) return "Travaille…";
+  if (!entry) return "Working…";
 
   // The tool the agent is running right now (current turn, still unresolved).
   const tool = lastInFlightMainToolUse(entry);
@@ -161,9 +161,9 @@ export function describeActivity(entry: SessionEntry | undefined): string {
   const current = todoSummary(entry.todos).current;
   if (current?.activeForm) return current.activeForm;
 
-  if (isStreamingText(entry)) return "Rédige une réponse…";
+  if (isStreamingText(entry)) return "Writing a reply…";
 
-  return "Réfléchit…";
+  return "Thinking…";
 }
 
 /** Reactive "what's happening now" for a conversation (by stable id). */

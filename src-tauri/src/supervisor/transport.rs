@@ -104,7 +104,7 @@ pub fn resolved_claude_bin() -> PathBuf {
 }
 
 /// Whether a usable `claude` binary is present on this machine. Powers the proactive
-/// "CLI not detected" surfaces (composer bar + Réglages → Comptes) so the user learns
+/// "CLI not detected" surfaces (composer bar + Settings → Accounts) so the user learns
 /// the binary is missing BEFORE the first message fails — the twin of
 /// [`super::codex::codex_available`]. Cheap: a `PATH` / well-known-location file check,
 /// never a process spawn. Mirrors [`resolve_bin`]'s structure: an explicit path (incl.
@@ -241,16 +241,16 @@ impl std::fmt::Display for TransportError {
             // for a Finder-launched bundle whose PATH could not be repaired.
             TransportError::Spawn(e) if e.kind() == std::io::ErrorKind::NotFound => write!(
                 f,
-                "Impossible de démarrer « claude » : binaire introuvable. \
-                 Vérifie que Claude Code est installé (essaie « claude --version » \
-                 dans un terminal), ou définis la variable TOSSE_CLAUDE_BIN sur le \
-                 chemin complet du binaire.",
+                "Could not start \"claude\": binary not found. \
+                 Check that Claude Code is installed (try \"claude --version\" \
+                 in a terminal), or set the TOSSE_CLAUDE_BIN variable to the \
+                 binary's full path.",
             ),
-            TransportError::Spawn(e) => write!(f, "Impossible de démarrer « claude » : {e}"),
+            TransportError::Spawn(e) => write!(f, "Could not start \"claude\": {e}"),
             TransportError::CwdMissing(p) => write!(
                 f,
-                "Le dossier de travail de cette conversation n'existe plus : {}. \
-                 Son worktree a peut-être été supprimé, ou le dossier déplacé.",
+                "This conversation's working directory no longer exists: {}. \
+                 Its worktree may have been removed, or the folder moved.",
                 p.display(),
             ),
             TransportError::Closed => write!(f, "claude session transport is closed"),
@@ -598,19 +598,19 @@ async fn writer_loop(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Valu
                 // A message we couldn't serialize is dropped (the session continues);
                 // record it so a lost outbound line is diagnosable, not silent.
                 eprintln!("[transport] dropping unserializable outbound message: {e}");
-                record(format!("message non sérialisable : {e}"));
+                record(format!("unserializable message: {e}"));
                 continue;
             }
         };
         line.push('\n');
         if let Err(e) = stdin.write_all(line.as_bytes()).await {
             eprintln!("[transport] stdin write failed: {e}");
-            record(format!("écriture stdin échouée : {e}"));
+            record(format!("stdin write failed: {e}"));
             break;
         }
         if let Err(e) = stdin.flush().await {
             eprintln!("[transport] stdin flush failed: {e}");
-            record(format!("flush stdin échoué : {e}"));
+            record(format!("stdin flush failed: {e}"));
             break;
         }
     }

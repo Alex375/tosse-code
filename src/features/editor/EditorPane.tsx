@@ -34,8 +34,8 @@ export function EditorPane({ convId }: { convId: string }) {
           className={styles.treeToggle}
           data-on={!treeCollapsed ? "" : undefined}
           onClick={toggleTree}
-          title={treeCollapsed ? "Afficher l'arborescence" : "Masquer l'arborescence"}
-          aria-label="Afficher/masquer l'arborescence"
+          title={treeCollapsed ? "Show file tree" : "Hide file tree"}
+          aria-label="Show/hide file tree"
         >
           <Ico name="sidebar" className="sm" />
         </button>
@@ -69,7 +69,7 @@ export function EditorPane({ convId }: { convId: string }) {
               <button
                 type="button"
                 className={styles.tabClose}
-                aria-label="Fermer l'onglet"
+                aria-label="Close tab"
                 onClick={(e) => {
                   e.stopPropagation();
                   closeTab(convId, p);
@@ -87,8 +87,8 @@ export function EditorPane({ convId }: { convId: string }) {
       ) : (
         <div className={styles.placeholder}>
           {conv.tabs.length === 0
-            ? "Sélectionne un fichier dans l'arborescence pour l'ouvrir."
-            : "Aucun onglet sélectionné."}
+            ? "Select a file in the tree to open it."
+            : "No tab selected."}
         </div>
       )}
     </div>
@@ -127,13 +127,13 @@ function ActiveFile({
         <div className={styles.banner}>
           <Ico name="alert" className="sm" />
           <span className={styles.bannerMsg}>
-            Ce fichier a été modifié sur le disque (tu as des modifications non sauvegardées).
+            This file was modified on disk (you have unsaved changes).
           </span>
           <button type="button" className={styles.bannerBtn} onClick={() => reloadFromDisk(convId, buffer.path)}>
-            Recharger
+            Reload
           </button>
           <button type="button" className={styles.bannerBtn} onClick={() => keepLocal(convId, buffer.path)}>
-            Garder mes modifs
+            Keep my changes
           </button>
         </div>
       ) : null}
@@ -148,7 +148,7 @@ function ActiveFile({
                 onClick={() => togglePreview(convId, buffer.path)}
               >
                 <Ico name="file" className="sm" />
-                Aperçu
+                Preview
               </button>
               <button
                 type="button"
@@ -161,16 +161,16 @@ function ActiveFile({
             </>
           ) : null}
           <span className={styles.toolbarSpace} />
-          <span>{buffer.dirty ? "Modifié…" : "Enregistré"}</span>
+          <span>{buffer.dirty ? "Modified…" : "Saved"}</span>
         </div>
       ) : null}
 
       {buffer.loading ? (
-        <div className={styles.placeholder}>Chargement…</div>
+        <div className={styles.placeholder}>Loading…</div>
       ) : buffer.error ? (
         <div className={styles.placeholder}>{buffer.error}</div>
       ) : buffer.tooLarge ? (
-        <div className={styles.placeholder}>Fichier trop volumineux pour être affiché (&gt; 16 Mo).</div>
+        <div className={styles.placeholder}>File too large to display (&gt; 16 MB).</div>
       ) : buffer.isImage ? (
         buffer.imageDataUrl ? (
           <ImageViewer
@@ -182,25 +182,25 @@ function ActiveFile({
             onViewChange={(z, o) => setImageView(convId, buffer.path, z, o)}
           />
         ) : (
-          <div className={styles.placeholder}>Aperçu de l'image indisponible.</div>
+          <div className={styles.placeholder}>Image preview unavailable.</div>
         )
       ) : buffer.isPdf ? (
         buffer.pdfBase64 ? (
-          <Suspense fallback={<div className={styles.placeholder}>Chargement du lecteur PDF…</div>}>
+          <Suspense fallback={<div className={styles.placeholder}>Loading PDF viewer…</div>}>
             <PdfViewer key={`${convId}:${buffer.path}`} base64={buffer.pdfBase64} />
           </Suspense>
         ) : (
-          <div className={styles.placeholder}>Aperçu du PDF indisponible.</div>
+          <div className={styles.placeholder}>PDF preview unavailable.</div>
         )
       ) : buffer.binary ? (
-        <div className={styles.placeholder}>Fichier binaire — aperçu non disponible.</div>
+        <div className={styles.placeholder}>Binary file — preview not available.</div>
       ) : isMd && buffer.preview ? (
         <div className={styles.mdPreview}>
           <StreamMarkdown text={buffer.content} />
         </div>
       ) : (
         <EditorErrorBoundary key={buffer.path}>
-          <Suspense fallback={<div className={styles.placeholder}>Chargement de l'éditeur…</div>}>
+          <Suspense fallback={<div className={styles.placeholder}>Loading editor…</div>}>
             <MonacoView
               path={buffer.path}
               value={buffer.content}

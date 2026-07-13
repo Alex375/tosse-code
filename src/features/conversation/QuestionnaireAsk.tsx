@@ -7,11 +7,11 @@ import { AiAvatar } from "./ConvMark";
 import { ToolResultBody } from "./ToolResultBody";
 
 // AskUserQuestion questionnaire — reproduces the Claude Code terminal UX:
-// you move through the questions one at a time with an explicit "Question
-// suivante" button (NO auto-advance), questions are optional (you may skip any),
-// and after the last one you land on a dedicated recap/"Envoi" step where a
-// single "Envoyer" button submits. A lone question skips the recap and shows
-// "Envoyer" directly. The answer is shipped back as the tool's updated input —
+// you move through the questions one at a time with an explicit "Next
+// question" button (NO auto-advance), questions are optional (you may skip any),
+// and after the last one you land on a dedicated recap/"Send" step where a
+// single "Send" button submits. A lone question skips the recap and shows
+// "Send" directly. The answer is shipped back as the tool's updated input —
 // `{ ...input, answers: { [question]: "label1, label2" } }` — exactly the shape
 // the CLI reads (Other replaced by its text; unanswered questions omitted).
 
@@ -81,7 +81,7 @@ export function QuestionnaireAsk({
         <div className="cv-q">
           <div className="cv-q-head">
             <Ico name="form" className="sm" />
-            <span>Questionnaire vide ou illisible.</span>
+            <span>Empty or unreadable questionnaire.</span>
           </div>
           <div className="cv-q-foot">
             <button
@@ -89,11 +89,11 @@ export function QuestionnaireAsk({
               onClick={() =>
                 answer.mutate({
                   requestId: request.request_id,
-                  decision: { behavior: "deny", message: "Questionnaire illisible, ignoré." },
+                  decision: { behavior: "deny", message: "Questionnaire unreadable, skipped." },
                 })
               }
             >
-              Ignorer
+              Skip
             </button>
             <span />
           </div>
@@ -131,7 +131,7 @@ export function QuestionnaireAsk({
       return next;
     });
     // Reveal + focus the free-text field when Other is picked. No auto-advance:
-    // the user moves on with the explicit "Question suivante" button.
+    // the user moves on with the explicit "Next question" button.
     if (label === OTHER) setTimeout(() => otherRef.current?.focus(), 0);
   };
 
@@ -154,7 +154,7 @@ export function QuestionnaireAsk({
       requestId: request.request_id,
       decision: {
         behavior: "deny",
-        message: "L'utilisateur a ignoré le questionnaire sans répondre.",
+        message: "The user skipped the questionnaire without answering.",
       },
     });
 
@@ -162,10 +162,10 @@ export function QuestionnaireAsk({
   // otherwise advance to the next step.
   const rightIsSubmit = !multi || onRecap;
   const rightLabel = rightIsSubmit
-    ? "Envoyer"
+    ? "Send"
     : cur < questions.length - 1
-      ? "Question suivante"
-      : "Terminer";
+      ? "Next question"
+      : "Finish";
   const onRight = rightIsSubmit ? submit : goNext;
 
   const onKeyNav = (e: KeyboardEvent) => {
@@ -199,13 +199,13 @@ export function QuestionnaireAsk({
           {selected && (q.multiSelect ? <Ico name="check" className="sm" /> : <span className="cv-q-dot" />)}
         </span>
         <span className="cv-q-opt-main">
-          <span className="cv-q-opt-label">{label === OTHER ? "Autre…" : label}</span>
+          <span className="cv-q-opt-label">{label === OTHER ? "Other…" : label}</span>
           {description && <span className="cv-q-opt-desc">{description}</span>}
           {label === OTHER && selected && (
             <input
               ref={otherRef}
               className="cv-q-other"
-              placeholder="Écris ta réponse…"
+              placeholder="Type your answer…"
               value={other[cur] ?? ""}
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => {
@@ -223,7 +223,7 @@ export function QuestionnaireAsk({
   return (
     <AskShell session={session}>
       <div className="cv-q" onKeyDown={onKeyNav}>
-        {/* Tabs: one per question (its header) + a final "Envoi" step. */}
+        {/* Tabs: one per question (its header) + a final "Send" step. */}
         {multi && (
           <div className="cv-q-tabs">
             {questions.map((qq, i) => (
@@ -241,7 +241,7 @@ export function QuestionnaireAsk({
               onClick={() => setCur(recapStep)}
             >
               <Ico name="send" className="sm" />
-              Envoi
+              Send
             </button>
           </div>
         )}
@@ -250,13 +250,13 @@ export function QuestionnaireAsk({
           <div className="cv-q-recap">
             <div className="cv-q-recap-h">
               <Ico name="check" className="sm" />
-              Prêt à envoyer — vérifie tes réponses
+              Ready to send — check your answers
             </div>
             {questions.map((qq, i) => (
-              <button key={i} className="cv-q-recap-row" onClick={() => setCur(i)} title="Modifier">
+              <button key={i} className="cv-q-recap-row" onClick={() => setCur(i)} title="Edit">
                 <span className="cv-q-recap-q">{qq.header}</span>
                 <span className={"cv-q-recap-a" + (answered(i) ? "" : " empty")}>
-                  {answered(i) ? answerFor(i) : "Non répondu"}
+                  {answered(i) ? answerFor(i) : "Not answered"}
                 </span>
               </button>
             ))}
@@ -281,7 +281,7 @@ export function QuestionnaireAsk({
 
         <div className="cv-q-foot">
           <button className="wf-btn ghost sm" onClick={skip}>
-            Ignorer
+            Skip
           </button>
           <button className="wf-btn prim sm" onClick={onRight}>
             <Ico name={rightIsSubmit ? "check" : "arrow"} className="sm" />
@@ -379,9 +379,9 @@ export function QuestionnaireSummary({
   const answers = Object.keys(fromInput).length > 0 ? fromInput : parseAnsweredResult(result ?? null, questions);
 
   const resultStr = typeof result === "string" ? result : "";
-  const recognized = resultStr.includes(ANSWER_PREFIX) || /ignor[ée]/i.test(resultStr);
+  const recognized = resultStr.includes(ANSWER_PREFIX) || /skip|ignor/i.test(resultStr);
   // Unknown result shape and nothing parsed → show the raw text rather than
-  // mislabelling every question "Non répondu".
+  // mislabelling every question "Not answered".
   if (Object.keys(answers).length === 0 && resultStr && !recognized) {
     return <ToolResultBody content={result ?? null} isError={false} />;
   }
@@ -406,7 +406,7 @@ export function QuestionnaireSummary({
                 ))}
               </div>
             ) : (
-              <div className="cv-qs-a empty">Non répondu</div>
+              <div className="cv-qs-a empty">Not answered</div>
             )}
           </div>
         );

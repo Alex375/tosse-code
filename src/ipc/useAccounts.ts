@@ -1,4 +1,4 @@
-// TanStack Query wrappers around the account commands (Réglages → Comptes). The
+// TanStack Query wrappers around the account commands (Settings → Accounts). The
 // credential stores stay OWNED by the CLIs (`claude auth`, codex app-server
 // `account/*`): these hooks only read the whitelisted statuses and drive the
 // official login/logout flows. Query keys share the `["account-status"]` prefix so
@@ -67,7 +67,7 @@ export function useClaudeAccountActions() {
  * The DEFINITIVE logged-out flags for both backends, for the passive warning
  * surfaces (composer banner, model-picker badges). `true` only when the status
  * query answered `loggedIn: false` — loading, disabled, or a failed status probe
- * yield `false` so a transient error never shows a scary false "non connecté".
+ * yield `false` so a transient error never shows a scary false "not connected".
  * Codex is only probed when its binary is installed. One shared cached query per
  * backend (30s staleTime + the global `account_login`/`account/updated`
  * invalidation), so mounting this in every composer costs nothing extra.

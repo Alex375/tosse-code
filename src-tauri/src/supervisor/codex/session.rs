@@ -9,7 +9,7 @@
 //! The teardown order mirrors `session::run_actor` byte-for-byte in SHAPE (invariant
 //! #4): explain a spontaneous death → announce the end → close the thread → evict from
 //! the registry → fire the shutdown ack LAST (the synchronous-stop contract a rewind
-//! relies on). The SOCLE emits enough to "answer text"; rich item rendering is 4.1.
+//! relies on). The base layer emits enough to "answer text"; rich item rendering is 4.1.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -39,7 +39,7 @@ use super::server::{CodexError, CodexServer};
 /// signature MIRRORS [`crate::supervisor::session::spawn_session`] (same `SpawnConfig`
 /// / `InitialControls` / emitter / `on_exit`) plus the shared [`CodexServer`], so the
 /// IPC dispatch is a clean `match` at the single spawn point. `initial` is unused at
-/// the socle (model/effort/permission mapping lands in 4.1).
+/// the base layer (model/effort/permission mapping lands in 4.1).
 pub fn spawn_session(
     id: String,
     cfg: SpawnConfig,
@@ -95,7 +95,7 @@ async fn run_codex_actor(
             // the id (and thus the history) intact; a transient failure (RPC timeout on the
             // shared server) is recoverable by simply resending.
             let msg = if resuming.is_some() {
-                format!("Reprise de la conversation Codex impossible : {e}. L'historique est conservé — réessayez d'envoyer.")
+                format!("Couldn't resume the Codex conversation: {e}. History is kept — try sending again.")
             } else {
                 e.to_string()
             };
@@ -107,7 +107,7 @@ async fn run_codex_actor(
     };
     core.on_thread_started(&thread_id, &cfg);
 
-    // Seed the forfait ring with a full snapshot right away: the `account/rateLimits/updated`
+    // Seed the plan ring with a full snapshot right away: the `account/rateLimits/updated`
     // push is SPARSE (may carry only a changed window) and may not arrive until the first
     // turn, so pull the current picture once. DETACHED (spawned) so it never delays the
     // actor's first command; best-effort — a failure just leaves the ring to fill from the
@@ -147,7 +147,7 @@ async fn run_codex_actor(
     if server_gone {
         core.emit_notice(
             "process_exited",
-            "le serveur codex app-server s'est arrêté de façon inattendue",
+            "the codex app-server stopped unexpectedly",
         );
     } else {
         // An approval the demux ROUTED to us may still be sitting UNPROCESSED in `inbound`
@@ -362,7 +362,7 @@ impl CodexCore {
                 tool_use_id: None,
                 // The sub-agent's name (agentPath tail) IS the prominent line; leaving
                 // `subagent_type` empty avoids echoing it a second time as a meta chip.
-                label: Some(name.unwrap_or_else(|| "Sous-agent".to_string())),
+                label: Some(name.unwrap_or_else(|| "Sub-agent".to_string())),
                 command: None,
                 subagent_type: None,
                 model,
@@ -418,7 +418,7 @@ impl CodexCore {
     /// Normalize a `rateLimits` snapshot (from the `account/rateLimits/updated` push or
     /// the `account/rateLimits/read` response) into the shared [`crate::usage::PlanUsage`]
     /// and emit it. A snapshot with no usable window (both absent) is dropped — never a
-    /// spurious empty forfait. Decode failures are ignored (tolerance rule 3).
+    /// spurious empty plan. Decode failures are ignored (tolerance rule 3).
     fn ingest_rate_limits(&self, snapshot: Value) {
         let Ok(snap) = serde_json::from_value::<RateLimitSnapshot>(snapshot) else {
             return;
@@ -444,8 +444,8 @@ impl CodexCore {
     /// icon, from, to}` detail shape the Claude backend's `change_notice` uses, so the
     /// front's shared `NoticeRow` renders it identically (zero front divergence).
     ///
-    /// The composer collapses sandbox × approval into ONE preset ("Prudent" / "Standard" /
-    /// "Auto" / "Accès total"), so those two axes are reported as a SINGLE "Permissions"
+    /// The composer collapses sandbox × approval into ONE preset ("Cautious" / "Standard" /
+    /// "Auto" / "Full access"), so those two axes are reported as a SINGLE "Permissions"
     /// line (reconstructed from the pair) — never two lines for one preset flip.
     fn announce_control_changes(&mut self) {
         let cur = self.controls.clone();
@@ -455,13 +455,13 @@ impl CodexCore {
             return;
         };
         self.diff_control(
-            "Modèle",
+            "Model",
             "diamond",
             codex_model_label(prev.model.as_deref()),
             codex_model_label(cur.model.as_deref()),
         );
         self.diff_control(
-            "Effort de réflexion",
+            "Thinking effort",
             "bolt",
             codex_effort_label(prev.effort.as_deref()),
             codex_effort_label(cur.effort.as_deref()),
@@ -473,19 +473,19 @@ impl CodexCore {
             codex_permissions_label(cur.sandbox.as_deref(), cur.approval_policy.as_deref()),
         );
         self.diff_control(
-            "Accès réseau",
+            "Network access",
             "globe",
             codex_bool_label(prev.network_access),
             codex_bool_label(cur.network_access),
         );
         self.diff_control(
-            "Résumé du raisonnement",
+            "Reasoning summary",
             "list",
             codex_summary_label(prev.summary.as_deref()),
             codex_summary_label(cur.summary.as_deref()),
         );
         self.diff_control(
-            "Personnalité",
+            "Personality",
             "wand",
             codex_personality_label(prev.personality.as_deref()),
             codex_personality_label(cur.personality.as_deref()),
@@ -537,14 +537,14 @@ impl CodexCore {
                 if !failed_images.is_empty() {
                     let msg = if failed_images.len() == 1 {
                         format!(
-                            "une image jointe n'a pas pu être transmise à Codex : {}",
+                            "an attached image couldn't be sent to Codex: {}",
                             failed_images[0]
                         )
                     } else {
                         format!(
-                            "{} images jointes n'ont pas pu être transmises à Codex : {}",
+                            "{} attached images couldn't be sent to Codex: {}",
                             failed_images.len(),
-                            failed_images.join(" ; ")
+                            failed_images.join("; ")
                         )
                     };
                     self.emit_notice("send_failed", &msg);
@@ -586,7 +586,7 @@ impl CodexCore {
                             Err(e) if steer_outcome_uncertain(&e) => {
                                 self.emit_notice(
                                     "send_failed",
-                                    "le serveur n'a pas confirmé la prise en compte du message à temps — il a peut-être quand même été injecté dans le tour en cours ; vérifiez la réponse avant de le renvoyer",
+                                    "the server didn't confirm the message was received in time — it may still have been injected into the current turn; check the response before resending",
                                 );
                                 return;
                             }
@@ -647,7 +647,7 @@ impl CodexCore {
                         )
                         .await
                     {
-                        self.emit_notice("error", &format!("interruption du tour impossible : {e}"));
+                        self.emit_notice("error", &format!("couldn't interrupt the turn: {e}"));
                     }
                 } else if self.state.busy {
                     // Busy with NO turn id (the turn/start response parse missed it and
@@ -655,7 +655,7 @@ impl CodexCore {
                     // say so rather than silently swallowing the click.
                     self.emit_notice(
                         "error",
-                        "interruption impossible : identifiant du tour introuvable — le tour se terminera de lui-même",
+                        "can't interrupt: turn id not found — the turn will finish on its own",
                     );
                 }
                 // Not busy → nothing to interrupt; `turn/completed` settles `busy`.
@@ -701,7 +701,7 @@ impl CodexCore {
             }
             SessionCommand::McpAuthenticate { reply, .. } => {
                 let _ = reply.send(McpAuthResult {
-                    error: Some("authentification MCP non gérée pour Codex".into()),
+                    error: Some("MCP authentication is not supported for Codex".into()),
                     ..McpAuthResult::default()
                 });
             }
@@ -746,7 +746,7 @@ impl CodexCore {
                             &ConversationItem::Notice {
                                 subtype: "send_failed".to_string(),
                                 detail: json!({
-                                    "message": format!("compactage du contexte impossible : {e}")
+                                    "message": format!("couldn't compact context: {e}")
                                 }),
                             },
                         );
@@ -781,7 +781,7 @@ impl CodexCore {
                     }
                 });
             }
-            // Everything else has no socle equivalent on Codex → a clean no-op. (Summary /
+            // Everything else has no base-layer equivalent on Codex → a clean no-op. (Summary /
             // remaining MCP mutations / plugins / stop-task land across phases 4.4-4.5.)
             // ⚠️ Any FUTURE `SessionCommand` variant carrying a `oneshot` reply MUST be matched
             // explicitly ABOVE this arm and resolve its reply — falling into this no-op would
@@ -807,7 +807,7 @@ impl CodexCore {
             {
                 self.emit_notice(
                     "error",
-                    &format!("interruption du tour à l'arrêt de la session impossible : {e}"),
+                    &format!("couldn't interrupt the turn while shutting down the session: {e}"),
                 );
             }
         }
@@ -841,7 +841,7 @@ impl CodexCore {
                     tool_name: "Bash".into(),
                     tool_use_id: p.item_id.unwrap_or_default(),
                     input: json!({ "command": p.command, "cwd": p.cwd }),
-                    title: Some("Exécuter une commande".into()),
+                    title: Some("Run a command".into()),
                     description: p.reason,
                     suggestions: Value::Null,
                 }
@@ -853,7 +853,7 @@ impl CodexCore {
                     tool_name: "ApplyPatch".into(),
                     tool_use_id: p.item_id.unwrap_or_default(),
                     input: json!({ "reason": p.reason }),
-                    title: Some("Modifier des fichiers".into()),
+                    title: Some("Edit files".into()),
                     description: p.reason,
                     suggestions: Value::Null,
                 }
@@ -915,7 +915,7 @@ impl CodexCore {
 
             "turn/completed" => self.on_turn_completed(params),
 
-            // ── Subscription rate-limit % (5h + weekly) — the forfait ring. A GLOBAL
+            // ── Subscription rate-limit % (5h + weekly) — the plan ring. A GLOBAL
             // (thread-less) push the shared server broadcasts to every conversation actor
             // (see `server::demux_loop`). Account-global, so any Codex conversation
             // surfacing it feeds the ONE front Codex plan store. Sparse: a push may carry
@@ -992,10 +992,10 @@ impl CodexCore {
                 let turn_err = parsed.as_ref().and_then(|e| e.error.as_ref());
                 let msg = turn_err
                     .and_then(|t| t.message.clone())
-                    .unwrap_or_else(|| "erreur codex app-server".into());
+                    .unwrap_or_else(|| "codex app-server error".into());
                 // A `sessionBudgetExceeded` cause (a bare-string `codexErrorInfo`) earns a
                 // dedicated notice — distinct from a plan rate-limit or a generic protocol
-                // error — so the UI can name it ("Budget de session Codex dépassé"). Only
+                // error — so the UI can name it ("Codex session budget exceeded"). Only
                 // that one variant is matched; the rest stay `protocol_error`.
                 let subtype = if turn_err
                     .and_then(|t| t.codex_error_info.as_ref())
@@ -1096,14 +1096,14 @@ impl CodexCore {
                     let name = raw_type.as_deref().unwrap_or("codexItem");
                     self.ensure_tool_use(id, name, json!({}), item_turn.as_deref());
                     if completed {
-                        self.emit_tool_result(id, json!(format!("Item Codex illisible : {name}")), true);
+                        self.emit_tool_result(id, json!(format!("Unreadable Codex item: {name}")), true);
                     }
                 }
                 None => {
-                    let ty = raw_type.as_deref().unwrap_or("inconnu");
+                    let ty = raw_type.as_deref().unwrap_or("unknown");
                     self.emit_notice(
                         "protocol_error",
-                        &format!("Un élément Codex ({ty}) n'a pas pu être décodé et n'est pas affiché."),
+                        &format!("A Codex item ({ty}) couldn't be decoded and is not shown."),
                     );
                 }
             }
@@ -1233,13 +1233,13 @@ impl CodexCore {
                 if completed {
                     let mut blocks: Vec<Value> = Vec::new();
                     if let Some(p) = revised_prompt.as_deref().filter(|p| !p.is_empty()) {
-                        blocks.push(json!({ "type": "text", "text": format!("Prompt : {p}") }));
+                        blocks.push(json!({ "type": "text", "text": format!("Prompt: {p}") }));
                     }
                     match saved_path.as_deref() {
                         Some(p) => match super::image_block(p, self.state.cwd.as_deref()) {
                             Ok(b) => blocks.push(b),
                             Err(note) => {
-                                blocks.push(json!({ "type": "text", "text": format!("{note} : {p}") }))
+                                blocks.push(json!({ "type": "text", "text": format!("{note}: {p}") }))
                             }
                         },
                         None => {
@@ -1249,7 +1249,7 @@ impl CodexCore {
                             match data_url_image_block(&r) {
                                 Some(b) => blocks.push(b),
                                 None if !r.is_empty() => {
-                                    blocks.push(json!({ "type": "text", "text": format!("Résultat : {r}") }))
+                                    blocks.push(json!({ "type": "text", "text": format!("Result: {r}") }))
                                 }
                                 None => {}
                             }
@@ -1257,7 +1257,7 @@ impl CodexCore {
                     }
                     let is_error = status_is_error(status.as_deref());
                     let content = if blocks.is_empty() {
-                        json!("Image générée.")
+                        json!("Image generated.")
                     } else {
                         json!(blocks)
                     };
@@ -1317,11 +1317,11 @@ impl CodexCore {
                 if completed {
                     let mut lines: Vec<String> = Vec::new();
                     if let Some(p) = prompt.as_deref().filter(|p| !p.is_empty()) {
-                        lines.push(format!("Tâche confiée : {p}"));
+                        lines.push(format!("Task delegated: {p}"));
                     }
                     let mut model_line = String::new();
                     if let Some(m) = model.as_deref().filter(|m| !m.is_empty()) {
-                        model_line = format!("Modèle : {m}");
+                        model_line = format!("Model: {m}");
                     }
                     if let Some(e) = reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
                         model_line.push_str(if model_line.is_empty() {
@@ -1355,7 +1355,7 @@ impl CodexCore {
             } => {
                 self.ensure_tool_use(
                     &id,
-                    "Sous-agent",
+                    "Sub-agent",
                     json!({ "kind": kind, "agent_path": agent_path }),
                     item_turn.as_deref(),
                 );
@@ -1363,9 +1363,9 @@ impl CodexCore {
                 let path = agent_path.as_deref().unwrap_or("");
                 let name = agent_name(path);
                 let headline = if name.is_empty() {
-                    format!("Sous-agent {kind_fr}")
+                    format!("Sub-agent {kind_fr}")
                 } else {
-                    format!("Sous-agent « {name} » {kind_fr}")
+                    format!("Sub-agent \"{name}\" {kind_fr}")
                 };
                 // Keep the full path as a second line when it adds info beyond the short name.
                 let body = if path.is_empty() || path == name {
@@ -1396,7 +1396,7 @@ impl CodexCore {
                 self.ensure_tool_use(&id, "Sleep", json!({ "duration_ms": duration_ms }), item_turn.as_deref());
                 if completed {
                     let msg = match duration_ms {
-                        Some(ms) => format!("Pause de {:.1} s", ms as f64 / 1000.0),
+                        Some(ms) => format!("Paused for {:.1} s", ms as f64 / 1000.0),
                         None => "Pause".to_string(),
                     };
                     self.emit_tool_result(&id, json!(msg), false);
@@ -1406,15 +1406,15 @@ impl CodexCore {
             // result unconditional).
             ThreadItem::EnteredReviewMode { id, review } => {
                 self.ensure_tool_use(&id, "ReviewMode", json!({ "review": review }), item_turn.as_deref());
-                self.emit_tool_result(&id, json!(format!("Entrée en mode revue : {review}").trim()), false);
+                self.emit_tool_result(&id, json!(format!("Entered review mode: {review}").trim()), false);
             }
             ThreadItem::ExitedReviewMode { id, review } => {
                 self.ensure_tool_use(&id, "ReviewMode", json!({ "review": review }), item_turn.as_deref());
-                self.emit_tool_result(&id, json!(format!("Sortie du mode revue : {review}").trim()), false);
+                self.emit_tool_result(&id, json!(format!("Exited review mode: {review}").trim()), false);
             }
             ThreadItem::ContextCompaction { id } => {
                 self.ensure_tool_use(&id, "Compaction", json!({}), item_turn.as_deref());
-                self.emit_tool_result(&id, json!("Conversation compactée."), false);
+                self.emit_tool_result(&id, json!("Conversation compacted."), false);
             }
 
             // The user's own echoed message / a hook-injected prompt: NOT model tool work
@@ -1432,7 +1432,7 @@ impl CodexCore {
                     if completed {
                         self.emit_tool_result(
                             id,
-                            json!(format!("Item Codex non modélisé : {name}")),
+                            json!(format!("Unmodelled Codex item: {name}")),
                             false,
                         );
                     }
@@ -1497,7 +1497,7 @@ impl CodexCore {
             total_cost_usd: None,
             num_turns: None,
             duration_ms,
-            // Codex's turn/completed carries no MODEL-time breakdown — the "N s de modèle"
+            // Codex's turn/completed carries no MODEL-time breakdown — the "N s of model"
             // rider + TTFT are Claude-only; None keeps that part of the footer honest.
             duration_api_ms: None,
             ttft_ms: None,
@@ -1568,7 +1568,7 @@ impl CodexCore {
         for id in self.open_tools.drain().collect::<Vec<_>>() {
             self.push_item(ConversationItem::ToolResult {
                 tool_use_id: id,
-                content: json!("(interrompu)"),
+                content: json!("(interrupted)"),
                 is_error: true,
                 parent_tool_use_id: None,
             });
@@ -1586,26 +1586,26 @@ fn status_is_error(status: Option<&str>) -> bool {
 /// treatment (transcript, live status, fleet) is Phase 4.5; here the card just reads clearly.
 fn collab_action_fr(tool: &str) -> String {
     match tool {
-        "spawnAgent" => "Lancement d'un sous-agent".to_string(),
-        "sendInput" => "Message à un sous-agent".to_string(),
-        "resumeAgent" => "Reprise d'un sous-agent".to_string(),
-        "wait" => "Attente d'un sous-agent".to_string(),
-        "closeAgent" => "Fermeture d'un sous-agent".to_string(),
-        other => format!("Sous-agent : {other}"),
+        "spawnAgent" => "Spawning a sub-agent".to_string(),
+        "sendInput" => "Message to a sub-agent".to_string(),
+        "resumeAgent" => "Resuming a sub-agent".to_string(),
+        "wait" => "Waiting on a sub-agent".to_string(),
+        "closeAgent" => "Closing a sub-agent".to_string(),
+        other => format!("Sub-agent: {other}"),
     }
 }
 
-/// A `CollabAgentStatus` → a French word for the card body.
+/// A `CollabAgentStatus` → an English word for the card body.
 fn collab_status_fr(status: &str) -> &'static str {
     match status {
-        "pendingInit" => "en attente",
-        "running" => "en cours",
-        "interrupted" => "interrompu",
-        "completed" => "terminé",
-        "errored" => "en erreur",
-        "shutdown" => "arrêté",
-        "notFound" => "introuvable",
-        _ => "état inconnu",
+        "pendingInit" => "pending",
+        "running" => "running",
+        "interrupted" => "interrupted",
+        "completed" => "completed",
+        "errored" => "errored",
+        "shutdown" => "stopped",
+        "notFound" => "not found",
+        _ => "unknown state",
     }
 }
 
@@ -1622,13 +1622,13 @@ fn collab_status_to_task_status(status: Option<&str>) -> BackgroundTaskStatus {
     }
 }
 
-/// A `SubAgentActivityKind` → a French verb for the card body.
+/// A `SubAgentActivityKind` → an English verb for the card body.
 fn subagent_kind_fr(kind: &str) -> &'static str {
     match kind {
-        "started" => "démarré",
-        "interacted" => "a interagi",
-        "interrupted" => "interrompu",
-        _ => "activité",
+        "started" => "started",
+        "interacted" => "interacted",
+        "interrupted" => "interrupted",
+        _ => "activity",
     }
 }
 
@@ -1639,7 +1639,7 @@ fn agent_name(path: &str) -> &str {
 }
 
 /// Summarize a `collabAgentToolCall`'s `agentsStates` ({threadId:{status,message}}) as a
-/// count-by-status line ("Sous-agents (2) : 1 en cours, 1 terminé"). `None` when empty.
+/// count-by-status line ("Sub-agents (2): 1 running, 1 completed"). `None` when empty.
 fn collab_states_summary(states: &Value) -> Option<String> {
     let obj = states.as_object().filter(|o| !o.is_empty())?;
     let mut counts: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
@@ -1652,7 +1652,7 @@ fn collab_states_summary(states: &Value) -> Option<String> {
         .map(|(label, n)| format!("{n} {label}"))
         .collect::<Vec<_>>()
         .join(", ");
-    Some(format!("Sous-agents ({}) : {detail}", obj.len()))
+    Some(format!("Sub-agents ({}): {detail}", obj.len()))
 }
 
 /// A `data:<mime>;base64,<data>` URL → the inline image block the front renders. Only a
@@ -1676,7 +1676,7 @@ fn data_url_image_block(url: &str) -> Option<Value> {
 /// mention), so nothing the tool returned is dropped. Empty / absent → a neutral note.
 fn dynamic_tool_content(items: Option<&[Value]>) -> Value {
     let Some(items) = items.filter(|i| !i.is_empty()) else {
-        return json!("(sans sortie)");
+        return json!("(no output)");
     };
     let mut out: Vec<Value> = Vec::new();
     for it in items {
@@ -1728,11 +1728,11 @@ fn web_search_result_text(query: &str, action: &Value) -> String {
             let note = if pattern.is_empty() {
                 String::new()
             } else {
-                format!("\n\nRecherche « {pattern} » dans la page.")
+                format!("\n\nSearch \"{pattern}\" in the page.")
             };
             match action.get("url").and_then(Value::as_str) {
                 Some(url) => format!("{}{note}", links_line(url)),
-                None if !pattern.is_empty() => format!("Recherche « {pattern} » dans la page."),
+                None if !pattern.is_empty() => format!("Search \"{pattern}\" in the page."),
                 None => String::new(),
             }
         }
@@ -1755,9 +1755,9 @@ fn web_search_result_text(query: &str, action: &Value) -> String {
             };
             match list.len() {
                 0 => String::new(),
-                1 => format!("Recherche : {}", list[0]),
+                1 => format!("Search: {}", list[0]),
                 _ => format!(
-                    "Recherches :\n{}",
+                    "Searches:\n{}",
                     list.iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
                 ),
             }
@@ -1767,7 +1767,7 @@ fn web_search_result_text(query: &str, action: &Value) -> String {
             if query.is_empty() {
                 String::new()
             } else {
-                format!("Recherche : {query}")
+                format!("Search: {query}")
             }
         }
     }
@@ -1778,7 +1778,7 @@ fn web_search_result_text(query: &str, action: &Value) -> String {
 // `CodexCore::announce_control_changes`). They mirror the composer's own labels
 // so a line reads like exactly what the user just picked, and match the Claude
 // backend's English effort wording ("Extra high") for cross-backend parity.
-// `None` (a field the front didn't send) renders as "(défaut)" so a first-set
+// `None` (a field the front didn't send) renders as "(default)" so a first-set
 // never reads as a move from an empty string. An unmodelled string passes
 // through verbatim rather than being dropped.
 // ---------------------------------------------------------------------------
@@ -1787,7 +1787,7 @@ fn web_search_result_text(query: &str, action: &Value) -> String {
 /// `gpt-5.5` → `GPT-5.5`. Unknown shapes fall back to the raw id.
 fn codex_model_label(id: Option<&str>) -> String {
     let Some(id) = id.map(str::trim).filter(|s| !s.is_empty()) else {
-        return "(défaut)".to_string();
+        return "(default)".to_string();
     };
     let Some(rest) = id.strip_prefix("gpt-") else {
         return id.to_string();
@@ -1816,7 +1816,7 @@ fn codex_effort_label(effort: Option<&str>) -> String {
         Some("max") => "Max",
         Some("ultra") => "Ultra",
         Some(other) => other,
-        None => "(défaut)",
+        None => "(default)",
     }
     .to_string()
 }
@@ -1826,34 +1826,34 @@ fn codex_effort_label(effort: Option<&str>) -> String {
 /// so the notice never lies.
 fn codex_permissions_label(sandbox: Option<&str>, approval: Option<&str>) -> String {
     match (sandbox, approval) {
-        (Some("readOnly"), Some("on-request")) => "Prudent".to_string(),
+        (Some("readOnly"), Some("on-request")) => "Cautious".to_string(),
         (Some("workspaceWrite"), Some("on-request")) => "Standard".to_string(),
         (Some("workspaceWrite"), Some("never")) => "Auto".to_string(),
-        (Some("dangerFullAccess"), Some("never")) => "Accès total".to_string(),
-        (None, None) => "(défaut)".to_string(),
+        (Some("dangerFullAccess"), Some("never")) => "Full access".to_string(),
+        (None, None) => "(default)".to_string(),
         (s, a) => format!("{} · {}", codex_sandbox_label(s), codex_approval_label(a)),
     }
 }
 
 fn codex_sandbox_label(sandbox: Option<&str>) -> String {
     match sandbox {
-        Some("readOnly") => "Lecture seule",
-        Some("workspaceWrite") => "Écriture workspace",
-        Some("dangerFullAccess") => "Accès total",
+        Some("readOnly") => "Read-only",
+        Some("workspaceWrite") => "Workspace write",
+        Some("dangerFullAccess") => "Full access",
         Some(other) => other,
-        None => "(défaut)",
+        None => "(default)",
     }
     .to_string()
 }
 
 fn codex_approval_label(approval: Option<&str>) -> String {
     match approval {
-        Some("untrusted") => "Toujours demander",
-        Some("on-failure") => "Demander en cas d'échec",
-        Some("on-request") => "Demander si nécessaire",
-        Some("never") => "Jamais demander",
+        Some("untrusted") => "Always ask",
+        Some("on-failure") => "Ask on failure",
+        Some("on-request") => "Ask when needed",
+        Some("never") => "Never ask",
         Some(other) => other,
-        None => "(défaut)",
+        None => "(default)",
     }
     .to_string()
 }
@@ -1861,31 +1861,31 @@ fn codex_approval_label(approval: Option<&str>) -> String {
 fn codex_summary_label(summary: Option<&str>) -> String {
     match summary {
         Some("auto") => "Auto",
-        Some("concise") => "Concis",
-        Some("detailed") => "Détaillé",
-        Some("none") => "Aucun",
+        Some("concise") => "Concise",
+        Some("detailed") => "Detailed",
+        Some("none") => "None",
         Some(other) => other,
-        None => "(défaut)",
+        None => "(default)",
     }
     .to_string()
 }
 
 fn codex_personality_label(personality: Option<&str>) -> String {
     match personality {
-        Some("none") => "Neutre",
-        Some("friendly") => "Amical",
-        Some("pragmatic") => "Pragmatique",
+        Some("none") => "Neutral",
+        Some("friendly") => "Friendly",
+        Some("pragmatic") => "Pragmatic",
         Some(other) => other,
-        None => "(défaut)",
+        None => "(default)",
     }
     .to_string()
 }
 
 fn codex_bool_label(v: Option<bool>) -> String {
     match v {
-        Some(true) => "Activé",
-        Some(false) => "Désactivé",
-        None => "(défaut)",
+        Some(true) => "On",
+        Some(false) => "Off",
+        None => "(default)",
     }
     .to_string()
 }
@@ -1990,10 +1990,10 @@ async fn codex_remote_enable(server: &CodexServer) -> RemoteControlState {
             match code {
                 Some(_) => (code, None),
                 // Enable succeeded but the server minted no code — say so, don't show OFF.
-                None => (None, Some("aucun code d'appairage renvoyé".to_string())),
+                None => (None, Some("no pairing code returned".to_string())),
             }
         }
-        Err(e) => (None, Some(format!("code d'appairage indisponible : {e}"))),
+        Err(e) => (None, Some(format!("pairing code unavailable: {e}"))),
     };
     RemoteControlState {
         status,
@@ -2057,7 +2057,7 @@ async fn fetch_mcp_status(
 /// a present `serverInfo` (the server answered `initialize`) → connected, else disconnected.
 /// A live `failed` startup status (captured from the `mcpServer/startupStatus/updated`
 /// push into `startup`) OVERRIDES that inference and carries its reason, so a server that
-/// failed to start shows "Échec · <reason>" instead of a mute "Déconnecté". Codex MCP
+/// failed to start shows "Failed · <reason>" instead of a mute "Disconnected". Codex MCP
 /// servers are user-global (`~/.codex/config.toml`), hence scope `user`; the launch
 /// command/url live in the config, not this live entry, so they stay `None` here.
 fn mcp_server_live(v: &Value, startup: &HashMap<String, McpStartupStatus>) -> McpServerLive {
@@ -2098,7 +2098,7 @@ fn mcp_server_live(v: &Value, startup: &HashMap<String, McpStartupStatus>) -> Mc
     }
 }
 
-/// Map a Codex `RateLimitSnapshot` to the shared [`crate::usage::PlanUsage`] the forfait
+/// Map a Codex `RateLimitSnapshot` to the shared [`crate::usage::PlanUsage`] the plan
 /// popover renders. The two windows are told apart by `windowDurationMins` (300 → 5h,
 /// 10080 → weekly); a window with any other/absent duration is skipped rather than
 /// mislabeled. `None` when neither window is usable (the actor then emits nothing).
@@ -2192,7 +2192,7 @@ fn user_inputs(
 
 /// Write a base64 image attachment under `dir` (the session's attachments dir, created
 /// lazily here) and return its path, so it can be referenced as a Codex `localImage`.
-/// `Err` carries a human-readable (French, UI-bound) reason — undecodable base64 or an
+/// `Err` carries a human-readable (UI-bound) reason — undecodable base64 or an
 /// unwritable temp dir — for the caller to surface. Files must OUTLIVE the turn (the
 /// app-server reads them from disk mid-turn), so no per-file deletion here: the whole
 /// dir is removed at actor teardown (`CodexCore::cleanup_images_dir`).
@@ -2200,7 +2200,7 @@ fn materialize_image(img: &ImageAttachment, dir: &Path) -> Result<String, String
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(img.data.trim())
-        .map_err(|e| format!("image illisible (base64 invalide : {e})"))?;
+        .map_err(|e| format!("unreadable image (invalid base64: {e})"))?;
     let ext = match img.media_type.as_str() {
         "image/png" => "png",
         "image/jpeg" => "jpg",
@@ -2209,10 +2209,10 @@ fn materialize_image(img: &ImageAttachment, dir: &Path) -> Result<String, String
         _ => "png",
     };
     std::fs::create_dir_all(dir)
-        .map_err(|e| format!("dossier temporaire inaccessible ({}) : {e}", dir.display()))?;
+        .map_err(|e| format!("temp dir unreachable ({}): {e}", dir.display()))?;
     let path = dir.join(format!("{}.{ext}", uuid::Uuid::new_v4()));
     std::fs::write(&path, &bytes)
-        .map_err(|e| format!("écriture de l'image impossible ({}) : {e}", path.display()))?;
+        .map_err(|e| format!("couldn't write the image ({}): {e}", path.display()))?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -2327,7 +2327,7 @@ mod tests {
         c.announce_control_changes();
         assert_eq!(
             notice(&items(&sink)),
-            vec![("Effort de réflexion", "High", "Low")],
+            vec![("Thinking effort", "High", "Low")],
             "only the moved control announces, once, with the friendly English label"
         );
     }
@@ -2357,7 +2357,7 @@ mod tests {
         assert_eq!(codex_model_label(Some("gpt-5.6-sol")), "GPT-5.6 Sol");
         assert_eq!(codex_model_label(Some("gpt-5.4-mini")), "GPT-5.4 Mini");
         assert_eq!(codex_model_label(Some("gpt-5.5")), "GPT-5.5");
-        assert_eq!(codex_model_label(None), "(défaut)");
+        assert_eq!(codex_model_label(None), "(default)");
     }
 
     #[test]
@@ -2749,11 +2749,11 @@ mod tests {
             json!({"item":{"type":"collabAgentToolCall","id":"co1","tool":"spawnAgent","status":"completed","senderThreadId":"s","receiverThreadIds":["r1","r2"],"prompt":"refactor the auth module","model":"gpt-5.6","reasoningEffort":"ultra","agentsStates":{"r1":{"status":"running"},"r2":{"status":"completed"}}}}),
         );
         let items = items(&sink);
-        assert!(has_tool_use(&items, "Lancement d'un sous-agent", "co1"), "readable French action label");
+        assert!(has_tool_use(&items, "Spawning a sub-agent", "co1"), "readable action label");
         let text = result_content(&items, "co1").and_then(Value::as_str).expect("collab card body");
         assert!(text.contains("refactor the auth module"), "the delegated task is shown");
         assert!(text.contains("gpt-5.6") && text.contains("ultra"), "model + effort shown");
-        assert!(text.contains("Sous-agents (2)") && text.contains("1 en cours") && text.contains("1 terminé"), "states summarized, not raw JSON");
+        assert!(text.contains("Sub-agents (2)") && text.contains("1 running") && text.contains("1 completed"), "states summarized, not raw JSON");
     }
 
     fn tasks(sink: &Sink) -> Vec<BackgroundTask> {
@@ -2795,7 +2795,7 @@ mod tests {
         assert!(matches!(r2.status, BackgroundTaskStatus::Running), "pendingInit → Running (still working)");
         // r2 never got a subAgentActivity (its name is unknown) → a stable fallback label,
         // never an empty string.
-        assert_eq!(r2.label.as_deref(), Some("Sous-agent"), "unnamed sub-agent falls back to a stable label");
+        assert_eq!(r2.label.as_deref(), Some("Sub-agent"), "unnamed sub-agent falls back to a stable label");
 
         // A later `wait` completing flips both to terminal via the cumulative snapshot.
         c.on_notification(
@@ -2805,7 +2805,7 @@ mod tests {
         assert!(matches!(last_task(&sink, "r1").unwrap().status, BackgroundTaskStatus::Completed), "completed → Completed");
         assert!(matches!(last_task(&sink, "r2").unwrap().status, BackgroundTaskStatus::Failed), "errored → Failed");
         // The collab item itself is STILL rendered as an in-thread card (never dropped).
-        assert!(has_tool_use(&items(&sink), "Lancement d'un sous-agent", "co1"));
+        assert!(has_tool_use(&items(&sink), "Spawning a sub-agent", "co1"));
     }
 
     #[test]
@@ -2818,7 +2818,7 @@ mod tests {
             json!({"item":{"type":"collabAgentToolCall","id":"co1","tool":"spawnAgent","status":"inProgress","senderThreadId":"s","receiverThreadIds":["r9"],"prompt":"build","model":"gpt-5.6","reasoningEffort":"high","agentsStates":{"r9":{"status":"running","message":"compilation"}}}}),
         );
         let before = last_task(&sink, "r9").expect("task from the spawn snapshot");
-        assert_eq!(before.label.as_deref(), Some("Sous-agent"), "no name yet → stable fallback");
+        assert_eq!(before.label.as_deref(), Some("Sub-agent"), "no name yet → stable fallback");
         assert_eq!(before.progress.as_deref(), Some("compilation"), "agentsStates message = live progress");
 
         // The subAgentActivity carries NO message — it must ENRICH the name WITHOUT wiping the
@@ -2856,9 +2856,9 @@ mod tests {
         assert!(has_tool_use(&items, "ReviewMode", "rm1"));
         assert!(result_content(&items, "rm1").and_then(Value::as_str).is_some_and(|s| s.contains("security")));
         assert!(has_tool_use(&items, "Compaction", "cc1"));
-        assert!(has_tool_use(&items, "Sous-agent", "sa1"));
-        // The bare path is turned into a readable name + a French verb.
-        assert!(result_content(&items, "sa1").and_then(Value::as_str).is_some_and(|s| s.contains("« foo »") && s.contains("démarré")));
+        assert!(has_tool_use(&items, "Sub-agent", "sa1"));
+        // The bare path is turned into a readable name + an English verb.
+        assert!(result_content(&items, "sa1").and_then(Value::as_str).is_some_and(|s| s.contains("\"foo\"") && s.contains("started")));
     }
 
     #[test]
@@ -2902,7 +2902,7 @@ mod tests {
         let items = items(&sink);
         // A type this build does not model still gets a named card keyed by its own id.
         assert!(has_tool_use(&items, "quantumTool", "q1"));
-        assert!(result_content(&items, "q1").and_then(Value::as_str).is_some_and(|s| s.contains("non modélisé")));
+        assert!(result_content(&items, "q1").and_then(Value::as_str).is_some_and(|s| s.contains("Unmodelled")));
     }
 
     #[test]
@@ -2922,7 +2922,7 @@ mod tests {
         match tool_result(&items, "cx1") {
             Some(ConversationItem::ToolResult { is_error, content, .. }) => {
                 assert!(is_error, "an undecodable item is flagged as an error");
-                assert!(content.as_str().is_some_and(|s| s.contains("illisible")));
+                assert!(content.as_str().is_some_and(|s| s.contains("Unreadable")));
             }
             _ => panic!("expected an error ToolResult for cx1"),
         }
@@ -3150,13 +3150,13 @@ mod tests {
         c.state.busy = true;
         c.on_notification(
             "error",
-            json!({"error":{"message":"budget de session dépassé","codexErrorInfo":"sessionBudgetExceeded"},"willRetry":false}),
+            json!({"error":{"message":"session budget exceeded","codexErrorInfo":"sessionBudgetExceeded"},"willRetry":false}),
         );
         let items = items(&sink);
         assert!(
             items.iter().any(|i| matches!(i, ConversationItem::Notice { subtype, detail }
                 if subtype == "session_budget_exceeded"
-                    && detail.get("message").and_then(Value::as_str) == Some("budget de session dépassé"))),
+                    && detail.get("message").and_then(Value::as_str) == Some("session budget exceeded"))),
             "sessionBudgetExceeded must emit a dedicated notice carrying the real nested message"
         );
         assert!(!c.state.busy, "a terminal budget error settles the turn");
@@ -3322,7 +3322,7 @@ mod tests {
         let unknown: RateLimitSnapshot =
             serde_json::from_value(json!({"primary":{"usedPercent":5.0,"windowDurationMins":42}})).unwrap();
         assert!(rate_limits_to_plan_usage(&unknown).is_none());
-        // An empty snapshot yields no usage (no spurious empty forfait).
+        // An empty snapshot yields no usage (no spurious empty plan).
         assert!(rate_limits_to_plan_usage(&RateLimitSnapshot::default()).is_none());
     }
 
@@ -3470,7 +3470,7 @@ mod tests {
         let server = Arc::new(CodexServer::new());
         for decision in [
             PermissionDecision::Allow { updated_input: None },
-            PermissionDecision::Deny { message: "non".into() },
+            PermissionDecision::Deny { message: "no".into() },
         ] {
             let (mut c, _sink) = core();
             c.on_approval_request(

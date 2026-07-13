@@ -83,7 +83,7 @@ export function ConductorConversation({ active }: { active: Conversation | null 
               padding: 24,
             }}
           >
-            Aucune conversation. Ouvre un dossier avec ＋ dans la barre latérale pour en démarrer une.
+            No conversations. Open a folder with ＋ in the sidebar to start one.
           </div>
         </div>
       )}

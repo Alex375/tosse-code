@@ -569,7 +569,7 @@ pub fn parse_remote_control(line: &Value, enabled: bool, err: Option<&str>) -> R
         },
         None => RemoteControlState {
             status: "error".to_string(),
-            error: Some("Le bridge n'a pas renvoyé d'URL de session.".to_string()),
+            error: Some("The bridge did not return a session URL.".to_string()),
             ..RemoteControlState::default()
         },
     }
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn generate_session_title_request_shape() {
-        let r = generate_session_title_request("t-1", "Aide-moi à fixer le bug du login");
+        let r = generate_session_title_request("t-1", "Help me fix the login bug");
         assert_eq!(r["type"], json!("control_request"));
         assert_eq!(r["request_id"], json!("t-1"));
         assert_eq!(r["request"]["subtype"], json!("generate_session_title"));
@@ -838,7 +838,7 @@ mod tests {
         // appended after it — the binary summarizes the whole thing into a short title.
         let desc = r["request"]["description"].as_str().expect("description is a string");
         assert!(
-            desc.starts_with("Aide-moi à fixer le bug du login"),
+            desc.starts_with("Help me fix the login bug"),
             "user text must lead the description, got: {desc:?}"
         );
         assert!(

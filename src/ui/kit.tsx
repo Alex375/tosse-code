@@ -196,14 +196,14 @@ export function NavBtn({
 export type StreamState = "work" | "ask" | "err" | "review" | "done" | "arch" | "off" | "bg";
 
 export const WF_STATUS: Record<StreamState, { label: string; pill: string; dot: string }> = {
-  work: { label: "En cours", pill: "run", dot: "run" },
-  ask: { label: "Action requise", pill: "att", dot: "att" },
-  err: { label: "Action requise", pill: "err", dot: "err" },
-  review: { label: "À relire", pill: "wait", dot: "wait" },
-  done: { label: "Actif", pill: "done", dot: "done" },
-  arch: { label: "Archivé", pill: "arch", dot: "arch" },
-  off: { label: "Éteint", pill: "off", dot: "off" },
-  bg: { label: "Tâches en fond", pill: "bg", dot: "bg" },
+  work: { label: "Running", pill: "run", dot: "run" },
+  ask: { label: "Action required", pill: "att", dot: "att" },
+  err: { label: "Action required", pill: "err", dot: "err" },
+  review: { label: "To review", pill: "wait", dot: "wait" },
+  done: { label: "Active", pill: "done", dot: "done" },
+  arch: { label: "Archived", pill: "arch", dot: "arch" },
+  off: { label: "Off", pill: "off", dot: "off" },
+  bg: { label: "Background tasks", pill: "bg", dot: "bg" },
 };
 export const WF_ATTENTION: StreamState[] = ["ask", "err", "review"];
 
@@ -220,7 +220,7 @@ export function Dot({ s, pulse, ring }: { s: StreamState; pulse?: boolean; ring?
  *  plain pulsing dot: a steady green core emitting two staggered sonar rings (pure
  *  CSS, GPU-friendly transform/opacity; rings are `::before`/`::after` in the CSS,
  *  and honour `prefers-reduced-motion`). Used in the sidebar for a conversation whose
- *  turn is in flight — the "indicateur de run plus travaillé". */
+ *  turn is in flight — a more elaborate "running" indicator. */
 export function RunPulse() {
   return (
     <span className="cv-run-ind" aria-hidden="true">
@@ -556,7 +556,7 @@ export type PlanUsageError =
   | { kind: "network"; detail: string }
   | { kind: "parse"; body: string };
 
-/** French message + actionable next step + retry-applies + raw detail, per cause.
+/** Message + actionable next step + retry-applies + raw detail, per cause.
  *  Single source of the copy so it lives in one place. */
 function usageErrorCopy(e: PlanUsageError): {
   msg: string;
@@ -567,54 +567,54 @@ function usageErrorCopy(e: PlanUsageError): {
   switch (e.kind) {
     case "no_token":
       return {
-        msg: "Aucun jeton Claude trouvé.",
+        msg: "No Claude token found.",
         action:
-          "Connecte-toi via le CLI : lance « claude » dans un terminal, authentifie-toi, puis réessaie.",
+          'Sign in via the CLI: run "claude" in a terminal, authenticate, then retry.',
         retry: true,
         detail: null,
       };
     case "keychain_denied":
       return {
-        msg: "Accès au trousseau refusé.",
+        msg: "Keychain access denied.",
         action:
-          "L'app n'est pas signée : clique « Toujours autoriser » sur le prompt du trousseau macOS, puis réessaie.",
+          'The app isn\'t signed: click "Always Allow" on the macOS Keychain prompt, then retry.',
         retry: true,
         detail: e.detail,
       };
     case "unauthorized":
       return {
-        msg: `Jeton expiré ou révoqué (HTTP ${e.status}).`,
-        action: "Relance une session « claude » pour rafraîchir le jeton, puis réessaie.",
+        msg: `Token expired or revoked (HTTP ${e.status}).`,
+        action: 'Start a "claude" session to refresh the token, then retry.',
         retry: true,
         detail: null,
       };
     case "rate_limited":
       return {
-        msg: "Endpoint d'usage temporairement limité.",
+        msg: "Usage endpoint temporarily rate-limited.",
         action: e.retry_after
-          ? `L'endpoint /api/oauth/usage est lui-même rate-limité (il est aussi interrogé par le CLI). Réessaie dans ~${e.retry_after}s.`
-          : "L'endpoint /api/oauth/usage est lui-même rate-limité (il est aussi interrogé par le CLI). Attends quelques minutes avant de réessayer.",
+          ? `The /api/oauth/usage endpoint is itself rate-limited (the CLI queries it too). Retry in ~${e.retry_after}s.`
+          : "The /api/oauth/usage endpoint is itself rate-limited (the CLI queries it too). Wait a few minutes before retrying.",
         retry: true,
         detail: null,
       };
     case "http":
       return {
-        msg: `Le service d'usage a renvoyé une erreur (HTTP ${e.status}).`,
-        action: "Réessaie dans un instant ; si ça persiste, signale-le avec les détails.",
+        msg: `The usage service returned an error (HTTP ${e.status}).`,
+        action: "Retry in a moment; if it persists, report it with the details.",
         retry: true,
         detail: e.body,
       };
     case "network":
       return {
-        msg: "Connexion au service d'usage impossible.",
-        action: "Vérifie ta connexion internet, puis réessaie.",
+        msg: "Couldn't connect to the usage service.",
+        action: "Check your internet connection, then retry.",
         retry: true,
         detail: e.detail,
       };
     case "parse":
       return {
-        msg: "Réponse illisible du service d'usage.",
-        action: "Probablement un bug — signale-le avec les détails ci-dessous.",
+        msg: "Unreadable response from the usage service.",
+        action: "Probably a bug — report it with the details below.",
         retry: false,
         detail: e.body,
       };
@@ -630,8 +630,8 @@ function usageErrorCopy(e: PlanUsageError): {
           ? String((e as { message: unknown }).message)
           : String(e);
       return {
-        msg: "Erreur inattendue du service d'usage.",
-        action: "Réessaie ; si ça persiste, signale-le avec les détails ci-dessous.",
+        msg: "Unexpected error from the usage service.",
+        action: "Retry; if it persists, report it with the details below.",
         retry: true,
         detail,
       };
@@ -640,7 +640,7 @@ function usageErrorCopy(e: PlanUsageError): {
 }
 
 /** Turns a failed usage fetch into a concrete next step. Two modes:
- *  - full (no data yet): message + action + optional « Réessayer » + « Détails ».
+ *  - full (no data yet): message + action + optional "Retry" + "Details".
  *  - `stale` (data already shown above): a compact non-destructive warning so a failed
  *    refresh is NEVER silent — the bars stay, but the user is told they may be stale. */
 function UsageErrorCard({
@@ -666,7 +666,7 @@ function UsageErrorCard({
         disabled={loading}
       >
         <Ico name="refresh" className={"sm" + (loading ? " wf-spin-fast" : "")} />
-        Réessayer
+        Retry
       </button>
     ) : null;
 
@@ -675,12 +675,12 @@ function UsageErrorCard({
       <div className="wf-pop-staleerr">
         <span className="wf-pop-staleerr-msg">
           <Ico name="alert" className="sm" />
-          Rafraîchissement échoué — chiffres possiblement périmés.
+          Refresh failed — figures may be stale.
         </span>
         <div className="wf-pop-err-foot">
           {retryBtn}
           <details className="wf-pop-err-det" onClick={(e) => e.stopPropagation()}>
-            <summary>Détails</summary>
+            <summary>Details</summary>
             <pre className="wf-mono">{c.detail ? `${c.msg}\n${c.detail}` : c.msg}</pre>
           </details>
         </div>
@@ -696,7 +696,7 @@ function UsageErrorCard({
           {retryBtn}
           {c.detail ? (
             <details className="wf-pop-err-det" onClick={(e) => e.stopPropagation()}>
-              <summary>Détails</summary>
+              <summary>Details</summary>
               <pre className="wf-mono">{c.detail}</pre>
             </details>
           ) : null}
@@ -740,9 +740,9 @@ function planStatus(status: string | null): { label: string; color: string } {
     case "allowed":
       return { label: "OK", color: "var(--wf-run)" };
     case "allowed_warning":
-      return { label: "Proche limite", color: "var(--wf-att)" };
+      return { label: "Near limit", color: "var(--wf-att)" };
     case "rejected":
-      return { label: "Limité", color: "var(--wf-err)" };
+      return { label: "Limited", color: "var(--wf-err)" };
     default:
       return { label: status ?? "—", color: "var(--wf-tx-lo)" };
   }
@@ -754,15 +754,15 @@ function planWindow(limitType: string | null): string {
     case "five_hour":
       return "5h";
     case "seven_day":
-      return "7j";
+      return "7d";
     default:
       return limitType ?? "";
   }
 }
 
-/** "dans 3j 4h" (≥24h) / "dans 2h14" / "dans 43min" / "imminent" — computed at render
+/** "in 3d 4h" (≥24h) / "in 2h14" / "in 43min" / "imminent" — computed at render
  *  (popover re-opens). The 7-day window resets days away, so above 24h we show days + hours
- *  (hours-only was impractical: "dans 73h"); below 24h we keep hours + minutes. */
+ *  (hours-only was impractical: "in 73h"); below 24h we keep hours + minutes. */
 function fmtReset(resetsAt: number | null): string {
   if (!resetsAt) return "—";
   const secs = resetsAt - Math.floor(Date.now() / 1000);
@@ -772,25 +772,25 @@ function fmtReset(resetsAt: number | null): string {
   if (h >= 24) {
     const d = Math.floor(h / 24);
     const rh = h % 24;
-    return rh > 0 ? `dans ${d}j ${rh}h` : `dans ${d}j`;
+    return rh > 0 ? `in ${d}d ${rh}h` : `in ${d}d`;
   }
-  return h > 0 ? `dans ${h}h${m.toString().padStart(2, "0")}` : `dans ${m}min`;
+  return h > 0 ? `in ${h}h${m.toString().padStart(2, "0")}` : `in ${m}min`;
 }
 
-/** "à l'instant" / "il y a 3 min" / "il y a 2 h" / "il y a 1 j" — how long ago the shown
+/** "just now" / "3 min ago" / "2 h ago" / "1 d ago" — how long ago the shown
  *  usage figures were last successfully fetched. `null`/0 (never fetched) → null so the
  *  caller hides the line. Computed at render (the popover re-opens fresh each time). */
 function fmtAgo(ts: number | null | undefined): string | null {
   if (!ts) return null;
   const secs = Math.floor((Date.now() - ts) / 1000);
-  if (secs < 30) return "à l'instant";
+  if (secs < 30) return "just now";
   const m = Math.floor(secs / 60);
-  if (m < 1) return "il y a moins d'1 min";
-  if (m < 60) return `il y a ${m} min`;
+  if (m < 1) return "less than 1 min ago";
+  if (m < 60) return `${m} min ago`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `il y a ${h} h`;
+  if (h < 24) return `${h} h ago`;
   const d = Math.floor(h / 24);
-  return `il y a ${d} j`;
+  return `${d} d ago`;
 }
 
 /** The context-window + real-usage data feeding both the ring and the meter popovers.
@@ -804,7 +804,7 @@ export interface ContextUsageData {
    *  popover falls back to the coarse `plan` status. */
   usage?: PlanUsageInfo | null;
   usageLoading?: boolean;
-  /** Which backend's subscription the "Forfait" figures belong to — labels the section
+  /** Which backend's subscription the "Plan" figures belong to — labels the section
    *  (Claude Max ≠ Codex/ChatGPT are two distinct plans, never merged) so the user always
    *  knows WHICH plan they're looking at. `undefined` → no label (single-backend setup). */
   usageBackend?: "claude" | "codex";
@@ -812,14 +812,14 @@ export interface ContextUsageData {
   usageError?: PlanUsageError | null;
   /** Timestamp (ms) of the last SUCCESSFUL usage fetch — the freshness of the shown
    *  figures. Stays put when a later refresh fails (e.g. the endpoint rate-limits us),
-   *  so the "mis à jour …" line tells the truth about how old the numbers are. */
+   *  so the "updated …" line tells the truth about how old the numbers are. */
   usageUpdatedAt?: number | null;
-  /** Deliberate retry, wired only to the error card's « Réessayer » (recovery after a
+  /** Deliberate retry, wired only to the error card's "Retry" (recovery after a
    *  failure) — there is no general refresh button (opening the popover refetches). */
   onRefreshUsage?: () => void;
 }
 
-/** The popover BODY (context window + forfait usage + « Compacter le contexte »),
+/** The popover BODY (context window + plan usage + "Compact context"),
  *  factored out so the ring and the card's clickable meter show an identical panel. */
 function ContextUsageBody({
   ctx,
@@ -837,7 +837,7 @@ function ContextUsageBody({
   const hasForfait = !!(plan || usage || usageLoading || usageError);
   return (
     <div className="wf-pop-ctx" onClick={(e) => e.stopPropagation()}>
-      <div className="wf-pop-h">Fenêtre de contexte</div>
+      <div className="wf-pop-h">Context window</div>
       <div className="wf-pop-ctx-line wf-mono">
         {ctx.used}/{ctx.max} tokens <span className={warn ? "warn" : "wf-pop-ctx-pct"}>({ctx.pct}%)</span>
       </div>
@@ -852,7 +852,7 @@ function ContextUsageBody({
                 (Max) or Codex (ChatGPT) figures — the two are distinct plans, never merged.
                 Coloured like the Extensions tabs (Claude coral, Codex green). */}
             <span>
-              Forfait
+              Plan
               {usageBackend ? (
                 <>
                   {" · "}
@@ -867,7 +867,7 @@ function ContextUsageBody({
                 rate-limited refresh doesn't fake-bump it. */}
             {fmtAgo(usageUpdatedAt) ? (
               <span className="wf-pop-updated">
-                {usageLoading ? "rafraîchissement…" : `mis à jour ${fmtAgo(usageUpdatedAt)}`}
+                {usageLoading ? "refreshing…" : `updated ${fmtAgo(usageUpdatedAt)}`}
               </span>
             ) : null}
           </div>
@@ -881,7 +881,7 @@ function ContextUsageBody({
           ) : null}
           {usage?.seven_day ? (
             <UsageRow
-              label="7j"
+              label="7d"
               w={usage.seven_day}
               fallbackReset={plan?.limitType === "seven_day" ? plan.resetsAt : null}
             />
@@ -889,7 +889,7 @@ function ContextUsageBody({
           {/* Coarse status pill (warning / rejected) — always informative. */}
           {st && plan ? (
             <div className="wf-pop-row">
-              <span>Statut{!usage && planWindow(plan.limitType) ? ` · ${planWindow(plan.limitType)}` : ""}</span>
+              <span>Status{!usage && planWindow(plan.limitType) ? ` · ${planWindow(plan.limitType)}` : ""}</span>
               <span className="wf-pop-pill">
                 <i style={{ background: st.color }} />
                 {st.label}
@@ -899,7 +899,7 @@ function ContextUsageBody({
           {/* No precise %: keep the coarse reset line (from the stream). */}
           {!usage && plan ? (
             <div className="wf-pop-row">
-              <span>Réinitialisation</span>
+              <span>Reset</span>
               <span className="wf-mono">{fmtReset(plan.resetsAt)}</span>
             </div>
           ) : null}
@@ -910,9 +910,9 @@ function ContextUsageBody({
             <UsageErrorCard error={usageError} loading={usageLoading} onRetry={onRefreshUsage} stale={!!usage} />
           ) : null}
           {!usage && !usageError && usageLoading ? (
-            <div className="wf-pop-sub">Chargement de l'usage…</div>
+            <div className="wf-pop-sub">Loading usage…</div>
           ) : null}
-          {plan?.usingOverage ? <div className="wf-pop-sub">Overage actif</div> : null}
+          {plan?.usingOverage ? <div className="wf-pop-sub">Overage active</div> : null}
         </>
       ) : null}
       <div
@@ -920,10 +920,10 @@ function ContextUsageBody({
         role="button"
         tabIndex={0}
         onClick={() => onCompact?.()}
-        title="Envoyer /compact pour réduire le contexte"
+        title="Send /compact to reduce context"
       >
         <Ico name="spark" className="sm" />
-        Compacter le contexte
+        Compact context
       </div>
     </div>
   );
@@ -949,7 +949,7 @@ export function ContextRing({
   // No usage reported yet (fresh session, pre-first-turn) — quiet, non-interactive stub.
   if (disabled) {
     return (
-      <button className="wf-ring" disabled title="Contexte — en attente du 1er tour">
+      <button className="wf-ring" disabled title="Context — waiting for the first turn">
         <svg width={sz} height={sz} viewBox={"0 0 " + sz + " " + sz}>
           <circle cx={sz / 2} cy={sz / 2} r={r} className="wf-ring-bg" />
         </svg>
@@ -962,7 +962,7 @@ export function ContextRing({
       up
       onOpen={onOpenUsage}
       trigger={
-        <button className={"wf-ring" + (warn ? " warn" : "")} title={"Contexte " + ctx.used + " / " + ctx.max}>
+        <button className={"wf-ring" + (warn ? " warn" : "")} title={"Context " + ctx.used + " / " + ctx.max}>
           <svg width={sz} height={sz} viewBox={"0 0 " + sz + " " + sz}>
             <circle cx={sz / 2} cy={sz / 2} r={r} className="wf-ring-bg" />
             <circle
@@ -1004,7 +1004,7 @@ function meterBody(ctx: Ctx) {
 export function ContextMeter({ ctx }: { ctx: Ctx }) {
   const warn = ctx.pct >= 70;
   return (
-    <span className={"wf-ctxm" + (warn ? " warn" : "")} title={`Contexte ${ctx.used} / ${ctx.max}`}>
+    <span className={"wf-ctxm" + (warn ? " warn" : "")} title={`Context ${ctx.used} / ${ctx.max}`}>
       {meterBody(ctx)}
     </span>
   );
@@ -1030,7 +1030,7 @@ export function ContextMeterMenu({
       trigger={
         <button
           className={"wf-ctxm wf-ctxm-btn" + (warn ? " warn" : "")}
-          title={`Contexte ${ctx.used} / ${ctx.max}`}
+          title={`Context ${ctx.used} / ${ctx.max}`}
         >
           {meterBody(ctx)}
         </button>
@@ -1051,7 +1051,7 @@ export function TodoPips({ segs, done, total }: { segs: TodoSeg[]; done: number;
     <span
       className="wf-row"
       style={{ gap: 6, color: "var(--wf-tx-lo)", fontSize: 11 }}
-      title="Avancement des tâches"
+      title="Task progress"
     >
       <span className="wf-todobar">
         {segs.map((s, i) => (

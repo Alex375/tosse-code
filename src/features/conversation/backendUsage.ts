@@ -29,8 +29,8 @@ export interface BackendUsage {
   usageLoading: boolean;
   usageError: PlanUsageError | null;
   usageUpdatedAt: number | null;
-  /** Labels the Forfait section by backend ONLY when both backends are in play (a
-   *  Codex-less setup has no ambiguity → undefined keeps the plain « Forfait »). */
+  /** Labels the Plan section by backend ONLY when both backends are in play (a
+   *  Codex-less setup has no ambiguity → undefined keeps the plain "Plan"). */
   usageBackend: "claude" | "codex" | undefined;
   onOpenUsage: (() => void) | undefined;
   onRefreshUsage: (() => void) | undefined;
@@ -43,7 +43,7 @@ export function useBackendUsage(
     /** Gates the very FIRST Claude fetch (see `usePlanUsage`) — pass the surface's
      *  "context data ready" so merely rendering never pops the Keychain. */
     enabled: boolean;
-    /** Optional Claude-side « Compacter le contexte » override: the composer routes
+    /** Optional Claude-side "Compact context" override: the composer routes
      *  `/compact` through its own send pipeline (optimistic bubble, scroll-to-bottom).
      *  Defaults to a bare `/compact` text turn. Codex always fires its native RPC. */
     compactClaude?: () => void;
@@ -73,7 +73,7 @@ export function useBackendUsage(
           const lastAttempt = Math.max(planUsage.dataUpdatedAt, planUsage.errorUpdatedAt);
           if (Date.now() - lastAttempt >= PLAN_USAGE_STALE_MS) void planUsage.refetch();
         },
-    // Deliberate retry after a FAILED fetch (the error card's « Réessayer ») —
+    // Deliberate retry after a FAILED fetch (the error card's "Retry") —
     // meaningless for the push-fed Codex source, so absent there.
     onRefreshUsage: isCodex ? undefined : () => void planUsage.refetch(),
     // Compact the context: Codex fires the native RPC; Claude sends the `/compact` turn.

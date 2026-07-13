@@ -276,7 +276,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
   const reset = () => setZoom(1);
   const onDoubleClick = () => setZoom((z) => (z > 1.01 ? 1 : 2));
 
-  if (error) return <div className={styles.placeholder}>PDF illisible : {error}</div>;
+  if (error) return <div className={styles.placeholder}>Unreadable PDF: {error}</div>;
 
   const canOut = zoom > ZOOM_MIN + 1e-3;
   const canIn = zoom < ZOOM_MAX - 1e-3;
@@ -285,7 +285,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
     <div className={styles.pdfViewer}>
       <div className={styles.pdfScroll} ref={scrollRef} onDoubleClick={onDoubleClick}>
         {loading ? (
-          <div className={styles.placeholder}>Chargement du PDF…</div>
+          <div className={styles.placeholder}>Loading PDF…</div>
         ) : (
           <div className={styles.pdfPages} style={{ width: `${pageWidth}px` }}>
             {pageDims.map((d, i) => (
@@ -315,8 +315,8 @@ export default function PdfViewer({ base64 }: { base64: string }) {
             className={styles.zoomBtn}
             onClick={() => zoomBy(1 / ZOOM_BTN_STEP)}
             disabled={!canOut}
-            title="Dézoomer"
-            aria-label="Dézoomer"
+            title="Zoom out"
+            aria-label="Zoom out"
           >
             −
           </button>
@@ -325,7 +325,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
             className={styles.zoomPct}
             onClick={reset}
             disabled={Math.abs(zoom - 1) < 1e-3}
-            title="Réinitialiser (ajuster à la largeur)"
+            title="Reset (fit to width)"
           >
             {Math.round(zoom * 100)}%
           </button>
@@ -334,8 +334,8 @@ export default function PdfViewer({ base64 }: { base64: string }) {
             className={styles.zoomBtn}
             onClick={() => zoomBy(ZOOM_BTN_STEP)}
             disabled={!canIn}
-            title="Zoomer"
-            aria-label="Zoomer"
+            title="Zoom in"
+            aria-label="Zoom in"
           >
             +
           </button>

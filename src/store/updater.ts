@@ -4,7 +4,7 @@
 // tauri.conf.json) before installing, then `@tauri-apps/plugin-process` relaunches.
 //
 // Checks run on launch and every 2h while the app is open (see startUpdaterAutoCheck),
-// plus on demand from the Settings "Vérifier les mises à jour" button.
+// plus on demand from the Settings "Check for updates" button.
 import { create } from "zustand";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -33,7 +33,8 @@ export const GH_ONLY_MARKER = "<!-- gh-only -->";
 // Legacy releases (before the CHANGELOG-driven body) shipped ONLY the Gatekeeper /
 // install boilerplate as their body, with no marker. Recognise it so those notes
 // don't leak into the app as if they were the "what's new".
-const LEGACY_INSTALL_BOILERPLATE = /non notaris|clic droit\s*→\s*ouvrir|build automatique depuis/i;
+const LEGACY_INSTALL_BOILERPLATE =
+  /non notaris|clic droit\s*→\s*ouvrir|build automatique depuis|not notariz|right-click\s*→\s*open|automatic build from/i;
 
 /**
  * The user-facing "what's new" to show IN-APP, extracted from a raw release body.

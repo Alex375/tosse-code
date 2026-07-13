@@ -15,7 +15,7 @@
 // "end_turn"/subtype "success" — they are indistinguishable on the wire. The only
 // 100%-native question signal is the `AskUserQuestion` tool (a questionnaire). For
 // everything else we fall back to a heuristic (`looksLikeQuestion`), and let the
-// user dismiss a false positive with the "Vu" button.
+// user dismiss a false positive with the "Seen" button.
 import type { StreamState } from "../ui/kit";
 
 export type AgentStatus =
@@ -128,11 +128,11 @@ export function looksLikeQuestion(text: string | null): boolean {
 function errorMessage(subtype: string | null): string {
   switch (subtype) {
     case "error_max_turns":
-      return "Limite de tours atteinte";
+      return "Turn limit reached";
     case "error_during_execution":
-      return "Erreur pendant l'exécution";
+      return "Error during execution";
     default:
-      return "La dernière réponse s'est terminée en erreur";
+      return "The last response ended in an error";
   }
 }
 
@@ -197,7 +197,7 @@ export function deriveAgentStatus(s: AgentSignals): AgentStatus {
   if (s.awaitingPermission) {
     if (s.pendingToolName === QUESTIONNAIRE_TOOL)
       return { kind: "needInput", via: "questionnaire", prompt: s.pendingPrompt };
-    return { kind: "needIntervention", tool: s.pendingToolName ?? "outil" };
+    return { kind: "needIntervention", tool: s.pendingToolName ?? "tool" };
   }
 
   if (s.busy) return { kind: "running", activity: s.activity };
@@ -288,7 +288,7 @@ export function rowAttention(s: AgentStatus): "input" | "review" | "error" | nul
 /**
  * The importance "rail": which conversations light up their left rail (Flight Deck
  * card + sidebar row) because they deserve a glance — actively working, or waiting on
- * the user. The two CALM states (`idle` = allumée-au-repos, `off` = éteinte) return
+ * the user. The two CALM states (`idle` = lit but at rest, `off` = shut off) return
  * null: they recede together, since a live-but-idle conversation is no more important
  * to the eye than a stopped one. Distinct from `rowAttention` (which tints the whole
  * sidebar row background): the rail ALSO covers `running`/`backgrounding`, which stay
@@ -385,13 +385,13 @@ export function statusRank(s: AgentStatus): number {
     case "needInput":
     case "needIntervention":
     case "error":
-      return 0; // action requise / erreur
+      return 0; // action required / error
     case "review":
-      return 1; // à relire
+      return 1; // to review
     case "running":
-      return 2; // en cours
+      return 2; // running
     case "backgrounding":
-      return 3; // tâches de fond en cours (calme)
+      return 3; // background tasks running (calm)
     case "idle":
       return 4;
     case "off":

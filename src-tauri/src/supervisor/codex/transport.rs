@@ -18,7 +18,7 @@
 //!     spike proved a SIGKILL of the app-server still left zero orphans because the MCP
 //!     children self-exit on their own stdio EOF — the graceful path makes that the norm.)
 //!
-//! Socle scope: the crash-diagnostic scaffolding the Claude transport carries (a
+//! Baseline scope: the crash-diagnostic scaffolding the Claude transport carries (a
 //! bounded stderr tail + terminal reader/writer error slots surfaced in the UI) is a
 //! phase-4.1 follow-up; here stderr is logged and a spontaneous death surfaces the
 //! generic `process_exited` notice (invariant #6).
@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 
 use super::protocol::{self, Incoming};
 
-/// How the shared `codex app-server` process is launched. Socle: just the working
+/// How the shared `codex app-server` process is launched. Baseline: just the working
 /// directory the server roots in (per-thread cwd is set at `thread/start`, not here).
 #[derive(Debug, Clone)]
 pub struct CodexSpawnConfig {
@@ -58,18 +58,18 @@ impl std::fmt::Display for CodexTransportError {
         match self {
             CodexTransportError::Spawn(e) if e.kind() == std::io::ErrorKind::NotFound => write!(
                 f,
-                "Binaire « codex » introuvable. Installez le CLI Codex (npm i -g @openai/codex) \
-                 ou définissez TOSSE_CODEX_BIN."
+                "\"codex\" binary not found. Install the Codex CLI (npm i -g @openai/codex) \
+                 or set TOSSE_CODEX_BIN."
             ),
             CodexTransportError::Spawn(e) => {
-                write!(f, "Impossible de démarrer « codex app-server » : {e}")
+                write!(f, "Could not start \"codex app-server\": {e}")
             }
             CodexTransportError::CwdMissing(p) => write!(
                 f,
-                "Le dossier de travail n'existe plus : {} (worktree supprimé ?)",
+                "The working directory no longer exists: {} (worktree removed?)",
                 p.display()
             ),
-            CodexTransportError::Closed => write!(f, "le transport codex app-server est fermé"),
+            CodexTransportError::Closed => write!(f, "the codex app-server transport is closed"),
         }
     }
 }

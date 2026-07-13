@@ -202,7 +202,7 @@
   background: color-mix(in srgb, var(--wf-accent) 16%, transparent);
 }
 
-/* Three colour-coded count boxes: lancés (neutral) · en cours (accent) · terminés (green). */
+/* Three colour-coded count boxes: launched (neutral) · running (accent) · done (green). */
 .statBoxes {
   display: flex;
   gap: 8px;

@@ -413,7 +413,7 @@
   font-weight: 600;
 }
 
-/* Release notes ("Nouveautés"), rendered as Markdown inside a framed card. */
+/* Release notes ("What's new"), rendered as Markdown inside a framed card. */
 .notesCard {
   margin-bottom: var(--space-4);
   border: 1px solid var(--wf-line);
@@ -562,7 +562,7 @@
   box-shadow: 0 1px 0 var(--border);
 }
 
-/* ---- Comptes (AccountsSection) ------------------------------------------ */
+/* ---- Accounts (AccountsSection) ------------------------------------------ */
 
 /* Inline error under a group card's rows — a login/logout failure, never silent. */
 .accountErr {
@@ -589,7 +589,7 @@
   border-color: var(--accent, #ff6b57);
 }
 
-/* "Autorise dans le navigateur…" while the Codex OAuth callback is pending. */
+/* "Authorize in the browser…" while the Codex OAuth callback is pending. */
 .waitingHint {
   align-self: center;
   font-size: var(--fs-sm);

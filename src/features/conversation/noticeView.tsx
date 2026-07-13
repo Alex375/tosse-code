@@ -35,7 +35,7 @@ export function ErrorBlock({
               className={styles.errorToggle}
               onClick={() => setOpen((o) => !o)}
             >
-              {open ? "Masquer le détail" : "Détails techniques"}
+              {open ? "Hide details" : "Technical details"}
             </button>
             {open ? <pre className={styles.errorDetail}>{detail}</pre> : null}
           </>
@@ -45,24 +45,24 @@ export function ErrorBlock({
   );
 }
 
-/** French heading for each error-bearing notice subtype the core can emit. Any subtype
+/** Heading for each error-bearing notice subtype the core can emit. Any subtype
  *  listed here (plus the generic `error`) renders as a visible error bubble; subtypes
  *  absent from this map stay quiet (e.g. `control_change`). This is the front half of the
  *  "zero silent error" contract: a layer surfaces an error by emitting
  *  `Notice{subtype, detail:{message, detail?}}` and it shows up here with no extra plumbing. */
 export const NOTICE_ERROR_HEADINGS: Record<string, string> = {
-  process_exited: "La session Claude Code s'est arrêtée de façon inattendue",
-  session_crashed: "La session Claude Code a planté",
-  send_failed: "Message non transmis à Claude Code",
-  protocol_error: "Erreur de protocole",
-  session_budget_exceeded: "Budget de session Codex dépassé",
-  permission_error: "Demande d'autorisation illisible",
-  task_failed: "Une tâche de fond a échoué",
-  history_error: "Problème de restauration de l'historique",
+  process_exited: "The Claude Code session stopped unexpectedly",
+  session_crashed: "The Claude Code session crashed",
+  send_failed: "Message not delivered to Claude Code",
+  protocol_error: "Protocol error",
+  session_budget_exceeded: "Codex session budget exceeded",
+  permission_error: "Unreadable permission request",
+  task_failed: "A background task failed",
+  history_error: "Problem restoring history",
 };
 
 /** Pull a human-readable detail string out of a notice's raw `detail` payload, for the
- *  collapsed "Détails techniques" disclosure. Prefers explicit `detail`, then any technical
+ *  collapsed "Technical details" disclosure. Prefers explicit `detail`, then any technical
  *  fields (stderr / exit code), else nothing. */
 export function noticeDetailText(d: Record<string, JsonValue> | null): string | null {
   if (!d) return null;
@@ -78,7 +78,7 @@ export function noticeDetailText(d: Record<string, JsonValue> | null): string | 
 /** Render ONE notice from its `subtype` + raw `detail` — store-free, so it works both for a
  *  live notice (read from the store by `NoticeRow`) and one embedded in a settled transcript
  *  (the history preview). Mirrors the live thread's routing exactly:
- *   - `control_change`: a subtle inline "control : from → to" line.
+ *   - `control_change`: a subtle inline "control: from → to" line.
  *   - `control_error` + every subtype in NOTICE_ERROR_HEADINGS (and the generic `error`):
  *     a visible red error bubble — never silent.
  *   - any other subtype: nothing (stays quiet). */
@@ -94,7 +94,7 @@ export function NoticeBlock({ subtype, detail }: { subtype: string; detail: Json
       <div className={styles.controlChange}>
         <Ico name={get("icon") ?? "spark"} className="sm" />
         <span>
-          {get("control")} : <b>{get("from")}</b> → <b>{get("to")}</b>
+          {get("control")}: <b>{get("from")}</b> → <b>{get("to")}</b>
         </span>
       </div>
     );
@@ -103,13 +103,13 @@ export function NoticeBlock({ subtype, detail }: { subtype: string; detail: Json
   if (subtype === "control_error") {
     return (
       <ErrorBlock detail={noticeDetailText(d)}>
-        Réglage « {get("control") ?? "contrôle"} » refusé par Claude Code
-        {get("message") ? ` : ${get("message")}` : ""}.
+        Setting "{get("control") ?? "control"}" rejected by Claude Code
+        {get("message") ? `: ${get("message")}` : ""}.
       </ErrorBlock>
     );
   }
 
-  const heading = NOTICE_ERROR_HEADINGS[subtype] ?? (subtype === "error" ? "Erreur" : null);
+  const heading = NOTICE_ERROR_HEADINGS[subtype] ?? (subtype === "error" ? "Error" : null);
   if (heading) {
     return (
       <ErrorBlock heading={heading} detail={noticeDetailText(d)}>

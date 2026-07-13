@@ -7,9 +7,9 @@
 //    real connection status + tools (from the `mcp_status` control request), plus
 //    the plugins/skills/sub-agents active.
 //
-// Section order (both lenses): MCP servers → skills (file-based, du dépôt) →
+// Section order (both lenses): MCP servers → skills (file-based, from the repo) →
 // sub-agents (file-based) → plugins. MCP servers are sorted into three ordered
-// buckets — dépôt, plugin, connecteurs cloud — and within each bucket the
+// buckets — repo, plugin, cloud connectors — and within each bucket the
 // connected/enabled ones come first (a sort that reads as sections).
 //
 // Interactions: an MCP row expands to reveal its tools; a file-based skill /
@@ -63,7 +63,7 @@ import {
 import styles from "./ExtensionsManager.module.css";
 
 const CONFIG_SCOPE_LABEL: Record<ExtScope, string> = {
-  user: "Utilisateur",
+  user: "User",
   project: "Repo",
   local: "Local",
   plugin: "Plugin",
@@ -111,7 +111,7 @@ function configBadgeCls(scope: ExtScope): string {
 function liveBadge(scope: string | null | undefined): { label: string; cls: string } {
   switch (scope) {
     case "claudeai":
-      return { label: "Connecteur Claude", cls: styles.scope_connector };
+      return { label: "Claude connector", cls: styles.scope_connector };
     case "dynamic":
       return { label: "Plugin", cls: styles.scope_plugin };
     case "project":
@@ -119,7 +119,7 @@ function liveBadge(scope: string | null | undefined): { label: string; cls: stri
     case "local":
       return { label: "Local", cls: "" };
     case "user":
-      return { label: "Utilisateur", cls: "" };
+      return { label: "User", cls: "" };
     default:
       return { label: scope ?? "—", cls: "" };
   }
@@ -131,7 +131,7 @@ function liveBadge(scope: string | null | undefined): { label: string; cls: stri
 function mcpFailureLabel(reason: string): string {
   switch (reason) {
     case "reauthenticationRequired":
-      return "Ré-authentification requise";
+      return "Re-authentication required";
     default:
       return reason;
   }
@@ -140,18 +140,18 @@ function mcpFailureLabel(reason: string): string {
 function statusInfo(status: string | null): { cls: string; label: string } {
   switch (status) {
     case "connected":
-      return { cls: styles.sOk, label: "Connecté" };
+      return { cls: styles.sOk, label: "Connected" };
     case "pending":
     case "checking_status":
-      return { cls: styles.sPending, label: "Connexion…" };
+      return { cls: styles.sPending, label: "Connecting…" };
     case "needs-auth":
-      return { cls: styles.sWarn, label: "Authentification requise" };
+      return { cls: styles.sWarn, label: "Authentication required" };
     case "failed":
-      return { cls: styles.sErr, label: "Échec" };
+      return { cls: styles.sErr, label: "Failed" };
     case "disconnected":
-      return { cls: styles.sOff, label: "Déconnecté" };
+      return { cls: styles.sOff, label: "Disconnected" };
     case "disabled":
-      return { cls: styles.sOff, label: "Désactivé" };
+      return { cls: styles.sOff, label: "Disabled" };
     default:
       return { cls: styles.sNone, label: status ?? "—" };
   }
@@ -168,7 +168,7 @@ function connType(
     } catch {
       /* keep the raw url */
     }
-    return { kind: "Réseau", icon: "globe", detail: host };
+    return { kind: "Network", icon: "globe", detail: host };
   }
   if (mcp.command) return { kind: "Local", icon: "term", detail: mcp.command };
   if (mcp.transport) return { kind: mcp.transport, icon: "term", detail: "" };
@@ -179,19 +179,19 @@ function connType(
 
 type McpBucket = "repo" | "user" | "plugin" | "connector";
 // Plugin (`dynamic`) servers are intentionally NOT a live bucket — they're shown as
-// "Fournis par des plugins" boxes instead (consistent with plugin skills/sub-agents),
-// so they don't appear twice. Order: Dépôt → Utilisateur → Connecteurs cloud.
+// "Provided by plugins" boxes instead (consistent with plugin skills/sub-agents),
+// so they don't appear twice. Order: Repo → User → Cloud connectors.
 const BUCKET_ORDER: McpBucket[] = ["repo", "user", "connector"];
 const BUCKET_LABEL: Record<McpBucket, string> = {
-  repo: "Dépôt",
-  user: "Utilisateur",
+  repo: "Repo",
+  user: "User",
   plugin: "Plugin",
-  connector: "Connecteurs cloud",
+  connector: "Cloud connectors",
 };
 
 /** Live `mcp_status` scope → bucket. A `user`-scope server (global, e.g. a
  *  file-configured `playwright` in ~/.claude.json) is its OWN bucket — it is NOT
- *  repo-specific, so it must not read as "Dépôt". `dynamic` (plugin) servers map to
+ *  repo-specific, so it must not read as "Repo". `dynamic` (plugin) servers map to
  *  "plugin" but that bucket isn't in BUCKET_ORDER → they're dropped from the live
  *  list and surfaced via the plugin boxes instead. */
 function liveBucket(scope: string | null | undefined): McpBucket {
@@ -260,7 +260,7 @@ interface Group<T> {
   items: T[];
 }
 
-/** Group file-based skills/sub-agents by their scope (Projet / Utilisateur). Plugin
+/** Group file-based skills/sub-agents by their scope (Project / User). Plugin
  *  items are excluded upstream — they live in the per-plugin explorer instead. */
 function groupBySource<T extends { source: string | null; scope: ExtScope }>(items: T[]): Group<T>[] {
   const map = new Map<string, Group<T>>();
@@ -354,7 +354,7 @@ export function ExtensionsManager() {
       // 1. Make sure every pending settings.json write has landed on disk.
       await Promise.allSettled(pendingWrites.current);
       pendingWrites.current = [];
-      // 2. Couche 1 (capacité live): hot-reload plugins on each live session. Best-effort
+      // 2. Layer 1 (live capability): hot-reload plugins on each live session. Best-effort
       //    — a dead session ("unknown session") is harmless (reads it on its next spawn).
       await Promise.all(
         convs.map(async (c) => {
@@ -366,7 +366,7 @@ export function ExtensionsManager() {
           }
         }),
       );
-      // 3. Couche 2 (menu `/`): refresh the catalogue once per DISTINCT effective cwd
+      // 3. Layer 2 (`/` menu): refresh the catalogue once per DISTINCT effective cwd
       //    (worktree-aware) — several sessions can share a cwd.
       await Promise.all(distinctCwds(convs).map((cwd) => refetchSlashCommands(cwd)));
     } finally {
@@ -414,7 +414,7 @@ export function ExtensionsManager() {
         <div className={styles.head}>
           <Ico name={isConversation ? "chat" : "layers"} className="sm" />
           <span className={styles.title}>
-            {isConversation ? "Extensions de la conversation" : "Extensions du dépôt"}
+            {isConversation ? "Conversation extensions" : "Repository extensions"}
             <span className={styles.titleSub}>{target.title}</span>
           </span>
           <button
@@ -427,12 +427,12 @@ export function ExtensionsManager() {
               if (liveFetching || (isConversation && activeTab === liveBackend)) void live.refetch();
             }}
             disabled={tabFetching || liveFetching}
-            title="Rafraîchir"
-            aria-label="Rafraîchir"
+            title="Refresh"
+            aria-label="Refresh"
           >
             <Ico name="refresh" className={"sm" + (tabFetching || liveFetching ? " " + styles.spin : "")} />
           </button>
-          <button className={styles.iconBtn} onClick={close} title="Fermer" aria-label="Fermer">
+          <button className={styles.iconBtn} onClick={close} title="Close" aria-label="Close">
             ✕
           </button>
         </div>
@@ -455,7 +455,7 @@ export function ExtensionsManager() {
         {/* Backend tabs — only when Codex is installed. Lets the user see BOTH backends'
             extensions; defaults to the target's own backend. */}
         {codexAvailable ? (
-          <div className={styles.tabBar} role="tablist" aria-label="Backend des extensions">
+          <div className={styles.tabBar} role="tablist" aria-label="Extensions backend">
             <button
               type="button"
               role="tab"
@@ -561,7 +561,7 @@ function ProjectBody({
   const data = ext.data;
   // No active/inactive state here — that is only knowable inside a live conversation
   // (see the conversation lens). The project lens shows what is CONFIGURED, grouped
-  // by scope so "what's on the repo" (Projet/Local) reads apart from user-global.
+  // by scope so "what's on the repo" (Project/Local) reads apart from user-global.
   // File-based / non-plugin only — plugin-provided MCP, skills and agents live in
   // the per-plugin explorer, so they are NOT duplicated at the top level (consistent
   // across all three categories).
@@ -573,7 +573,7 @@ function ProjectBody({
   return (
     <div className={styles.body}>
       {ext.isLoading ? (
-        <div className={styles.empty}>Chargement…</div>
+        <div className={styles.empty}>Loading…</div>
       ) : ext.isError ? (
         <div className={styles.error}>{(ext.error as Error).message}</div>
       ) : (
@@ -582,14 +582,14 @@ function ProjectBody({
             <div className={styles.error}>{(setPluginEnabled.error as Error).message}</div>
           ) : null}
           <WarningBanner warnings={ext.data?.warnings ?? []} />
-          <GroupedSection icon="term" title="Serveurs MCP configurés" groups={groupBySource(mcp)} render={(m) => (
+          <GroupedSection icon="term" title="Configured MCP servers" groups={groupBySource(mcp)} render={(m) => (
             <McpConfigRow key={(m.source ?? "") + ":" + m.name + ":" + m.scope} mcp={m} />
-          )} empty="Aucun serveur MCP configuré pour ce dépôt." />
+          )} empty="No MCP server configured for this repository." />
           <GroupedSection icon="spark" title="Skills" groups={groupBySource(skills)} render={(s) => (
             <SkillRow key={s.path} skill={s} onOpen={() => onOpenDoc({ name: s.name, source: CONFIG_SCOPE_LABEL[s.scope], path: s.path, description: s.description })} />
-          )} empty="Aucun skill de fichier." />
+          )} empty="No file-based skills." />
           {agents.length > 0 ? (
-            <GroupedSection icon="grid" title="Sous-agents" groups={groupBySource(agents)} render={(a) => (
+            <GroupedSection icon="grid" title="Sub-agents" groups={groupBySource(agents)} render={(a) => (
               <AgentRow key={a.path} agent={a} onOpen={() => onOpenDoc({ name: a.name, source: CONFIG_SCOPE_LABEL[a.scope], path: a.path, description: a.description })} />
             )} empty="" />
           ) : null}
@@ -600,7 +600,7 @@ function ProjectBody({
             icon="layers"
             title="Plugins"
             count={plugins.length}
-            empty="Aucun plugin pour ce dépôt."
+            empty="No plugins for this repository."
             action={<MarketplacesButton updates={totalUpdates(plugins)} onOpen={onOpenMarketplaces} />}
           >
             {plugins.map((p) => (
@@ -694,29 +694,29 @@ function ConversationBody({
         <div className={styles.error}>{(setPluginEnabled.error as Error).message}</div>
       ) : null}
       {/* A failed config snapshot read must NOT read as "empty repo" — surface it,
-          distinct from the sections' "Aucun …" placeholders. */}
+          distinct from the sections' "No …" placeholders. */}
       {ext.isError ? (
         <div className={styles.error}>
-          Lecture de la configuration des extensions impossible : {(ext.error as Error).message}
+          Unable to read the extensions configuration: {(ext.error as Error).message}
         </div>
       ) : null}
       <WarningBanner warnings={ext.data?.warnings ?? []} />
       <div className={styles.section}>
         <div className={styles.sectionH}>
           <Ico name="globe" className="sm" />
-          <span className={styles.sectionT}>Serveurs MCP</span>
+          <span className={styles.sectionT}>MCP servers</span>
           <span className={styles.sectionC}>{mcpTotal + sum(mcpContribs, (p) => p.mcp_count)}</span>
         </div>
         {handle == null ? (
           <div className={styles.sectionEmpty}>
-            Démarre la conversation (envoie un message) pour voir l'état live des serveurs MCP.
+            Start the conversation (send a message) to see the live MCP server status.
           </div>
         ) : live.isLoading ? (
-          <div className={styles.sectionEmpty}>Interrogation du process…</div>
+          <div className={styles.sectionEmpty}>Querying the process…</div>
         ) : live.isError ? (
           <div className={styles.error}>{(live.error as Error).message}</div>
         ) : mcpTotal === 0 && mcpContribs.length === 0 ? (
-          <div className={styles.sectionEmpty}>Aucun serveur MCP dans cette session.</div>
+          <div className={styles.sectionEmpty}>No MCP server in this session.</div>
         ) : (
           mcpGroups.map((g) => (
             <div key={g.bucket} className={styles.bucket}>
@@ -733,7 +733,7 @@ function ConversationBody({
           ))
         )}
         {/* Plugin-provided MCP servers as one box each (consistent with plugin
-            skills/sub-agents) — click opens the plugin explorer at its Connecteurs. */}
+            skills/sub-agents) — click opens the plugin explorer at its Connectors. */}
         {mcpContribs.length ? <PluginContribFooter plugins={mcpContribs} kind="mcp" onOpen={onOpenPlugin} /> : null}
       </div>
       <GroupedSection
@@ -743,14 +743,14 @@ function ConversationBody({
         render={(s) => (
           <SkillRow key={s.path} skill={s} onOpen={() => onOpenDoc({ name: s.name, source: CONFIG_SCOPE_LABEL[s.scope], path: s.path, description: s.description })} />
         )}
-        empty="Aucun skill de fichier."
+        empty="No file-based skills."
         extraCount={sum(skillContribs, (p) => p.skill_count)}
         footer={skillContribs.length ? <PluginContribFooter plugins={skillContribs} kind="skills" onOpen={onOpenPlugin} /> : null}
       />
       {agents.length > 0 || agentContribs.length > 0 ? (
         <GroupedSection
           icon="grid"
-          title="Sous-agents"
+          title="Sub-agents"
           groups={groupBySource(agents)}
           render={(a) => (
             <AgentRow key={a.path} agent={a} onOpen={() => onOpenDoc({ name: a.name, source: CONFIG_SCOPE_LABEL[a.scope], path: a.path, description: a.description })} />
@@ -767,7 +767,7 @@ function ConversationBody({
         icon="layers"
         title="Plugins"
         count={plugins.length}
-        empty="Aucun plugin."
+        empty="No plugins."
         action={<MarketplacesButton updates={totalUpdates(allPlugins)} onOpen={onOpenMarketplaces} />}
       >
         {plugins.map((p) => (
@@ -816,12 +816,12 @@ function PluginReloadBar({
     <div className={styles.reloadBar}>
       <Ico name="refresh" className={"sm" + (busy ? " " + styles.spin : "")} />
       <span className={styles.reloadBarText}>
-        {count} plugin{s} modifié{s} — appliquer aux conversations en cours&nbsp;?
+        {count} plugin{s} changed — apply to running conversations?
       </span>
       <span className={styles.reloadBarSpacer} />
       {hasCurrent ? (
         <button className={styles.reloadBtnPrimary} onClick={onReloadCurrent} disabled={busy}>
-          Cette conversation
+          This conversation
         </button>
       ) : null}
       {!hasCurrent || liveCount > 1 ? (
@@ -830,15 +830,15 @@ function PluginReloadBar({
           onClick={onReloadAll}
           disabled={busy}
         >
-          {hasCurrent ? `Toutes (${liveCount})` : `Toutes les conversations allumées (${liveCount})`}
+          {hasCurrent ? `All (${liveCount})` : `All live conversations (${liveCount})`}
         </button>
       ) : null}
       <button
         className={styles.reloadDismiss}
         onClick={onDismiss}
         disabled={busy}
-        title="Ignorer"
-        aria-label="Ignorer"
+        title="Dismiss"
+        aria-label="Dismiss"
       >
         ✕
       </button>
@@ -848,7 +848,7 @@ function PluginReloadBar({
 
 // ---- Codex backend view --------------------------------------------------------
 
-/** The Extensions view for a Codex conversation/target — v2, ACTIONNABLE. Codex's
+/** The Extensions view for a Codex conversation/target — v2, actionable. Codex's
  *  inventory is account-global (`~/.codex/config.toml` + `~/.codex/skills`, plus the
  *  repo's `.codex/skills`), rendered with the SAME section/row primitives as Claude.
  *  v2 wires the toggles (skills / MCP servers / plugins — every write goes through the
@@ -876,7 +876,7 @@ function CodexExtensionsBody({
   const hooks = useCodexHooks(true, cwd);
   const toggles = useCodexToggles(cwd);
 
-  if (codexExt.isLoading) return <div className={styles.body}><div className={styles.empty}>Chargement…</div></div>;
+  if (codexExt.isLoading) return <div className={styles.body}><div className={styles.empty}>Loading…</div></div>;
   if (codexExt.isError)
     return <div className={styles.body}><div className={styles.error}>{(codexExt.error as Error).message}</div></div>;
 
@@ -905,7 +905,7 @@ function CodexExtensionsBody({
   // until their next spawn, instead of showing a state they don't have.
   const mcpReloadWarning =
     toggles.mcp.data === false
-      ? "Réglage MCP écrit, mais les conversations Codex en cours n'ont pas pu le recharger — il s'appliquera au prochain démarrage de session."
+      ? "MCP setting written, but running Codex conversations couldn't reload it — it will apply on the next session start."
       : null;
 
   return (
@@ -919,16 +919,16 @@ function CodexExtensionsBody({
       {showLive ? (
         <Section
           icon="term"
-          title="Serveurs MCP"
+          title="MCP servers"
           count={liveServers.length}
           // Suppress the generic empty text while loading or on error — those states render
           // their own children below (never a silent empty list on a failed live query).
-          empty={live.isError || live.isLoading ? "" : "Aucun serveur MCP dans cette session Codex."}
+          empty={live.isError || live.isLoading ? "" : "No MCP server in this Codex session."}
         >
           {live.isError ? (
             <div className={styles.error}>{(live.error as Error).message}</div>
           ) : live.isLoading && liveServers.length === 0 ? (
-            <div className={styles.empty}>Chargement du statut MCP…</div>
+            <div className={styles.empty}>Loading MCP status…</div>
           ) : (
             liveServers.map((m) => (
               <CodexMcpLiveRow
@@ -937,7 +937,7 @@ function CodexExtensionsBody({
                 enabled={configEnabled(m.name)}
                 busy={toggles.mcp.isPending}
                 // Injected servers (not in config.toml) can't be toggled via config —
-                // render them read-only with a "géré par Codex" note instead of a
+                // render them read-only with a "managed by Codex" note instead of a
                 // toggle that would fail with an "invalid transport" error.
                 toggleable={configHas(m.name)}
                 onToggle={(enabled) => toggles.mcp.mutate({ name: m.name, enabled })}
@@ -948,9 +948,9 @@ function CodexExtensionsBody({
       ) : (
         <Section
           icon="term"
-          title="Serveurs MCP configurés"
+          title="Configured MCP servers"
           count={mcpConfigured.length}
-          empty="Aucun serveur MCP dans ~/.codex/config.toml."
+          empty="No MCP server in ~/.codex/config.toml."
         >
           {mcpConfigured.map((m) => (
             <McpConfigRow
@@ -970,7 +970,7 @@ function CodexExtensionsBody({
         icon="spark"
         title="Skills"
         count={skills.length}
-        empty="Aucun skill dans ~/.codex/skills."
+        empty="No skills in ~/.codex/skills."
       >
         {skills.map((s) => (
           <SkillRow
@@ -1027,15 +1027,15 @@ function CodexPluginsSection({
       icon="layers"
       title="Plugins"
       count={count}
-      empty={codexPlugins.isLoading ? "Chargement de l'inventaire des plugins…" : "Aucun plugin Codex installé."}
+      empty={codexPlugins.isLoading ? "Loading plugin inventory…" : "No Codex plugin installed."}
     >
       {codexPlugins.isError ? (
         <div className={styles.error}>
-          Inventaire live des plugins indisponible : {(codexPlugins.error as Error).message}
+          Live plugin inventory unavailable: {(codexPlugins.error as Error).message}
         </div>
       ) : null}
       {(codexPlugins.data?.loadErrors ?? []).map((e) => (
-        <div key={e} className={styles.error}>Marketplace en erreur — {e}</div>
+        <div key={e} className={styles.error}>Marketplace error — {e}</div>
       ))}
       {useLive
         ? livePlugins.map((p) => (
@@ -1097,10 +1097,10 @@ function CodexHooksSection({ hooks }: { hooks: ReturnType<typeof useCodexHooks> 
       count={list.length}
       empty={
         hooks.isLoading
-          ? "Chargement des hooks…"
+          ? "Loading hooks…"
           : hooks.isError
             ? ""
-            : "Aucun hook Codex configuré."
+            : "No Codex hook configured."
       }
     >
       {hooks.isError ? (
@@ -1136,10 +1136,10 @@ function CodexHooksSection({ hooks }: { hooks: ReturnType<typeof useCodexHooks> 
 }
 
 const HOOK_TRUST_LABEL: Record<string, string> = {
-  trusted: "Approuvé",
-  managed: "Géré",
-  untrusted: "Non approuvé",
-  modified: "Modifié",
+  trusted: "Trusted",
+  managed: "Managed",
+  untrusted: "Untrusted",
+  modified: "Modified",
 };
 
 /** The Codex marketplaces (from the live inventory): list + per-marketplace refresh +
@@ -1164,7 +1164,7 @@ function CodexMarketplacesSection({
       icon="layers"
       title="Marketplaces"
       count={marketplaces.length}
-      empty={codexPlugins.isLoading ? "Chargement…" : "Aucune marketplace Codex enregistrée."}
+      empty={codexPlugins.isLoading ? "Loading…" : "No Codex marketplace registered."}
     >
       {err ? <div className={styles.error}>{err}</div> : null}
       {marketplaces.map((m) => (
@@ -1178,16 +1178,16 @@ function CodexMarketplacesSection({
               className={styles.updateBtnGhost}
               disabled={anyBusy}
               onClick={() => upgrade.mutate(m.name)}
-              title="Rafraîchir le contenu de cette marketplace"
+              title="Refresh this marketplace's contents"
             >
               <Ico name="refresh" className={"sm" + (upgrade.isPending ? " " + styles.spin : "")} />
-              Mettre à jour
+              Update
             </button>
             <button
               className={styles.updateBtnGhost}
               disabled={anyBusy}
               onClick={() => remove.mutate(m.name)}
-              title="Retirer cette marketplace"
+              title="Remove this marketplace"
             >
               ✕
             </button>
@@ -1204,7 +1204,7 @@ function CodexMarketplacesSection({
           className={styles.mktAddInput}
           value={source}
           onChange={(e) => setSource(e.target.value)}
-          placeholder="Ajouter une marketplace (owner/repo, URL git ou chemin local)"
+          placeholder="Add a marketplace (owner/repo, git URL or local path)"
           onKeyDown={(e) => {
             if (e.key === "Enter" && source.trim() && !anyBusy)
               add.mutate(source.trim(), { onSuccess: () => setSource("") });
@@ -1215,7 +1215,7 @@ function CodexMarketplacesSection({
           disabled={!source.trim() || anyBusy}
           onClick={() => add.mutate(source.trim(), { onSuccess: () => setSource("") })}
         >
-          {add.isPending ? "Ajout…" : "Ajouter"}
+          {add.isPending ? "Adding…" : "Add"}
         </button>
       </div>
     </Section>
@@ -1252,7 +1252,7 @@ function CodexPluginRow({
   return (
     <div className={styles.pluginRow}>
       {onOpen ? (
-        <button className={styles.pluginMain} onClick={onOpen} title="Explorer le plugin">
+        <button className={styles.pluginMain} onClick={onOpen} title="Explore the plugin">
           {main}
           <Ico name="arrow" className={"sm " + styles.openArrow} />
         </button>
@@ -1263,8 +1263,8 @@ function CodexPluginRow({
         checked={enabled}
         disabled={busy}
         onChange={onToggle}
-        label={`${enabled ? "Désactiver" : "Activer"} ${name}`}
-        title="Réglage Codex global (~/.codex/config.toml)"
+        label={`${enabled ? "Disable" : "Enable"} ${name}`}
+        title="Global Codex setting (~/.codex/config.toml)"
       />
     </div>
   );
@@ -1296,13 +1296,13 @@ function CodexMcpLiveRow({
         <span className={`${styles.dot} ${tone.cls}`} />
         <span className={styles.rowName}>{mcp.name}</span>
         <span className={styles.spacer} />
-        {mcp.tool_count > 0 ? <span className={styles.toolPill}>{mcp.tool_count} outils</span> : null}
+        {mcp.tool_count > 0 ? <span className={styles.toolPill}>{mcp.tool_count} tools</span> : null}
         {canExpand ? (
           <button
             className={styles.chevBtn}
             onClick={() => setOpen((o) => !o)}
-            title={open ? "Masquer les outils" : "Voir les outils"}
-            aria-label="Voir les outils"
+            title={open ? "Hide tools" : "Show tools"}
+            aria-label="Show tools"
           >
             <Ico name="chev" className={"sm " + styles.chev + (open ? " " + styles.chevOpen : "")} />
           </button>
@@ -1312,12 +1312,12 @@ function CodexMcpLiveRow({
             checked={enabled}
             disabled={busy}
             onChange={onToggle}
-            label={`${enabled ? "Désactiver" : "Activer"} ${mcp.name}`}
-            title="Réglage Codex global (~/.codex/config.toml) · appliqué au prochain tour via reload"
+            label={`${enabled ? "Disable" : "Enable"} ${mcp.name}`}
+            title="Global Codex setting (~/.codex/config.toml) · applied on the next turn via reload"
           />
         ) : (
-          <span className={styles.connKind} title="Serveur fourni par Codex — non désactivable depuis la configuration">
-            géré par Codex
+          <span className={styles.connKind} title="Server provided by Codex — cannot be disabled from configuration">
+            managed by Codex
           </span>
         )}
       </div>
@@ -1416,7 +1416,7 @@ function GroupedSection<T extends { source: string | null; scope: ExtScope }>({
               <div className={styles.groupH}>
                 <Ico name={g.isPlugin ? "layers" : "folder"} className="sm" />
                 <span>{g.label}</span>
-                <span className={styles.groupTag}>{g.isPlugin ? "plugin" : "fichiers"}</span>
+                <span className={styles.groupTag}>{g.isPlugin ? "plugin" : "files"}</span>
                 <span className={styles.groupC}>{g.items.length}</span>
               </div>
               <div className={styles.list}>{g.items.map(render)}</div>
@@ -1436,7 +1436,7 @@ function MarketplacesButton({ updates, onOpen }: { updates: number; onOpen: () =
     <button
       className={styles.actBtn}
       onClick={onOpen}
-      title="Gérer les marketplaces et les mises à jour automatiques"
+      title="Manage marketplaces and auto-updates"
     >
       <Ico name="layers" className="sm" />
       Marketplaces
@@ -1448,7 +1448,7 @@ function MarketplacesButton({ updates, onOpen }: { updates: number; onOpen: () =
 /** The Marketplaces page — a dedicated overlay reached from the Plugins section header.
  *  Auto-update is PER-MARKETPLACE (the only granularity Claude Code exposes), so it
  *  belongs here rather than as a general section: the global master toggle, one toggle
- *  per marketplace, and the network "Vérifier" (marketplace refresh). Per-plugin update
+ *  per marketplace, and the network "Check" (marketplace refresh). Per-plugin update
  *  stays on each PluginRow; the counts here are derived from the plugin list. */
 function MarketplacesPage({
   path,
@@ -1486,7 +1486,7 @@ function MarketplacesPage({
           <span className={styles.title}>
             Marketplaces
             <span className={styles.titleSub}>
-              Mise à jour automatique des plugins{total > 0 ? ` · ${total} MAJ dispo` : ""}
+              Plugin auto-update{total > 0 ? ` · ${total} update${total > 1 ? "s" : ""} available` : ""}
             </span>
           </span>
           <span className={styles.spacer} />
@@ -1494,12 +1494,12 @@ function MarketplacesPage({
             className={styles.actBtn}
             onClick={() => check.mutate(null)}
             disabled={check.isPending}
-            title="Rafraîchir les marketplaces et re-vérifier les mises à jour disponibles"
+            title="Refresh marketplaces and re-check for available updates"
           >
             <Ico name="refresh" className={"sm" + (check.isPending ? " " + styles.spin : "")} />
-            {check.isPending ? "Vérification…" : "Vérifier les mises à jour"}
+            {check.isPending ? "Checking…" : "Check for updates"}
           </button>
-          <button className={styles.iconBtn} onClick={onClose} title="Fermer" aria-label="Fermer">
+          <button className={styles.iconBtn} onClick={onClose} title="Close" aria-label="Close">
             ✕
           </button>
         </div>
@@ -1508,24 +1508,24 @@ function MarketplacesPage({
           {setAuto.isError ? <div className={styles.error}>{(setAuto.error as Error).message}</div> : null}
           {setAllAuto.isError ? <div className={styles.error}>{(setAllAuto.error as Error).message}</div> : null}
           {marketplaces.isLoading ? (
-            <div className={styles.sectionEmpty}>Chargement des marketplaces…</div>
+            <div className={styles.sectionEmpty}>Loading marketplaces…</div>
           ) : marketplaces.isError ? (
             <div className={styles.error}>{(marketplaces.error as Error).message}</div>
           ) : list.length === 0 ? (
-            <div className={styles.sectionEmpty}>Aucun marketplace enregistré.</div>
+            <div className={styles.sectionEmpty}>No marketplace registered.</div>
           ) : (
             <div className={styles.list}>
               <div className={styles.mktRow}>
                 <Ico name="bolt" className="sm" />
                 <div className={styles.rowMain}>
-                  <span className={styles.rowName}>Mise à jour automatique</span>
-                  <span className={styles.rowMeta}>Tous les marketplaces à la fois</span>
+                  <span className={styles.rowName}>Auto-update</span>
+                  <span className={styles.rowMeta}>All marketplaces at once</span>
                 </div>
                 <Toggle
                   checked={allOn}
                   disabled={setAuto.isPending || setAllAuto.isPending}
                   onChange={(v) => setAllAuto.mutate(v)}
-                  label="Mise à jour automatique de tous les marketplaces"
+                  label="Auto-update all marketplaces"
                 />
               </div>
               {list.map((m) => {
@@ -1536,7 +1536,7 @@ function MarketplacesPage({
                     <div className={styles.rowMain}>
                       <span className={styles.rowName}>
                         {m.name}
-                        {n > 0 ? <span className={styles.updateBadge}>{n} MAJ</span> : null}
+                        {n > 0 ? <span className={styles.updateBadge}>{n} update{n > 1 ? "s" : ""}</span> : null}
                       </span>
                       {m.source ? <span className={styles.rowMeta}>{m.source}</span> : null}
                     </div>
@@ -1544,8 +1544,8 @@ function MarketplacesPage({
                       checked={m.auto_update}
                       disabled={setAuto.isPending || setAllAuto.isPending}
                       onChange={(v) => setAuto.mutate({ name: m.name, enabled: v })}
-                      label={`Mise à jour automatique de ${m.name}`}
-                      title="Mise à jour automatique de ce marketplace"
+                      label={`Auto-update ${m.name}`}
+                      title="Auto-update this marketplace"
                     />
                   </div>
                 );
@@ -1577,13 +1577,13 @@ function PluginContribFooter({
     kind === "skills"
       ? `${n} skill${n > 1 ? "s" : ""}`
       : kind === "agents"
-        ? `${n} sous-agent${n > 1 ? "s" : ""}`
-        : `${n} serveur${n > 1 ? "s" : ""} MCP`;
+        ? `${n} sub-agent${n > 1 ? "s" : ""}`
+        : `${n} MCP server${n > 1 ? "s" : ""}`;
   return (
     <div className={styles.group}>
       <div className={styles.groupH}>
         <Ico name="layers" className="sm" />
-        <span>Fournis par des plugins</span>
+        <span>Provided by plugins</span>
       </div>
       <div className={styles.list}>
         {plugins.map((p) => (
@@ -1591,7 +1591,7 @@ function PluginContribFooter({
             key={p.id}
             className={styles.contribBox}
             onClick={() => onOpen(p, kind)}
-            title={`Explorer ${p.name}`}
+            title={`Explore ${p.name}`}
           >
             <Ico name="layers" className="sm" />
             <span className={styles.rowName}>{p.name}</span>
@@ -1614,7 +1614,7 @@ function WarningBanner({ warnings }: { warnings: string[] }) {
   if (!warnings.length) return null;
   return (
     <div className={styles.warn}>
-      Configuration partiellement illisible — l'inventaire ci-dessous peut être incomplet :
+      Configuration partially unreadable — the inventory below may be incomplete:
       <ul>
         {warnings.map((w) => (
           <li key={w}>{w}</li>
@@ -1650,13 +1650,13 @@ function McpLiveRow({ mcp, actions }: { mcp: McpServerLive; actions: ReturnType<
         <span className={styles.rowName}>{mcp.name}</span>
         <Badge label={b.label} cls={b.cls} />
         <span className={styles.spacer} />
-        {mcp.tool_count > 0 ? <span className={styles.toolPill}>{mcp.tool_count} outils</span> : null}
+        {mcp.tool_count > 0 ? <span className={styles.toolPill}>{mcp.tool_count} tools</span> : null}
         {canExpand ? (
           <button
             className={styles.chevBtn}
             onClick={() => setOpen((o) => !o)}
-            title={open ? "Masquer les outils" : "Voir les outils"}
-            aria-label="Voir les outils"
+            title={open ? "Hide tools" : "Show tools"}
+            aria-label="Show tools"
           >
             <Ico name="chev" className={"sm " + styles.chev + (open ? " " + styles.chevOpen : "")} />
           </button>
@@ -1665,7 +1665,7 @@ function McpLiveRow({ mcp, actions }: { mcp: McpServerLive; actions: ReturnType<
       <div className={styles.mcpSub}>
         <span className={`${styles.statusWord} ${tone.cls}`}>{tone.label}</span>
         {/* Why it failed to start (Codex `mcpServer/startupStatus/updated` push) — turns a
-            mute "Échec" into a named cause, e.g. "Échec · Ré-authentification requise". */}
+            mute "Failed" into a named cause, e.g. "Failed · Re-authentication required". */}
         {mcp.failure_reason ? (
           <>
             <span className={styles.subSep}>·</span>
@@ -1689,32 +1689,32 @@ function McpLiveRow({ mcp, actions }: { mcp: McpServerLive; actions: ReturnType<
               disabled={busy}
               onClick={() => actions.authenticate.mutate(mcp.name)}
             >
-              S'authentifier
+              Authenticate
             </button>
           ) : null}
           {!isCloud && (mcp.status === "failed" || mcp.status === "disconnected") ? (
             <button className={styles.actBtn} disabled={busy} onClick={() => actions.reconnect.mutate(mcp.name)}>
-              Reconnecter
+              Reconnect
             </button>
           ) : null}
           {!isCloud && isNetwork && (mcp.status === "connected" || mcp.status === "needs-auth") ? (
             <button className={styles.actBtn} disabled={busy} onClick={() => actions.clearAuth.mutate(mcp.name)}>
-              Réinit. auth
+              Reset auth
             </button>
           ) : null}
           {isCloud && (mcp.status === "needs-auth" || mcp.status === "failed") ? (
             <span
               className={styles.cloudHint}
-              title="Connecteur géré par l'application Claude. Authentifie-le dans Claude, puis rafraîchis."
+              title="Connector managed by the Claude app. Authenticate it in Claude, then refresh."
             >
-              Géré par l'app Claude
+              Managed by the Claude app
             </span>
           ) : null}
           <Toggle
             checked={enabled}
             disabled={busy}
             onChange={(v) => actions.toggle.mutate({ serverName: mcp.name, enabled: v })}
-            label={`${enabled ? "Désactiver" : "Activer"} ${mcp.name}`}
+            label={`${enabled ? "Disable" : "Enable"} ${mcp.name}`}
           />
         </div>
       </div>
@@ -1754,8 +1754,8 @@ function McpConfigRow({
             checked={toggle.checked}
             disabled={toggle.busy}
             onChange={toggle.onChange}
-            label={`${toggle.checked ? "Désactiver" : "Activer"} ${mcp.name}`}
-            title="Réglage Codex global (~/.codex/config.toml)"
+            label={`${toggle.checked ? "Disable" : "Enable"} ${mcp.name}`}
+            title="Global Codex setting (~/.codex/config.toml)"
           />
         ) : null}
       </div>
@@ -1806,12 +1806,12 @@ function PluginRow({
   const parts = pluginParts(plugin);
   return (
     <div className={styles.pluginRow}>
-      <button className={styles.pluginMain} onClick={onOpen} title="Explorer le plugin">
+      <button className={styles.pluginMain} onClick={onOpen} title="Explore the plugin">
         <span className={`${styles.dot} ${plugin.enabled ? styles.sOk : styles.sOff}`} />
         <div className={styles.rowMain}>
           <span className={styles.rowName}>
             {plugin.name}
-            <Badge label={`Installé : ${CONFIG_SCOPE_LABEL[plugin.scope]}`} cls={configBadgeCls(plugin.scope)} />
+            <Badge label={`Installed: ${CONFIG_SCOPE_LABEL[plugin.scope]}`} cls={configBadgeCls(plugin.scope)} />
             {plugin.update_available ? (
               <span className={styles.updateBadge}>{updateBadgeLabel(plugin.version, plugin.latest_version)}</span>
             ) : null}
@@ -1830,12 +1830,12 @@ function PluginRow({
           disabled={updating || anyUpdating}
           title={
             plugin.update_available
-              ? "Mettre à jour ce plugin maintenant"
-              : "Forcer la mise à jour à la dernière version du marketplace"
+              ? "Update this plugin now"
+              : "Force update to the marketplace's latest version"
           }
         >
           <Ico name="refresh" className={"sm" + (updating ? " " + styles.spin : "")} />
-          {updating ? "Mise à jour…" : "Mettre à jour"}
+          {updating ? "Updating…" : "Update"}
         </button>
       ) : null}
       {onToggle ? (
@@ -1843,12 +1843,12 @@ function PluginRow({
           checked={plugin.enabled}
           disabled={busy}
           onChange={onToggle}
-          label={`${plugin.enabled ? "Désactiver" : "Activer"} ${plugin.name}`}
-          title="Réglage global (tous les dépôts) · une barre propose de l'appliquer aux conversations en cours"
+          label={`${plugin.enabled ? "Disable" : "Enable"} ${plugin.name}`}
+          title="Global setting (all repositories) · a bar offers to apply it to running conversations"
         />
       ) : (
         <span className={styles.statusWord + " " + (plugin.enabled ? styles.sOk : styles.sOff)}>
-          {plugin.enabled ? "Actif" : "Inactif"}
+          {plugin.enabled ? "Active" : "Inactive"}
         </span>
       )}
     </div>
@@ -1878,7 +1878,7 @@ function SkillRow({
   );
   if (!toggle) {
     return (
-      <button className={styles.docRow} onClick={onOpen} title="Ouvrir le skill">
+      <button className={styles.docRow} onClick={onOpen} title="Open the skill">
         {main}
       </button>
     );
@@ -1887,15 +1887,15 @@ function SkillRow({
   // toggle sits outside it (a control can't nest inside a button).
   return (
     <div className={styles.pluginRow}>
-      <button className={styles.pluginMain} onClick={onOpen} title="Ouvrir le skill">
+      <button className={styles.pluginMain} onClick={onOpen} title="Open the skill">
         {main}
       </button>
       <Toggle
         checked={toggle.checked}
         disabled={toggle.busy}
         onChange={toggle.onChange}
-        label={`${toggle.checked ? "Désactiver" : "Activer"} ${skill.name}`}
-        title="Réglage Codex global (écrit [[skills.config]] dans ~/.codex/config.toml)"
+        label={`${toggle.checked ? "Disable" : "Enable"} ${skill.name}`}
+        title="Global Codex setting (writes [[skills.config]] to ~/.codex/config.toml)"
       />
     </div>
   );
@@ -1903,7 +1903,7 @@ function SkillRow({
 
 function AgentRow({ agent, onOpen }: { agent: AgentInfo; onOpen: () => void }) {
   return (
-    <button className={styles.docRow} onClick={onOpen} title="Ouvrir le sous-agent">
+    <button className={styles.docRow} onClick={onOpen} title="Open the sub-agent">
       <Ico name="grid" className="sm" />
       <div className={styles.rowMain}>
         <span className={styles.rowName}>
@@ -1956,7 +1956,7 @@ function PluginExplorer({
   const [section, setSection] = useState<ExplorerSectionKey>(initialSection);
   const [itemKey, setItemKey] = useState<string | null>(null);
 
-  // Section descriptors in the requested order: Skills → Connecteurs → Sous-agents.
+  // Section descriptors in the requested order: Skills → Connectors → Sub-agents.
   const allSections: { key: ExplorerSectionKey; label: string; icon: string; items: ExplorerItem[] }[] = [
     {
       key: "skills",
@@ -1966,13 +1966,13 @@ function PluginExplorer({
     },
     {
       key: "mcp",
-      label: "Connecteurs",
+      label: "Connectors",
       icon: "term",
       items: (data?.mcp_servers ?? []).map((m) => ({ key: m.name, name: m.name, path: null, mcp: m })),
     },
     {
       key: "agents",
-      label: "Sous-agents",
+      label: "Sub-agents",
       icon: "grid",
       items: (data?.agents ?? []).map((a) => ({ key: a.path, name: a.name, path: a.path, model: a.model, description: a.description })),
     },
@@ -2002,17 +2002,17 @@ function PluginExplorer({
           </span>
           {plugin.version ? <span className={styles.verTag}>v{plugin.version}</span> : null}
           <span className={styles.spacer} />
-          <button className={styles.iconBtn} onClick={onClose} title="Fermer" aria-label="Fermer">
+          <button className={styles.iconBtn} onClick={onClose} title="Close" aria-label="Close">
             ✕
           </button>
         </div>
 
         {isLoading ? (
-          <div className={styles.pluginLoading}>Chargement du plugin…</div>
+          <div className={styles.pluginLoading}>Loading the plugin…</div>
         ) : isError ? (
           <div className={styles.error} style={{ margin: 16 }}>{(error as Error).message}</div>
         ) : sections.length === 0 ? (
-          <div className={styles.pluginLoading}>Ce plugin ne fournit ni skill, ni connecteur, ni sous-agent.</div>
+          <div className={styles.pluginLoading}>This plugin provides no skills, connectors, or sub-agents.</div>
         ) : (
           <div className={styles.pluginCols}>
             <div className={styles.pluginRail}>
@@ -2053,7 +2053,7 @@ function PluginExplorer({
               {item ? (
                 <ItemDetail item={item} sectionKey={section} pluginName={plugin.name} />
               ) : (
-                <div className={styles.detailEmpty}>Sélectionne un élément.</div>
+                <div className={styles.detailEmpty}>Select an item.</div>
               )}
             </div>
           </div>
@@ -2065,19 +2065,19 @@ function PluginExplorer({
 
 /** Right pane: a metadata strip + rendered markdown (skill/agent) or an MCP card. */
 function ItemDetail({ item, sectionKey, pluginName }: { item: ExplorerItem; sectionKey: ExplorerSectionKey; pluginName: string }) {
-  const typeLabel = sectionKey === "skills" ? "Skill" : sectionKey === "agents" ? "Sous-agent" : "Serveur MCP";
+  const typeLabel = sectionKey === "skills" ? "Skill" : sectionKey === "agents" ? "Sub-agent" : "MCP server";
   return (
     <>
       <div className={styles.detailHead}>
         <span className={styles.detailName}>{item.name}</span>
         <div className={styles.metaGrid}>
-          <span className={styles.metaKey}>Fourni par</span>
+          <span className={styles.metaKey}>Provided by</span>
           <span className={styles.metaVal}>{pluginName}</span>
           <span className={styles.metaKey}>Type</span>
           <span className={styles.metaVal}>{typeLabel}</span>
           {item.model ? (
             <>
-              <span className={styles.metaKey}>Modèle</span>
+              <span className={styles.metaKey}>Model</span>
               <span className={styles.metaVal}>{item.model}</span>
             </>
           ) : null}
@@ -2094,10 +2094,10 @@ function ItemDetail({ item, sectionKey, pluginName }: { item: ExplorerItem; sect
  *  four-way state handling and frontmatter strip live in one place. */
 function DocMarkdown({ path }: { path: string }) {
   const { data, isLoading, isError, error } = useExtensionDoc(path);
-  if (isLoading) return <div className={styles.empty}>Chargement…</div>;
+  if (isLoading) return <div className={styles.empty}>Loading…</div>;
   if (isError) return <div className={styles.error}>{(error as Error).message}</div>;
   if (data?.binary || data?.too_large)
-    return <div className={styles.empty}>Fichier non affichable.</div>;
+    return <div className={styles.empty}>File cannot be displayed.</div>;
   return <StreamMarkdown text={stripFrontmatter(data?.content ?? "")} />;
 }
 
@@ -2124,10 +2124,10 @@ function McpDetailCard({ mcp }: { mcp: McpServerInfo }) {
             {conn.detail ? <span className={styles.subDetail}>{conn.detail}</span> : null}
           </div>
         ) : (
-          <div className={styles.mcpCardLine}>Connexion non décrite.</div>
+          <div className={styles.mcpCardLine}>Connection not described.</div>
         )}
         {mcp.transport ? (
-          <div className={styles.mcpCardMeta}>Transport : {mcp.transport}</div>
+          <div className={styles.mcpCardMeta}>Transport: {mcp.transport}</div>
         ) : null}
       </div>
     </div>
@@ -2146,7 +2146,7 @@ function DocViewer({ doc, onClose }: { doc: OpenDoc; onClose: () => void }) {
             {doc.name}
             <span className={styles.titleSub}>{doc.source}</span>
           </span>
-          <button className={styles.iconBtn} onClick={onClose} title="Fermer" aria-label="Fermer">
+          <button className={styles.iconBtn} onClick={onClose} title="Close" aria-label="Close">
             ✕
           </button>
         </div>

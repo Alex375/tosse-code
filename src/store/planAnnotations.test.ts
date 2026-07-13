@@ -23,9 +23,9 @@ describe("planAnnotations store", () => {
 
   it("adds and removes an annotation, persisting to localStorage", async () => {
     const { usePlanAnnotationsStore } = await freshStore();
-    usePlanAnnotationsStore.getState().add("conv", "tool", ann("a1", "risqué"));
+    usePlanAnnotationsStore.getState().add("conv", "tool", ann("a1", "risky"));
     expect(usePlanAnnotationsStore.getState().byConv.conv.tool).toHaveLength(1);
-    expect(JSON.parse(localStorage.getItem(ANN_KEY)!).conv.tool[0].comment).toBe("risqué");
+    expect(JSON.parse(localStorage.getItem(ANN_KEY)!).conv.tool[0].comment).toBe("risky");
 
     usePlanAnnotationsStore.getState().remove("conv", "tool", "a1");
     // Emptying a tool prunes the conversation entirely.
@@ -34,9 +34,9 @@ describe("planAnnotations store", () => {
 
   it("stores and clears the general note under a separate key", async () => {
     const { usePlanAnnotationsStore } = await freshStore();
-    usePlanAnnotationsStore.getState().setNote("conv", "tool", "trop ambitieux");
-    expect(usePlanAnnotationsStore.getState().notes.conv.tool).toBe("trop ambitieux");
-    expect(JSON.parse(localStorage.getItem(NOTE_KEY)!).conv.tool).toBe("trop ambitieux");
+    usePlanAnnotationsStore.getState().setNote("conv", "tool", "too ambitious");
+    expect(usePlanAnnotationsStore.getState().notes.conv.tool).toBe("too ambitious");
+    expect(JSON.parse(localStorage.getItem(NOTE_KEY)!).conv.tool).toBe("too ambitious");
 
     usePlanAnnotationsStore.getState().setNote("conv", "tool", "");
     expect(usePlanAnnotationsStore.getState().notes.conv).toBeUndefined();
@@ -45,10 +45,10 @@ describe("planAnnotations store", () => {
   it("survives a remount (re-read from localStorage) — the switch-survival case", async () => {
     const first = await freshStore();
     first.usePlanAnnotationsStore.getState().add("conv", "tool", ann("a1", "note"));
-    first.usePlanAnnotationsStore.getState().setNote("conv", "tool", "général");
+    first.usePlanAnnotationsStore.getState().setNote("conv", "tool", "general");
     const second = await freshStore();
     expect(second.usePlanAnnotationsStore.getState().byConv.conv.tool[0].comment).toBe("note");
-    expect(second.usePlanAnnotationsStore.getState().notes.conv.tool).toBe("général");
+    expect(second.usePlanAnnotationsStore.getState().notes.conv.tool).toBe("general");
   });
 
   it("clearConversation forgets both annotations and notes for one conversation only", async () => {
@@ -65,8 +65,8 @@ describe("planAnnotations store", () => {
   it("snapshot → clear → restore round-trips a conversation's plan state (the undo case)", async () => {
     const { usePlanAnnotationsStore, snapshotPlanAnnotations, restorePlanAnnotations, clearPlanAnnotations } =
       await freshStore();
-    usePlanAnnotationsStore.getState().add("conv", "tool", ann("a1", "revois ça"));
-    usePlanAnnotationsStore.getState().setNote("conv", "tool", "note générale");
+    usePlanAnnotationsStore.getState().add("conv", "tool", ann("a1", "review this"));
+    usePlanAnnotationsStore.getState().setNote("conv", "tool", "general note");
 
     const snap = snapshotPlanAnnotations("conv");
     expect(snap).not.toBeNull();
@@ -76,8 +76,8 @@ describe("planAnnotations store", () => {
     expect(usePlanAnnotationsStore.getState().notes.conv).toBeUndefined();
 
     restorePlanAnnotations("conv", snap); // the ⌘Z undo
-    expect(usePlanAnnotationsStore.getState().byConv.conv.tool[0].comment).toBe("revois ça");
-    expect(usePlanAnnotationsStore.getState().notes.conv.tool).toBe("note générale");
+    expect(usePlanAnnotationsStore.getState().byConv.conv.tool[0].comment).toBe("review this");
+    expect(usePlanAnnotationsStore.getState().notes.conv.tool).toBe("general note");
   });
 
   it("the snapshot is decoupled from later store mutations", async () => {

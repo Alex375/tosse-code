@@ -92,7 +92,7 @@ pub async fn set_mcp_enabled(
     let _write = CONFIG_WRITE_LOCK.lock().await;
     if !is_toml_bare_key(name) {
         return Err(CodexError::Rpc(format!(
-            "nom de serveur MCP invalide pour un toggle : « {name} »"
+            "invalid MCP server name for a toggle: \"{name}\""
         )));
     }
     // Only a server DEFINED in config.toml can be toggled by writing its `enabled` key:
@@ -105,8 +105,8 @@ pub async fn set_mcp_enabled(
     // the belt.)
     if !super::config::mcp_server_in_config(name) {
         return Err(CodexError::Rpc(format!(
-            "« {name} » est un serveur MCP fourni par Codex : il n'est pas dans votre config.toml \
-             et ne peut pas être activé/désactivé depuis la configuration."
+            "\"{name}\" is an MCP server provided by Codex: it is not in your config.toml \
+             and cannot be enabled/disabled from the configuration."
         )));
     }
     let key_path = format!("mcp_servers.{name}.enabled");
@@ -135,7 +135,7 @@ pub async fn set_plugin_enabled(plugin_id: &str, enabled: bool) -> Result<(), Co
     let _write = CONFIG_WRITE_LOCK.lock().await;
     if !is_safe_quoted_key(plugin_id) {
         return Err(CodexError::Rpc(format!(
-            "identifiant de plugin invalide pour un toggle : « {plugin_id} »"
+            "invalid plugin id for a toggle: \"{plugin_id}\""
         )));
     }
     let key_path = format!("plugins.\"{plugin_id}\".enabled");
@@ -249,8 +249,8 @@ pub async fn list_plugins_live(cwds: Vec<String>) -> Result<CodexPluginsLive, Co
         .unwrap_or(&Vec::new())
     {
         let path = e.get("marketplacePath").and_then(Value::as_str).unwrap_or("?");
-        let msg = e.get("message").and_then(Value::as_str).unwrap_or("erreur inconnue");
-        out.load_errors.push(format!("{path} : {msg}"));
+        let msg = e.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+        out.load_errors.push(format!("{path}: {msg}"));
     }
     Ok(out)
 }
@@ -383,8 +383,8 @@ pub async fn list_hooks(cwds: Vec<String>) -> Result<CodexHooksSnapshot, CodexEr
         }
         for e in entry.get("errors").and_then(Value::as_array).unwrap_or(&Vec::new()) {
             let path = e.get("path").and_then(Value::as_str).unwrap_or("?");
-            let msg = e.get("message").and_then(Value::as_str).unwrap_or("erreur inconnue");
-            out.errors.push(format!("{path} : {msg}"));
+            let msg = e.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+            out.errors.push(format!("{path}: {msg}"));
         }
     }
     Ok(out)

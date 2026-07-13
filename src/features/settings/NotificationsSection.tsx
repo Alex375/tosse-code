@@ -16,19 +16,19 @@ export function NotificationsSection() {
     <div>
       <PageHead
         title="Notifications"
-        subtitle="Quand un agent termine son tour ou a besoin de ton attention (permission, question). Rien ne se déclenche si tu regardes déjà la conversation concernée."
+        subtitle="When an agent finishes its turn or needs your attention (permission, question). Nothing fires if you're already looking at the conversation in question."
       />
 
-      <SettingsGroup title="Canaux" icon="bell">
+      <SettingsGroup title="Channels" icon="bell">
         <ToggleRow
-          title="Notification système"
-          hint="Une bannière macOS dans le Centre de notifications."
+          title="System notification"
+          hint="A macOS banner in Notification Center."
           checked={systemNotification}
           onChange={(v) => set({ systemNotification: v })}
         />
         <ToggleRow
-          title="Son"
-          hint="Un petit carillon."
+          title="Sound"
+          hint="A soft chime."
           checked={sound}
           onChange={(v) => set({ sound: v })}
           action={
@@ -37,13 +37,13 @@ export function NotificationsSection() {
               className={`${styles.btn} ${styles.ghost}`}
               onClick={() => testSound("done")}
             >
-              Tester
+              Test
             </button>
           }
         />
         <ToggleRow
-          title="Rebond du Dock"
-          hint="L'icône de Flight Deck rebondit dans le Dock."
+          title="Dock bounce"
+          hint="The Flight Deck icon bounces in the Dock."
           checked={dockBounce}
           onChange={(v) => set({ dockBounce: v })}
         />

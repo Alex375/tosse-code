@@ -48,11 +48,11 @@ impl std::fmt::Display for CodexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CodexError::Transport(e) => write!(f, "{e}"),
-            CodexError::Rpc(m) => write!(f, "codex app-server a répondu par une erreur : {m}"),
+            CodexError::Rpc(m) => write!(f, "codex app-server returned an error: {m}"),
             CodexError::Timeout(what) => {
-                write!(f, "codex app-server n'a pas répondu à « {what} » à temps")
+                write!(f, "codex app-server did not respond to \"{what}\" in time")
             }
-            CodexError::Closed => write!(f, "le serveur codex app-server est arrêté"),
+            CodexError::Closed => write!(f, "the codex app-server is stopped"),
         }
     }
 }
@@ -250,7 +250,7 @@ impl CodexServer {
                             params
                                 .get("message")
                                 .and_then(Value::as_str)
-                                .unwrap_or("erreur codex app-server")
+                                .unwrap_or("codex app-server error")
                                 .to_string(),
                         );
                         break;
@@ -279,9 +279,9 @@ impl CodexServer {
         if !answer.is_empty() {
             Ok(answer)
         } else if let Some(e) = turn_error {
-            Err(CodexError::Rpc(format!("le tour modèle a échoué : {e}")))
+            Err(CodexError::Rpc(format!("the model turn failed: {e}")))
         } else {
-            Err(CodexError::Rpc("le modèle n'a renvoyé aucun texte (timeout ou tour vide)".into()))
+            Err(CodexError::Rpc("the model returned no text (timeout or empty turn)".into()))
         }
     }
 
@@ -386,7 +386,7 @@ impl CodexServer {
             Ok(p) => p,
             Err(e) => {
                 self.shutdown_if_no_threads().await;
-                return Err(CodexError::Rpc(format!("réponse {method} malformée : {e}")));
+                return Err(CodexError::Rpc(format!("malformed {method} response: {e}")));
             }
         };
         let thread_id = parsed.thread.id;
@@ -620,7 +620,7 @@ async fn demux_loop(
                     let reply = if method == "currentTime/read" {
                         protocol::reply_result(&id, serde_json::json!({ "currentTimeMs": now_ms() }))
                     } else {
-                        protocol::reply_error(&id, -32601, "non géré par Flight Deck")
+                        protocol::reply_error(&id, -32601, "not handled by Flight Deck")
                     };
                     let _ = outbound.send(reply);
                 }

@@ -1,4 +1,4 @@
-// Réglages → Comptes : the in-app login/logout/status for BOTH backends, as graphical
+// Settings → Accounts: the in-app login/logout/status for BOTH backends, as graphical
 // per-backend cards (brand accent, mark tile, live status chip, rich connected state).
 // The flows drive the OFFICIAL mechanisms only — `claude auth login|logout` for Claude
 // (URL + pasted code) and the app-server's `account/login/*` for Codex (URL + async
@@ -21,7 +21,7 @@ import s from "./AccountsSection.module.css";
 
 // The brand accent each card is themed with (drives the glow, tile, plan pill, CTA).
 // Shared design tokens (conductor-wirekit.css), never raw hex — so a brand tweak is
-// one edit and the Comptes card / Extensions tab / Forfait pill never diverge.
+// one edit and the Accounts card / Extensions tab / Plan pill never diverge.
 const BRAND: Record<"claude" | "codex", string> = {
   claude: "var(--wf-accent)", // coral
   codex: "var(--wf-codex-accent)", // OpenAI green
@@ -29,16 +29,16 @@ const BRAND: Record<"claude" | "codex", string> = {
 
 export function AccountsSection() {
   // Tri-state (null while the one-shot probe is in flight): show the alarming
-  // "CLI introuvable" card ONLY on a DEFINITIVE `false`. While still checking (null), render
-  // the normal account group — it has its own "Vérification…" skeleton — so a user who has
-  // the CLI installed never sees a scary "introuvable" flash before the check resolves.
+  // "CLI not found" card ONLY on a DEFINITIVE `false`. While still checking (null), render
+  // the normal account group — it has its own "Checking…" skeleton — so a user who has
+  // the CLI installed never sees a scary "not found" flash before the check resolves.
   const claude = useBackendAvailabilityState("claude");
   const codex = useBackendAvailabilityState("codex");
   return (
     <div>
       <PageHead
-        title="Comptes"
-        subtitle="Connexion aux comptes Claude et Codex utilisés par les agents."
+        title="Accounts"
+        subtitle="Sign in to the Claude and Codex accounts used by the agents."
       />
       <div className={s.cards}>
         {claude === false ? <ClaudeUnavailableCard /> : <ClaudeAccountGroup />}
@@ -78,12 +78,12 @@ function AccountCard({
 }) {
   const chip =
     state === "connected"
-      ? { tone: "ok", label: "Connecté" }
+      ? { tone: "ok", label: "Connected" }
       : state === "loading"
-        ? { tone: "idle", label: "Vérification…" }
+        ? { tone: "idle", label: "Checking…" }
         : state === "error"
-          ? { tone: "off", label: "Indisponible" }
-          : { tone: "off", label: "Non connecté" };
+          ? { tone: "off", label: "Unavailable" }
+          : { tone: "off", label: "Not connected" };
   return (
     <section className={s.card} data-state={state} style={{ ["--brand" as string]: BRAND[brand] }}>
       <div className={s.head}>
@@ -106,7 +106,7 @@ function AccountCard({
           </>
         ) : state === "connected" ? (
           <>
-            <div className={s.email}>{email ?? "Connecté"}</div>
+            <div className={s.email}>{email ?? "Connected"}</div>
             {pills && pills.length ? (
               <div className={s.pills}>
                 {pills.map((p) => (
@@ -134,12 +134,12 @@ function OpenUrlFallback({ error, url, onRetry }: { error: string; url: string; 
   return (
     <div className={s.err}>
       {error}
-      {" — ouvre ce lien à la main : "}
+      {" — open this link manually: "}
       <span
         role="link"
         tabIndex={0}
         className={s.errLink}
-        title="Réessayer d'ouvrir dans le navigateur — le texte reste sélectionnable pour le copier"
+        title="Retry opening in the browser — the text stays selectable so you can copy it"
         onClick={onRetry}
         onKeyDown={(e) => {
           if (e.key === "Enter") onRetry();
@@ -153,7 +153,7 @@ function OpenUrlFallback({ error, url, onRetry }: { error: string; url: string; 
 
 /** The browser-open step of a login flow. `openUrl`'s rejection is NEVER swallowed
  *  (zero-silent-error): it lands in `error`, and `url` keeps the auth link around so
- *  the UI can offer the manual fallback (clickable retry + copiable text) — the flow
+ *  the UI can offer the manual fallback (clickable retry + copyable text) — the flow
  *  must stay completable even when the opener is broken (no default browser…). */
 function useAuthUrlOpener() {
   const [url, setUrl] = useState<string | null>(null);
@@ -162,7 +162,7 @@ function useAuthUrlOpener() {
     setUrl(u);
     setError(null);
     openUrl(u).catch((e: unknown) => {
-      setError(`Impossible d'ouvrir le navigateur : ${e instanceof Error ? e.message : String(e)}`);
+      setError(`Unable to open the browser: ${e instanceof Error ? e.message : String(e)}`);
     });
   };
   return { url, error, open };
@@ -176,7 +176,7 @@ function LogoutControl({ pending, onConfirm }: { pending: boolean; onConfirm: ()
       <>
         <span className={s.spacer} />
         <button className={`${s.btn} ${s.ghost}`} onClick={() => setConfirming(true)}>
-          Se déconnecter…
+          Sign out…
         </button>
       </>
     );
@@ -189,14 +189,14 @@ function LogoutControl({ pending, onConfirm }: { pending: boolean; onConfirm: ()
         disabled={pending}
         onClick={() => onConfirm()}
       >
-        {pending ? "Déconnexion…" : "Confirmer la déconnexion"}
+        {pending ? "Signing out…" : "Confirm sign-out"}
       </button>
       <button
         className={`${s.btn} ${s.ghost}`}
         disabled={pending}
         onClick={() => setConfirming(false)}
       >
-        Annuler
+        Cancel
       </button>
     </>
   );
@@ -231,7 +231,7 @@ function ClaudeAccountGroup() {
         setStep("idle");
         setCode("");
       },
-      // On failure the CLI child has exited: back to idle so "Se connecter" restarts
+      // On failure the CLI child has exited: back to idle so "Sign in" restarts
       // a fresh flow (the error stays visible below).
       onError: () => setStep("idle"),
     });
@@ -256,11 +256,11 @@ function ClaudeAccountGroup() {
     <>
       <span className={s.spacer} />
       <button className={`${s.btn} ${s.connect}`} disabled={loginStart.isPending} onClick={startLogin}>
-        <ClaudeMark /> {loginStart.isPending ? "Ouverture…" : "Se connecter"}
+        <ClaudeMark /> {loginStart.isPending ? "Opening…" : "Sign in"}
       </button>
     </>
   ) : (
-    <span className={s.provider}>Connexion en cours…</span>
+    <span className={s.provider}>Signing in…</span>
   );
 
   return (
@@ -273,27 +273,27 @@ function ClaudeAccountGroup() {
       email={status.data?.email}
       pills={[
         status.data?.subscriptionType
-          ? { label: `Forfait ${status.data.subscriptionType}`, plan: true }
+          ? { label: `Plan ${status.data.subscriptionType}`, plan: true }
           : null,
         status.data?.orgName ? { label: status.data.orgName } : null,
       ].filter(Boolean) as { label: string; plan?: boolean }[]}
       invite={
         status.isError
-          ? `Statut indisponible : ${(status.error as Error).message}`
-          : "Connecte le compte Anthropic que le CLI claude utilisera pour tes conversations."
+          ? `Status unavailable: ${(status.error as Error).message}`
+          : "Sign in to the Anthropic account the claude CLI will use for your conversations."
       }
       actions={actions}
     >
       {step === "code" ? (
         <div className={s.subRow}>
           <span className={s.subLabel}>
-            Autorise dans le navigateur, copie le code affiché, puis colle-le ici.
+            Authorize in the browser, copy the code shown, then paste it here.
           </span>
           <input
             className={s.codeInput}
             value={code}
             autoFocus
-            placeholder="Code d'autorisation…"
+            placeholder="Authorization code…"
             onChange={(e) => setCode(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submitCode();
@@ -304,10 +304,10 @@ function ClaudeAccountGroup() {
             disabled={!code.trim() || loginCode.isPending}
             onClick={submitCode}
           >
-            {loginCode.isPending ? "Validation…" : "Valider"}
+            {loginCode.isPending ? "Validating…" : "Submit"}
           </button>
           <button className={`${s.btn} ${s.ghost}`} disabled={loginCode.isPending} onClick={cancelLogin}>
-            Annuler
+            Cancel
           </button>
         </div>
       ) : null}
@@ -333,7 +333,7 @@ function CodexAccountGroup() {
     const un = events.accountLoginEvent.listen((e) => {
       if (disposed || e.payload.backend !== "codex") return;
       setWaiting(false);
-      setLoginErr(e.payload.success ? null : (e.payload.error ?? "la connexion a échoué"));
+      setLoginErr(e.payload.success ? null : (e.payload.error ?? "sign-in failed"));
     });
     return () => {
       disposed = true;
@@ -344,11 +344,11 @@ function CodexAccountGroup() {
   // Surface a failure that landed while this panel was CLOSED: the async Codex login can
   // complete minutes after the user navigated away, so the in-panel listener above misses
   // it. The always-mounted global handler stashed the reason — read it on mount and consume
-  // it, so the reopened panel explains the failure instead of a bare "Non connecté".
+  // it, so the reopened panel explains the failure instead of a bare "Not connected".
   useEffect(() => {
     const stashed = useAccountLoginStore.getState().failures.codex;
     if (stashed) {
-      setLoginErr(stashed.error ?? "la connexion a échoué");
+      setLoginErr(stashed.error ?? "sign-in failed");
       useAccountLoginStore.getState().clear("codex");
     }
   }, []);
@@ -385,18 +385,18 @@ function CodexAccountGroup() {
     <>
       <span className={s.waiting}>
         <span className={s.waitingDot} />
-        Autorise dans le navigateur…
+        Authorize in the browser…
       </span>
       <span className={s.spacer} />
       <button className={`${s.btn} ${s.ghost}`} onClick={cancelLogin}>
-        Annuler
+        Cancel
       </button>
     </>
   ) : (
     <>
       <span className={s.spacer} />
       <button className={`${s.btn} ${s.connect}`} disabled={loginStart.isPending} onClick={startLogin}>
-        <CodexMark /> {loginStart.isPending ? "Ouverture…" : "Se connecter"}
+        <CodexMark /> {loginStart.isPending ? "Opening…" : "Sign in"}
       </button>
     </>
   );
@@ -410,13 +410,13 @@ function CodexAccountGroup() {
       state={state}
       email={status.data?.email}
       pills={[
-        status.data?.planType ? { label: `Forfait ${status.data.planType}`, plan: true } : null,
-        status.data?.authMethod === "chatgpt" ? { label: "Compte ChatGPT" } : null,
+        status.data?.planType ? { label: `Plan ${status.data.planType}`, plan: true } : null,
+        status.data?.authMethod === "chatgpt" ? { label: "ChatGPT account" } : null,
       ].filter(Boolean) as { label: string; plan?: boolean }[]}
       invite={
         status.isError
-          ? `Statut indisponible : ${(status.error as Error).message}`
-          : "Connecte le compte ChatGPT que le CLI codex utilisera pour tes conversations."
+          ? `Status unavailable: ${(status.error as Error).message}`
+          : "Sign in to the ChatGPT account the codex CLI will use for your conversations."
       }
       actions={actions}
     >
@@ -429,8 +429,8 @@ function CodexAccountGroup() {
 }
 
 /** Claude binary absent: a muted card that points at the install command instead of a
- *  dead "Se connecter" (login — `claude auth login` — is impossible without the CLI).
- *  Replaces the confusing "Statut indisponible : <error>" the live card would otherwise
+ *  dead "Sign in" (login — `claude auth login` — is impossible without the CLI).
+ *  Replaces the confusing "Status unavailable: <error>" the live card would otherwise
  *  show when the `claude auth status` probe fails for want of the binary. */
 function ClaudeUnavailableCard() {
   return (
@@ -440,14 +440,14 @@ function ClaudeUnavailableCard() {
       name="Claude"
       provider="Anthropic · claude.ai"
       state="disconnected"
-      invite="CLI Claude introuvable. Installe Claude Code (npm i -g @anthropic-ai/claude-code) pour connecter un compte."
+      invite="Claude CLI not found. Install Claude Code (npm i -g @anthropic-ai/claude-code) to connect an account."
       actions={<span className={s.spacer} />}
     />
   );
 }
 
 /** Codex binary absent: a muted card that points at the install command instead of a
- *  dead "Se connecter" (login is impossible without the CLI). */
+ *  dead "Sign in" (login is impossible without the CLI). */
 function CodexUnavailableCard() {
   return (
     <AccountCard
@@ -456,7 +456,7 @@ function CodexUnavailableCard() {
       name="Codex"
       provider="OpenAI · ChatGPT"
       state="disconnected"
-      invite="CLI Codex introuvable. Installe le binaire (npm i -g @openai/codex) pour connecter un compte."
+      invite="Codex CLI not found. Install the binary (npm i -g @openai/codex) to connect an account."
       actions={<span className={s.spacer} />}
     />
   );

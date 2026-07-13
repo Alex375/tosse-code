@@ -95,8 +95,8 @@ const PERM_LABEL: Record<string, string> = {
   bypassPermissions: "Bypass permissions",
   dontAsk: "Bypass permissions",
 };
-// Per-mode accent, à la Claude Code terminal: plan=bleu, default=gris,
-// acceptEdits=violet, auto=jaune, bypass=rouge. Driven via CSS tokens.
+// Per-mode accent, like the Claude Code terminal: plan=blue, default=gray,
+// acceptEdits=purple, auto=yellow, bypass=red. Driven via CSS tokens.
 const PERM_TONE: Record<string, string> = {
   auto: "var(--wf-perm-auto)",
   default: "var(--wf-perm-default)",
@@ -108,18 +108,18 @@ const PERM_TONE: Record<string, string> = {
 // Modes the user can cycle through with Shift+Tab (bypass is disabled — see PERM_OPTS).
 const PERM_CYCLE = PERM_OPTS.filter(([, , disabled]) => !disabled).map(([, value]) => value);
 
-// Codex-only composer options (applied as turn/start overrides). Labels in French,
+// Codex-only composer options (applied as turn/start overrides). Display labels;
 // wire values are the ReasoningSummary / Personality enums.
 const CODEX_SUMMARY_OPTS: [string, CodexSummary][] = [
   ["Auto", "auto"],
-  ["Concis", "concise"],
-  ["Détaillé", "detailed"],
-  ["Aucun", "none"],
+  ["Concise", "concise"],
+  ["Detailed", "detailed"],
+  ["None", "none"],
 ];
 const CODEX_PERSONALITY_OPTS: [string, CodexPersonality][] = [
-  ["Neutre", "none"],
-  ["Amical", "friendly"],
-  ["Pragmatique", "pragmatic"],
+  ["Neutral", "none"],
+  ["Friendly", "friendly"],
+  ["Pragmatic", "pragmatic"],
 ];
 
 export interface ComposerHandle {
@@ -194,14 +194,14 @@ export const ConductorComposer = forwardRef<
     defaultTierById: codexDefaultTier,
   } = useCodexModels(codexAvailable);
   const pickerGroups = modelsForPicker(ctl.kind, { locked, codexAvailable, codexModels });
-  // Account state per backend, for the picker's "non connecté" badges (definitive
+  // Account state per backend, for the picker's "not connected" badges (definitive
   // logged-out only — cf. useAccountsLoggedOut). Shared cached queries, cost ~nil.
   const loggedOut = useAccountsLoggedOut(codexAvailable);
   // Codex-only composer controls (per-conv, localStorage). Read unconditionally (hook
   // rules); only rendered/consumed when the conversation runs on Codex. Model + effort
   // live on the conversation record (shared picker/gauge); these are the Codex-only axes.
   const codexCtl = useCodexConvControls(session);
-  // ⇧Tab walks the SAFE presets only (PRESET_CYCLE): « Accès total » is excluded from
+  // ⇧Tab walks the SAFE presets only (PRESET_CYCLE): "Full access" is excluded from
   // the blind cycle — a stray keystroke must never disarm the sandbox — and stays
   // reachable only through an explicit menu pick, mirroring Claude's PERM_CYCLE
   // excluding bypassPermissions. From danger, ⇧Tab steps back to the safest preset.
@@ -314,7 +314,7 @@ export const ConductorComposer = forwardRef<
   const permLabel = PERM_LABEL[permMode] ?? PERM_LABEL[DEFAULT_PERMISSION_MODE];
 
   // "Clean output" is PER-CONVERSATION: the chip shows this conversation's EFFECTIVE
-  // value (its own explicit choice, else the global default from Settings → Général)
+  // value (its own explicit choice, else the global default from Settings → General)
   // and, on toggle, writes an explicit override for THIS conversation only.
   const cleanOutput = useEffectiveCleanOutput(session);
 
@@ -476,10 +476,10 @@ export const ConductorComposer = forwardRef<
     let paths: string[] = [];
     if (isTauri) {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const sel = await open({ multiple: true, title: "Joindre des fichiers ou des images" });
+      const sel = await open({ multiple: true, title: "Attach files or images" });
       paths = Array.isArray(sel) ? sel : sel ? [sel] : [];
     } else {
-      const p = window.prompt("Chemin du fichier à joindre :", "");
+      const p = window.prompt("Path of the file to attach:", "");
       paths = p && p.trim() ? [p.trim()] : [];
     }
     await addPaths(paths);
@@ -504,11 +504,11 @@ export const ConductorComposer = forwardRef<
     void (async () => {
       try {
         for (const b of blobs) {
-          const name = b.name && b.name.trim() ? b.name : "Image collée";
+          const name = b.name && b.name.trim() ? b.name : "Pasted image";
           const res = await attachmentFromBlob(b, name);
           if (res && "error" in res) setAttachErr(res.error);
           else if (res) useComposerAttachments.getState().add(session, res);
-          else setAttachErr("Format d'image non supporté (png, jpeg, gif, webp).");
+          else setAttachErr("Unsupported image format (png, jpeg, gif, webp).");
         }
       } finally {
         setAttaching((n) => Math.max(0, n - 1));
@@ -541,7 +541,7 @@ export const ConductorComposer = forwardRef<
     useConversationsStore.getState().noteFirstMessage(session, t);
     // The worktree toggle only applies to the very first spawn of a conversation.
     // `queued`: busy at send time → the CLI will inject this mid-turn, so the
-    // bubble shows an "en attente" badge until the turn ends.
+    // bubble shows a "pending" badge until the turn ends.
     send.mutate({ text: t, images, worktree: useWorktree && isFresh, queued: busy });
     // `/reload-skills` makes the CLI re-scan on-disk skills; mirror that in the
     // `/` menu by re-fetching this cwd's catalogue (a fresh spawn reads disk
@@ -714,8 +714,8 @@ export const ConductorComposer = forwardRef<
               <button
                 type="button"
                 className="cv-attach-x"
-                title="Retirer"
-                aria-label="Retirer la pièce jointe"
+                title="Remove"
+                aria-label="Remove attachment"
                 onClick={() => useComposerAttachments.getState().remove(session, a.id)}
               >
                 <Ico name="x" className="sm" />
@@ -730,8 +730,8 @@ export const ConductorComposer = forwardRef<
           type="button"
           className="cv-add"
           onClick={() => void pickAndAttach()}
-          title="Joindre un fichier ou une image"
-          aria-label="Joindre un fichier ou une image"
+          title="Attach a file or image"
+          aria-label="Attach a file or image"
         >
           <Ico name="plus" className="sm" />
         </button>
@@ -742,8 +742,8 @@ export const ConductorComposer = forwardRef<
           value={text}
           placeholder={
             busy
-              ? "L'agent travaille — ton message sera pris en compte en cours de route…"
-              : "Demande à l'agent, @ pour un fichier, / pour une commande…"
+              ? "The agent is working — your message will be picked up along the way…"
+              : "Ask the agent, @ for a file, / for a command…"
           }
           onChange={(e) => {
             // Genuine typing exits history navigation: the edited text becomes the
@@ -764,7 +764,7 @@ export const ConductorComposer = forwardRef<
             busy or not — it's a send button: a message sent mid-turn is natively queued
             by the CLI and injected at the next loop boundary. */}
         {busy && !text.trim() && attachments.length === 0 && attaching === 0 ? (
-          <button className="cv-send" onClick={() => interrupt.mutate()} title="Interrompre">
+          <button className="cv-send" onClick={() => interrupt.mutate()} title="Interrupt">
             <Ico name="stop" className="sm" />
           </button>
         ) : (
@@ -772,7 +772,7 @@ export const ConductorComposer = forwardRef<
             className="cv-send"
             onClick={doSend}
             disabled={(!text.trim() && attachments.length === 0) || attaching > 0}
-            title={busy ? "Envoyer — l'agent le traitera en cours de route" : "Envoyer"}
+            title={busy ? "Send — the agent will handle it along the way" : "Send"}
           >
             <Ico name="send" className="sm" />
           </button>
@@ -802,7 +802,7 @@ export const ConductorComposer = forwardRef<
                   {/* Definitive logged-out flag only (a failed probe shows nothing) —
                       picking a model of a disconnected backend WILL fail on send. */}
                   {(g.backend === "codex" ? loggedOut.codex : loggedOut.claude) ? (
-                    <span className="wf-mi-lbl-warn">non connecté</span>
+                    <span className="wf-mi-lbl-warn">not connected</span>
                   ) : null}
                 </span>
               </MenuLabel>
@@ -821,7 +821,7 @@ export const ConductorComposer = forwardRef<
           {/* Once locked, the other backend is gone from the list — say why, so a user
               who saw both sections before the first message understands. */}
           {locked && codexAvailable ? (
-            <MenuItem disabled>Backend figé après le 1er message</MenuItem>
+            <MenuItem disabled>Backend locked after the first message</MenuItem>
           ) : null}
         </Menu>
         {/* Effort gauge — BOTH backends (levels are backend-aware: Claude adds max/Ultra
@@ -848,12 +848,12 @@ export const ConductorComposer = forwardRef<
           <Menu
             up
             trigger={
-              <ChipBtn icon="shield" data-perm={permMode} title="Mode de permission — ⇧Tab pour changer">
+              <ChipBtn icon="shield" data-perm={permMode} title="Permission mode — ⇧Tab to change">
                 {permLabel}
               </ChipBtn>
             }
           >
-            <MenuLabel>Mode de permission · ⇧Tab</MenuLabel>
+            <MenuLabel>Permission mode · ⇧Tab</MenuLabel>
             {PERM_OPTS.map(([label, value, disabled]) => (
               <MenuItem
                 key={value}
@@ -869,7 +869,7 @@ export const ConductorComposer = forwardRef<
         ) : (
           /* Codex controls — all applied as per-turn overrides (see codexControls). */
           <>
-            {/* Safety PRESET = sandbox × approval, à la OpenAI's VS Code dropdown. The
+            {/* Safety PRESET = sandbox × approval, like OpenAI's VS Code dropdown. The
                 chip is colour-coded per preset (like Claude's permission mode), ⇧Tab
                 cycles (same muscle-memory). */}
             <Menu
@@ -878,13 +878,13 @@ export const ConductorComposer = forwardRef<
                 <ChipBtn
                   icon="shield"
                   data-codex-preset={codexCtl.preset}
-                  title="Sécurité Codex (bac à sable × approbation) — ⇧Tab pour changer"
+                  title="Codex safety (sandbox × approval) — ⇧Tab to change"
                 >
                   {CODEX_PRESETS[codexCtl.preset].label}
                 </ChipBtn>
               }
             >
-              <MenuLabel>Sécurité Codex · ⇧Tab</MenuLabel>
+              <MenuLabel>Codex safety · ⇧Tab</MenuLabel>
               {PRESET_ORDER.map((p) => (
                 <MenuItem
                   key={p}
@@ -914,13 +914,13 @@ export const ConductorComposer = forwardRef<
                     <ChipBtn
                       icon="bolt"
                       data-codex-fast={boosted ? "on" : undefined}
-                      title="Vitesse Codex (service tier) — override par tour"
+                      title="Codex speed (service tier) — per-turn override"
                     >
-                      {current?.name || "Vitesse"}
+                      {current?.name || "Speed"}
                     </ChipBtn>
                   }
                 >
-                  <MenuLabel>Vitesse Codex</MenuLabel>
+                  <MenuLabel>Codex speed</MenuLabel>
                   {tiers.map((t) => (
                     <MenuItem
                       key={t.id}
@@ -946,12 +946,12 @@ export const ConductorComposer = forwardRef<
               trigger={
                 <ChipBtn
                   icon="cog"
-                  title="Options Codex — accès réseau, résumé de raisonnement, personnalité"
-                  aria-label="Options Codex"
+                  title="Codex options — network access, reasoning summary, personality"
+                  aria-label="Codex options"
                 />
               }
             >
-              <MenuLabel>Réseau du bac à sable</MenuLabel>
+              <MenuLabel>Sandbox network</MenuLabel>
               <MenuItem
                 on={codexCtl.network}
                 icon="globe"
@@ -959,9 +959,9 @@ export const ConductorComposer = forwardRef<
                   useCodexControls.getState().set(session, { network: !codexCtl.network })
                 }
               >
-                Accès réseau
+                Network access
               </MenuItem>
-              <MenuLabel>Résumé du raisonnement</MenuLabel>
+              <MenuLabel>Reasoning summary</MenuLabel>
               {CODEX_SUMMARY_OPTS.map(([label, value]) => (
                 <MenuItem
                   key={value}
@@ -971,7 +971,7 @@ export const ConductorComposer = forwardRef<
                   {label}
                 </MenuItem>
               ))}
-              <MenuLabel>Personnalité</MenuLabel>
+              <MenuLabel>Personality</MenuLabel>
               {CODEX_PERSONALITY_OPTS.map(([label, value]) => (
                 <MenuItem
                   key={value}
@@ -986,7 +986,7 @@ export const ConductorComposer = forwardRef<
         )}
         <span style={{ marginLeft: "auto" }} />
         {/* Extensions panel — what this conversation's Claude sees (MCP + live
-            status, plugins, skills, sub-agents), à la /mcp. Scans the session's
+            status, plugins, skills, sub-agents), like /mcp. Scans the session's
             current cwd so a worktree shows its own config. */}
         <button
           type="button"
@@ -1000,15 +1000,15 @@ export const ConductorComposer = forwardRef<
               session,
             })
           }
-          title="Extensions de cette conversation — MCP (statut live), plugins, skills, sous-agents"
+          title="This conversation's extensions — MCP (live status), plugins, skills, sub-agents"
           aria-label="Extensions"
         >
           <Ico name="layers" className="sm" />
         </button>
-        {/* Clean-output toggle — fold each round's work behind a "Travail de Claude"
+        {/* Clean-output toggle — fold each round's work behind a "Claude's work"
             block so only the final message stays in clear. PER-CONVERSATION: the toggle
             writes THIS conversation's explicit override (the global default lives in
-            Settings → Général). On-state borrows the accent like the worktree checkbox. */}
+            Settings → General). On-state borrows the accent like the worktree checkbox. */}
         <button
           type="button"
           role="switch"
@@ -1017,7 +1017,7 @@ export const ConductorComposer = forwardRef<
           onClick={() =>
             useConversationsStore.getState().setConvCleanOutput(session, !cleanOutput)
           }
-          title="Clean output (cette conversation) — n'afficher que le message final de chaque réponse ; replier le travail intermédiaire (outils, réflexion, étapes)"
+          title="Clean output (this conversation) — show only the final message of each response; fold the intermediate work (tools, thinking, steps)"
           aria-label="Clean output"
           style={
             cleanOutput
@@ -1041,7 +1041,7 @@ export const ConductorComposer = forwardRef<
             aria-checked={useWorktree}
             className="cv-wt-toggle"
             onClick={() => setUseWorktree((v) => !v)}
-            title="Démarrer cette conversation dans un nouveau worktree git"
+            title="Start this conversation in a new git worktree"
             style={{
               display: "inline-flex",
               alignItems: "center",

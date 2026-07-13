@@ -1,6 +1,6 @@
 // Grouping layer for the conversation transcript: turns a turn's flat block list
 // into SEGMENTS, where every run of consecutive tool_use blocks becomes ONE
-// collapsible "Exécuté N étapes" section (the claude.ai/code shape — see memory
+// collapsible "Ran N steps" section (the claude.ai/code shape — see memory
 // `claude-app-transcript-grouped-steps`). Assistant prose / thinking break a run,
 // so a turn that writes → runs 4 tools → writes → runs 2 tools yields two sections,
 // exactly like the reference. Pure + framework-free so it is unit-testable and
@@ -168,7 +168,7 @@ export function groupBlocks(
         return;
       }
       // A Skill (model-invoked slash-command) is its own inline command chip — breaks the run
-      // so the invocation stands out instead of hiding in an "Exécuté N étapes" step row.
+      // so the invocation stands out instead of hiding in a "Ran N steps" step row.
       if (b.name === "Skill") {
         run = null;
         out.push({ kind: "skill", key: `sk-${i}`, step: { id: b.id, name: b.name, input: b.input } });
@@ -209,8 +209,8 @@ export function groupBlocks(
  * tools, then "done"), only the CONCLUDING prose stays in clear; the in-between narration
  * folds with the work. This is intentional for "clean output" — the user opted to see only
  * the response's final message, with all the mechanics (tools, thinking, interim narration)
- * tucked behind the one fold. Mirrors the user-facing copy "n'afficher que le message final
- * de chaque réponse".
+ * tucked behind the one fold. Mirrors the user-facing copy "only show the final message of
+ * each response".
  *
  *  - work + final  → fold `work` behind one block, show `final` in clear.
  *  - only final (no work)        → `work` empty: render the message bare, no block.
@@ -405,8 +405,8 @@ export function atomStillRunning(opts: {
   return !opts.hasResult; // no task: a missing tool_result means it is still running
 }
 
-/** How many "étapes" a stretch of work represents, for the "Travail de Claude — N
- *  étapes" header: every tool step across its runs PLUS each sub-agent (in clean-output the
+/** How many "steps" a stretch of work represents, for the "Claude's work — N
+ *  steps" header: every tool step across its runs PLUS each sub-agent (in clean-output the
  *  sub-agents fold into the block too, so they count as work). Prose and thinking are not
  *  steps and are not counted. */
 export function countWorkSteps(segments: Segment[]): number {
@@ -536,8 +536,8 @@ export function multiEdits(input: JsonValue): { old: string; next: string }[] {
 }
 
 /**
- * A compact result summary shown on the step's collapsed row, à la the reference
- * ("+5 −2", "12 résultats"). Edits/Write derive from the INPUT alone (no result
+ * A compact result summary shown on the step's collapsed row, like the reference
+ * ("+5 −2", "12 results"). Edits/Write derive from the INPUT alone (no result
  * needed); Grep/Glob count lines of their result text. `resultText` is the joined
  * tool_result rendered as text, or null while still running / unavailable.
  */

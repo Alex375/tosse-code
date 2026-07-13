@@ -25,7 +25,7 @@ export const CLAUDE_MODELS: ModelOption[] = [
   // Fable 5: time-limited preview model (special rate limit, until 2026-07-12). Same
   // effort tier as Opus. Alias "fable" is sent verbatim. Pinned at the top while the
   // preview window is open.
-  { label: "Fable 5", value: "fable", backend: "claude", hint: "12 juil." },
+  { label: "Fable 5", value: "fable", backend: "claude", hint: "Jul 12" },
   { label: "Opus 4.8", value: "opus", backend: "claude", hint: "1M" },
   { label: "Sonnet 4.6", value: "sonnet", backend: "claude" },
   { label: "Haiku 4.5", value: "haiku", backend: "claude" },
@@ -74,7 +74,7 @@ export function backendOfModel(id?: string | null): BackendKind {
 /** Pretty label for a model id (matches a catalogue label; falls back per family so a
  *  resolved live id still reads well). */
 export function modelLabel(id?: string | null): string {
-  if (!id) return "Modèle";
+  if (!id) return "Model";
   const s = id.toLowerCase();
   const exact = ALL_MODELS.find((m) => m.value === s);
   if (exact) return exact.label;

@@ -133,7 +133,7 @@ where
     ) else {
         server.shutdown_all().await;
         return Err(CodexError::Rpc(
-            "account/login/start n'a pas renvoyé d'URL d'autorisation".into(),
+            "account/login/start did not return an authorization URL".into(),
         ));
     };
 
@@ -166,7 +166,7 @@ where
                 if !cancelled.load(Ordering::SeqCst) {
                     on_done(
                         false,
-                        Some("le processus codex s'est terminé avant la fin de la connexion".into()),
+                        Some("the codex process exited before the sign-in completed".into()),
                     );
                 }
             }
@@ -207,7 +207,7 @@ async fn await_login_completed(
             }
             Ok(Some(_)) => {}
             Ok(None) => return None, // server died / torn down
-            Err(_) => return Some((false, Some("délai d'autorisation dépassé (10 min)".into()))),
+            Err(_) => return Some((false, Some("authorization timed out (10 min)".into()))),
         }
     }
 }
@@ -313,7 +313,7 @@ mod tests {
         let outcome = await_login_completed(&mut rx, "ours", deadline).await;
         let (success, error) = outcome.expect("timeout must produce an outcome");
         assert!(!success);
-        assert!(error.as_deref().is_some_and(|e| e.contains("délai")), "{error:?}");
+        assert!(error.as_deref().is_some_and(|e| e.contains("timed out")), "{error:?}");
     }
 
     /// A channel that closes with no completion (server died / torn down) yields `None`

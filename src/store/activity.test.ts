@@ -138,7 +138,7 @@ describe("describeActivity", () => {
   it("with parallel tools, shows a still-running earlier tool even if a later one finished first", () => {
     // One message batched three tools; the last block (Grep) finished first while
     // the Reads are still running. The live line must name a running Read, not fall
-    // through to "Réfléchit…".
+    // through to "Thinking…".
     const e = entry({
       timeline: [{ kind: "turn", id: "t1" }],
       turns: {
@@ -168,10 +168,10 @@ describe("describeActivity", () => {
       timeline: [{ kind: "turn", id: "t1" }],
       turns: { t1: assistantTurn("t1", [], "Voici le correctif") },
     });
-    expect(describeActivity(e)).toBe("Rédige une réponse…");
+    expect(describeActivity(e)).toBe("Writing a reply…");
   });
 
-  it("never shows a FINISHED tool — no stale 'Exécute …' leaking into the next turn", () => {
+  it("never shows a FINISHED tool — no stale 'Run …' leaking into the next turn", () => {
     // The previous turn ran a Bash echo that completed; a fresh turn is starting
     // with nothing produced yet. The finished echo must NOT be shown as activity.
     const e = entry({
@@ -179,7 +179,7 @@ describe("describeActivity", () => {
       turns: { t1: assistantTurn("t1", [toolUse("tu1", "Bash", { command: "echo salut" })]) },
       toolResults: { tu1: { toolUseId: "tu1", content: "salut", isError: false, parentToolUseId: null } },
     });
-    expect(describeActivity(e)).toBe("Réfléchit…");
+    expect(describeActivity(e)).toBe("Thinking…");
   });
 
   it("never leaks a prior turn's result-less (interrupted) tool into a new empty turn", () => {
@@ -199,7 +199,7 @@ describe("describeActivity", () => {
       },
       toolResults: {}, // interrupt synthesized no result for tu1
     });
-    expect(describeActivity(e)).toBe("Réfléchit…");
+    expect(describeActivity(e)).toBe("Thinking…");
   });
 
   it("shows nothing-in-flight when the latest main turn is the user's just-sent message", () => {
@@ -216,12 +216,12 @@ describe("describeActivity", () => {
       },
       toolResults: {},
     });
-    expect(describeActivity(e)).toBe("Réfléchit…");
+    expect(describeActivity(e)).toBe("Thinking…");
   });
 
   it("falls back to thinking on an empty turn, and a neutral line with no entry", () => {
-    expect(describeActivity(entry({}))).toBe("Réfléchit…");
-    expect(describeActivity(undefined)).toBe("Travaille…");
+    expect(describeActivity(entry({}))).toBe("Thinking…");
+    expect(describeActivity(undefined)).toBe("Working…");
   });
 });
 

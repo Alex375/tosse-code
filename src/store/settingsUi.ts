@@ -1,5 +1,5 @@
 // Settings panel open state + which section it should land on. A tiny shared
-// slice so the panel can be opened from anywhere — the sidebar "Réglages" entry
+// slice so the panel can be opened from anywhere — the sidebar "Settings" entry
 // AND deep-links (e.g. the update banner → "updates") both flip the same flag
 // (same pattern as worktreeUiStore).
 import { create } from "zustand";

@@ -173,7 +173,7 @@ fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
             // partially-restored conversation is never silently incomplete.
             if skipped > 0 {
                 items.push(history_notice(format!(
-                    "{skipped} ligne(s) de l'historique étaient illisibles — des messages peuvent manquer."
+                    "{skipped} history line(s) were unreadable — some messages may be missing."
                 )));
             }
             items
@@ -186,7 +186,7 @@ fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
         Err(e) => {
             eprintln!("[history] cannot read transcript {}: {e}", path.display());
             vec![history_notice(format!(
-                "Impossible de lire l'historique de cette conversation : {e}"
+                "Unable to read this conversation's history: {e}"
             ))]
         }
     }
@@ -352,7 +352,7 @@ fn push_assistant(entry: &Value, items: &mut Vec<ConversationItem>) {
 // ============================================================================
 // Rewind — truncate a conversation's transcript at a chosen message.
 //
-// "Reprendre à partir d'ici" cuts the on-disk transcript so the conversation ends
+// "Resume from here" cuts the on-disk transcript so the conversation ends
 // just before a genuine human-prompt boundary, then the app re-spawns
 // `claude --resume` on the shortened file. VERIFIED (live probe, binary 2.1.187):
 // resume HONOURS a truncated transcript — the dropped turns do not survive in the
@@ -367,7 +367,7 @@ fn push_assistant(entry: &Value, items: &mut Vec<ConversationItem>) {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RewindOutcome {
     /// For a USER-message rewind, the text of the removed prompt so the composer can be
-    /// re-seeded with it ("revenir à ce prompt"). `None` for an assistant-message rewind
+    /// re-seeded with it ("go back to this prompt"). `None` for an assistant-message rewind
     /// (its response is kept; the user just continues with a new message).
     pub removed_prompt: Option<String>,
     /// How many transcript lines were dropped. `0` means nothing followed the target —
@@ -375,7 +375,7 @@ pub struct RewindOutcome {
     pub removed_lines: usize,
 }
 
-/// The result of a fork ("brancher une nouvelle conversation ici"): the freshly-written
+/// The result of a fork ("branch a new conversation here"): the freshly-written
 /// branch conversation (ready to bring into the app via `reactivateDiskConversation`) and,
 /// for a USER-message fork, the removed prompt text to seed the new conversation's composer.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -484,11 +484,11 @@ fn resolve_cut(
                     .or_else(|| matches.last().copied());
             }
         }
-        let ti = ti.ok_or_else(|| "message ciblé introuvable dans le transcript".to_string())?;
+        let ti = ti.ok_or_else(|| "target message not found in the transcript".to_string())?;
         let has_prior_turn = (0..ti).any(|i| human_prompt_at(parsed, i).is_some());
         if !has_prior_turn {
             return Err(
-                "Impossible de reprendre avant le premier message de la conversation.".to_string(),
+                "Cannot resume before the first message of the conversation.".to_string(),
             );
         }
         let removed = human_prompt_at(parsed, ti).and_then(|t| clean_prompt_for_composer(&t));
@@ -507,7 +507,7 @@ fn resolve_cut(
                 break;
             }
         }
-        let ai = ai.ok_or_else(|| "réponse ciblée introuvable dans le transcript".to_string())?;
+        let ai = ai.ok_or_else(|| "target response not found in the transcript".to_string())?;
         let next_human = (ai + 1..raw.len()).find(|&i| human_prompt_at(parsed, i).is_some());
         Ok((next_human.unwrap_or(raw.len()), None))
     }
@@ -517,7 +517,7 @@ fn resolve_cut(
 /// index-aligned. Shared by rewind and fork.
 fn read_transcript_lines(path: &Path) -> Result<(String, Vec<Option<Value>>), String> {
     let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("lecture du transcript impossible : {e}"))?;
+        .map_err(|e| format!("could not read the transcript: {e}"))?;
     let parsed: Vec<Option<Value>> =
         content.lines().map(|l| serde_json::from_str::<Value>(l.trim()).ok()).collect();
     Ok((content, parsed))
@@ -533,7 +533,7 @@ pub fn rewind_transcript(
     occurrence: Option<usize>,
 ) -> Result<RewindOutcome, String> {
     let config_dir = claude_config_dir()
-        .ok_or_else(|| "répertoire de configuration Claude introuvable".to_string())?;
+        .ok_or_else(|| "Claude config directory not found".to_string())?;
     rewind_transcript_in(&config_dir, session_id, target_id, target_is_user, target_text, occurrence)
 }
 
@@ -546,7 +546,7 @@ fn rewind_transcript_in(
     occurrence: Option<usize>,
 ) -> Result<RewindOutcome, String> {
     let path = find_transcript(config_dir, session_id)
-        .ok_or_else(|| "transcript de la conversation introuvable".to_string())?;
+        .ok_or_else(|| "conversation transcript not found".to_string())?;
     let (content, parsed) = read_transcript_lines(&path)?;
     let raw: Vec<&str> = content.lines().collect();
 
@@ -556,7 +556,7 @@ fn rewind_transcript_in(
     let removed_lines = raw.len() - cut_index;
     if removed_lines == 0 {
         // Nothing after the target — the conversation already ends here. Leave the file
-        // untouched (a no-op the UI can surface as "rien à rembobiner").
+        // untouched (a no-op the UI can surface as "nothing to rewind").
         return Ok(RewindOutcome { removed_prompt, removed_lines: 0 });
     }
 
@@ -567,9 +567,9 @@ fn rewind_transcript_in(
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("transcript");
     let tmp = path.with_file_name(format!(".{file_name}.rewind-tmp"));
     std::fs::write(&tmp, &body)
-        .map_err(|e| format!("écriture du transcript tronqué impossible : {e}"))?;
+        .map_err(|e| format!("could not write the truncated transcript: {e}"))?;
     std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("remplacement du transcript impossible : {e}"))?;
+        .map_err(|e| format!("could not replace the transcript: {e}"))?;
 
     Ok(RewindOutcome { removed_prompt, removed_lines })
 }
@@ -587,7 +587,7 @@ pub fn fork_transcript(
     occurrence: Option<usize>,
 ) -> Result<ForkOutcome, String> {
     let config_dir = claude_config_dir()
-        .ok_or_else(|| "répertoire de configuration Claude introuvable".to_string())?;
+        .ok_or_else(|| "Claude config directory not found".to_string())?;
     fork_transcript_in(&config_dir, session_id, target_id, target_is_user, target_text, occurrence)
 }
 
@@ -600,7 +600,7 @@ fn fork_transcript_in(
     occurrence: Option<usize>,
 ) -> Result<ForkOutcome, String> {
     let path = find_transcript(config_dir, session_id)
-        .ok_or_else(|| "transcript de la conversation introuvable".to_string())?;
+        .ok_or_else(|| "conversation transcript not found".to_string())?;
     let (content, parsed) = read_transcript_lines(&path)?;
     let raw: Vec<&str> = content.lines().collect();
 
@@ -632,11 +632,11 @@ fn fork_transcript_in(
         }
     }
     std::fs::write(&new_path, &out)
-        .map_err(|e| format!("écriture de la conversation forkée impossible : {e}"))?;
+        .map_err(|e| format!("could not write the forked conversation: {e}"))?;
 
     // Head-read the new file back into the same row shape the history panel uses.
     let conversation = scan_disk_conversation(&new_path)
-        .ok_or_else(|| "la conversation forkée n'a pas pu être relue".to_string())?;
+        .ok_or_else(|| "the forked conversation could not be re-read".to_string())?;
     Ok(ForkOutcome { conversation, removed_prompt })
 }
 
@@ -1643,7 +1643,7 @@ mod tests {
         rewind_fixture(&base, sid);
         let err = rewind_transcript_in(&base, sid, "u1", true, None, None).unwrap_err();
         std::fs::remove_dir_all(&base).ok();
-        assert!(err.contains("premier message"), "got: {err}");
+        assert!(err.contains("first message"), "got: {err}");
     }
 
     /// A rewind whose target has nothing after it is a no-op: 0 lines removed and the
@@ -1674,7 +1674,7 @@ mod tests {
         rewind_fixture(&base, sid);
         let err = rewind_transcript_in(&base, sid, "does-not-exist", true, None, None).unwrap_err();
         std::fs::remove_dir_all(&base).ok();
-        assert!(err.contains("introuvable"), "got: {err}");
+        assert!(err.contains("not found"), "got: {err}");
     }
 
     /// A LIVE user turn carries a synthetic front id (`user_N`) that is NOT on disk, so the

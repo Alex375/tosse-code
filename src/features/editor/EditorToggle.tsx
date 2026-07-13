@@ -28,8 +28,8 @@ export function EditorToggle() {
           type="button"
           className="wf-icon-btn"
           onClick={flipOrientation}
-          title={curOrientation === "row" ? "Disposition empilée (haut/bas)" : "Disposition côte à côte"}
-          aria-label="Changer la disposition du panneau"
+          title={curOrientation === "row" ? "Stacked layout (top/bottom)" : "Side-by-side layout"}
+          aria-label="Change panel layout"
         >
           <Ico name={curOrientation === "row" ? "splitv" : "splith"} className="sm" />
         </button>
@@ -39,8 +39,8 @@ export function EditorToggle() {
         className={"wf-icon-btn" + (open ? " on" : "")}
         data-on={open ? "" : undefined}
         onClick={toggleOpen}
-        title={open ? "Fermer l'éditeur" : "Ouvrir l'éditeur de fichiers"}
-        aria-label="Basculer l'éditeur de fichiers"
+        title={open ? "Close editor" : "Open file editor"}
+        aria-label="Toggle file editor"
       >
         <Ico name="code" className="sm" />
       </button>

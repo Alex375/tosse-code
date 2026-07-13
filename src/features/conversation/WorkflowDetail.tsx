@@ -101,12 +101,12 @@ export function WorkflowDetail({
         commands.loadWorkflowJournal(sessionId, runId),
         wantPhases ? commands.loadWorkflowPhases(sessionId, runId) : Promise.resolve(null),
       ]);
-      // The MANIFEST error is blocking (the body shows "illisible"); a journal/phases error is
+      // The MANIFEST error is blocking (the body shows "unreadable"); a journal/phases error is
       // non-blocking but must NOT be silent → surface it in the app-level error banner.
       if (r.status === "ok") setRun(r.data);
       setErr(r.status === "error" ? r.error : null);
       if (j.status === "ok") setJournal(j.data);
-      else useAppErrors.getState().pushError("Journal du workflow illisible", j.error);
+      else useAppErrors.getState().pushError("Workflow journal unreadable", j.error);
       if (p) {
         if (p.status === "ok") {
           if (p.data.length > 0) {
@@ -114,7 +114,7 @@ export function WorkflowDetail({
             phasesLoadedRef.current = true;
           }
         } else {
-          useAppErrors.getState().pushError("Phases du workflow illisibles", p.error);
+          useAppErrors.getState().pushError("Workflow phases unreadable", p.error);
         }
       }
     } catch (e) {
@@ -151,7 +151,7 @@ export function WorkflowDetail({
   // The manifest lands shortly AFTER the run's status flips to done — and on a heavy run / slow
   // FS that can be more than a couple seconds. So once finished but the manifest isn't loaded
   // yet, poll a BOUNDED number of times (~10 s) to upgrade the live overview to the rich report
-  // in place; then stop (the "introuvable" state + Rafraîchir remain as the fallback).
+  // in place; then stop (the "not found" state + Refresh remain as the fallback).
   useEffect(() => {
     if (!open || running || run) return;
     void fetchData();
@@ -216,7 +216,7 @@ export function WorkflowDetail({
         run.defaultModel ? shortModel(run.defaultModel) : null,
       ].filter(Boolean)
     : [
-        running ? "en cours" : "terminé",
+        running ? "running" : "completed",
         journal ? `${journal.done}/${journal.started} agents` : null,
       ].filter(Boolean);
 
@@ -228,7 +228,7 @@ export function WorkflowDetail({
         <div className={styles.colPhases}>
           <div className={styles.colHdr}>Phases</div>
           {model.phases.length === 0 ? (
-            <div className={styles.note}>Aucune phase.</div>
+            <div className={styles.note}>No phases.</div>
           ) : (
             model.phases.map((p) => {
               const pp = phaseProgress(p);
@@ -255,7 +255,7 @@ export function WorkflowDetail({
         <div className={styles.colAgents}>
           <div className={styles.colHdr}>Agents</div>
           {!selectedPhase || selectedPhase.agents.length === 0 ? (
-            <div className={styles.note}>Aucun agent pour cette phase.</div>
+            <div className={styles.note}>No agents for this phase.</div>
           ) : (
             selectedPhase.agents.map((a, i) => {
               const rk = agentRowKey(a, i);
@@ -275,13 +275,13 @@ export function WorkflowDetail({
           {selectedAgent ? (
             <AgentTranscriptPane sessionId={sessionId} agent={selectedAgent} running={running} refreshTick={tick} />
           ) : (
-            <div className={styles.note}>Sélectionne un agent pour voir son transcript.</div>
+            <div className={styles.note}>Select an agent to view its transcript.</div>
           )}
         </div>
       </>
     );
   } else if (err) {
-    bodyInner = <div className={styles.note}>Manifeste illisible : {err}</div>;
+    bodyInner = <div className={styles.note}>Manifest unreadable: {err}</div>;
   } else if (running || journal) {
     // ---- Live overview (manifest not written yet) ----
     bodyInner = (
@@ -293,10 +293,10 @@ export function WorkflowDetail({
       />
     );
   } else if (loading) {
-    bodyInner = <div className={styles.note}>Chargement du workflow…</div>;
+    bodyInner = <div className={styles.note}>Loading workflow…</div>;
   } else {
     bodyInner = (
-      <div className={styles.note}>Rapport du workflow introuvable (conversation rouverte ?).</div>
+      <div className={styles.note}>Workflow report not found (conversation reopened?).</div>
     );
   }
 
@@ -320,12 +320,12 @@ export function WorkflowDetail({
               setTick((t) => t + 1);
               void fetchData();
             }}
-            aria-label="Rafraîchir"
-            title="Rafraîchir"
+            aria-label="Refresh"
+            title="Refresh"
           >
             <Ico name="refresh" className={"sm" + (loading ? " wf-spin-fast" : "")} />
           </button>
-          <button className={styles.headBtn} onClick={onClose} aria-label="Fermer" title="Fermer (Échap)">
+          <button className={styles.headBtn} onClick={onClose} aria-label="Close" title="Close (Esc)">
             <Ico name="x" className="sm" />
           </button>
         </div>
@@ -449,15 +449,15 @@ function LiveOverview({
       <div className={styles.statBoxes}>
         <div className={styles.statBox + " " + styles.sbTotal}>
           <span className={styles.sbN}>{started}</span>
-          <span className={styles.sbL}>lancés</span>
+          <span className={styles.sbL}>launched</span>
         </div>
         <div className={styles.statBox + " " + styles.sbRun}>
           <span className={styles.sbN}>{inflight}</span>
-          <span className={styles.sbL}>en cours</span>
+          <span className={styles.sbL}>running</span>
         </div>
         <div className={styles.statBox + " " + styles.sbDone}>
           <span className={styles.sbN}>{done}</span>
-          <span className={styles.sbL}>terminés</span>
+          <span className={styles.sbL}>done</span>
         </div>
       </div>
 
@@ -480,7 +480,7 @@ function LiveOverview({
                   ) : null}
                 </span>
                 <span className={styles.livePhaseCount} data-state={r.state}>
-                  {r.started > 0 ? `${r.done}/${r.started}` : "à venir"}
+                  {r.started > 0 ? `${r.done}/${r.started}` : "upcoming"}
                 </span>
               </div>
             );
@@ -488,15 +488,15 @@ function LiveOverview({
         </div>
       ) : (
         <div className={styles.liveCur}>
-          <div className={styles.liveCurLbl}>Étape en cours</div>
-          <div className={styles.liveCurPhase}>{cur ? cur.phase : "Le workflow démarre…"}</div>
+          <div className={styles.liveCurLbl}>Current step</div>
+          <div className={styles.liveCurPhase}>{cur ? cur.phase : "Workflow starting…"}</div>
           {cur?.label ? <div className={styles.liveCurAgent}>{cur.label}</div> : null}
         </div>
       )}
 
       <div className={styles.liveNote}>
-        Vue d'ensemble en direct. Le compte par étape s'affine au fil du run ; le détail par
-        agent (métriques, transcripts) apparaît à la fin, quand le rapport complet est écrit.
+        Live overview. Per-step counts refine as the run progresses; per-agent detail (metrics,
+        transcripts) appears at the end, once the full report is written.
       </div>
     </div>
   );
@@ -514,7 +514,7 @@ function AgentRow({
   const meta = [agent.agentType, agent.model ? shortModel(agent.model) : null].filter(Boolean).join(" · ");
   const stats = [
     agent.tokens != null ? `${fmtTokens(agent.tokens)} tk` : null,
-    agent.toolCalls != null ? `${agent.toolCalls} outils` : null,
+    agent.toolCalls != null ? `${agent.toolCalls} tools` : null,
     agent.durationMs != null ? fmtDuration(agent.durationMs) : null,
   ]
     .filter(Boolean)
@@ -525,7 +525,7 @@ function AgentRow({
       type="button"
       className={styles.agentRow + (selected ? " " + styles.sel : "")}
       onClick={onSelect}
-      title={agent.agentId ? "Voir le transcript de l'agent" : "Transcript indisponible"}
+      title={agent.agentId ? "View the agent's transcript" : "Transcript unavailable"}
     >
       <span className={styles.agentTop}>
         {live ? <RunDots /> : <Dot s={wfStateDot(agent.state)} />}
@@ -586,15 +586,15 @@ function AgentTranscriptPane({
 
   let body: ReactNode;
   if (!agentId) {
-    body = <div className={styles.note}>Transcript indisponible (agent sans id sur disque).</div>;
+    body = <div className={styles.note}>Transcript unavailable (agent has no id on disk).</div>;
   } else if (err) {
-    body = <div className={styles.note}>Transcript illisible : {err}</div>;
+    body = <div className={styles.note}>Transcript unreadable: {err}</div>;
   } else if (loading && !items) {
-    body = <div className={styles.note}>Chargement du transcript…</div>;
+    body = <div className={styles.note}>Loading transcript…</div>;
   } else if (!items || items.length === 0) {
     body = (
       <div className={styles.note}>
-        {running ? "L'agent travaille — pas encore de transcript…" : "Aucun transcript écrit."}
+        {running ? "The agent is working — no transcript yet…" : "No transcript written."}
       </div>
     );
   } else {
@@ -613,7 +613,7 @@ function AgentTranscriptPane({
         ) : null}
         {agent.resultPreview ? (
           <div className={styles.txPreview}>
-            <span className={styles.txPreviewLbl}>Résultat</span>
+            <span className={styles.txPreviewLbl}>Result</span>
             {truncate(agent.resultPreview, 320)}
           </div>
         ) : null}

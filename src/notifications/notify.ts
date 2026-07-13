@@ -128,11 +128,11 @@ export function dispatchAgentNotification(ev: AgentNotification): void {
 function sendOsNotification(ev: AgentNotification): void {
   if (!inTauri()) return;
   const where = ev.repoName ? ` · ${ev.repoName}` : "";
-  const title = ev.kind === "attention" ? "Action requise" : "Agent terminé";
+  const title = ev.kind === "attention" ? "Action required" : "Agent finished";
   const body =
     ev.kind === "attention"
-      ? `${ev.title}${where} a besoin de ton attention.`
-      : `${ev.title}${where} a terminé.`;
+      ? `${ev.title}${where} needs your attention.`
+      : `${ev.title}${where} finished.`;
 
   const fire = () => {
     try {
@@ -157,7 +157,7 @@ function sendOsNotification(ev: AgentNotification): void {
   })();
 }
 
-/** Play just the chime — used by the Settings "Tester le son" button. */
+/** Play just the chime — used by the Settings "Test sound" button. */
 export function testSound(kind: ChimeKind = "done"): void {
   try {
     playChime(kind);

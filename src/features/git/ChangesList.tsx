@@ -30,7 +30,7 @@ export function ChangesList({ cwd, convId }: { cwd: string; convId: string }) {
   if (files.length === 0) {
     return (
       <div className={styles.empty}>
-        {status.isLoading ? "Lecture du statut…" : "Aucune modification — l'arbre est propre."}
+        {status.isLoading ? "Reading status…" : "No changes — working tree is clean."}
       </div>
     );
   }

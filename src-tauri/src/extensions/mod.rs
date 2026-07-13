@@ -84,12 +84,12 @@ pub struct PluginInfo {
     pub scope: ExtScope,
     /// Whether the plugin's installed pin differs from its marketplace's currently
     /// downloaded pin (compared on-disk — see [`compute_update`]). Only as fresh as
-    /// the last `claude plugin marketplace update`; the UI's "Vérifier" button runs
+    /// the last `claude plugin marketplace update`; the UI's "Check" button runs
     /// that refresh then re-reads. Never a false positive: unknown pins → `false`.
     pub update_available: bool,
     /// The marketplace's human version when it is KNOWN and DIFFERS from the installed
     /// one (for a "vX → vY" badge). `None` for sha-only updates (a new commit with the
-    /// same semver) — the UI falls back to a generic "Mise à jour disponible" then.
+    /// same semver) — the UI falls back to a generic "Update available" then.
     pub latest_version: Option<String>,
     /// What the plugin provides (scanned from its cache dir), regardless of
     /// enabled state — so the UI can show "5 skills" even when toggled off.
@@ -577,7 +577,7 @@ pub fn set_plugin_enabled(plugin_id: &str, enabled: bool) -> Result<(), String> 
     // A fresh install has no settings.json yet (the CLI writes it only on first
     // setting change) — `write_settings` treats absent as an empty object so the very
     // first toggle CREATES the file; a present-but-unreadable file is still a real error.
-    let home = home_dir().ok_or("répertoire personnel ($HOME) introuvable")?;
+    let home = home_dir().ok_or("home directory ($HOME) not found")?;
     write_settings(&home, |text| apply_plugin_enabled(text, plugin_id, enabled))
 }
 
@@ -590,7 +590,7 @@ pub fn set_plugin_enabled(plugin_id: &str, enabled: bool) -> Result<(), String> 
 /// created carrying its `source` (copied from `known_marketplaces.json`) so the entry
 /// stays valid for the CLI.
 pub fn set_marketplace_auto_update(name: &str, enabled: bool) -> Result<(), String> {
-    let home = home_dir().ok_or("répertoire personnel ($HOME) introuvable")?;
+    let home = home_dir().ok_or("home directory ($HOME) not found")?;
     let source = marketplace_source(&home, name);
     write_settings(&home, |text| {
         apply_marketplace_auto_update(text, name, enabled, source.clone())
@@ -601,7 +601,7 @@ pub fn set_marketplace_auto_update(name: &str, enabled: bool) -> Result<(), Stri
 /// toggle) — one atomic settings.json write. Ensures each known marketplace has an
 /// `extraKnownMarketplaces` entry (with its `source`) carrying the new flag.
 pub fn set_all_marketplaces_auto_update(enabled: bool) -> Result<(), String> {
-    let home = home_dir().ok_or("répertoire personnel ($HOME) introuvable")?;
+    let home = home_dir().ok_or("home directory ($HOME) not found")?;
     let known: BTreeMap<String, KnownMarketplace> =
         read_json(&home.join(".claude/plugins/known_marketplaces.json")).unwrap_or_default();
     let entries: Vec<(String, Option<serde_json::Value>)> = known
@@ -633,12 +633,12 @@ fn write_settings(
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".to_string(),
-        Err(e) => return Err(format!("lecture de settings.json impossible : {e}")),
+        Err(e) => return Err(format!("unable to read settings.json: {e}")),
     };
     let updated = transform(&text)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("création du dossier de config impossible : {e}"))?;
+            .map_err(|e| format!("unable to create config directory: {e}"))?;
     }
     write_atomic(&path, updated.as_bytes())
 }
@@ -653,12 +653,12 @@ fn apply_marketplace_auto_update(
     source: Option<serde_json::Value>,
 ) -> Result<String, String> {
     let mut root: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("settings.json illisible : {e}"))?;
+        serde_json::from_str(text).map_err(|e| format!("settings.json unreadable: {e}"))?;
     let obj = root
         .as_object_mut()
-        .ok_or("settings.json n'est pas un objet JSON")?;
+        .ok_or("settings.json is not a JSON object")?;
     set_marketplace_flag(obj, name, enabled, source);
-    serde_json::to_string_pretty(&root).map_err(|e| format!("sérialisation JSON : {e}"))
+    serde_json::to_string_pretty(&root).map_err(|e| format!("JSON serialization: {e}"))
 }
 
 /// Pure transform for the global master toggle: set `autoUpdate = enabled` on EVERY
@@ -669,14 +669,14 @@ fn apply_all_marketplaces_auto_update(
     enabled: bool,
 ) -> Result<String, String> {
     let mut root: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("settings.json illisible : {e}"))?;
+        serde_json::from_str(text).map_err(|e| format!("settings.json unreadable: {e}"))?;
     let obj = root
         .as_object_mut()
-        .ok_or("settings.json n'est pas un objet JSON")?;
+        .ok_or("settings.json is not a JSON object")?;
     for (name, source) in marketplaces {
         set_marketplace_flag(obj, name, enabled, source.clone());
     }
-    serde_json::to_string_pretty(&root).map_err(|e| format!("sérialisation JSON : {e}"))
+    serde_json::to_string_pretty(&root).map_err(|e| format!("JSON serialization: {e}"))
 }
 
 /// Set `extraKnownMarketplaces[name].autoUpdate = enabled` on a settings root object,
@@ -722,18 +722,18 @@ fn set_marketplace_flag(
 /// Splitting this out keeps it unit-testable without touching the filesystem.
 fn apply_plugin_enabled(text: &str, plugin_id: &str, enabled: bool) -> Result<String, String> {
     let mut root: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("settings.json illisible : {e}"))?;
+        serde_json::from_str(text).map_err(|e| format!("settings.json unreadable: {e}"))?;
     let obj = root
         .as_object_mut()
-        .ok_or("settings.json n'est pas un objet JSON")?;
+        .ok_or("settings.json is not a JSON object")?;
     if !obj.get("enabledPlugins").map(|v| v.is_object()).unwrap_or(false) {
         obj.insert("enabledPlugins".to_string(), serde_json::json!({}));
     }
     obj.get_mut("enabledPlugins")
         .and_then(|v| v.as_object_mut())
-        .ok_or("enabledPlugins n'est pas un objet")?
+        .ok_or("enabledPlugins is not an object")?
         .insert(plugin_id.to_string(), serde_json::Value::Bool(enabled));
-    serde_json::to_string_pretty(&root).map_err(|e| format!("sérialisation JSON : {e}"))
+    serde_json::to_string_pretty(&root).map_err(|e| format!("JSON serialization: {e}"))
 }
 
 /// Replace `path` atomically: write a sibling temp file, then rename over the
@@ -745,10 +745,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("json.tosse-tmp.{}.{n}", std::process::id()));
-    std::fs::write(&tmp, bytes).map_err(|e| format!("écriture du fichier temporaire : {e}"))?;
+    std::fs::write(&tmp, bytes).map_err(|e| format!("writing temporary file: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp); // don't leave the temp behind on failure
-        format!("remplacement atomique de settings.json : {e}")
+        format!("atomic replacement of settings.json: {e}")
     })
 }
 
@@ -776,11 +776,11 @@ fn read_json_checked<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Opti
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{} illisible : {e}", path.display())),
+        Err(e) => return Err(format!("{} unreadable: {e}", path.display())),
     };
     serde_json::from_str(&text)
         .map(Some)
-        .map_err(|e| format!("{} corrompu : {e}", path.display()))
+        .map_err(|e| format!("{} corrupt: {e}", path.display()))
 }
 
 /// Read a main config file, degrading to `T::default()` but recording a warning when

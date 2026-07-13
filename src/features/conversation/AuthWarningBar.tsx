@@ -8,7 +8,7 @@
 // Both warn ONLY on a DEFINITIVE negative (a resolved `false`, a `loggedIn:false`) — never
 // while still checking — so a transient glitch never cries wolf. Without this bar, the
 // first hint of either problem would be the NEXT message failing; this tells the user
-// before they type, with a direct jump to Réglages → Comptes.
+// before they type, with a direct jump to Settings → Accounts.
 import { useConversationsStore, type BackendKind } from "../../store/conversationsStore";
 import { useCodexAvailable, useBackendAvailabilityState } from "../../store/binaryAvailable";
 import { useAccountsLoggedOut } from "../../ipc/useAccounts";
@@ -28,17 +28,17 @@ export function AuthWarningBar({ session }: { session: string }) {
   const name = kind === "codex" ? "Codex" : "Claude";
 
   // Tone "error" (red) for both: each is a hard blocker — the next send WILL fail — not a
-  // soft warning. The button jumps to Réglages → Comptes, where the missing-binary install
+  // soft warning. The button jumps to Settings → Accounts, where the missing-binary install
   // hint (and the login flow) live.
   if (available === false) {
     return (
       <div className="cv-reviewbar" data-tone="error">
         <span className="cv-reviewbar-dot" />
         <span className="cv-reviewbar-label">
-          CLI {name} introuvable — les prochains messages échoueront.
+          {name} CLI not found — the next messages will fail.
         </span>
         <button className="cv-reviewbar-btn" onClick={() => openSettings("accounts")}>
-          Réglages
+          Settings
         </button>
       </div>
     );
@@ -51,10 +51,10 @@ export function AuthWarningBar({ session }: { session: string }) {
     <div className="cv-reviewbar" data-tone="error">
       <span className="cv-reviewbar-dot" />
       <span className="cv-reviewbar-label">
-        Compte {name} non connecté — les prochains messages échoueront.
+        {name} account not connected — the next messages will fail.
       </span>
       <button className="cv-reviewbar-btn" onClick={() => openSettings("accounts")}>
-        Se connecter
+        Sign in
       </button>
     </div>
   );

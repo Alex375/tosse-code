@@ -1,49 +1,49 @@
 /* ============================================================
-   Wireframe kit — dark, épuré (Linear / Raycast vibe), macOS
-   Low-fi: structure d'abord, couleur réservée aux statuts.
+   Wireframe kit — dark, refined (Linear / Raycast vibe), macOS
+   Low-fi: structure first, colour reserved for statuses.
    ============================================================ */
 :root {
-  --wf-bg:        #0c0c0f;   /* fond app */
-  --wf-bg-2:      #101014;   /* zone secondaire */
-  --wf-panel:     #15151b;   /* panneaux / cartes */
-  --wf-panel-2:   #1a1a21;   /* éléments surélevés */
-  --wf-panel-3:   #20202a;   /* hover / sélection */
-  --wf-line:      #26262f;   /* bordures subtiles */
-  --wf-line-2:    #32323d;   /* bordures marquées */
-  --wf-skel:      #2b2b34;   /* barres placeholder */
+  --wf-bg:        #0c0c0f;   /* app background */
+  --wf-bg-2:      #101014;   /* secondary area */
+  --wf-panel:     #15151b;   /* panels / cards */
+  --wf-panel-2:   #1a1a21;   /* raised elements */
+  --wf-panel-3:   #20202a;   /* hover / selection */
+  --wf-line:      #26262f;   /* subtle borders */
+  --wf-line-2:    #32323d;   /* stronger borders */
+  --wf-skel:      #2b2b34;   /* placeholder bars */
   --wf-skel-2:    #34343f;
-  --wf-tx-hi:     #e7e7ec;   /* texte fort */
-  --wf-tx:        #a6a6b0;   /* texte normal */
-  --wf-tx-lo:     #6a6a76;   /* texte faible */
-  --wf-tx-xlo:    #4a4a55;   /* labels discrets */
+  --wf-tx-hi:     #e7e7ec;   /* strong text */
+  --wf-tx:        #a6a6b0;   /* normal text */
+  --wf-tx-lo:     #6a6a76;   /* weak text */
+  --wf-tx-xlo:    #4a4a55;   /* discreet labels */
 
-  --wf-accent:    #d97757;   /* marque Claude (coral) — usage rare */
+  --wf-accent:    #d97757;   /* Claude brand mark (coral) — rare use */
   --wf-accent-dim:#3a2a24;
-  --wf-codex-accent:#10a37f; /* marque Codex (vert OpenAI) — cartes Comptes, onglet Extensions, pilule Forfait */
-  --wf-ultra:     #b483e0;   /* tier « Ultra code » — violet premium */
+  --wf-codex-accent:#10a37f; /* Codex brand mark (OpenAI green) — Accounts cards, Extensions tab, Plan pill */
+  --wf-ultra:     #b483e0;   /* "Ultra code" tier — premium violet */
   --wf-ultra-dim: #2e2440;
 
-  --wf-run:       #5fb98c;   /* en cours */
+  --wf-run:       #5fb98c;   /* running */
   --wf-run-bg:    #18342a;
-  --wf-att:       #e3a857;   /* demande attention */
+  --wf-att:       #e3a857;   /* needs attention */
   --wf-att-bg:    #382c18;
-  --wf-wait:      #7aa2e3;   /* en attente d'input */
+  --wf-wait:      #7aa2e3;   /* waiting for input */
   --wf-wait-bg:   #1c2740;
-  --wf-done:      #7f8593;   /* terminé */
+  --wf-done:      #7f8593;   /* completed */
   --wf-done-bg:   #23252c;
-  --wf-err:       #e0727c;   /* erreur */
+  --wf-err:       #e0727c;   /* error */
   --wf-err-bg:    #3a1f23;
 
-  /* modes de permission (sélecteur ⇧Tab, façon terminal Claude Code) */
-  --wf-perm-auto:       #e3c54e;  /* auto — jaune */
+  /* permission modes (⇧Tab selector, Claude Code terminal style) */
+  --wf-perm-auto:       #e3c54e;  /* auto — yellow */
   --wf-perm-auto-bg:    #353016;
-  --wf-perm-default:    #8b909c;  /* default — gris */
+  --wf-perm-default:    #8b909c;  /* default — grey */
   --wf-perm-default-bg: #23252c;
   --wf-perm-accept:     #b483e0;  /* auto-accept edits — violet */
   --wf-perm-accept-bg:  #2a2140;
-  --wf-perm-plan:       #7aa2e3;  /* plan — bleu */
+  --wf-perm-plan:       #7aa2e3;  /* plan — blue */
   --wf-perm-plan-bg:    #1c2740;
-  --wf-perm-bypass:     #e0727c;  /* bypass — rouge */
+  --wf-perm-bypass:     #e0727c;  /* bypass — red */
   --wf-perm-bypass-bg:  #3a1f23;
 
   --wf-r:   6px;
@@ -110,9 +110,9 @@
 .wf-dot.off  { background: transparent; box-shadow: inset 0 0 0 1.5px var(--wf-tx-lo); }
 .wf-dot.err  { background: var(--wf-err);  box-shadow: 0 0 0 3px var(--wf-err-bg); }
 /* "backgrounding" — main turn done, background tools (workflows / sub-agents) still
-   running. GREEN, the running-family colour: this is work continuing, NOT a blue "à
-   relire" (there is nothing to review yet — the agent resumes on its own). It is the
-   SOLID green core WITHOUT the pulse (the "Vert calme" variant): the pulse is reserved
+   running. GREEN, the running-family colour: this is work continuing, NOT a blue "to
+   review" (there is nothing to review yet — the agent resumes on its own). It is the
+   SOLID green core WITHOUT the pulse (the "Calm green" variant): the pulse is reserved
    for an in-flight turn (`.wf-dot.run.pulse` / the sidebar sonar `RunPulse`), so a static
    green = "finished the turn, background still churning", a pulsing/sonar green = "actively
    generating". Calm by design — present and waiting, never demanding attention. */
@@ -272,7 +272,7 @@
 /* subtle scroll fade hint */
 .wf-fade-b { -webkit-mask-image: linear-gradient(180deg,#000 78%,transparent); mask-image: linear-gradient(180deg,#000 78%,transparent); }
 
-/* ---- activité vivante -------------------------------------- */
+/* ---- live activity ----------------------------------------- */
 @keyframes wf-spin { to { transform: rotate(360deg); } }
 .wf-spin { animation: wf-spin 3.4s linear infinite; transform-origin: 50% 50%; }
 @keyframes wf-act-in { from { opacity:0; transform: translateY(3px); } to { opacity:1; transform:none; } }
@@ -299,7 +299,7 @@
 .wf-todoseg.done { background:var(--wf-run); }
 .wf-todoseg.doing { background:var(--wf-att); }
 
-/* ---- context meter (taille du contexte, pas une progression) */
+/* ---- context meter (context size, not a progress bar) ------ */
 .wf-ctxm { display:inline-flex; align-items:center; gap:6px; color:var(--wf-tx-lo); }
 .wf-ctxm.warn { color:var(--wf-att); }
 /* Clickable variant (FlightDeck card): a button that opens the context/usage popover.
@@ -310,7 +310,7 @@
 .wf-ctx { width:38px; height:4px; border-radius:999px; background:var(--wf-panel-3); overflow:hidden; display:inline-block; flex:0 0 auto; }
 .wf-ctx > i { display:block; height:100%; background:currentColor; border-radius:999px; opacity:.85; }
 
-/* ---- ask box (la vraie question / demande) ----------------- */
+/* ---- ask box (the actual question / request) --------------- */
 .wf-ask { border:1px solid #5a4527; background:var(--wf-att-bg); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:7px; }
 .wf-ask.err { border-color:#5c3036; background:var(--wf-err-bg); }
 .wf-ask.compact { padding:9px 11px; gap:5px; }
@@ -323,7 +323,7 @@
 .wf-ask.compact .wf-ask-q li { font-size:11.5px; }
 .wf-ask-cmd { font-size:11.5px; color:#f0cd97; background:#0e0e11; border:1px solid #4a3a22; border-radius:5px; padding:6px 9px; display:block; }
 
-/* ---- menus déroulants + chips compacts --------------------- */
+/* ---- dropdown menus + compact chips ------------------------ */
 .wf-menu { position:relative; display:inline-flex; }
 .wf-chip { font:inherit; cursor:default; display:inline-flex; align-items:center; gap:5px; padding:4px 7px; border-radius:7px; border:1px solid transparent; background:transparent; color:var(--wf-tx); }
 .wf-chip:hover, .wf-chip[data-open] { background:var(--wf-panel); border-color:var(--wf-line); }
@@ -356,7 +356,7 @@
 .wf-mi-lbl-brand { display:inline-flex; align-items:center; gap:6px; }
 .wf-mi-lbl-brand .wf-claude, .wf-mi-lbl-brand .wf-codex { width:11px; height:11px; }
 .wf-mi-lbl-brand .wf-claude { color:var(--wf-accent); }
-/* "non connecté" badge in a backend section label — the account is definitively
+/* "not connected" badge in a backend section label — the account is definitively
    logged out, a model picked here WILL fail on send (composer AuthWarningBar's twin).
    Red (not amber): a hard blocker, not a soft warning. */
 .wf-mi-lbl-warn { margin-left:4px; padding:1px 6px; border-radius:99px; font-size:9px;
@@ -371,7 +371,7 @@
 .wf-mi.danger:hover { background:color-mix(in srgb, var(--wf-err) 14%, transparent); }
 .cv-ctxmenu-noicon { width:16px; flex:0 0 auto; }
 
-/* ---- jauge d'effort : slider à crans (footer composer) ----- */
+/* ---- effort gauge: stepped slider (composer footer) -------- */
 .wf-eff { min-width:236px; padding:11px 13px 13px; display:flex; flex-direction:column; gap:11px; }
 .wf-eff-top { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
 .wf-eff-lbl { font-size:9.5px; letter-spacing:.7px; text-transform:uppercase; color:var(--wf-tx-xlo); font-weight:600; }
@@ -397,7 +397,7 @@
 .wf-chip[data-ultra] .wf-ico:first-child { color:var(--wf-ultra); opacity:1; }
 .wf-chip[data-ultra] { color:var(--wf-ultra); }
 
-/* ---- chip mode de permission (Claude) + preset de sécurité (Codex) : pastille colorée ---- */
+/* ---- permission-mode chip (Claude) + security preset (Codex): coloured dot ---- */
 .wf-chip[data-perm], .wf-chip[data-codex-preset] { color:var(--pm); background:var(--pm-bg); border-color:transparent; font-weight:500; }
 .wf-chip[data-perm] .wf-ico:first-child, .wf-chip[data-codex-preset] .wf-ico:first-child { color:var(--pm); opacity:1; }
 .wf-chip[data-perm] .wf-chip-chev, .wf-chip[data-codex-preset] .wf-chip-chev { color:var(--pm); opacity:.5; }
@@ -409,14 +409,14 @@
 .wf-chip[data-perm="plan"]              { --pm:var(--wf-perm-plan);    --pm-bg:var(--wf-perm-plan-bg); }
 .wf-chip[data-perm="bypassPermissions"],
 .wf-chip[data-perm="dontAsk"]           { --pm:var(--wf-perm-bypass);  --pm-bg:var(--wf-perm-bypass-bg); }
-/* Codex presets, mapped to the same severity palette: prudent=plan(bleu), standard=default(gris),
-   auto=accept(violet), danger=bypass(rouge). */
+/* Codex presets, mapped to the same severity palette: prudent=plan(blue), standard=default(grey),
+   auto=accept(violet), danger=bypass(red). */
 .wf-chip[data-codex-preset="prudent"]   { --pm:var(--wf-perm-plan);    --pm-bg:var(--wf-perm-plan-bg); }
 .wf-chip[data-codex-preset="standard"]  { --pm:var(--wf-perm-default); --pm-bg:var(--wf-perm-default-bg); }
 .wf-chip[data-codex-preset="auto"]      { --pm:var(--wf-perm-accept);  --pm-bg:var(--wf-perm-accept-bg); }
 .wf-chip[data-codex-preset="danger"]    { --pm:var(--wf-perm-bypass);  --pm-bg:var(--wf-perm-bypass-bg); }
 
-/* pastille de mode dans le menu déroulant */
+/* mode dot in the dropdown menu */
 .cv-perm-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:8px; vertical-align:middle; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -426,7 +426,7 @@
   .wf-icon-btn:hover:not(:disabled), .wf-icon-btn:active:not(:disabled) { transform:none; }
 }
 
-/* ---- anneau de contexte ------------------------------------ */
+/* ---- context ring ------------------------------------------ */
 .wf-ring { font:inherit; cursor:default; display:inline-flex; align-items:center; gap:6px; padding:4px 7px; border-radius:7px; border:1px solid transparent; background:transparent; color:var(--wf-tx-lo); }
 .wf-ring:hover, .wf-ring[data-open] { background:var(--wf-panel); border-color:var(--wf-line); }
 .wf-ring:disabled { opacity:.4; }
@@ -453,7 +453,7 @@
 .wf-pop-sep { height:1px; margin:3px 0; background:var(--wf-line-2); }
 .wf-pop-pill { display:inline-flex; align-items:center; gap:6px; font-size:11.5px; color:var(--wf-tx-hi); }
 .wf-pop-pill > i { width:7px; height:7px; border-radius:999px; flex:0 0 auto; }
-/* Forfait header carries the "last refreshed" freshness note on the right (no manual
+/* Plan header carries the "last refreshed" freshness note on the right (no manual
    refresh button — the popover refetches on open). */
 .wf-pop-h-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .wf-pop-updated { font-size:10.5px; font-weight:400; color:var(--wf-tx-xlo); white-space:nowrap; }
@@ -477,13 +477,13 @@
 .wf-pop-staleerr { display:flex; flex-direction:column; gap:4px; }
 .wf-pop-staleerr-msg { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--wf-att); }
 
-/* ---- à relire (ready for review) --------------------------- */
+/* ---- to review (ready for review) -------------------------- */
 .wf-review { border:1px solid #314463; background:var(--wf-wait-bg); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }
 .wf-review.compact { padding:9px 11px; }
 .wf-review-h { display:flex; align-items:center; gap:7px; font-size:10.5px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; color:#9fc0f5; }
 .wf-review-t { font-size:12.5px; line-height:1.5; color:var(--wf-tx-hi); }
 .wf-review.compact .wf-review-t { font-size:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 /* "backgrounding" variant of the review card — main turn done, a background task still
-   runs. GREEN (running family), NOT the blue review: nothing to relire yet. */
+   runs. GREEN (running family), NOT the blue review: nothing to review yet. */
 .wf-review.bg { border-color:#27513f; background:var(--wf-run-bg); }
 .wf-review.bg .wf-review-h { color:#9fe0c0; }

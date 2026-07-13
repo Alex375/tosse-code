@@ -10,11 +10,11 @@ export async function pickFolder(): Promise<string | null> {
     const sel = await open({
       directory: true,
       multiple: false,
-      title: "Choisir le dossier de travail",
+      title: "Choose the working folder",
     });
     return typeof sel === "string" ? sel : null;
   }
   // Dev / browser mock — no native dialog available.
-  const p = window.prompt("Chemin du dossier de travail :", "");
+  const p = window.prompt("Working folder path:", "");
   return p && p.trim() ? p.trim() : null;
 }

@@ -170,7 +170,7 @@ pub async fn fork_thread(
         .get("thread")
         .and_then(|t| t.get("id"))
         .and_then(Value::as_str)
-        .ok_or_else(|| CodexError::Rpc("thread/fork n'a pas renvoyé d'identifiant de thread".into()))?
+        .ok_or_else(|| CodexError::Rpc("thread/fork returned no thread id".into()))?
         .to_string();
     let model = value.get("model").and_then(Value::as_str).map(str::to_string);
     Ok(CodexForkResult { thread_id: new_id, model })
@@ -193,8 +193,8 @@ pub async fn archive_thread(thread_id: &str, cwd: &Path) -> Result<(), CodexErro
 /// lets the server pick its default.
 pub async fn generate_title(description: &str, model: Option<&str>, cwd: &Path) -> Option<String> {
     let prompt = format!(
-        "Résume l'intention de l'utilisateur en un titre TRÈS court (3 à 6 mots), sans \
-         ponctuation finale et sans guillemets. Réponds UNIQUEMENT par le titre, rien d'autre.\n\n\
+        "Summarize the user's intent as a VERY short title (3 to 6 words), with no \
+         trailing punctuation and no quotes. Reply ONLY with the title, nothing else.\n\n\
          {description}"
     );
     match CodexServer::run_ephemeral_turn(prompt, model, cwd).await {
@@ -258,8 +258,8 @@ pub(super) fn image_block(path: &str, cwd: Option<&str>) -> Result<Value, String
     };
     let resolved = resolved.to_string_lossy();
     match crate::fs::read_image(&resolved) {
-        Ok(img) if img.too_large => Err(format!("Image trop volumineuse pour l'aperçu ({} o)", img.size)),
-        Ok(img) if img.data_base64.is_empty() => Err("Image vide".to_string()),
+        Ok(img) if img.too_large => Err(format!("Image too large for preview ({} B)", img.size)),
+        Ok(img) if img.data_base64.is_empty() => Err("Empty image".to_string()),
         Ok(img) => Ok(json!({
             "type": "image",
             "source": {
@@ -268,7 +268,7 @@ pub(super) fn image_block(path: &str, cwd: Option<&str>) -> Result<Value, String
                 "data": img.data_base64,
             }
         })),
-        Err(e) => Err(format!("Image non lisible ({e})")),
+        Err(e) => Err(format!("Unreadable image ({e})")),
     }
 }
 
@@ -278,7 +278,7 @@ pub(super) fn image_block(path: &str, cwd: Option<&str>) -> Result<Value, String
 pub(super) fn image_result_content(path: &str, cwd: Option<&str>) -> Value {
     match image_block(path, cwd) {
         Ok(block) => json!([block]),
-        Err(note) => json!(format!("{note} : {path}")),
+        Err(note) => json!(format!("{note}: {path}")),
     }
 }
 

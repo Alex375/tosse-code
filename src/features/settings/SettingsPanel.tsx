@@ -1,5 +1,5 @@
 // Settings modal — a left-rail tabbed panel (built to scale as more settings
-// land). Sections: Général (about), Notifications, Mises à jour, Données (the
+// land). Sections: General (about), Notifications, Updates, Data (the
 // destructive "drop all", kept while the SQL model is still in flux). The active
 // section is shared state so deep-links (e.g. the update banner) can open it
 // straight onto a given tab.
@@ -19,13 +19,13 @@ import { PageHead, SettingsGroup, ToggleRow } from "./SettingsKit";
 import styles from "./SettingsPanel.module.css";
 
 const TABS: Array<{ id: SettingsSection; label: string; icon: string }> = [
-  { id: "general", label: "Général", icon: "cog" },
-  { id: "accounts", label: "Comptes", icon: "key" },
+  { id: "general", label: "General", icon: "cog" },
+  { id: "accounts", label: "Accounts", icon: "key" },
   { id: "conversation", label: "Conversation", icon: "chat" },
-  { id: "shortcuts", label: "Raccourcis", icon: "key" },
+  { id: "shortcuts", label: "Shortcuts", icon: "key" },
   { id: "notifications", label: "Notifications", icon: "bell" },
-  { id: "updates", label: "Mises à jour", icon: "refresh" },
-  { id: "data", label: "Données", icon: "trash" },
+  { id: "updates", label: "Updates", icon: "refresh" },
+  { id: "data", label: "Data", icon: "trash" },
 ];
 
 export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -88,15 +88,15 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
           <span className={styles.headIcon}>
             <Ico name="cog" className="sm" />
           </span>
-          <span className={styles.title}>Réglages</span>
-          <button className={styles.close} onClick={close} title="Fermer" aria-label="Fermer">
+          <span className={styles.title}>Settings</span>
+          <button className={styles.close} onClick={close} title="Close" aria-label="Close">
             ✕
           </button>
         </div>
 
         <div className={styles.layout}>
-          <nav className={styles.rail} aria-label="Sections des réglages">
-            <div className={styles.railCap}>Réglages</div>
+          <nav className={styles.rail} aria-label="Settings sections">
+            <div className={styles.railCap}>Settings</div>
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -114,7 +114,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
           <div className={styles.content}>
             {section === "general" && (
               <div>
-                <PageHead title="Général" subtitle="Apparence, flotte et alertes de l'application." />
+                <PageHead title="General" subtitle="Appearance, fleet, and app alerts." />
 
                 <div className={styles.about}>
                   <span className={styles.aboutMark}>
@@ -123,7 +123,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                   <div>
                     <div className={styles.appName}>Flight Deck</div>
                     <div className={styles.appTag}>
-                      Application de bureau pour piloter Claude Code.
+                      Desktop app to drive Claude Code.
                     </div>
                   </div>
                   {version && <span className={styles.version}>v{version}</span>}
@@ -149,13 +149,12 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
             {section === "data" && (
               <div>
                 <PageHead
-                  title="Données"
-                  subtitle="Gestion des données locales de l'application."
+                  title="Data"
+                  subtitle="Manage the app's local data."
                 />
                 <div className={styles.desc}>
-                  Supprime toutes les conversations et tous les dépôts enregistrés, et vide la base
-                  locale. Les transcripts de Claude sur le disque ne sont pas touchés. Action
-                  irréversible.
+                  Deletes all saved conversations and repositories, and wipes the local database.
+                  Claude's on-disk transcripts are not touched. This cannot be undone.
                 </div>
 
                 {confirming ? (
@@ -165,14 +164,14 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                       onClick={() => void dropAll()}
                       disabled={busy}
                     >
-                      {busy ? "Suppression…" : "Confirmer la suppression"}
+                      {busy ? "Deleting…" : "Confirm deletion"}
                     </button>
                     <button
                       className={`${styles.btn} ${styles.ghost}`}
                       onClick={() => setConfirming(false)}
                       disabled={busy}
                     >
-                      Annuler
+                      Cancel
                     </button>
                   </div>
                 ) : (
@@ -180,7 +179,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                     className={`${styles.btn} ${styles.danger}`}
                     onClick={() => setConfirming(true)}
                   >
-                    Tout supprimer…
+                    Delete all…
                   </button>
                 )}
               </div>
@@ -192,8 +191,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
   );
 }
 
-/** Display prefs in the Général tab. Today: the GLOBAL DEFAULT for "clean output" — fold
- *  each round's work behind a "Travail de Claude" block so only the final message stays in
+/** Display prefs in the General tab. Today: the GLOBAL DEFAULT for "clean output" — fold
+ *  each round's work behind a "Work" block so only the final message stays in
  *  clear. This is the default applied to conversations that haven't set their own choice;
  *  each conversation's composer chip can override it (per-conversation, persisted). */
 function DisplayPrefs() {
@@ -204,75 +203,75 @@ function DisplayPrefs() {
   const clickableFileMentions = useDisplay((s) => s.clickableFileMentions);
   const set = useDisplay((s) => s.set);
   return (
-    <SettingsGroup title="Affichage" icon="list">
+    <SettingsGroup title="Display" icon="list">
       <ToggleRow
-        title="Clean output (par défaut)"
+        title="Clean output (default)"
         hint={
           <>
-            N'affiche que le message final de chaque réponse ; les outils, la réflexion et les
-            étapes intermédiaires sont repliés derrière un bloc « Work », dépliable à
-            la demande. Réglage <strong>par défaut</strong> : chaque conversation peut le surcharger
-            via son bouton « Clean output ».
+            Shows only the final message of each response; tools, thinking, and intermediate
+            steps are folded behind a "Work" block that expands on demand.{" "}
+            <strong>Default</strong> setting: each conversation can override it via its
+            "Clean output" button.
           </>
         }
         checked={cleanOutput}
         onChange={(v) => set({ cleanOutput: v })}
-        label="Clean output par défaut"
+        label="Clean output by default"
       />
       <ToggleRow
-        title="Notifications de tâche de fond"
+        title="Background task notifications"
         hint={
           <>
-            Affiche les messages <code>&lt;task-notification&gt;</code> (injectés par le CLI quand
-            une tâche de fond ou un sous-agent se termine) dans le fil. <strong>Désactivé par
-            défaut</strong> : ils encombrent la conversation, surtout au rechargement ou à l'import
-            depuis l'historique.
+            Shows <code>&lt;task-notification&gt;</code> messages (injected by the CLI when a
+            background task or sub-agent finishes) in the thread. <strong>Off by
+            default</strong>: they clutter the conversation, especially on reload or when importing
+            from history.
           </>
         }
         checked={showTaskNotifications}
         onChange={(v) => set({ showTaskNotifications: v })}
-        label="Afficher les notifications de tâche de fond"
+        label="Show background task notifications"
       />
       <ToggleRow
-        title="Aperçu du dernier message envoyé"
+        title="Preview of the last sent message"
         hint={
           <>
-            Épingle en haut de la conversation un aperçu <strong>flottant</strong> du dernier
-            message que tu as envoyé (le message en clair s'il est court, sinon un court résumé) —
-            le même que sur le Flight Deck. Un clic dessus <strong>fait défiler</strong> jusqu'au
-            message. <strong>Activé par défaut.</strong>
+            Pins a <strong>floating</strong> preview of the last message you sent to the top of the
+            conversation (the message itself if short, otherwise a brief summary) — the same one
+            shown on the Flight Deck. Clicking it <strong>scrolls</strong> to the message.{" "}
+            <strong>On by default.</strong>
           </>
         }
         checked={showLastMessagePreview}
         onChange={(v) => set({ showLastMessagePreview: v })}
-        label="Aperçu du dernier message envoyé"
+        label="Preview of the last sent message"
       />
       <ToggleRow
-        title="Contrôles sur les messages"
+        title="Message controls"
         hint={
           <>
-            Affiche les contrôles au survol des messages (les tiens et ceux de Claude) :
-            <strong> « reprendre ici »</strong> (rembobine la conversation à ce point) et
-            <strong> « forker »</strong> (branche une nouvelle conversation à ce point).{" "}
-            <strong>Activé par défaut.</strong>
+            Shows controls on hover over messages (yours and Claude's):
+            <strong> "resume from here"</strong> (rewinds the conversation to that point) and
+            <strong> "fork"</strong> (branches a new conversation from that point).{" "}
+            <strong>On by default.</strong>
           </>
         }
         checked={messageControls}
         onChange={(v) => set({ messageControls: v })}
-        label="Afficher les contrôles sur les messages"
+        label="Show message controls"
       />
       <ToggleRow
-        title="Chemins de fichiers cliquables (outils Read/Write)"
+        title="Clickable file paths (Read/Write tools)"
         hint={
           <>
-            Rend cliquables les chemins de fichiers des outils <strong>Read/Write</strong> et dans le
-            texte : un clic <strong>ouvre le fichier</strong> dans le visualiseur latéral, à la bonne
-            ligne. <strong>Activé par défaut.</strong> Désactivé → les chemins restent du texte simple.
+            Makes file paths in <strong>Read/Write</strong> tools and in text clickable: a click{" "}
+            <strong>opens the file</strong> in the side viewer, at the right line.{" "}
+            <strong>On by default.</strong> Off → paths stay plain text.
           </>
         }
         checked={clickableFileMentions}
         onChange={(v) => set({ clickableFileMentions: v })}
-        label="Rendre les chemins de fichiers cliquables"
+        label="Make file paths clickable"
       />
     </SettingsGroup>
   );
@@ -287,58 +286,58 @@ function TimingPrefs() {
   const showToolTime = useDisplay((s) => s.showToolTime);
   const set = useDisplay((s) => s.set);
   return (
-    <SettingsGroup title="Durées & temps" icon="clock">
+    <SettingsGroup title="Durations & timing" icon="clock">
       <ToggleRow
-        title="Durée des tours"
+        title="Turn duration"
         hint={
           <>
-            Sous chaque tour terminé, le <strong>temps total</strong> qu'il a pris ; et un{" "}
-            <strong>compteur en direct</strong> lorsqu'un tour dépasse 40&nbsp;s.{" "}
-            <strong>Activé par défaut.</strong>
+            Under each finished turn, the <strong>total time</strong> it took; and a{" "}
+            <strong>live counter</strong> when a turn runs past 40&nbsp;s.{" "}
+            <strong>On by default.</strong>
           </>
         }
         checked={showTurnDuration}
         onChange={(v) => set({ showTurnDuration: v })}
-        label="Afficher la durée des tours"
+        label="Show turn duration"
       />
       <ToggleRow
-        title="Temps de modèle"
+        title="Model time"
         hint={
           <>
-            À côté de la durée du tour, le <strong>temps passé côté modèle</strong>{" "}
-            (« · 18s modèle »). Visible seulement si « Durée des tours » est activé.{" "}
-            <strong>Activé par défaut.</strong>
+            Next to the turn duration, the <strong>time spent on the model side</strong>{" "}
+            ("· 18s model"). Visible only if "Turn duration" is on.{" "}
+            <strong>On by default.</strong>
           </>
         }
         checked={showModelTime}
         onChange={(v) => set({ showModelTime: v })}
-        label="Afficher le temps de modèle"
+        label="Show model time"
       />
       <ToggleRow
-        title="Temps de réflexion"
+        title="Thinking time"
         hint={
           <>
-            Sur chaque bloc de réflexion, le temps passé à réfléchir — un{" "}
-            <strong>compteur en direct</strong> pendant la réflexion, puis figé.{" "}
-            <strong>Activé par défaut.</strong>
+            On each thinking block, the time spent thinking — a{" "}
+            <strong>live counter</strong> during thinking, then frozen.{" "}
+            <strong>On by default.</strong>
           </>
         }
         checked={showThinkingTime}
         onChange={(v) => set({ showThinkingTime: v })}
-        label="Afficher le temps de réflexion"
+        label="Show thinking time"
       />
       <ToggleRow
-        title="Temps par outil"
+        title="Tool time"
         hint={
           <>
-            Sur chaque outil (Read, Bash, Edit…), sa <strong>durée d'exécution</strong> — un
-            compteur en direct pendant qu'il tourne, puis figé.{" "}
-            <strong>Activé par défaut.</strong>
+            On each tool (Read, Bash, Edit…), its <strong>run time</strong> — a
+            live counter while it runs, then frozen.{" "}
+            <strong>On by default.</strong>
           </>
         }
         checked={showToolTime}
         onChange={(v) => set({ showToolTime: v })}
-        label="Afficher le temps par outil"
+        label="Show tool time"
       />
     </SettingsGroup>
   );
@@ -354,20 +353,20 @@ function FleetBannerPrefs() {
   const conversation = useDisplay((s) => s.fleetBannerConversation);
   const set = useDisplay((s) => s.set);
   return (
-    <SettingsGroup title="Bandeau de flotte" icon="grid">
+    <SettingsGroup title="Fleet banner" icon="grid">
       <ToggleRow
-        title="Afficher dans le Flight Deck"
-        hint="Le résumé de la flotte (Running · Review · Need Attention · Idle) en haut du Flight Deck."
+        title="Show in the Flight Deck"
+        hint="The fleet readout (Running · Review · Need Attention · Idle) at the top of the Flight Deck."
         checked={flightDeck}
         onChange={(v) => set({ fleetBannerFlightDeck: v })}
-        label="Bandeau de flotte dans le Flight Deck"
+        label="Fleet banner in the Flight Deck"
       />
       <ToggleRow
-        title="Afficher dans la Conversation"
-        hint="Le même résumé, en version compacte, en bas de la barre latérale des conversations."
+        title="Show in the Conversation"
+        hint="The same readout, in a compact version, at the bottom of the conversation sidebar."
         checked={conversation}
         onChange={(v) => set({ fleetBannerConversation: v })}
-        label="Bandeau de flotte dans la Conversation"
+        label="Fleet banner in the Conversation"
       />
     </SettingsGroup>
   );
@@ -381,22 +380,22 @@ function BackgroundTaskPrefs() {
   const alertOnBackgroundBash = useDisplay((s) => s.alertOnBackgroundBash);
   const set = useDisplay((s) => s.set);
   return (
-    <SettingsGroup title="Tâches de fond" icon="term">
+    <SettingsGroup title="Background tasks" icon="term">
       <ToggleRow
-        title="Alerter pour les commandes shell de fond"
+        title="Alert for background shell commands"
         hint={
           <>
-            À la fin d'un tour, si la <strong>seule</strong> tâche de fond en cours est une commande
-            Bash lancée en arrière-plan, déclenche une notification et passe la conversation en{" "}
-            <strong>« à relire »</strong> (bleu) au lieu de l'état vert silencieux. Une fois la
-            conversation marquée comme vue, elle retourne au vert « tâche de fond » tant que la
-            commande tourne. Les sous-agents et workflows gardent l'état vert.{" "}
-            <strong>Désactivé par défaut.</strong>
+            At the end of a turn, if the <strong>only</strong> background task still running is a
+            Bash command launched in the background, fires a notification and moves the conversation
+            to <strong>"to review"</strong> (blue) instead of the silent green state. Once the
+            conversation is marked as seen, it returns to green "background task" while the command
+            runs. Sub-agents and workflows keep the green state.{" "}
+            <strong>Off by default.</strong>
           </>
         }
         checked={alertOnBackgroundBash}
         onChange={(v) => set({ alertOnBackgroundBash: v })}
-        label="Alerter pour les commandes shell de fond"
+        label="Alert for background shell commands"
       />
     </SettingsGroup>
   );

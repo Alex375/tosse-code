@@ -96,7 +96,7 @@ export function TaskOutputPopover({
       }
     } catch (e) {
       // Never swallow a thrown IPC/transport error: surface it; `finally` guarantees we
-      // never get stuck on "Chargement…".
+      // never get stuck on "Loading…".
       console.error("readTaskOutputFile threw:", e);
       setErr(String(e));
     } finally {
@@ -197,7 +197,7 @@ export function TaskOutputPopover({
             ) : null}
             <div className={styles.subtitle}>{subtitle}</div>
           </div>
-          <button className={styles.close} onClick={onClose} aria-label="Fermer" title="Fermer (Échap)">
+          <button className={styles.close} onClick={onClose} aria-label="Close" title="Close (Esc)">
             <Ico name="x" className="sm" />
           </button>
         </div>

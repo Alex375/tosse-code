@@ -44,7 +44,7 @@ export function DiffPane({ cwd, convId }: { cwd: string; convId: string }) {
       diff={q.data}
       loading={q.isLoading}
       error={q.error ? (q.error as Error).message : null}
-      emptyHint={isHistory ? "Sélectionne un fichier du commit" : "Sélectionne un fichier modifié"}
+      emptyHint={isHistory ? "Select a commit file" : "Select a changed file"}
     />
   );
 }

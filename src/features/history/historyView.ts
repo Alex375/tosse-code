@@ -83,17 +83,17 @@ export function applySearch(convs: DiskConversation[], hits: SearchHit[]): Ranke
     });
 }
 
-/** Relative French "time ago" for a Unix-ms timestamp (compact list label). */
+/** Relative "time ago" for a Unix-ms timestamp (compact list label). */
 export function timeAgo(ms: number, now: number): string {
   const diff = Math.max(0, now - ms);
   const min = Math.floor(diff / 60_000);
-  if (min < 1) return "à l'instant";
-  if (min < 60) return `il y a ${min} min`;
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
   const h = Math.floor(min / 60);
-  if (h < 24) return `il y a ${h} h`;
+  if (h < 24) return `${h} h ago`;
   const d = Math.floor(h / 24);
-  if (d < 30) return `il y a ${d} j`;
+  if (d < 30) return `${d} d ago`;
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `il y a ${mo} mois`;
-  return `il y a ${Math.floor(mo / 12)} an(s)`;
+  if (mo < 12) return `${mo} mo ago`;
+  return `${Math.floor(mo / 12)} yr ago`;
 }

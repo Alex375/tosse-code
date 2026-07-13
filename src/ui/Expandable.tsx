@@ -11,7 +11,7 @@ interface ExpandableProps {
 
 /**
  * Caps tall content at `maxHeight` and, when it overflows, clips it with a
- * bottom fade plus a "Voir plus / Voir moins" toggle. Keeps long output (Bash
+ * bottom fade plus a "Show more / Show less" toggle. Keeps long output (Bash
  * results, fenced code, …) from taking over the conversation while leaving the
  * full content one click away.
  */
@@ -42,7 +42,7 @@ export function Expandable({ children, maxHeight = 240, fadeColor }: ExpandableP
       {clamped && <div className={styles.fade} aria-hidden />}
       {overflowing && (
         <button type="button" className={styles.toggle} onClick={() => setExpanded((e) => !e)}>
-          {expanded ? "Voir moins" : "Voir plus"}
+          {expanded ? "Show less" : "Show more"}
         </button>
       )}
     </div>

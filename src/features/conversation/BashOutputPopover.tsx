@@ -37,16 +37,16 @@ export function BashOutputPopover({
       outputFile={outputFile}
       running={running}
       icon="term"
-      title={named ? name : <>$ {command ?? "commande"}</>}
+      title={named ? name : <>$ {command ?? "command"}</>}
       titleMono={!named}
       commandLine={named && command ? command : undefined}
-      subtitle={running ? "En cours…" : summary ?? "Terminé"}
-      loadingText="Chargement de la sortie…"
-      unreadableText={(e) => `Sortie illisible : ${e}`}
-      unavailableText="Sortie indisponible (conversation rouverte)."
-      emptyRunningText="La commande tourne — aucune sortie pour l'instant…"
-      emptyDoneText="Cette commande n'a produit aucune sortie."
-      unloadedText="Sortie indisponible (impossible de la charger)."
+      subtitle={running ? "Running…" : summary ?? "Completed"}
+      loadingText="Loading output…"
+      unreadableText={(e) => `Unreadable output: ${e}`}
+      unavailableText="Output unavailable (conversation reopened)."
+      emptyRunningText="The command is running — no output yet…"
+      emptyDoneText="This command produced no output."
+      unloadedText="Output unavailable (couldn't load it)."
       onClose={onClose}
     />
   );

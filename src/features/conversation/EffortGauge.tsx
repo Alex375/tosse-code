@@ -148,7 +148,7 @@ export function EffortGauge({
     <Menu up portal={portal} trigger={chip}>
       <div className="wf-eff" onClick={(e) => e.stopPropagation()}>
         <div className="wf-eff-top">
-          <span className="wf-eff-lbl">Effort de réflexion</span>
+          <span className="wf-eff-lbl">Thinking effort</span>
           <span className={"wf-eff-cur" + (ultraFx ? " ultra" : "")}>{LABELS[current]}</span>
         </div>
 
@@ -156,7 +156,7 @@ export function EffortGauge({
           ref={trackRef}
           className={"wf-eff-track" + (ultraFx ? " ultra" : "")}
           role="slider"
-          aria-label="Effort de réflexion"
+          aria-label="Thinking effort"
           aria-valuemin={0}
           aria-valuemax={last}
           aria-valuenow={sel}

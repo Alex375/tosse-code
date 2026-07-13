@@ -26,7 +26,7 @@ async spawnSession(repoPath: string, resume: string | null, model: string | null
 },
 /**
  * Whether a usable `claude` binary is installed on this machine. Powers the proactive
- * "CLI Claude introuvable" surfaces (composer bar + Réglages → Comptes) so the absence
+ * "Claude CLI not found" surfaces (composer bar + Settings → Accounts) so the absence
  * is shown BEFORE the first message fails — the twin of [`codex_available`]. Cheap: a
  * `PATH` / well-known-location file check, never a spawn.
  */
@@ -413,7 +413,7 @@ async loadSessionContext(sessionId: string) : Promise<Result<ContextFill, string
 /**
  * Rewind a conversation IN PLACE by truncating its on-disk transcript at `target_id`,
  * dropping that message (USER target) or everything after its response (ASSISTANT
- * target). Destructive by design ("reprendre à partir d'ici"): the removed turns are
+ * target). Destructive by design ("resume from here"): the removed turns are
  * gone from the transcript, so a `--resume` re-spawn reads the shortened history fresh
  * (VERIFIED: resume honours the truncation — see [`history::rewind_transcript`]).
  * 
@@ -2030,7 +2030,7 @@ warnings: string[] }
  */
 export type FileContent = { path: string; content: string; too_large: boolean; binary: boolean; size: number }
 /**
- * The result of a fork ("brancher une nouvelle conversation ici"): the freshly-written
+ * The result of a fork ("branch a new conversation here"): the freshly-written
  * branch conversation (ready to bring into the app via `reactivateDiskConversation`) and,
  * for a USER-message fork, the removed prompt text to seed the new conversation's composer.
  */
@@ -2362,14 +2362,14 @@ id: string; name: string; marketplace: string; version: string | null; descripti
 /**
  * Whether the plugin's installed pin differs from its marketplace's currently
  * downloaded pin (compared on-disk — see [`compute_update`]). Only as fresh as
- * the last `claude plugin marketplace update`; the UI's "Vérifier" button runs
+ * the last `claude plugin marketplace update`; the UI's "Check" button runs
  * that refresh then re-reads. Never a false positive: unknown pins → `false`.
  */
 update_available: boolean; 
 /**
  * The marketplace's human version when it is KNOWN and DIFFERS from the installed
  * one (for a "vX → vY" badge). `None` for sha-only updates (a new commit with the
- * same semver) — the UI falls back to a generic "Mise à jour disponible" then.
+ * same semver) — the UI falls back to a generic "Update available" then.
  */
 latest_version: string | null; 
 /**
@@ -2449,7 +2449,7 @@ added_at: number }
 export type RewindOutcome = { 
 /**
  * For a USER-message rewind, the text of the removed prompt so the composer can be
- * re-seeded with it ("revenir à ce prompt"). `None` for an assistant-message rewind
+ * re-seeded with it ("go back to this prompt"). `None` for an assistant-message rewind
  * (its response is kept; the user just continues with a new message).
  */
 removed_prompt: string | null; 
