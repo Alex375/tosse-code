@@ -7,7 +7,7 @@
 **A fast, native desktop cockpit for piloting Claude&nbsp;Code and Codex —**
 **with many agents running in parallel, in one clean tool.**
 
-[![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-000000?style=flat-square&logo=apple&logoColor=white)](#-getting-started) [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app) [![Rust](https://img.shields.io/badge/Rust-2021-DEA584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org) [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev) [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org) [![Version](https://img.shields.io/badge/version-0.28.0-2BC6F0?style=flat-square)](CHANGELOG.md) [![Status](https://img.shields.io/badge/status-active%20development-4FB477?style=flat-square)](#-roadmap)
+[![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-000000?style=flat-square&logo=apple&logoColor=white)](#-install) [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app) [![Rust](https://img.shields.io/badge/Rust-2021-DEA584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org) [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev) [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org) [![Version](https://img.shields.io/badge/version-0.28.0-2BC6F0?style=flat-square)](CHANGELOG.md) [![Status](https://img.shields.io/badge/status-active%20development-4FB477?style=flat-square)](#-roadmap)
 
 </div>
 
@@ -30,6 +30,7 @@
 - [A quick tour](#-a-quick-tour)
 - [Architecture](#-architecture)
 - [Tech stack](#-tech-stack)
+- [Install](#-install)
 - [Getting started](#-getting-started)
 - [Project layout](#-project-layout)
 - [Development](#-development)
@@ -222,9 +223,38 @@ Design principles:
 
 ---
 
+## 📥 Install
+
+Flight Deck ships as a signed **macOS** app through **GitHub Releases** — this is how you
+install and run it, no build required.
+
+1. Open the [**latest release**](https://github.com/Alex375/tosse-code/releases/latest) and
+   download the **`.dmg`** (universal — Apple Silicon &amp; Intel).
+2. Open the `.dmg` and drag **Flight Deck** into your **Applications** folder.
+3. The app is signed with a self-signed certificate but **not notarized**, so on first launch
+   macOS Gatekeeper blocks it. **Right-click the app → Open** once to get past it — or run:
+   ```bash
+   xattr -cr "/Applications/Flight Deck.app"
+   ```
+4. Make sure the **`claude`** CLI is on your `PATH` — Flight Deck drives it.
+   *(optional: the `codex` CLI to use the Codex backend.)*
+
+From then on the app **keeps itself up to date**: it checks for new signed releases on launch
+and every two hours, then relaunches once you confirm. See
+[Releases &amp; auto-update](#-releases--auto-update).
+
+> [!NOTE]
+> Fresh `.dmg` installs land as **`Flight Deck.app`**. Machines that already run an earlier
+> build keep the file name **`Tosse Code.app`** (the updater replaces it in place) while still
+> showing "Flight Deck" — same app, the bundle file name just differs.
+
+---
+
 ## 🚀 Getting started
 
-> Flight Deck targets **macOS** (the release bundle is a universal Apple Silicon + Intel app).
+> **Just want to run the app?** See [Install](#-install) above — this section is about
+> **building from source**. Flight Deck targets **macOS** (the release bundle is a universal
+> Apple Silicon + Intel app).
 
 ### Prerequisites
 
