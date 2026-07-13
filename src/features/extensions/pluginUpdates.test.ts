@@ -44,9 +44,9 @@ describe("updateBadgeLabel", () => {
     expect(updateBadgeLabel("1.0.0", "1.1.0")).toBe("v1.0.0 → v1.1.0");
   });
   it("falls back to a generic label for sha-only bumps or unknown versions", () => {
-    expect(updateBadgeLabel("1.0.0", "1.0.0")).toBe("Mise à jour dispo");
-    expect(updateBadgeLabel(null, "1.1.0")).toBe("Mise à jour dispo");
-    expect(updateBadgeLabel("1.0.0", null)).toBe("Mise à jour dispo");
+    expect(updateBadgeLabel("1.0.0", "1.0.0")).toBe("Update available");
+    expect(updateBadgeLabel(null, "1.1.0")).toBe("Update available");
+    expect(updateBadgeLabel("1.0.0", null)).toBe("Update available");
   });
 });
 

@@ -18,6 +18,7 @@ import { useToolResult } from "../../store/conversationStore";
 import type { BackgroundTask, BackgroundTaskKind } from "../../ipc/client";
 import { resolveAgentId, runIdFromResult, shortModel, taskStatusDot } from "../../agent/subagentMeta";
 import { TranscriptPopover } from "../conversation/TranscriptPopover";
+import { useIsCodex } from "../conversation/ConvMark";
 import { WorkflowDetail } from "../conversation/WorkflowDetail";
 
 const KIND_ICON: Record<BackgroundTaskKind, string> = {
@@ -29,17 +30,21 @@ const KIND_ICON: Record<BackgroundTaskKind, string> = {
 };
 
 const KIND_LABEL: Record<BackgroundTaskKind, string> = {
-  agent: "Sous-agents",
+  agent: "Sub-agents",
   workflow: "Workflows",
-  bash: "Bash (fond)",
+  bash: "Bash (background)",
   monitor: "Monitors",
-  other: "Tâches",
+  other: "Tasks",
 };
 
 const ORDER: BackgroundTaskKind[] = ["agent", "workflow", "monitor", "bash", "other"];
 
 export function BackgroundTaskBadge({ convId }: { convId: string }) {
   const tasks = useSessionTasks(convId);
+  // Phase 4.5 (Bloc C): Codex sub-agents show here too (kind `agent`), but their threads
+  // aren't routed to us — no transcript to drill into. Gate drill OFF on Codex so a row is
+  // display-only (status + name), never a click into an empty transcript.
+  const isCodex = useIsCodex(convId);
   const claudeSessionId = useConversationsStore(
     (s) => s.conversations.find((c) => c.id === convId)?.sessionId ?? null,
   );
@@ -63,7 +68,7 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
   const openedRunId =
     openTask?.kind === "workflow" ? runIdFromResult(openedResult?.content) : null;
   // Per-phase live activity for the opened workflow (else the detail's live overview shows
-  // every phase as "à venir"). The hook is unconditional, so an empty task_id is safe.
+  // every phase as "upcoming"). The hook is unconditional, so an empty task_id is safe.
   const openedLiveActivity = useWorkflowLive(convId, openTask?.task_id ?? "");
 
   // Close the popover on Escape while it's open. This popover owns Escape while open, so
@@ -122,7 +127,7 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
           ref={btnRef}
           className="ag-bgbadge"
           onClick={toggle}
-          title={`${running} tâche(s) de fond en cours`}
+          title={`${running} background task(s) running`}
         >
           <Ico name="cog" className="sm" />
           <span className="wf-mono">{running}</span>
@@ -151,7 +156,7 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
                       <span className="wf-mono ag-bgpop-n">{g.items.length}</span>
                     </div>
                     {g.items.map((t) => {
-                      const drill = t.kind === "agent" || t.kind === "workflow";
+                      const drill = !isCodex && (t.kind === "agent" || t.kind === "workflow");
                       const meta = [t.subagent_type, t.model ? shortModel(t.model) : null]
                         .filter(Boolean)
                         .join(" · ");
@@ -165,7 +170,7 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
                             setOpenTask(t);
                             setOpen(false);
                           }}
-                          title={drill ? "Ouvrir le transcript" : undefined}
+                          title={drill ? "Open transcript" : undefined}
                         >
                           <Dot s={taskStatusDot(t.status)} pulse={t.status === "running"} />
                           <span className="ag-bgpop-label">
@@ -190,7 +195,7 @@ export function BackgroundTaskBadge({ convId }: { convId: string }) {
         liveSession={convId}
         toolUseId={openTask?.tool_use_id ?? null}
         running={openTask?.status === "running"}
-        label={openTask?.label ?? "Sous-agent"}
+        label={openTask?.label ?? "Sub-agent"}
         subtitle={
           openTask
             ? [openTask.subagent_type, openTask.model ? shortModel(openTask.model) : null]

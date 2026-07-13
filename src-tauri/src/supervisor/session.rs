@@ -31,9 +31,13 @@ use super::transport::{self, SpawnConfig, Transport, TransportError};
 pub enum SessionCommand {
     /// A user turn: the typed text plus any images joined to it (sent as `image`
     /// blocks in the message `content` array). `images` is empty for a plain text turn.
+    /// `controls` carries the Codex composer controls (model / effort / approval /
+    /// sandbox / …) applied as per-turn overrides — `None` for Claude, which pushes
+    /// each control the moment it changes instead of per-turn.
     SendUser {
         text: String,
         images: Vec<transport::ImageAttachment>,
+        controls: Option<crate::supervisor::codex::CodexControls>,
     },
     AnswerPermission {
         request_id: String,
@@ -93,6 +97,12 @@ pub enum SessionCommand {
     /// enable / disable), so a running conversation applies it without a restart.
     /// Fire-and-correlate (bare-success ack; rejection surfaces as a control error).
     ReloadPlugins,
+    /// Compact the conversation's context. CODEX-ONLY: Claude compacts via the plain
+    /// `/compact` text command (a slash-command turn), so its actor treats this as a
+    /// no-op; the Codex actor issues the native `thread/compact/start` RPC (there is no
+    /// `/compact` text command on the app-server). Fire-and-forget — a failure is
+    /// surfaced by the Codex actor as a timeline notice.
+    Compact,
     /// Tear the session down. `ack`, when present, is fired by the actor ONLY after the
     /// process is fully reaped (the graceful EOF→SIGTERM→SIGKILL ladder has run), so a
     /// caller can wait for the `claude` process to ACTUALLY be gone — required before any
@@ -153,19 +163,19 @@ impl PendingControl {
     /// Human label for a surfaced control error.
     fn label(self) -> &'static str {
         match self {
-            PendingControl::GetSettings => "lecture des réglages",
-            PendingControl::SetPermissionMode(_) => "mode de permission",
-            PendingControl::SetModel => "modèle",
+            PendingControl::GetSettings => "reading settings",
+            PendingControl::SetPermissionMode(_) => "permission mode",
+            PendingControl::SetModel => "model",
             PendingControl::SetEffort => "effort",
             PendingControl::SetUltracode => "ultracode",
-            PendingControl::GenerateTitle(_) => "génération du titre",
-            PendingControl::GenerateSummary(_) => "résumé du dernier message",
-            PendingControl::Interrupt => "interruption",
-            PendingControl::StopTask => "arrêt d'une tâche de fond",
-            PendingControl::McpToggle => "activation d'un serveur MCP",
-            PendingControl::McpReconnect => "reconnexion d'un serveur MCP",
-            PendingControl::McpClearAuth => "réinitialisation de l'authentification MCP",
-            PendingControl::ReloadPlugins => "rechargement des plugins",
+            PendingControl::GenerateTitle(_) => "title generation",
+            PendingControl::GenerateSummary(_) => "last-message summary",
+            PendingControl::Interrupt => "interrupt",
+            PendingControl::StopTask => "stopping a background task",
+            PendingControl::McpToggle => "toggling an MCP server",
+            PendingControl::McpReconnect => "reconnecting an MCP server",
+            PendingControl::McpClearAuth => "resetting MCP authentication",
+            PendingControl::ReloadPlugins => "reloading plugins",
         }
     }
 }
@@ -205,18 +215,30 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    /// Send a user turn: text plus any joined images. `send_user_text` is the
-    /// text-only convenience used by internal callers and tests.
+    /// Build a handle around a raw command channel. `pub(crate)` so a sibling backend
+    /// module (`supervisor::codex`) can wrap its OWN actor's channel in a `SessionHandle`
+    /// without the private `cmd_tx` field being exposed — the handle stays "just a
+    /// bounded command channel + a stable id", identical for both backends, and all the
+    /// downstream IPC commands (send / interrupt / stop / …) drive either backend
+    /// unchanged. The Claude path uses the struct literal directly in `spawn_session`.
+    pub(crate) fn from_channel(id: String, cmd_tx: mpsc::Sender<SessionCommand>) -> Self {
+        Self { id, cmd_tx }
+    }
+
+    /// Send a user turn: text, any joined images, and (Codex only) the composer
+    /// controls applied as per-turn overrides. `send_user_text` is the text-only
+    /// convenience used by internal callers and tests.
     pub async fn send_user(
         &self,
         text: impl Into<String>,
         images: Vec<transport::ImageAttachment>,
+        controls: Option<crate::supervisor::codex::CodexControls>,
     ) -> Result<(), SessionError> {
-        self.send(SessionCommand::SendUser { text: text.into(), images }).await
+        self.send(SessionCommand::SendUser { text: text.into(), images, controls }).await
     }
 
     pub async fn send_user_text(&self, text: impl Into<String>) -> Result<(), SessionError> {
-        self.send_user(text, Vec::new()).await
+        self.send_user(text, Vec::new(), None).await
     }
 
     pub async fn answer_permission(
@@ -323,6 +345,13 @@ impl SessionHandle {
     /// running conversation applies the change without a restart. Fire-and-correlate.
     pub async fn reload_plugins(&self) -> Result<(), SessionError> {
         self.send(SessionCommand::ReloadPlugins).await
+    }
+
+    /// Compact this conversation's context (Codex: the native `thread/compact/start`
+    /// RPC; Claude: a no-op — it compacts via the `/compact` text command instead).
+    /// Fire-and-forget: a Codex failure surfaces as a timeline notice, so no reply.
+    pub async fn compact(&self) -> Result<(), SessionError> {
+        self.send(SessionCommand::Compact).await
     }
 
     /// Request teardown WITHOUT waiting for the process to be reaped (the quit path uses
@@ -526,7 +555,7 @@ impl SessionCore {
         if self.send(line) {
             self.pending_control.insert(rid, kind);
         } else {
-            self.emit_control_error(kind, "session fermée : la requête n'a pas pu être envoyée");
+            self.emit_control_error(kind, "session closed: the request could not be sent");
         }
     }
 
@@ -570,10 +599,10 @@ impl SessionCore {
         let message = describe_exit(status);
         let mut parts: Vec<String> = Vec::new();
         if let Some(r) = reader_err {
-            parts.push(format!("flux interrompu : {r}"));
+            parts.push(format!("stream interrupted: {r}"));
         }
         if let Some(w) = writer_err {
-            parts.push(format!("écriture interrompue : {w}"));
+            parts.push(format!("write interrupted: {w}"));
         }
         if let Some(code) = status.and_then(|s| s.code()) {
             parts.push(format!("exit code: {code}"));
@@ -686,7 +715,7 @@ impl SessionCore {
                 Err(resp
                     .error
                     .clone()
-                    .unwrap_or_else(|| "requête mcp_status rejetée".to_string()))
+                    .unwrap_or_else(|| "mcp_status request rejected".to_string()))
             };
             let _ = reply.send(result);
             return;
@@ -738,7 +767,7 @@ impl SessionCore {
             }
             // A rejection (invalid model, unsupported mode/effort, …) must be
             // visible. Then re-read the truth so the indicator never lies.
-            let detail = resp.error.as_deref().unwrap_or("requête de contrôle rejetée");
+            let detail = resp.error.as_deref().unwrap_or("control request rejected");
             self.emit_control_error(kind, detail);
             if !matches!(kind, PendingControl::GetSettings) {
                 self.refresh_settings();
@@ -811,7 +840,7 @@ impl SessionCore {
             // CLI may hang. Surface it so a stuck turn is at least explained.
             eprintln!("[session {}] control_request without a usable request_id", self.id);
             self.emit_error_notice("protocol_error", json!({
-                "message": "Une requête de Claude Code était illisible (sans identifiant) et n'a pas pu être traitée.",
+                "message": "A Claude Code request was unreadable (no identifier) and could not be processed.",
             }));
             return;
         };
@@ -826,7 +855,7 @@ impl SessionCore {
                 // The most likely malformed request is a `can_use_tool` — i.e. a
                 // permission prompt the user will never see. Make that visible.
                 self.emit_error_notice("protocol_error", json!({
-                    "message": "Une requête de Claude Code n'a pas pu être interprétée (une demande d'autorisation a peut-être été ignorée).",
+                    "message": "A Claude Code request could not be interpreted (a permission prompt may have been skipped).",
                     "detail": e,
                 }));
                 return;
@@ -871,7 +900,9 @@ impl SessionCore {
 
     fn on_command(&mut self, cmd: SessionCommand) {
         match cmd {
-            SessionCommand::SendUser { text, images } => {
+            // `controls` is Codex-only (per-turn overrides); the Claude backend pushes
+            // each control the moment it changes, so it's ignored here.
+            SessionCommand::SendUser { text, images, .. } => {
                 // Stamp a uuid so `--replay-user-messages` echo of THIS turn can be
                 // recognised as our own and suppressed (the UI shows it optimistically);
                 // a remote turn carries a uuid we never recorded, so it surfaces live.
@@ -884,7 +915,7 @@ impl SessionCore {
                     // The line never reached the (dead) process: say so, instead of
                     // flipping to "busy" for a turn that will never start.
                     self.emit_error_notice("send_failed", json!({
-                        "message": "Votre message n'a pas pu être transmis à Claude Code : la session s'est fermée. Renvoyez-le pour la relancer.",
+                        "message": "Your message couldn't be delivered to Claude Code: the session closed. Send it again to restart it.",
                     }));
                 }
             }
@@ -909,7 +940,7 @@ impl SessionCore {
                         self.emit(ev);
                         if !delivered {
                             self.emit_error_notice("send_failed", json!({
-                                "message": "Votre réponse à la demande d'autorisation n'a pas pu être transmise : la session s'est fermée.",
+                                "message": "Your response to the permission prompt couldn't be delivered: the session closed.",
                             }));
                         }
                     }
@@ -1047,28 +1078,32 @@ impl SessionCore {
                 // control error so the user knows the update wasn't hot-applied.
                 self.send_tracked(PendingControl::ReloadPlugins, control::reload_plugins_request);
             }
+            // Codex-only: Claude compacts via the `/compact` text command (a normal
+            // slash-command turn the composer sends directly), so there's nothing to do
+            // on the control channel here.
+            SessionCommand::Compact => {}
             // Shutdown is handled in the run loop (breaks before reaching here).
             SessionCommand::Shutdown { .. } => {}
         }
     }
 }
 
-/// Human, French summary of how the `claude` process exited (the `message` of a
+/// Human-readable summary of how the `claude` process exited (the `message` of a
 /// `process_exited` notice). The raw exit code / signal go in the detail.
 fn describe_exit(status: Option<ExitStatus>) -> String {
     let Some(status) = status else {
-        return "Le process Claude Code s'est arrêté de façon inattendue.".to_string();
+        return "The Claude Code process stopped unexpectedly.".to_string();
     };
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(sig) = status.signal() {
-            return format!("Le process Claude Code a été interrompu par un signal ({sig}).");
+            return format!("The Claude Code process was interrupted by a signal ({sig}).");
         }
     }
     match status.code() {
-        Some(0) | None => "Le process Claude Code s'est arrêté de façon inattendue.".to_string(),
-        Some(code) => format!("Le process Claude Code s'est arrêté (code {code})."),
+        Some(0) | None => "The Claude Code process stopped unexpectedly.".to_string(),
+        Some(code) => format!("The Claude Code process exited (code {code})."),
     }
 }
 
@@ -1107,6 +1142,9 @@ mod tests {
         }
         fn emit_remote_control(&self, _session: &str, state: &RemoteControlState) {
             let _ = self.tx.send(SessionEvent::RemoteControl(state.clone()));
+        }
+        fn emit_codex_plan_usage(&self, _session: &str, _usage: &crate::usage::PlanUsage) {
+            // Codex-only push; the Claude core never emits it.
         }
     }
 
@@ -1227,7 +1265,7 @@ mod tests {
     fn send_user_text_on_a_dead_session_surfaces_a_notice() {
         let (mut core, mut events, out) = test_core();
         drop(out); // the process is gone: the outbound channel is closed
-        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new(), controls: None });
         let notice = drain(&mut events).into_iter().find_map(|e| match e {
             SessionEvent::Item(ConversationItem::Notice { subtype, .. }) => Some(subtype),
             _ => None,
@@ -1309,7 +1347,7 @@ mod tests {
                 _ => None,
             })
             .expect("a permission control_change notice should be emitted");
-        assert_eq!(detail["control"], json!("Mode de permission"));
+        assert_eq!(detail["control"], json!("Permission mode"));
         assert_eq!(detail["from"], json!("Auto mode"));
         assert_eq!(detail["to"], json!("Plan mode"));
     }
@@ -1443,7 +1481,7 @@ mod tests {
     #[test]
     fn send_user_text_writes_a_user_message() {
         let (mut core, _events, mut out) = test_core();
-        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new(), controls: None });
         let lines = drain(&mut out);
         assert_eq!(lines[0]["type"], json!("user"));
         assert_eq!(lines[0]["message"]["content"][0]["text"], json!("hello"));
@@ -1458,7 +1496,7 @@ mod tests {
     #[test]
     fn own_user_message_echo_suppressed_remote_surfaced() {
         let (mut core, mut events, mut out) = test_core();
-        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new() });
+        core.on_command(SessionCommand::SendUser { text: "hello".to_string(), images: Vec::new(), controls: None });
         let uuid = drain(&mut out)[0]["uuid"].as_str().unwrap().to_string();
         let _ = drain(&mut events); // the busy state event from the send
 
@@ -1482,7 +1520,7 @@ mod tests {
         core.on_message(
             serde_json::from_value(json!({
                 "type": "user", "uuid": "remote-xyz", "isReplay": true,
-                "message": { "role": "user", "content": "depuis le téléphone" }
+                "message": { "role": "user", "content": "from the phone" }
             }))
             .unwrap(),
         );
@@ -1490,7 +1528,7 @@ mod tests {
             drain(&mut events).iter().any(|e| matches!(
                 e,
                 SessionEvent::Item(ConversationItem::UserMessage { id, text, .. })
-                    if id == "remote-xyz" && text == "depuis le téléphone"
+                    if id == "remote-xyz" && text == "from the phone"
             )),
             "a remote turn must be surfaced as a UserMessage"
         );
@@ -1503,7 +1541,7 @@ mod tests {
     fn generate_title_round_trip_emits_title_event() {
         let (mut core, mut events, mut out) = test_core();
         core.on_command(SessionCommand::GenerateTitle {
-            description: "Fixer le bug du login".to_string(),
+            description: "Fix the login bug".to_string(),
             seq: 2,
         });
 
@@ -1512,7 +1550,7 @@ mod tests {
         // The description carries the user's text (verbatim, leading) plus the appended
         // brevity hint (control.rs::TITLE_BREVITY_HINT) — see `generate_session_title_request`.
         let desc = req["request"]["description"].as_str().expect("description is a string");
-        assert!(desc.starts_with("Fixer le bug du login"), "user text leads, got: {desc:?}");
+        assert!(desc.starts_with("Fix the login bug"), "user text leads, got: {desc:?}");
         assert!(desc.contains("at most 5 words"), "brevity hint appended, got: {desc:?}");
         assert_eq!(req["request"]["persist"], json!(false));
         let rid = req["request_id"].as_str().expect("request_id").to_string();
@@ -1523,7 +1561,7 @@ mod tests {
                 "response": {
                     "subtype": "success",
                     "request_id": rid,
-                    "response": { "title": "Bug de login" }
+                    "response": { "title": "Login bug" }
                 }
             }))
             .unwrap(),
@@ -1537,7 +1575,7 @@ mod tests {
                 _ => None,
             })
             .expect("a Title event should be emitted");
-        assert_eq!(title, ("Bug de login".to_string(), 2));
+        assert_eq!(title, ("Login bug".to_string(), 2));
     }
 
     /// ACCEPTANCE (deterministic): a GenerateSummary command sends a
@@ -1548,14 +1586,14 @@ mod tests {
     fn generate_summary_round_trip_emits_summary_event() {
         let (mut core, mut events, mut out) = test_core();
         core.on_command(SessionCommand::GenerateSummary {
-            text: "Peux-tu corriger le crash au login stp".to_string(),
+            text: "Can you fix the login crash please".to_string(),
             seq: 5,
         });
 
         let sent = drain(&mut out);
         let req = find_req(&sent, "generate_session_title").expect("a generate_session_title request");
         let desc = req["request"]["description"].as_str().expect("description is a string");
-        assert!(desc.starts_with("Peux-tu corriger le crash au login stp"), "message leads, got: {desc:?}");
+        assert!(desc.starts_with("Can you fix the login crash please"), "message leads, got: {desc:?}");
         assert!(desc.contains("at most 6 words"), "summary hint appended, got: {desc:?}");
         assert_eq!(req["request"]["persist"], json!(false));
         let rid = req["request_id"].as_str().expect("request_id").to_string();
@@ -1566,7 +1604,7 @@ mod tests {
                 "response": {
                     "subtype": "success",
                     "request_id": rid,
-                    "response": { "title": "Corriger le crash login" }
+                    "response": { "title": "Fix the login crash" }
                 }
             }))
             .unwrap(),
@@ -1579,7 +1617,7 @@ mod tests {
                 _ => None,
             })
             .expect("a Summary event should be emitted");
-        assert_eq!(summary, ("Corriger le crash login".to_string(), 5));
+        assert_eq!(summary, ("Fix the login crash".to_string(), 5));
     }
 
     /// REGRESSION (no noisy error): a REJECTED generate_session_title must NOT
@@ -1587,7 +1625,7 @@ mod tests {
     #[test]
     fn rejected_title_generation_is_silent() {
         let (mut core, mut events, mut out) = test_core();
-        core.on_command(SessionCommand::GenerateTitle { description: "peu importe".to_string(), seq: 1 });
+        core.on_command(SessionCommand::GenerateTitle { description: "whatever".to_string(), seq: 1 });
         let rid = drain(&mut out)
             .into_iter()
             .find(|l| l["request"]["subtype"] == json!("generate_session_title"))
@@ -1898,7 +1936,7 @@ mod tests {
 
         handle
             .generate_title(
-                "Aide-moi à corriger le bug de connexion sur la page de login".to_string(),
+                "Help me fix the connection bug on the login page".to_string(),
                 1,
             )
             .await

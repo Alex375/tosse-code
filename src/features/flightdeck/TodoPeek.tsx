@@ -32,7 +32,7 @@ export function TodoPeek({ convId }: { convId: string }) {
         type="button"
         className="ag-todo-btn"
         onClick={() => setOpen((o) => !o)}
-        title="Voir la liste des tâches"
+        title="View the task list"
       >
         {/* Cap the pip count so a huge plan can't overflow the footer; the
             "done/total" ratio still carries the full number. */}
@@ -44,7 +44,7 @@ export function TodoPeek({ convId }: { convId: string }) {
         open={open}
         onClose={() => setOpen(false)}
         width={320}
-        title="Tâches"
+        title="Tasks"
         icon="list"
       >
         <TodoList todos={todos} />

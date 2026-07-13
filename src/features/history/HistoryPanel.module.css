@@ -237,6 +237,35 @@
   gap: 8px;
   min-width: 0;
 }
+/* Backend brand mark (Claude glyph vs OpenAI/Codex glyph) so a mixed on-disk history is
+   readable at a glance — the disk rows aren't store conversations, so this reads the
+   row's own `backend` rather than going through ConvMark's store lookup. */
+.backendBadge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.backendBadge :global(.wf-claude),
+.backendBadge :global(.wf-codex) {
+  width: 14px;
+  height: 14px;
+}
+.backendBadge :global(.wf-claude) {
+  color: var(--wf-accent);
+}
+.backendBadge :global(.wf-codex) {
+  color: var(--wf-tx-hi);
+}
+/* A slightly larger mark in the preview header, sat inline just before the title text. */
+.previewBadge {
+  margin-right: 7px;
+  vertical-align: -2px;
+}
+.previewBadge :global(.wf-claude),
+.previewBadge :global(.wf-codex) {
+  width: 16px;
+  height: 16px;
+}
 .rowTitle {
   font-weight: 600;
   font-size: 13px;

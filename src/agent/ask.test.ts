@@ -20,7 +20,7 @@ describe("classifyAsk", () => {
     const a = classifyAsk(req({ tool_name: "Bash", input: { command: "pnpm test" } }));
     expect(a).toEqual({
       kind: "permission",
-      text: "Autoriser l'exécution de la commande ?",
+      text: "Allow running the command?",
       cmd: "pnpm test",
     });
   });
@@ -41,18 +41,18 @@ describe("classifyAsk", () => {
 
   it("falls back to the tool name when nothing else is known", () => {
     const a = classifyAsk(req({ tool_name: "WebFetch", input: {} }));
-    expect(a.text).toBe("Autoriser WebFetch ?");
+    expect(a.text).toBe("Allow WebFetch?");
   });
 
   it("ignores an empty description and falls back to the file target", () => {
     // description "" is falsy, so the `||` chain must drop through to the file path.
     const a = classifyAsk(req({ tool_name: "Edit", description: "", input: { file_path: "src/y.ts" } }));
-    expect(a.text).toBe("Autoriser la modification de src/y.ts ?");
+    expect(a.text).toBe("Allow editing src/y.ts?");
   });
 
   it("falls back to the tool name for an edit with neither description nor file_path", () => {
     const a = classifyAsk(req({ tool_name: "Edit", input: {} }));
-    expect(a.text).toBe("Autoriser Edit ?");
+    expect(a.text).toBe("Allow Edit?");
   });
 });
 

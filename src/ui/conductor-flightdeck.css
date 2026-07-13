@@ -1,6 +1,6 @@
 /* conductor-flightdeck.css — the FlightDeck (agent dashboard) view.
    Cards per stream, grouped by repo, with the Fleet readout banner on top. Ported from the
-   Conductor design handoff's view-agents.css (V1 "par dépôt, cartes"). The leaf
+   Conductor design handoff's view-agents.css (V1 "by repo, cards"). The leaf
    bits (.wf-card, .wf-ask, .wf-act, .wf-ctxm, .wf-todobar, status dots/pills)
    come from the shared kit (conductor-wirekit.css); only the grid/layout lives
    here. Two adaptations vs the static artboard: the scroller really scrolls, and
@@ -39,7 +39,7 @@
 .ag-grid::-webkit-scrollbar { height:9px; }
 .ag-grid::-webkit-scrollbar-thumb { background:var(--wf-line-2); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
 .ag-grid::-webkit-scrollbar-track { background:transparent; }
-.ag-card { padding:14px; display:flex; flex-direction:column; gap:11px; }
+.ag-card { position:relative; padding:14px; display:flex; flex-direction:column; gap:11px; }
 /* The whole card body is clickable (→ opens the reply modal); the title and every
    action/badge inside handle their own click. Signal it with a pointer + a subtle
    border lift on hover, without competing with the attention/review accents. */
@@ -51,14 +51,45 @@
    the amber/blue accent on exactly the cards meant to stand out. `:not(.att):not(.rev)`
    keeps the lift for calm cards only. */
 .ag-card-clickable:not(.att):not(.rev):hover { border-color:var(--wf-line-2); }
-.ag-card.dim { opacity:.58; }
+/* The two CALM states recede together (see agent/status.ts `railState`): `dim` (off)
+   a touch more than `rest` (at rest) — the only whisper between them, alongside the dot
+   shape (hollow vs filled). Neither carries a rail. */
+.ag-card.dim { opacity:.5; }
+.ag-card.rest { opacity:.7; }
 .ag-card.rev { border-color:#314463; }
+
+/* The importance rail: a lit left edge for the states that deserve a glance. Colour comes
+   from the existing semantic tokens (no new colour) — all STATIC, no motion (a moving rail
+   was distracting). `pointer-events:none` so the 3px strip never intercepts the card's
+   open-on-click. */
+.ag-card[data-rail]::before {
+  content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+  border-radius:var(--wf-r-l) 0 0 var(--wf-r-l); pointer-events:none;
+}
+.ag-card[data-rail="run"]::before    { background:var(--wf-run); }
+.ag-card[data-rail="bg"]::before     { background:linear-gradient(var(--wf-run), #a78bfa); }
+.ag-card[data-rail="review"]::before { background:var(--wf-wait); }
+.ag-card[data-rail="att"]::before    { background:var(--wf-att); }
+.ag-card[data-rail="err"]::before    { background:var(--wf-err); }
 .ag-card-h { display:flex; align-items:center; gap:9px; }
 .ag-card-name { font:inherit; font-size:13px; font-weight:600; flex:1; min-width:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--wf-tx-hi); background:transparent; border:0; cursor:pointer; padding:0; }
 .ag-card-name:hover { text-decoration:underline; }
+/* Delete-from-card affordance (mirrors the sidebar's .cv-sess-del): a reveal-on-hover
+   × that stays danger-tinted on hover. Fixed width so revealing it shifts no layout. */
+.ag-card-del { flex:0 0 auto; width:22px; height:22px; border:0; background:transparent; color:var(--wf-tx-lo); display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease; }
+.ag-card:hover .ag-card-del, .ag-card-del:focus-visible { opacity:1; }
+.ag-card-del:hover { background:var(--wf-err-bg); color:var(--wf-err); }
 .ag-card-tags { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
 /* The reasoning-effort chip (now the interactive EffortGauge, ChipBtn) sits here next
    to the worktree chip; it carries its own .wf-chip styling. */
+/* Backend badge: which agent runs this card (Claude vs Codex/OpenAI), legible at a glance
+   in a mixed fleet — the BARE LOGO (no pill, no border) to stay minimal. Claude keeps the
+   coral mark; Codex is neutral monochrome (the OpenAI logo is black & white — a tint would
+   misread as Anthropic branding). */
+.ag-backend { display:inline-flex; align-items:center; }
+.ag-backend .wf-claude, .ag-backend .wf-codex { width:14px; height:14px; }
+.ag-backend .wf-claude { color:var(--wf-accent); }
+.ag-backend.codex .wf-codex { color:var(--wf-tx-hi); }
 /* "Last message you sent" — a few-word summary (≤6 words) of the user's latest message,
    under the tags. A small self-hugging box (not full width) with a coral "reply" arrow
    marking it as YOUR voice, distinct from the agent's activity line below. Live-only. */
@@ -76,7 +107,7 @@
 .ag-card-act { padding:9px 11px; background:var(--wf-bg-2); border:1px solid var(--wf-line); border-radius:var(--wf-r); min-height:38px; display:flex; align-items:center; }
 .ag-card-foot { display:flex; align-items:center; flex-wrap:wrap; gap:8px 13px; min-width:0; font-size:11px; color:var(--wf-tx-lo); }
 .ag-card-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:11px; border-top:1px solid var(--wf-line); }
-/* Card action buttons ("Vu" / "Répondre" / "Ouvrir") — the base .wf-btn has cursor:default
+/* Card action buttons ("Seen" / "Reply" / "Open") — the base .wf-btn has cursor:default
    and no hover/active state, so it doesn't read as clickable. Give these a clear button feel:
    pointer cursor + a light lift on hover and a quick press on click. Scoped to the card
    actions so the rest of the app's .wf-btn usage is untouched. */

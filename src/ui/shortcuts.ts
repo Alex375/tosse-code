@@ -131,7 +131,7 @@ export function isEditableTarget(el: Element | null): boolean {
 // On top of the four historical chords above (view switch / undo / sound / settings)
 // we drive a small TABLE of extra bindings from one place: the global App handler
 // matches an event against each spec and runs the mapped action, and the
-// Settings → Raccourcis page renders the same catalogue — one source of truth so a
+// Settings → Shortcuts page renders the same catalogue — one source of truth so a
 // wired shortcut and its documentation can never drift.
 
 /** The full keyboard-event shape the generic matcher inspects (a DOM
@@ -197,7 +197,7 @@ export interface ActionBinding {
  * The chords added on top of the historical ones. Letters use `key` (AZERTY-robust);
  * the conversation-navigation arrows use `code` (position-stable). These are GLOBAL
  * (they never type a character under ⌘, so they win over the editor's same chord —
- * the VS Code convention). The App handler matches each `spec`; Settings → Raccourcis
+ * the VS Code convention). The App handler matches each `spec`; Settings → Shortcuts
  * documents them via {@link SHORTCUT_GROUPS}.
  */
 export const ACTION_BINDINGS: ActionBinding[] = [
@@ -212,7 +212,7 @@ export const ACTION_BINDINGS: ActionBinding[] = [
   { action: "open-history", spec: { key: "o", shift: true }, scope: "global" },
 ];
 
-// ---- Display catalogue (Settings → Raccourcis) ------------------------------
+// ---- Display catalogue (Settings → Shortcuts) ------------------------------
 
 export interface ShortcutDoc {
   /** Human-readable chord, e.g. "⌘ L" or "⌘⌥ ↑ / ⌘⌥ ↓". */
@@ -233,53 +233,53 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     title: "Global",
     items: [
-      { keys: "⌘ 1", label: "Vue Conversation" },
-      { keys: "⌘ 2", label: "Vue Flight Deck" },
-      { keys: "⌘ N", label: "Nouvelle conversation" },
-      { keys: "⌘⌥ ↑ / ⌘⌥ ↓", label: "Conversation précédente / suivante" },
-      { keys: "⌘⇧ O", label: "Ouvrir l'historique des conversations" },
-      { keys: "⌘⇧ M", label: "Couper / rétablir le son des notifications" },
-      { keys: "⌘ ,", label: "Ouvrir les Réglages" },
-      { keys: "⌘ Z", label: "Restaurer la dernière conversation supprimée" },
+      { keys: "⌘ 1", label: "Conversation view" },
+      { keys: "⌘ 2", label: "Flight Deck view" },
+      { keys: "⌘ N", label: "New conversation" },
+      { keys: "⌘⌥ ↑ / ⌘⌥ ↓", label: "Previous / next conversation" },
+      { keys: "⌘⇧ O", label: "Open conversation history" },
+      { keys: "⌘⇧ M", label: "Mute / unmute notification sound" },
+      { keys: "⌘ ,", label: "Open Settings" },
+      { keys: "⌘ Z", label: "Restore the last deleted conversation" },
     ],
   },
   {
-    title: "Vue Conversation",
+    title: "Conversation view",
     items: [
-      { keys: "⌘ B", label: "Ouvrir / fermer l'éditeur de fichiers" },
-      { keys: "⌘ J", label: "Ouvrir / fermer le terminal intégré" },
-      { keys: "⌘⇧ G", label: "Ouvrir / fermer le panneau Git" },
-      { keys: "⌘ L", label: "Basculer le « clean output » de la conversation" },
-      { keys: "⌘ E", label: "Ouvrir les Extensions (MCP, plugins, skills, sous-agents)" },
+      { keys: "⌘ B", label: "Open / close the file editor" },
+      { keys: "⌘ J", label: "Open / close the integrated terminal" },
+      { keys: "⌘⇧ G", label: "Open / close the Git panel" },
+      { keys: "⌘ L", label: 'Toggle the conversation\'s "clean output"' },
+      { keys: "⌘ E", label: "Open Extensions (MCP, plugins, skills, sub-agents)" },
     ],
   },
   {
-    title: "Compositeur",
+    title: "Composer",
     items: [
-      { keys: "↵", label: "Envoyer le message" },
-      { keys: "⇧ ↵", label: "Retour à la ligne" },
-      { keys: "⇧ ⇥", label: "Changer le mode de permission" },
-      { keys: "↑ / ↓", label: "Rappeler le message précédent / suivant (en bord de texte)" },
-      { keys: "/", label: "Menu des commandes — ↑↓ naviguer, ↵/⇥ choisir, Échap fermer" },
+      { keys: "↵", label: "Send the message" },
+      { keys: "⇧ ↵", label: "New line" },
+      { keys: "⇧ ⇥", label: "Change the permission mode" },
+      { keys: "↑ / ↓", label: "Recall the previous / next message (at text edge)" },
+      { keys: "/", label: "Command menu — ↑↓ navigate, ↵/⇥ select, Esc close" },
     ],
   },
   {
-    title: "Éditeur",
+    title: "Editor",
     items: [
-      { keys: "⌘ S", label: "Enregistrer le fichier" },
-      { keys: "⌘ W", label: "Fermer l'onglet actif" },
-      { keys: "↵ / Échap", label: "Renommer : valider / annuler (arborescence et sidebar)" },
+      { keys: "⌘ S", label: "Save the file" },
+      { keys: "⌘ W", label: "Close the active tab" },
+      { keys: "↵ / Esc", label: "Rename: confirm / cancel (tree and sidebar)" },
     ],
   },
   {
-    title: "Git & Revue",
+    title: "Git & Review",
     items: [
-      { keys: "⌘ ↵", label: "Valider le commit (dans la zone de message)" },
-      { keys: "⌘ ↵", label: "Marquer « Vu » / envoyer une note de plan" },
+      { keys: "⌘ ↵", label: "Commit (in the message field)" },
+      { keys: "⌘ ↵", label: 'Mark "Seen" / send a plan note' },
     ],
   },
   {
-    title: "Fenêtres & popovers",
-    items: [{ keys: "Échap", label: "Fermer la fenêtre, le popover ou le menu actif" }],
+    title: "Windows & popovers",
+    items: [{ keys: "Esc", label: "Close the active window, popover, or menu" }],
   },
 ];

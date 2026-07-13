@@ -16,6 +16,7 @@ vi.mock("../ipc/client", () => {
       spawnSession: vi.fn(() => ok("session-1")),
       createWorktree: vi.fn(() => ok({ path: "/tmp/wt" })),
       loadSessionHistory: vi.fn(() => ok([])),
+      codexLoadHistory: vi.fn(() => ok([])),
       loadSessionContext: vi.fn(() => ok({ context_tokens: 0 })),
       deleteConversation: vi.fn(() => ok()),
       stopSession: vi.fn(() => ok()),
@@ -24,14 +25,19 @@ vi.mock("../ipc/client", () => {
 });
 
 import { commands } from "../ipc/client";
+import type { DiskConversation } from "../ipc/client";
 import {
   acknowledgeConversation,
+  createConversationInRepo,
   DEFAULT_CONV_NAME,
+  DEFAULT_MODEL,
   ensureConversationSession,
   loadConversationHistory,
+  reactivateDiskConversation,
   useConversationsStore,
   type Conversation,
 } from "./conversationsStore";
+import { DEFAULT_CODEX_MODEL } from "../features/conversation/models";
 import { useConversationStore } from "./conversationStore";
 
 const baseConv = (over: Partial<Conversation> = {}): Conversation => ({
@@ -50,6 +56,7 @@ const baseConv = (over: Partial<Conversation> = {}): Conversation => ({
   permissionMode: "default",
   pendingReminder: null,
   cleanOutput: null,
+  kind: "claude",
   ...over,
 });
 
@@ -143,50 +150,50 @@ describe("conversationsStore — auto title (VS Code style)", () => {
 
   it("places an optimistic placeholder then applies the generated title", () => {
     seed(baseConv({ id: "t1", name: DEFAULT_CONV_NAME }));
-    store().noteFirstMessage("t1", "Aide-moi à corriger le bug de login");
+    store().noteFirstMessage("t1", "Help me fix the login bug");
     // Optimistic placeholder (the truncated message) — no longer the default name.
     expect(convOf("t1").name).not.toBe(DEFAULT_CONV_NAME);
-    store().applyAutoTitle("t1", "Correction du bug de login", 1);
-    expect(convOf("t1").name).toBe("Correction du bug de login");
+    store().applyAutoTitle("t1", "Fix the login bug", 1);
+    expect(convOf("t1").name).toBe("Fix the login bug");
   });
 
   it("a manual rename protects against a late-arriving generated title", () => {
     seed(baseConv({ id: "t2", name: DEFAULT_CONV_NAME }));
-    store().noteFirstMessage("t2", "première question");
-    store().renameConversation("t2", "Mon titre à moi");
+    store().noteFirstMessage("t2", "first question");
+    store().renameConversation("t2", "My own title");
     // The generated title arrives AFTER the manual rename — it must be ignored.
-    store().applyAutoTitle("t2", "Titre généré", 1);
-    expect(convOf("t2").name).toBe("Mon titre à moi");
+    store().applyAutoTitle("t2", "Generated title", 1);
+    expect(convOf("t2").name).toBe("My own title");
   });
 
   it("applyAutoTitle is a no-op on a conversation that never became eligible", () => {
-    seed(baseConv({ id: "t3", name: "Titre existant" }));
-    store().applyAutoTitle("t3", "Titre généré", 1);
-    expect(convOf("t3").name).toBe("Titre existant");
+    seed(baseConv({ id: "t3", name: "Existing title" }));
+    store().applyAutoTitle("t3", "Generated title", 1);
+    expect(convOf("t3").name).toBe("Existing title");
   });
 
   it("ignores an out-of-order (stale) title response", () => {
     seed(baseConv({ id: "t4", name: DEFAULT_CONV_NAME }));
-    store().noteFirstMessage("t4", "premier");
+    store().noteFirstMessage("t4", "first");
     // The richer (seq 3) response lands first…
-    store().applyAutoTitle("t4", "Titre riche", 3);
-    expect(convOf("t4").name).toBe("Titre riche");
+    store().applyAutoTitle("t4", "Rich title", 3);
+    expect(convOf("t4").name).toBe("Rich title");
     // …then the older (seq 1, poorer-context) response arrives late — it must be dropped.
-    store().applyAutoTitle("t4", "Titre pauvre", 1);
-    expect(convOf("t4").name).toBe("Titre riche");
+    store().applyAutoTitle("t4", "Poor title", 1);
+    expect(convOf("t4").name).toBe("Rich title");
   });
 
   it("triggerAutoTitle asks the binary (with its seq) only when eligible AND live", () => {
     seed(baseConv({ id: "t5", name: DEFAULT_CONV_NAME, handle: "session-7" }));
-    store().noteFirstMessage("t5", "ma description");
-    store().triggerAutoTitle("t5", "ma description");
-    expect(commands.generateConversationTitle).toHaveBeenCalledWith("session-7", "ma description", 1);
+    store().noteFirstMessage("t5", "my description");
+    store().triggerAutoTitle("t5", "my description");
+    expect(commands.generateConversationTitle).toHaveBeenCalledWith("session-7", "my description", 1);
   });
 
   it("triggerAutoTitle is a no-op without a live session", () => {
     seed(baseConv({ id: "t6", name: DEFAULT_CONV_NAME, handle: null }));
-    store().noteFirstMessage("t6", "ma description");
-    store().triggerAutoTitle("t6", "ma description");
+    store().noteFirstMessage("t6", "my description");
+    store().triggerAutoTitle("t6", "my description");
     expect(commands.generateConversationTitle).not.toHaveBeenCalled();
   });
 
@@ -195,9 +202,9 @@ describe("conversationsStore — auto title (VS Code style)", () => {
     const s = store();
     s.noteFirstMessage("t7", "/list-tasks");
     s.triggerAutoTitle("t7", "/list-tasks");
-    s.triggerAutoTitle("t7", "fais la tâche renommage");
-    s.triggerAutoTitle("t7", "ajoute des tests");
-    s.triggerAutoTitle("t7", "et un quatrième message"); // over the cap of 3
+    s.triggerAutoTitle("t7", "do the rename task");
+    s.triggerAutoTitle("t7", "add tests");
+    s.triggerAutoTitle("t7", "and a fourth message"); // over the cap of 3
     // Capped at 3 regenerations.
     expect(commands.generateConversationTitle).toHaveBeenCalledTimes(3);
     // The 2nd generation titles from the ACCUMULATED intent (with its seq), not just
@@ -205,7 +212,7 @@ describe("conversationsStore — auto title (VS Code style)", () => {
     expect(commands.generateConversationTitle).toHaveBeenNthCalledWith(
       2,
       "session-7",
-      "/list-tasks\nfais la tâche renommage",
+      "/list-tasks\ndo the rename task",
       2,
     );
   });
@@ -357,6 +364,132 @@ describe("conversationsStore — friction-free delete + undo", () => {
   });
 });
 
+describe("conversationsStore — backend (kind) branches", () => {
+  it("setConvBackend flips kind + model on a pristine conversation and persists", () => {
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("codex");
+    expect(conv0().model).toBe("gpt-5.5");
+    expect(commands.upsertConversation).toHaveBeenCalled();
+  });
+
+  it("setConvBackend is refused once a session EVER existed (sessionId set, handle off)", () => {
+    // A restarted app: the conversation is reloaded with its persisted sessionId but no
+    // live handle. Flipping here would hand a Codex thread id to `claude --resume`
+    // (fresh empty session) and orphan the whole history — the guard must hold on
+    // sessionId alone, not just on a live handle.
+    seed(baseConv({ sessionId: "sess-1", handle: null }));
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("claude");
+    expect(conv0().model).toBe("opus");
+    expect(commands.upsertConversation).not.toHaveBeenCalled();
+  });
+
+  it("setConvBackend is refused on a live session (handle bound)", () => {
+    seed(baseConv({ handle: "session-7" }));
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("claude");
+    expect(commands.upsertConversation).not.toHaveBeenCalled();
+  });
+
+  it("setConvBackend is refused while a spawn is IN FLIGHT (no sessionId/handle yet)", async () => {
+    // Freeze the spawn mid-flight: sessionId/handle are still null, but the actor being
+    // started already reads the kind captured at send time — flipping now would persist
+    // kind=codex over a Claude session (history invisible on reload, resume broken).
+    let releaseSpawn!: (v: unknown) => void;
+    vi.mocked(commands.spawnSession).mockReturnValueOnce(
+      new Promise((res) => {
+        releaseSpawn = res;
+      }) as never,
+    );
+    const inflight = ensureConversationSession("c1");
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("claude"); // refused, not queued
+    expect(conv0().model).toBe("opus");
+    releaseSpawn({ status: "ok", data: "session-1" });
+    await inflight;
+    // Once spawned it stays refused (handle guard takes over from the spawn guard).
+    useConversationsStore.getState().setConvBackend("c1", "codex", "gpt-5.5");
+    expect(conv0().kind).toBe("claude");
+  });
+
+  it("createConversationInRepo seeds the backend's own defaults", () => {
+    // Codex: its own model + effort (a Claude alias would be rejected at thread/start).
+    const cx = createConversationInRepo("/tmp/r1", "codex");
+    const codexConv = useConversationsStore.getState().conversations.find((c) => c.id === cx)!;
+    expect(codexConv.kind).toBe("codex");
+    expect(codexConv.model).toBe("gpt-5.6-sol"); // DEFAULT_CODEX_MODEL
+    expect(codexConv.effort).toBe("xhigh"); // DEFAULT_CODEX_EFFORT
+    // Default (kind omitted) stays the pre-Codex Claude behaviour.
+    const cl = createConversationInRepo("/tmp/r1");
+    const claudeConv = useConversationsStore.getState().conversations.find((c) => c.id === cl)!;
+    expect(claudeConv.kind).toBe("claude");
+    expect(claudeConv.model).not.toBe("gpt-5.6-sol");
+  });
+
+  it("Codex model/effort changes persist but are NEVER pushed live (per-turn overrides)", () => {
+    seed(baseConv({ kind: "codex", model: "gpt-5.5", effort: "medium", handle: "session-7" }));
+    useConversationsStore.getState().setConvModel("c1", "gpt-5.4");
+    useConversationsStore.getState().setConvEffort("c1", "high");
+    expect(conv0().model).toBe("gpt-5.4"); // persisted…
+    expect(conv0().effort).toBe("high");
+    expect(commands.upsertConversation).toHaveBeenCalled();
+    // …but no live push: Codex has no set_model/set_effort channel — the values ride
+    // the next turn/start as overrides (buildCodexControls).
+    expect(commands.setModel).not.toHaveBeenCalled();
+    expect(commands.setEffortLevel).not.toHaveBeenCalled();
+  });
+
+  it("loadConversationHistory routes a Codex conversation to the rollout reader and skips the Claude context seed", async () => {
+    seed(baseConv({ id: "cx-hist", kind: "codex", sessionId: "thread-1" }));
+    const cs = useConversationStore.getState();
+    const ensureSession = vi.spyOn(cs, "ensureSession").mockImplementation(() => {});
+    const applyItem = vi.spyOn(cs, "applyItem").mockImplementation(() => {});
+    const applyContextFill = vi.spyOn(cs, "applyContextFill").mockImplementation(() => {});
+    const markSeen = vi.spyOn(cs, "markSeen").mockImplementation(() => {});
+    // Non-empty history so the loader runs past its early return, down to the seed gate.
+    vi.mocked(commands.codexLoadHistory).mockResolvedValueOnce({
+      status: "ok",
+      data: [{}],
+    } as never);
+
+    await loadConversationHistory("cx-hist");
+
+    expect(commands.codexLoadHistory).toHaveBeenCalledWith("thread-1");
+    expect(commands.loadSessionHistory).not.toHaveBeenCalled();
+    // Codex has no cold context source (its ring fills from the first live push) —
+    // the Claude transcript context seed must not run for a Codex thread id.
+    expect(commands.loadSessionContext).not.toHaveBeenCalled();
+
+    ensureSession.mockRestore();
+    applyItem.mockRestore();
+    applyContextFill.mockRestore();
+    markSeen.mockRestore();
+  });
+
+  it("loadConversationHistory seeds the context ring from the transcript for a CLAUDE conversation", async () => {
+    seed(baseConv({ id: "cl-hist", sessionId: "sess-cl" }));
+    const cs = useConversationStore.getState();
+    const ensureSession = vi.spyOn(cs, "ensureSession").mockImplementation(() => {});
+    const applyItem = vi.spyOn(cs, "applyItem").mockImplementation(() => {});
+    const applyContextFill = vi.spyOn(cs, "applyContextFill").mockImplementation(() => {});
+    const markSeen = vi.spyOn(cs, "markSeen").mockImplementation(() => {});
+    vi.mocked(commands.loadSessionHistory).mockResolvedValueOnce({
+      status: "ok",
+      data: [{}],
+    } as never);
+
+    await loadConversationHistory("cl-hist");
+
+    expect(commands.codexLoadHistory).not.toHaveBeenCalled();
+    expect(commands.loadSessionContext).toHaveBeenCalledWith("sess-cl");
+
+    ensureSession.mockRestore();
+    applyItem.mockRestore();
+    applyContextFill.mockRestore();
+    markSeen.mockRestore();
+  });
+});
+
 describe("conversationsStore — controls applied at spawn", () => {
   it("ensureConversationSession passes the persisted controls to spawn_session", async () => {
     seed(
@@ -364,8 +497,8 @@ describe("conversationsStore — controls applied at spawn", () => {
     );
     const handle = await ensureConversationSession("c1");
     expect(handle).toBe("session-1");
-    // (cwd, resume, model, effort, permissionMode, ultracode) — the conversation's
-    // own controls, NOT the old hardcoded opus/xhigh defaults.
+    // (cwd, resume, model, effort, permissionMode, ultracode, backend) — the
+    // conversation's own controls + its backend, NOT the old hardcoded defaults.
     expect(commands.spawnSession).toHaveBeenCalledWith(
       "/tmp/r1",
       null,
@@ -373,6 +506,49 @@ describe("conversationsStore — controls applied at spawn", () => {
       "high",
       "plan",
       false,
+      "claude",
     );
+  });
+});
+
+describe("reactivateDiskConversation — backend-aware", () => {
+  const diskConv = (over: Partial<DiskConversation>): DiskConversation => ({
+    session_id: "s-x",
+    cwd: "/tmp/disk-repo",
+    repo_root: "/tmp/disk-repo",
+    git_branch: null,
+    title: null,
+    excerpt: "hi",
+    mtime_ms: 100,
+    backend: "claude",
+    ...over,
+  });
+
+  beforeEach(() => {
+    // Seed a repo the disk cwd already belongs to so reactivation reuses it (the auto-add
+    // path would call the un-mocked commands.upsertRepo — not what this test exercises).
+    useConversationsStore.setState({
+      repos: [{ id: "disk-r", path: "/tmp/disk-repo", addedAt: 1 }],
+      conversations: [],
+      activeId: null,
+    });
+  });
+
+  it("brings a Codex disk row back as a Codex conversation with Codex defaults", () => {
+    const id = reactivateDiskConversation(diskConv({ session_id: "cx-1", backend: "codex" }));
+    const conv = useConversationsStore.getState().conversations.find((c) => c.id === id)!;
+    // Backend, its default model, and the resume id all come from the disk row — a Codex
+    // thread must not be reactivated as a Claude conversation (else the next message would
+    // spawn the wrong CLI and the rollout history wouldn't load).
+    expect(conv.kind).toBe("codex");
+    expect(conv.model).toBe(DEFAULT_CODEX_MODEL);
+    expect(conv.sessionId).toBe("cx-1");
+  });
+
+  it("brings a Claude disk row back as a Claude conversation with Claude defaults", () => {
+    const id = reactivateDiskConversation(diskConv({ session_id: "cl-1", backend: "claude" }));
+    const conv = useConversationsStore.getState().conversations.find((c) => c.id === id)!;
+    expect(conv.kind).toBe("claude");
+    expect(conv.model).toBe(DEFAULT_MODEL);
   });
 });

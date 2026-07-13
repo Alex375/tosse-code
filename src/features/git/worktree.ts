@@ -111,7 +111,7 @@ export function mainWorktree(worktrees: WorktreeInfo[]): WorktreeInfo | null {
 export function worktreeLabel(w: WorktreeInfo): string {
   if (w.branch) return w.branch;
   if (w.is_detached && w.head) return w.head.slice(0, 7);
-  return "détaché";
+  return "detached";
 }
 
 /** The worktree's own name = the basename of its directory (not the full path). */

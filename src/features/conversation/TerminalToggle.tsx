@@ -16,8 +16,8 @@ export function TerminalToggle() {
       className={"wf-icon-btn" + (terminalOpen ? " on" : "")}
       data-on={terminalOpen ? "" : undefined}
       onClick={toggleTerminal}
-      title={terminalOpen ? "Fermer le terminal" : "Ouvrir le terminal intégré"}
-      aria-label="Basculer le terminal intégré"
+      title={terminalOpen ? "Close the terminal" : "Open the integrated terminal"}
+      aria-label="Toggle the integrated terminal"
     >
       <Ico name="term" className="sm" />
     </button>

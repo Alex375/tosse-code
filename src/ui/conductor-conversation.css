@@ -84,7 +84,7 @@
 .cv-sess-edit { flex:1; min-width:0; font:inherit; font-size:13px; color:var(--wf-tx-hi); background:var(--wf-bg); border:1px solid var(--wf-accent); border-radius:5px; padding:4px 6px; outline:none; }
 .cv-side-foot { display:flex; align-items:center; gap:8px; padding:11px 14px; border-top:1px solid var(--wf-line); margin-top:0; }
 
-/* Running-conversation indicator ("indicateur de run plus travaillé"): a steady, softly
+/* Running-conversation indicator (a more elaborate run indicator): a steady, softly
    breathing green core emitting two staggered sonar rings. More presence than the plain
    pulsing status dot, but still cheap — only transform/opacity animate (GPU-composited),
    and it collapses to a static glowing dot under prefers-reduced-motion. Rendered by the
@@ -108,13 +108,13 @@
 
 /* Single source of truth for the conversation's content width. The thread, the
    composer (input + footer controls) and the floating bars (todo / review) all
-   centre on this same max-width so they share one visual column, à la Claude. */
+   centre on this same max-width so they share one visual column, like Claude. */
 /* position:relative → the pane is the containing block for the floating .cv-lastpin. */
 .cv-pane { --cv-max:840px; position:relative; }
 
-/* ---- pin flottant "dernier message envoyé" : épinglé en haut, par-dessus le fil ----
-   Reprend l'aperçu du Flight Deck (message court en clair / résumé Haiku). Clic → scroll
-   jusqu'au message. Fond translucide + flou pour flotter lisiblement au-dessus du fil. */
+/* ---- floating "last sent message" pin: pinned at the top, above the thread ----
+   Reuses the Flight Deck preview (short message in clear / Haiku summary). Click → scroll
+   to the message. Translucent, blurred background so it floats legibly above the thread. */
 .cv-lastpin {
   position:absolute;
   top:10px;
@@ -225,7 +225,7 @@
 .cv-skill { display:flex; }
 .cv-skill .cv-cmd { width:fit-content; max-width:100%; padding:5px 10px; border:1px solid var(--wf-line); border-radius:8px; background:var(--wf-panel-2); }
 /* Queued user message (sent while the agent was busy): dashed wait-coloured border
-   + an "en attente" tag, so it reads clearly as not-yet-processed. The tag clears
+   + a "pending" tag, so it reads clearly as not-yet-processed. The tag clears
    once the agent picks the message up (next message_started; see conversationStore). */
 .cv-user.is-queued .cv-bubble { border-color:var(--wf-wait); border-style:dashed; }
 .cv-queued-tag { display:flex; align-items:center; gap:5px; width:fit-content; margin-bottom:8px; padding:2px 8px; border-radius:6px; font-size:10px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--wf-wait); background:var(--wf-wait-bg); }
@@ -285,7 +285,7 @@
 .cv-tool-cmd:last-child { margin-bottom:0; }
 
 /* ── Grouped tool steps ──────────────────────────────────────────────────────
-   A run of consecutive tool calls collapses into one "Exécuté N étapes" section
+   A run of consecutive tool calls collapses into one "Ran N steps" section
    (claude.ai/code shape). Collapsed by default; the body lists compact step rows,
    each of which expands to its own detail (diff / output). Quiet by design so the
    transcript reads as prose + a few thin lines, not a wall of cards. */
@@ -305,7 +305,7 @@
 /* An error is flagged ONLY by the small alert glyph (.cv-steps-errico) — never a red title
    and never an auto-expand. */
 
-/* "Travail de Claude" fold (collapse-work display): the round's intermediate work behind
+/* "Claude's work" fold (collapse-work display): the round's intermediate work behind
    ONE discreet collapsible, leaving only the final message in clear. Same chrome-less
    language as a run section, a touch more present (it's the round's outer fold), and its
    body indents so the nested run sections read as contained. */
@@ -425,7 +425,7 @@
 
 .cv-q-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-top:2px; }
 
-/* Recap / "Envoi" step shown after the last question (multi-question only). */
+/* Recap / "Send" step shown after the last question (multi-question only). */
 .cv-q-recap { display:flex; flex-direction:column; gap:7px; }
 .cv-q-recap-h { display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--wf-tx-hi); font-weight:500; margin-bottom:2px; }
 .cv-q-recap-h .wf-ico { color:var(--wf-run); }
@@ -512,7 +512,7 @@
 /* Text row inside the card: no border/background of its own — the card is the box. */
 .cv-input { display:flex; align-items:center; gap:8px; padding:5px 6px; background:transparent; border:0; }
 
-/* ---- menu d'autocomplétion des slash commands (popover au-dessus du composer) ---- */
+/* ---- slash-command autocomplete menu (popover above the composer) ---- */
 /* Popover floats just above the composer card, spanning its width. */
 .cv-slash { position:absolute; left:0; right:0; bottom:calc(100% + 8px); z-index:50; background:var(--wf-panel-2); border:1px solid var(--wf-line-2); border-radius:14px; box-shadow:0 14px 36px -12px #000, 0 0 0 1px #0006; overflow:hidden; animation:cv-slash-in .12s ease-out; }
 @keyframes cv-slash-in { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
@@ -590,9 +590,9 @@
 .cv-check.doing { border-color:var(--wf-att); border-style:dashed; }
 .cv-check.todo { border-color:var(--wf-line-2); }
 
-/* ---- barre de validation "review" : carte flottante au-dessus du composer ----
-   Rend l'action "Marquer comme vu" évidente (le ✓ de la sidebar n'est qu'un
-   raccourci). Teintée selon l'état (bleu review / orange question / rouge erreur). */
+/* ---- "review" acknowledgement bar: floating card above the composer ----
+   Makes the "Mark as seen" action obvious (the sidebar ✓ is only a shortcut).
+   Tinted by state (blue review / orange question / red error). */
 .cv-reviewbar {
   flex:0 0 auto;
   display:flex;
@@ -611,8 +611,8 @@
 .cv-reviewbar[data-tone="input"]  { background:var(--wf-att-bg);  border-color:#5a4527; color:var(--wf-att); }
 .cv-reviewbar[data-tone="error"]  { background:var(--wf-err-bg);  border-color:#5c3036; color:var(--wf-err); }
 /* "backgrounding" — main turn done, a background task (workflow / sub-agent) still runs.
-   GREEN (running family), NOT the blue "à relire" tone: there is nothing to review yet.
-   Non-dismissable (no "Marquer comme vu" button), calm. */
+   GREEN (running family), NOT the blue "to review" tone: there is nothing to review yet.
+   Non-dismissable (no "Mark as seen" button), calm. */
 .cv-reviewbar[data-tone="backgrounding"] { background:var(--wf-run-bg); border-color:#27513f; color:var(--wf-run); }
 .cv-reviewbar-dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex:0 0 auto; box-shadow:0 0 0 3px color-mix(in srgb, currentColor 22%, transparent); }
 .cv-reviewbar-label { min-width:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -620,7 +620,7 @@
 .cv-reviewbar-btn:hover { background:color-mix(in srgb, currentColor 16%, transparent); }
 .cv-reviewbar-btn .wf-ico { width:14px; height:14px; }
 
-/* ---- barre de tâches (todo list de l'agent) : carte flottante au-dessus du composer ---- */
+/* ---- task bar (the agent's todo list): floating card above the composer ---- */
 .cv-todobar {
   flex:0 0 auto;
   margin:10px auto 4px;
@@ -670,6 +670,10 @@
 .cv-bgagent-stats { flex:0 0 auto; font-size:10.5px; color:var(--wf-tx-xlo); font-variant-numeric:tabular-nums; }
 .cv-bgagent-go { flex:0 0 auto; margin-left:auto; color:var(--wf-tx-xlo); opacity:0; transition:opacity .12s ease; }
 .cv-bgagent:hover .cv-bgagent-go { opacity:1; }
+/* Display-only variant: a Codex sub-agent (Phase 4.5, Bloc C) has no routed transcript to
+   drill and no per-agent stop wire, so its row is inert — no pointer, no hover affordance. */
+.cv-bgagent.static { cursor:default; }
+.cv-bgagent.static:hover { background:transparent; color:var(--wf-tx-lo); }
 
 /* The bouncing "thinking" dots for a running detached agent (mirrors the main
    thread's working indicator, scaled down). */
@@ -720,7 +724,7 @@
   color:var(--wf-accent); background:color-mix(in srgb, var(--wf-accent) 13%, transparent);
 }
 
-/* The live foreground shell command in the working indicator (registre 1): a terminal
+/* The live foreground shell command in the working indicator (register 1): a terminal
    "$ command…" line, ellipsised to one row. */
 .cv-shellrun {
   min-width:0; max-width:100%; display:inline-flex; align-items:baseline;
@@ -751,7 +755,7 @@
 .cv-todo-i.completed .cv-todo-t { text-decoration:line-through; color:var(--wf-tx-lo); opacity:.7; }
 .cv-todo-i.in_progress .cv-todo-t { color:var(--wf-tx-hi); font-weight:600; }
 
-/* En cours : le rond ambre devient un spinner qui tourne, avec un halo pulsant. */
+/* In progress: the amber ring turns into a spinning spinner, with a pulsing halo. */
 @keyframes cv-todo-spin { to { transform:rotate(1turn); } }
 @keyframes cv-todo-doing-glow {
   0%, 100% { box-shadow:0 0 0 0 transparent; }
@@ -763,8 +767,8 @@
   animation:cv-todo-spin 2.6s linear infinite, cv-todo-doing-glow 1.8s ease-in-out infinite;
 }
 
-/* Terminé : pop + onde verte + coche qui se dessine — joué UNIQUEMENT à la transition
-   (classe .just-done posée par TodoList le rendu où l'item bascule en "completed"). */
+/* Completed: pop + green ripple + a check that draws itself — played ONLY on the transition
+   (the .just-done class is set by TodoList on the render where the item flips to "completed"). */
 @keyframes cv-todo-pop {
   0%   { transform:scale(.5); }
   55%  { transform:scale(1.22); }

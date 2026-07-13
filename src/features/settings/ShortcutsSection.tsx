@@ -1,4 +1,4 @@
-// The "Raccourcis" settings tab: a read-only recap of every keyboard shortcut the
+// The "Shortcuts" settings tab: a read-only recap of every keyboard shortcut the
 // app answers to. It renders the shared SHORTCUT_GROUPS catalogue (src/ui/shortcuts.ts)
 // — the SAME source the global handler dispatches from for the new chords — so what's
 // documented here can never drift from what's wired.
@@ -17,8 +17,8 @@ export function ShortcutsSection() {
   return (
     <div>
       <PageHead
-        title="Raccourcis clavier"
-        subtitle="Les raccourcis disponibles dans l'application. Sur macOS, ⌘ est la touche Commande ; sous Windows/Linux, utilisez Ctrl à la place."
+        title="Keyboard shortcuts"
+        subtitle="The shortcuts available in the app. On macOS, ⌘ is the Command key; on Windows/Linux, use Ctrl instead."
       />
 
       {SHORTCUT_GROUPS.map((group) => (

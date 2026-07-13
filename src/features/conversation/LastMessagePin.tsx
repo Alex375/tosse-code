@@ -52,7 +52,7 @@ export function LastMessagePin({
     <button
       type="button"
       className="cv-lastpin"
-      title="Aller au dernier message envoyé"
+      title="Go to last message sent"
       onClick={(e) => {
         e.stopPropagation(); // don't trigger the pane's background click
         scrollToLastUser();

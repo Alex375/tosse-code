@@ -79,16 +79,16 @@ export function WorktreeManager() {
               setRefreshError(null);
               const r = await refetch();
               if (r.isError) {
-                setRefreshError((r.error as Error)?.message ?? "Échec du rafraîchissement.");
+                setRefreshError((r.error as Error)?.message ?? "Refresh failed.");
               }
             }}
             disabled={isFetching}
-            title="Rafraîchir"
-            aria-label="Rafraîchir"
+            title="Refresh"
+            aria-label="Refresh"
           >
             <Ico name="refresh" className={"sm" + (isFetching ? " " + styles.spin : "")} />
           </button>
-          <button className={styles.iconBtn} onClick={close} title="Fermer" aria-label="Fermer">
+          <button className={styles.iconBtn} onClick={close} title="Close" aria-label="Close">
             ✕
           </button>
         </div>
@@ -98,12 +98,12 @@ export function WorktreeManager() {
 
           {/* Worktree list */}
           {isLoading ? (
-            <div className={styles.empty}>Chargement…</div>
+            <div className={styles.empty}>Loading…</div>
           ) : isError ? (
             /not a git repository/i.test((error as Error).message) ? (
               // A plain folder, not a git repo → no worktrees. Calm, not an error.
               <div className={styles.empty}>
-                Ce dossier n'est pas un dépôt git — il n'y a pas de worktree à gérer.
+                This folder isn't a git repository — there are no worktrees to manage.
               </div>
             ) : (
               <div className={styles.error}>{(error as Error).message}</div>
@@ -123,7 +123,7 @@ export function WorktreeManager() {
                 ))}
             </div>
           ) : (
-            <div className={styles.empty}>Aucun worktree.</div>
+            <div className={styles.empty}>No worktrees.</div>
           )}
         </div>
       </div>
@@ -153,7 +153,7 @@ function WorktreeRow({
   // deletion — it's allowed, behind a loud warning in the confirm dialog.
   const canDelete = !worktree.is_main;
   const disabledReason = worktree.is_main
-    ? "Le worktree principal ne peut pas être supprimé."
+    ? "The main worktree cannot be removed."
     : undefined;
 
   async function confirmDelete() {
@@ -196,26 +196,26 @@ function WorktreeRow({
           <Ico name="folder" className="sm" />
           {worktreeName(worktree)}
         </span>
-        <span className={styles.branchTag} title={`Branche checkout : ${worktreeLabel(worktree)}`}>
+        <span className={styles.branchTag} title={`Checked-out branch: ${worktreeLabel(worktree)}`}>
           <Ico name="branch" className="sm" />
           {worktreeLabel(worktree)}
         </span>
-        {worktree.is_main ? <span className={`${styles.tag} ${styles.tagMain}`}>principal</span> : null}
-        {worktree.is_locked ? <span className={styles.tag}>verrouillé</span> : null}
-        {worktree.is_detached ? <span className={styles.tag}>détaché</span> : null}
+        {worktree.is_main ? <span className={`${styles.tag} ${styles.tagMain}`}>main</span> : null}
+        {worktree.is_locked ? <span className={styles.tag}>locked</span> : null}
+        {worktree.is_detached ? <span className={styles.tag}>detached</span> : null}
         <span className={styles.spacer} />
         {/* git status — error is surfaced (never shown as a neutral "—"). */}
         {statusError ? (
           <span className={styles.statusErr} title={(statusErr as Error)?.message}>
-            statut indisponible
+            status unavailable
           </span>
         ) : status ? (
           dirty ? (
             <span className={styles.dirty}>
-              {status.changed_files} modif.{status.untracked ? " · non suivis" : ""}
+              {status.changed_files} changed{status.untracked ? " · untracked" : ""}
             </span>
           ) : (
-            <span className={styles.clean}>propre</span>
+            <span className={styles.clean}>clean</span>
           )
         ) : (
           <span className={styles.muted}>…</span>
@@ -229,13 +229,13 @@ function WorktreeRow({
       <div className={styles.meta}>
         <span>
           {convs.length === 0
-            ? "aucune conversation"
+            ? "no conversations"
             : `${convs.length} conversation${convs.length > 1 ? "s" : ""}`}
         </span>
         {liveHere ? (
           <span className={styles.live}>
             <span className={styles.dot} />
-            session active
+            active session
           </span>
         ) : null}
       </div>
@@ -244,7 +244,7 @@ function WorktreeRow({
         <button
           className={styles.btn}
           onClick={onOpenConversation}
-          title="Démarrer une conversation dans ce worktree"
+          title="Start a conversation in this worktree"
         >
           + conversation
         </button>
@@ -255,7 +255,7 @@ function WorktreeRow({
           title={disabledReason}
           onClick={() => setConfirming(true)}
         >
-          Supprimer
+          Delete
         </button>
       </div>
 
@@ -267,30 +267,33 @@ function WorktreeRow({
         open={confirming}
         danger
         busy={deleting || remove.isPending}
-        title={`Supprimer le worktree « ${worktreeLabel(worktree)} » ?`}
-        confirmLabel={liveHere ? "Supprimer quand même" : dirty ? "Forcer la suppression" : "Supprimer"}
+        title={`Delete worktree "${worktreeLabel(worktree)}"?`}
+        confirmLabel={liveHere ? "Delete anyway" : dirty ? "Force delete" : "Delete"}
         onCancel={() => setConfirming(false)}
         onConfirm={confirmDelete}
       >
         {liveHere ? (
           <div className={styles.dangerBox}>
-            ⚠️ DANGER — {convs.filter((c) => c.handle != null).length} session
-            {convs.filter((c) => c.handle != null).length > 1 ? "s" : ""} Claude{" "}
-            <strong>active{convs.filter((c) => c.handle != null).length > 1 ? "s" : ""}</strong>{" "}
-            tourne{convs.filter((c) => c.handle != null).length > 1 ? "nt" : ""} dans ce worktree
-            (peut-être en train d'écrire). Les supprimer maintenant va{" "}
-            <strong>arrêter ces sessions</strong> et peut faire <strong>perdre le travail en
-            cours</strong>.
+            ⚠️ DANGER — {convs.filter((c) => c.handle != null).length}{" "}
+            <strong>active</strong> Claude session
+            {convs.filter((c) => c.handle != null).length > 1 ? "s" : ""}{" "}
+            {convs.filter((c) => c.handle != null).length > 1 ? "are" : "is"} running in this
+            worktree (possibly mid-write). Removing{" "}
+            {convs.filter((c) => c.handle != null).length > 1 ? "them" : "it"} now will{" "}
+            <strong>
+              stop {convs.filter((c) => c.handle != null).length > 1 ? "these sessions" : "this session"}
+            </strong>{" "}
+            and may <strong>lose in-progress work</strong>.
           </div>
         ) : null}
-        Le dossier <span className="wf-mono">{worktree.path}</span> sera supprimé. La branche{" "}
-        <span className="wf-mono">{worktreeLabel(worktree)}</span> est conservée (seul le worktree
-        est retiré).
+        The folder <span className="wf-mono">{worktree.path}</span> will be deleted. The branch{" "}
+        <span className="wf-mono">{worktreeLabel(worktree)}</span> is kept (only the worktree is
+        removed).
         {convs.length > 0
-          ? ` ⚠️ ${convs.length} conversation${convs.length > 1 ? "s" : ""} y ${convs.length > 1 ? "sont rattachées et perdront" : "est rattachée et perdra"} son dossier de travail (tu pourras les relancer, mais dans l'arbre principal).`
+          ? ` ⚠️ ${convs.length} conversation${convs.length > 1 ? "s" : ""} ${convs.length > 1 ? "are attached to it and will lose their" : "is attached to it and will lose its"} working directory (you can restart ${convs.length > 1 ? "them" : "it"}, but in the main tree).`
           : ""}
         {dirty
-          ? " ⚠️ Ce worktree a des modifications non commitées qui seront définitivement perdues."
+          ? " ⚠️ This worktree has uncommitted changes that will be permanently lost."
           : ""}
       </ConfirmDialog>
     </div>

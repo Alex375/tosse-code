@@ -18,14 +18,14 @@ export type MarkdownMode = "classic" | "warm" | "minimal";
 export interface DisplayPrefs {
   /** The GLOBAL DEFAULT for "clean output" — folding an assistant response's intermediate
    *  work (tool runs, thinking, in-between narration, sub-agents) into ONE collapsible
-   *  "Travail de Claude — N étapes" block, so only the response's CONCLUDING message stays
+   *  "Claude's work — N steps" block, so only the response's CONCLUDING message stays
    *  in clear. Per response, not per app: each response keeps its own block + concluding
    *  message. When a response spans several turns, only its LAST message stays in clear.
    *  See ConductorThread/CleanBlocks.
    *
    *  This is the DEFAULT applied to any conversation that has not set its OWN preference:
    *  clean output is a per-conversation setting (persisted in SQLite as `Conversation.cleanOutput`,
-   *  a tristate where null = "inherit this default"). The Settings → Général toggle writes THIS
+   *  a tristate where null = "inherit this default"). The Settings → General toggle writes THIS
    *  default; the composer chip writes the current conversation's explicit override. The
    *  effective value for a conversation is resolved by {@link useEffectiveCleanOutput}. */
   cleanOutput: boolean;
@@ -36,11 +36,11 @@ export interface DisplayPrefs {
 
   /** Show the "Fleet readout" banner (the adaptive "N Running · N Review · …" stage
    *  counts across the whole fleet) at the TOP of the FlightDeck. On by default. Set
-   *  from Settings → Général. Independent of {@link fleetBannerConversation}. */
+   *  from Settings → General. Independent of {@link fleetBannerConversation}. */
   fleetBannerFlightDeck: boolean;
 
   /** Show the compact "Fleet readout" box at the BOTTOM of the conversation sidebar.
-   *  On by default. Set from Settings → Général. Independent of
+   *  On by default. Set from Settings → General. Independent of
    *  {@link fleetBannerFlightDeck}. */
   fleetBannerConversation: boolean;
 
@@ -57,8 +57,8 @@ export interface DisplayPrefs {
    *  default. Read by {@link LastMessagePin}. */
   showLastMessagePreview: boolean;
 
-  /** Show the hover controls on conversation messages — "reprendre à partir d'ici" (rewind
-   *  the conversation in place) and "forker" (branch a new conversation at this message),
+  /** Show the hover controls on conversation messages — "resume from here" (rewind
+   *  the conversation in place) and "fork" (branch a new conversation at this message),
    *  offered on both the user's and Claude's messages. ON by default. Off → messages have no
    *  hover controls. Read by {@link MessageActions} (via the conversation thread). */
   messageControls: boolean;
@@ -74,7 +74,7 @@ export interface DisplayPrefs {
    *  ON by default. Off → neither is rendered. */
   showTurnDuration: boolean;
 
-  /** Show the "· N s de modèle" breakdown (`result.duration_api_ms`) next to the turn's
+  /** Show the "· N s of model" breakdown (`result.duration_api_ms`) next to the turn's
    *  total in the footer. Rides the footer, so only visible when {@link showTurnDuration} is
    *  also on. ON by default. Read by {@link TurnResultRow}. */
   showModelTime: boolean;
@@ -92,7 +92,7 @@ export interface DisplayPrefs {
    *  Bash command. OFF by default (the calm green `backgrounding` state — no ping — applies to
    *  every background tool, the shipped behaviour). ON adds a ONE-TIME alert FOR BASH COMMANDS
    *  ONLY: a turn that finishes while a background Bash command is the sole remaining background
-   *  task fires the "done" notification and surfaces the blue "à relire" (`review`) state instead
+   *  task fires the "done" notification and surfaces the blue "to review" (`review`) state instead
    *  of silently going green. It is a one-shot "go look": as soon as the user marks the turn seen,
    *  the conversation falls back to today's green `backgrounding` while the Bash keeps running.
    *  Scope is strict: the moment any non-Bash background work (sub-agent / workflow / Monitor) is
@@ -103,7 +103,7 @@ export interface DisplayPrefs {
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
-// (Settings → Général, or the composer chip) when they want the condensed reading view.
+// (Settings → General, or the composer chip) when they want the condensed reading view.
 // markdownMode defaults to `warm` — the on-brand, cleaner look (the whole point of the
 // feature); users can switch to `minimal` or back to `classic` in Settings → Conversation.
 const DEFAULTS: DisplayPrefs = {

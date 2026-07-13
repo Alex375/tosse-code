@@ -15,7 +15,10 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { events } from "./client";
 import type {
+  AccountLoginEvent,
+  SessionCodexPlanUsageEvent,
   SessionCommandsEvent,
+  SessionExtensionsChangedEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionRemoteControlEvent,
@@ -36,8 +39,10 @@ import { useDisplay } from "../store/display";
 import { agentStatusForEntry } from "../agent/useAgentStatus";
 import { useCommandsStore } from "../store/commandsStore";
 import { useRemoteControlStore } from "../store/remoteControl";
+import { useCodexPlanUsageStore } from "../store/codexPlanUsage";
 import { useLastMessageSummaryStore } from "../store/lastMessageSummary";
 import { setCachedWindow } from "../store/contextWindowCache";
+import { useAccountLoginStore } from "../store/accountLogin";
 import { dispatchAgentNotification } from "../notifications/notify";
 import { agentEventFor } from "../notifications/transition";
 import { syncReminderFromLive } from "../agent/reminderSync";
@@ -166,7 +171,7 @@ export function useGlobalSessionEvents(): void {
           .getState()
           .addErrorTurn(
             activeId,
-            `La connexion au flux d'événements (${name}) a échoué — les mises à jour en direct peuvent ne pas s'afficher. Redémarre l'application.`,
+            `The connection to the event stream (${name}) failed — live updates may not appear. Restart the app.`,
             message,
           );
       }
@@ -370,8 +375,49 @@ export function useGlobalSessionEvents(): void {
       if (payload.state.status === "error" && prev !== "error") {
         useConversationStore
           .getState()
-          .addErrorTurn(convId, `Remote control : ${payload.state.error ?? "le bridge a échoué"}`);
+          .addErrorTurn(convId, `Remote control: ${payload.state.error ?? "the bridge failed"}`);
       }
+    }
+
+    // Codex subscription rate-limit % push. ACCOUNT-global: it writes the ONE shared
+    // Codex plan store (never keyed by conversation, never merged with Claude's), so we
+    // ignore which session surfaced it. Sparse windows are merged inside the store.
+    function onCodexPlanUsage(payload: SessionCodexPlanUsageEvent) {
+      useCodexPlanUsageStore.getState().set(payload.usage);
+    }
+
+    // Extensions v2: the live Codex session noticed its inventory changed
+    // (skills/changed, mcpServer/startupStatus/updated, account/updated). Pure
+    // INVALIDATION — the payload carries no data; the affected queries refetch through
+    // the normal whitelisted read commands. Broadcast to every actor by the shared
+    // server, so several sessions may re-emit the same push: invalidation is idempotent.
+    function onExtensionsChanged(payload: SessionExtensionsChangedEvent) {
+      switch (payload.area) {
+        case "skills":
+          void queryClient.invalidateQueries({ queryKey: ["codex-extensions"] });
+          void queryClient.invalidateQueries({ queryKey: ["codex-plugins"] });
+          void queryClient.invalidateQueries({ queryKey: ["codex-hooks"] });
+          break;
+        case "mcp":
+          void queryClient.invalidateQueries({ queryKey: ["mcp-status"] });
+          void queryClient.invalidateQueries({ queryKey: ["codex-extensions"] });
+          break;
+        case "accounts":
+          void queryClient.invalidateQueries({ queryKey: ["account-status"] });
+          break;
+      }
+    }
+
+    // An in-app account login flow finished (today: the async Codex OAuth flow).
+    // Refresh the account panels; the Accounts tab (when open) also listens to show
+    // the outcome inline. Stash a FAILURE reason here (always-mounted) so it survives the
+    // panel being closed when the async outcome lands — otherwise the reason is lost and the
+    // reopened panel only shows "Not connected".
+    function onAccountLogin(payload: AccountLoginEvent) {
+      useAccountLoginStore
+        .getState()
+        .recordOutcome(payload.backend, payload.success, payload.error);
+      void queryClient.invalidateQueries({ queryKey: ["account-status"] });
     }
 
     function onCommands(payload: SessionCommandsEvent) {
@@ -405,7 +451,7 @@ export function useGlobalSessionEvents(): void {
       if (seenFailedTasks.has(task.task_id)) return; // re-emitted per transition
       seenFailedTasks.add(task.task_id);
       ensureOnce(session);
-      const label = task.label ? ` : ${task.label}` : "";
+      const label = task.label ? `: ${task.label}` : "";
       const detailParts: string[] = [];
       if (task.summary) detailParts.push(task.summary);
       if (task.output_file) detailParts.push(`output: ${task.output_file}`);
@@ -413,7 +459,7 @@ export function useGlobalSessionEvents(): void {
         .getState()
         .addErrorTurn(
           session,
-          `Une tâche de fond a échoué${label}.`,
+          `A background task failed${label}.`,
           detailParts.length ? detailParts.join("\n") : null,
         );
     }
@@ -425,7 +471,7 @@ export function useGlobalSessionEvents(): void {
     events.sessionStateEvent
       .listen((e) => { if (!disposed) onState(e.payload); })
       .then((un) => unlisteners.push(un))
-      .catch((e) => onAttachError("état", e));
+      .catch((e) => onAttachError("state", e));
     events.sessionPermissionEvent
       .listen((e) => { if (!disposed) onPermission(e.payload); })
       .then((un) => unlisteners.push(un))
@@ -433,23 +479,35 @@ export function useGlobalSessionEvents(): void {
     events.sessionCommandsEvent
       .listen((e) => { if (!disposed) onCommands(e.payload); })
       .then((un) => unlisteners.push(un))
-      .catch((e) => onAttachError("commandes", e));
+      .catch((e) => onAttachError("commands", e));
     events.sessionTitleEvent
       .listen((e) => { if (!disposed) onTitle(e.payload); })
       .then((un) => unlisteners.push(un))
-      .catch((e) => onAttachError("titres", e));
+      .catch((e) => onAttachError("titles", e));
     events.sessionSummaryEvent
       .listen((e) => { if (!disposed) onSummary(e.payload); })
       .then((un) => unlisteners.push(un))
-      .catch((e) => onAttachError("résumés", e));
+      .catch((e) => onAttachError("summaries", e));
     events.sessionTaskEvent
       .listen((e) => { if (!disposed) onTask(e.payload); })
       .then((un) => unlisteners.push(un))
-      .catch((e) => onAttachError("tâches", e));
+      .catch((e) => onAttachError("tasks", e));
     events.sessionRemoteControlEvent
       .listen((e) => { if (!disposed) onRemote(e.payload); })
       .then((un) => unlisteners.push(un))
       .catch((e) => onAttachError("remote control", e));
+    events.sessionCodexPlanUsageEvent
+      .listen((e) => { if (!disposed) onCodexPlanUsage(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("Codex usage", e));
+    events.sessionExtensionsChangedEvent
+      .listen((e) => { if (!disposed) onExtensionsChanged(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("extensions", e));
+    events.accountLoginEvent
+      .listen((e) => { if (!disposed) onAccountLogin(e.payload); })
+      .then((un) => unlisteners.push(un))
+      .catch((e) => onAttachError("accounts", e));
 
     return () => {
       disposed = true;

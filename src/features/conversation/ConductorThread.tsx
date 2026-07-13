@@ -35,7 +35,8 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { useBackgroundTasksStore, useTaskByToolUse, useRunningTaskCount } from "../../store/backgroundTasksStore";
 import { fmtDuration, isBackgroundAgentInput, shortModel } from "../../agent/subagentMeta";
 import { fmtTokens } from "../../store/contextData";
-import { Avatar, ClaudeMark, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
+import { Avatar, Dot, Ico, UserMark, type StreamState } from "../../ui/kit";
+import { AiAvatar } from "./ConvMark";
 import { useNow } from "../../ui/useNow";
 import { QuestionnaireAsk } from "./QuestionnaireAsk";
 import { PlanCard } from "./PlanCard";
@@ -62,6 +63,7 @@ import { ClaudeWorkBlock, LiveToolStep, ToolSection } from "./ToolSection";
 import { SkillChip, UserText } from "./userText";
 import { parseSpecialMessage } from "./specialMessage";
 import { SpecialMessageCard } from "./SpecialMessageCard";
+import { ErrorBlock, NoticeBlock } from "./noticeView";
 import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
 import { WorkflowCard } from "./WorkflowCard";
@@ -93,8 +95,8 @@ function promptMatchKey(text: string): string {
  * no background), on both the user's and Claude's messages. Revealed on hover of the parent
  * `.cv-msg` (see conductor-conversation.css). Two actions, each gated INDEPENDENTLY by the
  * caller (the handler is `undefined` → its icon doesn't render):
- *  - rewind ("reprendre ici"): rewind the conversation IN PLACE (destructive, confirmed);
- *  - fork ("forker ici"): branch a NEW conversation at this message (non-destructive).
+ *  - rewind ("resume here"): rewind the conversation IN PLACE (destructive, confirmed);
+ *  - fork ("fork here"): branch a NEW conversation at this message (non-destructive).
  * Both are hidden entirely when the `messageControls` pref is off or the agent is busy.
  */
 function MessageActions({
@@ -114,8 +116,8 @@ function MessageActions({
         <button
           type="button"
           className="cv-msg-action"
-          title="Reprendre la conversation à partir d'ici (rembobiner)"
-          aria-label="Reprendre la conversation à partir d'ici"
+          title="Resume the conversation from here (rewind)"
+          aria-label="Resume the conversation from here"
           onClick={onRewind}
         >
           <Ico name="restart" />
@@ -125,8 +127,8 @@ function MessageActions({
         <button
           type="button"
           className={"cv-msg-action" + (forkBusy ? " is-busy" : "")}
-          title="Forker une nouvelle conversation à partir d'ici"
-          aria-label="Forker une nouvelle conversation à partir d'ici"
+          title="Fork a new conversation from here"
+          aria-label="Fork a new conversation from here"
           onClick={onFork}
           disabled={forkBusy}
         >
@@ -164,9 +166,9 @@ export function MsgUser({
       <Avatar user><UserMark /></Avatar>
       <div className="cv-bubble">
         {queued ? (
-          <span className="cv-queued-tag" title="Envoyé pendant que l'agent travaille — sera traité en cours de route">
+          <span className="cv-queued-tag" title="Sent while the agent is working — will be handled along the way">
             <Ico name="clock" />
-            en attente
+            pending
           </span>
         ) : null}
         {images && images.length ? (
@@ -176,7 +178,7 @@ export function MsgUser({
                 key={i}
                 className="cv-user-image"
                 src={imageDataUrl(img)}
-                alt={img.name ?? "image jointe"}
+                alt={img.name ?? "attached image"}
                 title={img.name}
               />
             ))}
@@ -206,7 +208,7 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
   const special = text.trim() ? parseSpecialMessage(text) : null;
   if (special) return <SpecialMessageCard data={special} />;
   // Mirror MsgUser's affordance: while the message is still QUEUED (not yet delivered to the
-  // CLI) show "en attente", switching to "Message envoyé" once the badge clears on delivery.
+  // CLI) show "pending", switching to "Message sent" once the badge clears on delivery.
   const queued = turn?.queued ?? false;
   return (
     <div className={styles.injectedMsg}>
@@ -214,12 +216,12 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
         className={styles.injectedMsgTag}
         title={
           queued
-            ? "Envoyé pendant que l'agent travaille — sera traité en cours de route"
+            ? "Sent while the agent is working — will be handled along the way"
             : undefined
         }
       >
         <Ico name="clock" className="sm" />
-        {queued ? "en attente" : "Message envoyé"}
+        {queued ? "pending" : "Message sent"}
       </span>
       <div className={styles.injectedMsgBody}>
         {hasImages ? (
@@ -229,7 +231,7 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
                 key={i}
                 className="cv-user-image"
                 src={imageDataUrl(img)}
-                alt={img.name ?? "image jointe"}
+                alt={img.name ?? "attached image"}
                 title={img.name}
               />
             ))}
@@ -241,128 +243,19 @@ function InlineUserMarker({ session, turnId }: { session: string; turnId: string
   );
 }
 
-/** The single, consistent way an error shows in the thread: a red `role=alert`
- *  bubble with an optional bold heading, a main message, and a collapsed
- *  "Détails techniques" disclosure for the raw payload (stderr / exit code / raw
- *  line) so the detail is one click away without polluting the stream. Used by
- *  client errors (MsgError), core error notices (NoticeRow) and failed turns
- *  (TurnResultRow) so they never diverge. */
-function ErrorBlock({
-  heading,
-  children,
-  detail,
-}: {
-  heading?: ReactNode;
-  children?: ReactNode;
-  /** Raw technical detail, hidden behind a disclosure (collapsed by default). */
-  detail?: string | null;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className={styles.errorBubble} role="alert">
-      <Ico name="alert" className={"sm " + styles.errorBubbleIco} />
-      <div className={styles.errorBody}>
-        {heading ? <div className={styles.errorHeading}>{heading}</div> : null}
-        {children ? <div className={styles.errorText}>{children}</div> : null}
-        {detail ? (
-          <>
-            <button
-              type="button"
-              className={styles.errorToggle}
-              onClick={() => setOpen((o) => !o)}
-            >
-              {open ? "Masquer le détail" : "Détails techniques"}
-            </button>
-            {open ? <pre className={styles.errorDetail}>{detail}</pre> : null}
-          </>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 function MsgError({ session, errorId }: { session: string; errorId: string }) {
   const err = useError(session, errorId);
   if (!err) return null;
   return <ErrorBlock detail={err.detail}>{err.message}</ErrorBlock>;
 }
 
-/** French heading for each error-bearing notice subtype the core can emit. Any
- *  subtype listed here (plus the generic `error`) renders as a visible error
- *  bubble; subtypes absent from this map stay quiet (e.g. `control_change`). This
- *  is the front half of the "zero silent error" contract: a layer surfaces an
- *  error by emitting `Notice{subtype, detail:{message, detail?}}` and it shows up
- *  here with no extra plumbing. */
-const NOTICE_ERROR_HEADINGS: Record<string, string> = {
-  process_exited: "La session Claude Code s'est arrêtée de façon inattendue",
-  session_crashed: "La session Claude Code a planté",
-  send_failed: "Message non transmis à Claude Code",
-  protocol_error: "Erreur de protocole",
-  permission_error: "Demande d'autorisation illisible",
-  task_failed: "Une tâche de fond a échoué",
-  history_error: "Problème de restauration de l'historique",
-};
-
-/** Pull a human-readable detail string out of a notice's raw `detail` payload, for
- *  the collapsed "Détails techniques" disclosure. Prefers explicit `detail`, then
- *  any technical fields (stderr / exit code), else the whole payload as JSON. */
-function noticeDetailText(d: Record<string, JsonValue> | null): string | null {
-  if (!d) return null;
-  if (typeof d.detail === "string" && d.detail.trim()) return d.detail;
-  const lines: string[] = [];
-  if (typeof d.stderr === "string" && d.stderr.trim()) lines.push(d.stderr.trimEnd());
-  if (d.exit_code != null) lines.push(`exit code: ${String(d.exit_code)}`);
-  if (typeof d.signal === "string" && d.signal) lines.push(`signal: ${d.signal}`);
-  if (lines.length) return lines.join("\n");
-  return null;
-}
-
-/** Control-channel + error notices surfaced from the core:
- *  - `control_change`: a model/effort/permission change CONFIRMED by the CLI — a
- *    subtle inline line (like the VS Code extension). Emitted only on the model-felt
- *    transition (get_settings read-back / set_permission_mode ack / system/init),
- *    never on the optimistic click, so it is reliable.
- *  - `control_error` + every subtype in NOTICE_ERROR_HEADINGS (and the generic
- *    `error`): a real error — a visible red bubble, never silent.
- *  Other notice subtypes stay quiet. */
+/** Control-channel + error notices surfaced from the core, keyed off the live store. The
+ *  routing + visuals live in the pure `NoticeBlock` (`noticeView`) so the read-only
+ *  transcript preview renders an error notice identically. */
 function NoticeRow({ session, noticeId }: { session: string; noticeId: string }) {
   const notice = useNotice(session, noticeId);
   if (!notice) return null;
-  const d = (notice.detail ?? null) as Record<string, JsonValue> | null;
-  const get = (k: string): string | undefined => {
-    const v = d?.[k];
-    return typeof v === "string" ? v : undefined;
-  };
-
-  if (notice.subtype === "control_change") {
-    return (
-      <div className={styles.controlChange}>
-        <Ico name={get("icon") ?? "spark"} className="sm" />
-        <span>
-          {get("control")} : <b>{get("from")}</b> → <b>{get("to")}</b>
-        </span>
-      </div>
-    );
-  }
-
-  if (notice.subtype === "control_error") {
-    return (
-      <ErrorBlock detail={noticeDetailText(d)}>
-        Réglage « {get("control") ?? "contrôle"} » refusé par Claude Code
-        {get("message") ? ` : ${get("message")}` : ""}.
-      </ErrorBlock>
-    );
-  }
-
-  const heading = NOTICE_ERROR_HEADINGS[notice.subtype] ?? (notice.subtype === "error" ? "Erreur" : null);
-  if (heading) {
-    return (
-      <ErrorBlock heading={heading} detail={noticeDetailText(d)}>
-        {get("message") ?? null}
-      </ErrorBlock>
-    );
-  }
-  return null;
+  return <NoticeBlock subtype={notice.subtype} detail={notice.detail} />;
 }
 
 /** A turn that ended in error: the CLI sends a `result` with `is_error` (or an
@@ -370,14 +263,14 @@ function NoticeRow({ session, noticeId }: { session: string; noticeId: string })
  *  rendered (it fell through the timeline switch). Now a persistent error bubble
  *  with a typed heading. Successful / interrupted turns render nothing here. */
 function turnErrorHeading(meta: { subtype: string; apiErrorStatus?: string | null }): string {
-  if (meta.apiErrorStatus) return `Erreur d'API : ${meta.apiErrorStatus}`;
+  if (meta.apiErrorStatus) return `API error: ${meta.apiErrorStatus}`;
   switch (meta.subtype) {
     case "error_max_turns":
-      return "Nombre maximum de tours atteint";
+      return "Turn limit reached";
     case "error_during_execution":
-      return "Erreur pendant l'exécution";
+      return "Error during execution";
     default:
-      return "La tâche s'est terminée en erreur";
+      return "The task ended in an error";
   }
 }
 
@@ -401,11 +294,11 @@ function TurnResultRow({ session, resultId }: { session: string; resultId: strin
   // (duration_ms) plus the model-time breakdown (duration_api_ms). No cost/TTFT shown.
   if (!showTurnDuration || meta.durationMs == null) return null;
   return (
-    <div className={styles.turnMeta + " wf-mono"} title="Durée de ce tour · dont temps de modèle">
+    <div className={styles.turnMeta + " wf-mono"} title="This turn's duration · including model time">
       <Ico name="clock" className="sm" />
       <span>{fmtDuration(meta.durationMs)}</span>
       {showModelTime && meta.durationApiMs != null && meta.durationApiMs > 0 && (
-        <span className={styles.turnMetaModel}>{fmtDuration(meta.durationApiMs)} modèle</span>
+        <span className={styles.turnMetaModel}>{fmtDuration(meta.durationApiMs)} model</span>
       )}
     </div>
   );
@@ -458,7 +351,7 @@ function SubAgentCard({
   );
 
   const status: BackgroundTaskStatus | null = task?.status ?? null;
-  const label = field(input, "description") ?? task?.label ?? "Sous-agent";
+  const label = field(input, "description") ?? task?.label ?? "Sub-agent";
   const subagentType = field(input, "subagent_type") ?? task?.subagent_type ?? null;
   const agentId = task?.agent_id ?? null;
   const model = task?.model ?? null;
@@ -486,7 +379,7 @@ function SubAgentCard({
       else setErr(res.error);
     } catch (e) {
       // A thrown IPC/transport error must NEVER be swallowed: surface it and clear the
-      // loading state (the `finally` guarantees we don't get stuck "Chargement…").
+      // loading state (the `finally` guarantees we don't get stuck "Loading…").
       console.error("loadSubagentTranscript threw:", e);
       setErr(String(e));
     } finally {
@@ -535,21 +428,21 @@ function SubAgentCard({
         body = <SubAgentTranscript items={disk!} />;
         break;
       case "loading":
-        body = <div className={styles.subEmpty}>Chargement du transcript…</div>;
+        body = <div className={styles.subEmpty}>Loading transcript…</div>;
         break;
       case "error":
-        body = <div className={styles.subEmpty}>Transcript illisible : {err}</div>;
+        body = <div className={styles.subEmpty}>Transcript unreadable: {err}</div>;
         break;
       case "working":
-        body = <div className={styles.subEmpty}>Le sous-agent travaille…</div>;
+        body = <div className={styles.subEmpty}>The sub-agent is working…</div>;
         break;
       case "unavailable":
         body = (
-          <div className={styles.subEmpty}>Transcript indisponible (conversation rouverte).</div>
+          <div className={styles.subEmpty}>Transcript unavailable (conversation reopened).</div>
         );
         break;
       case "empty":
-        body = <div className={styles.subEmpty}>Aucun transcript pour ce sous-agent.</div>;
+        body = <div className={styles.subEmpty}>No transcript for this sub-agent.</div>;
         break;
     }
   }
@@ -563,7 +456,7 @@ function SubAgentCard({
         style={{ cursor: "pointer" }}
       >
         <Ico name="spark" className="sm" />
-        <span className="cv-tool-t">Sous-agent</span>
+        <span className="cv-tool-t">Sub-agent</span>
         <span className="cv-tool-m" title={label}>
           {label}
         </span>
@@ -587,7 +480,7 @@ function SubAgentCard({
           {model ? <span title={model}>{shortModel(model)}</span> : null}
           {effort ? <span>effort {effort}</span> : null}
           {task?.tokens != null ? <span>{fmtTokens(task.tokens)} tk</span> : null}
-          {task?.tool_uses != null ? <span>{task.tool_uses} outils</span> : null}
+          {task?.tool_uses != null ? <span>{task.tool_uses} tools</span> : null}
           {task?.duration_ms != null ? <span>{fmtDuration(task.duration_ms)}</span> : null}
         </div>
       ) : null}
@@ -637,7 +530,7 @@ function FrozenThinkingBlock({ session, text }: { session: string; text: string 
 }
 
 /** The thinking block currently STREAMING, with a live counter that ticks each second once
- *  it passes ~1s (floored, à la {@link LiveElapsed}). Its own leaf so the 1 Hz tick doesn't
+ *  it passes ~1s (floored, like {@link LiveElapsed}). Its own leaf so the 1 Hz tick doesn't
  *  re-render the rest of the response. */
 function LiveThinkingBlock({ session, text }: { session: string; text: string }) {
   const show = useDisplay((s) => s.showThinkingTime);
@@ -925,7 +818,7 @@ function MsgAI({
   const live = busy && !awaiting && turn.status === "streaming";
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai><ClaudeMark /></Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         {/* Finalized blocks accumulated so far, then the block currently being
             typed as a live tail. Both render together so an already-shown block is
@@ -992,9 +885,7 @@ function MsgAIGroup({
   );
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai>
-        <ClaudeMark />
-      </Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         {blocks.length > 0 && (
           <AssistantBlocks session={session} blocks={blocks} live={live} roundKey={turnIds[0]} />
@@ -1021,28 +912,28 @@ function AskTurn({ session, request }: { session: string; request: PermissionReq
   const allow = () =>
     answer.mutate({ requestId: request.request_id, decision: { behavior: "allow", updated_input: null } });
   const deny = () =>
-    answer.mutate({ requestId: request.request_id, decision: { behavior: "deny", message: "Refusé." } });
+    answer.mutate({ requestId: request.request_id, decision: { behavior: "deny", message: "Rejected." } });
 
   return (
     <div className="cv-msg cv-ai">
-      <Avatar ai><ClaudeMark /></Avatar>
+      <AiAvatar session={session} />
       <div className="cv-aibody">
         <div className="cv-ask-turn">
           <div className="wf-ask">
             <div className="wf-ask-h">
               <Ico name="key" className="sm" />
-              Demande une autorisation
+              Requesting permission
             </div>
             <div className="wf-ask-t">{ask.text}</div>
             {ask.cmd ? <code className="wf-ask-cmd wf-mono">$ {ask.cmd}</code> : null}
           </div>
           <div className="wf-row" style={{ gap: 8, justifyContent: "flex-end" }}>
             <button className="wf-btn ghost sm" onClick={deny}>
-              Refuser
+              Reject
             </button>
             <button className="wf-btn prim sm" onClick={allow}>
               <Ico name="check" className="sm" />
-              Autoriser
+              Allow
             </button>
           </div>
         </div>
@@ -1100,14 +991,23 @@ export function ConductorThread({
   // Gated by the display pref, and only on a SETTLED conversation (both operate on the
   // on-disk transcript and rewind kills the live process — racing a live turn is unsafe),
   // and never in a lightweight surface (the reply modal). `session` is the STABLE conv id.
+  //
+  // Rewind/fork work on BOTH backends. Claude truncates its on-disk transcript by prompt text;
+  // Codex has no in-place truncation, so it FORKS the thread through the chosen turn
+  // (thread/fork{lastTurnId}) and swaps onto the branch — targeting by Codex turn id, not text.
+  // ⚠️ Neither reverts on-disk file changes — history only (spelled out in the confirm dialog).
+  const isCodex = useConversationsStore(
+    (s) => s.conversations.find((c) => c.id === session)?.kind === "codex",
+  );
   const messageControls = useDisplay((s) => s.messageControls);
   const runningBgTasks = useRunningTaskCount(session);
   const showControls = messageControls && !busy && !awaiting && !disableControls;
-  // { target message id, is-user, its clean composer text, occurrence } — set on click; the
-  // rewind opens a confirm. `text`/`occurrence` are the fallback locator for a LIVE turn
-  // (synthetic front id not on disk); occurrence disambiguates identical repeated prompts.
+  // { target message id, is-user, its clean composer text, occurrence, and — for Codex — the
+  // turn id to fork THROUGH } set on click; the rewind opens a confirm. `text`/`occurrence` are
+  // the Claude fallback locator for a LIVE turn (synthetic front id not on disk; occurrence
+  // disambiguates identical repeated prompts). `codexLastTurnId` is the Codex locator instead.
   const [rewindTarget, setRewindTarget] = useState<
-    { id: string; isUser: boolean; text: string | null; occurrence: number | null } | null
+    { id: string; isUser: boolean; text: string | null; occurrence: number | null; codexLastTurnId: string | null } | null
   >(null);
   const [rewinding, setRewinding] = useState(false);
   // The message whose fork is in flight (spins its icon; blocks a re-click). The thread
@@ -1155,12 +1055,52 @@ export function ConductorThread({
     },
     [session],
   );
+  // Codex ONLY: the turn id to fork THROUGH for a rewind/fork at plan index `idx`. Codex targets
+  // a turn boundary by id (not by text like Claude). An AI-response target keeps THROUGH its own
+  // turn → its Codex turn id. A user target removes that turn + everything after → keep through
+  // the PREVIOUS turn → the nearest preceding AI group's Codex turn id. `null` when unavailable
+  // (a Claude conv, or a turn with no surfaced id — e.g. the first turn, or a pre-`turn_context`
+  // cold line): the caller then does NOT offer the control, so we never fork the whole thread by
+  // accident.
+  const codexCutTurnId = useCallback(
+    (idx: number, isUser: boolean): string | null => {
+      if (!isCodex) return null;
+      const s = useConversationStore.getState().sessions[session];
+      // Every item of an AI group carries the SAME Codex turn id; scan the group for the
+      // first id that has one (the final agent_message reliably does, but a group's last id
+      // could be a tool card whose stamp raced) rather than trusting only the last.
+      const groupTurnId = (ids: string[]): string | null => {
+        for (const tid of ids) {
+          const t = s?.turns[tid]?.codexTurnId;
+          if (t) return t;
+        }
+        return null;
+      };
+      if (!isUser) {
+        const item = plan[idx];
+        return item && item.kind === "ai" ? groupTurnId(item.ids) : null;
+      }
+      for (let k = idx - 1; k >= 0; k--) {
+        const p = plan[k];
+        if (p.kind === "ai") return groupTurnId(p.ids);
+      }
+      return null;
+    },
+    [isCodex, plan, session],
+  );
   const doRewind = useCallback(async () => {
     const target = rewindTarget;
     if (!target) return;
     setRewinding(true);
     try {
-      await rewindConversation(session, target.id, target.isUser, target.text, target.occurrence);
+      await rewindConversation(
+        session,
+        target.id,
+        target.isUser,
+        target.text,
+        target.occurrence,
+        target.codexLastTurnId,
+      );
     } catch {
       /* the failure was already surfaced as an app error by rewindConversation */
     } finally {
@@ -1169,12 +1109,19 @@ export function ConductorThread({
     }
   }, [rewindTarget, session]);
   const doFork = useCallback(
-    async (id: string, isUser: boolean) => {
+    async (id: string, isUser: boolean, codexLastTurnId: string | null = null) => {
       if (forkingId) return; // guard a double-click (the thread unmounts on switch)
       setForkingId(id);
       const loc = isUser ? userTarget(id) : null;
       try {
-        await forkConversation(session, id, isUser, loc ? loc.text : null, loc ? loc.occurrence : null);
+        await forkConversation(
+          session,
+          id,
+          isUser,
+          loc ? loc.text : null,
+          loc ? loc.occurrence : null,
+          codexLastTurnId,
+        );
       } catch {
         /* already surfaced as an app error by forkConversation */
       } finally {
@@ -1195,12 +1142,12 @@ export function ConductorThread({
       <StreamFollow session={session} onRender={onRender} />
       <div className="cv-thread-inner">
         {empty && !busy ? (
-          <div className={styles.empty}>Démarre la conversation en envoyant un message.</div>
+          <div className={styles.empty}>Start the conversation by sending a message.</div>
         ) : (
           <>
             <div className="cv-day">
               <span className="wf-line" />
-              aujourd'hui
+              today
               <span className="wf-line" />
             </div>
             {plan.map((item, idx) => {
@@ -1215,18 +1162,33 @@ export function ConductorThread({
                     busy={busy}
                     awaiting={awaiting}
                     onRewind={
-                      showControls && hasUserAfter(idx)
-                        ? () => setRewindTarget({ id: aiId, isUser: false, text: null, occurrence: null })
+                      showControls && hasUserAfter(idx) && (!isCodex || codexCutTurnId(idx, false) != null)
+                        ? () =>
+                            setRewindTarget({
+                              id: aiId,
+                              isUser: false,
+                              text: null,
+                              occurrence: null,
+                              codexLastTurnId: codexCutTurnId(idx, false),
+                            })
                         : undefined
                     }
-                    onFork={showControls ? () => doFork(aiId, false) : undefined}
+                    onFork={
+                      showControls && (!isCodex || codexCutTurnId(idx, false) != null)
+                        ? () => doFork(aiId, false, codexCutTurnId(idx, false))
+                        : undefined
+                    }
                     forkBusy={forkingId === aiId}
                   />
                 );
               }
               if (item.kind === "user") {
                 // Not the first prompt, and not a mid-work injection (not a clean boundary).
-                const usable = showControls && idx !== firstUserIdx && !isInjected(item.id);
+                const usable =
+                  showControls &&
+                  idx !== firstUserIdx &&
+                  !isInjected(item.id) &&
+                  (!isCodex || codexCutTurnId(idx, true) != null);
                 return (
                   <TurnRow
                     key={item.id}
@@ -1236,11 +1198,17 @@ export function ConductorThread({
                       usable
                         ? () => {
                             const loc = userTarget(item.id);
-                            setRewindTarget({ id: item.id, isUser: true, text: loc.text, occurrence: loc.occurrence });
+                            setRewindTarget({
+                              id: item.id,
+                              isUser: true,
+                              text: loc.text,
+                              occurrence: loc.occurrence,
+                              codexLastTurnId: codexCutTurnId(idx, true),
+                            });
                           }
                         : undefined
                     }
-                    onFork={usable ? () => doFork(item.id, true) : undefined}
+                    onFork={usable ? () => doFork(item.id, true, codexCutTurnId(idx, true)) : undefined}
                     forkBusy={forkingId === item.id}
                   />
                 );
@@ -1270,29 +1238,38 @@ export function ConductorThread({
         open={!!rewindTarget}
         danger
         busy={rewinding}
-        title="Reprendre la conversation à partir d'ici ?"
-        confirmLabel="Rembobiner"
+        title="Resume the conversation from here?"
+        confirmLabel="Rewind"
         onCancel={() => setRewindTarget(null)}
         onConfirm={doRewind}
       >
         {rewindTarget?.isUser ? (
           <>
-            Ce message et tout ce qui suit seront <strong>définitivement supprimés</strong> de la
-            conversation. Son texte revient dans la zone de saisie pour que tu puisses le renvoyer.
+            This message and everything after it will be <strong>permanently deleted</strong> from the
+            conversation. Its text returns to the input box so you can resend it.
           </>
         ) : (
           <>
-            Tout ce qui suit cette réponse sera <strong>définitivement supprimé</strong> de la
-            conversation. La réponse elle-même est conservée.
+            Everything after this response will be <strong>permanently deleted</strong> from the
+            conversation. The response itself is kept.
           </>
         )}
+        {isCodex ? (
+          <div className="cv-rewind-warn">
+            <Ico name="alert" />
+            <span>
+              Only the conversation history is rewound: files already modified on disk are not
+              restored.
+            </span>
+          </div>
+        ) : null}
         {runningBgTasks > 0 ? (
           <div className="cv-rewind-warn">
             <Ico name="alert" />
             <span>
               {runningBgTasks === 1
-                ? "Une tâche de fond en cours sera arrêtée."
-                : `${runningBgTasks} tâches de fond en cours seront arrêtées.`}
+                ? "One running background task will be stopped."
+                : `${runningBgTasks} running background tasks will be stopped.`}
             </span>
           </div>
         ) : null}
@@ -1303,7 +1280,7 @@ export function ConductorThread({
 
 /** Below this many ms of a turn running, the live elapsed counter stays hidden — short
  *  turns don't need a stopwatch. Once a turn runs past it, the counter appears and ticks
- *  each second (à la CLI, which starts showing elapsed time on long-running turns). */
+ *  each second (like the CLI, which starts showing elapsed time on long-running turns). */
 const TURN_ELAPSED_MIN_MS = 40_000;
 
 /** The live elapsed counter (🕐 40s → 1m 04s) shown at the right of the working line once
@@ -1318,7 +1295,7 @@ function LiveElapsed({ session }: { session: string }) {
   const elapsed = now - startedAt;
   if (elapsed < TURN_ELAPSED_MIN_MS) return null;
   return (
-    <span className={styles.elapsed + " wf-mono"} title="Durée du tour en cours">
+    <span className={styles.elapsed + " wf-mono"} title="Current turn duration">
       <Ico name="clock" className="sm" />
       {fmtDuration(Math.floor(elapsed / 1000) * 1000)}
     </span>
@@ -1334,8 +1311,8 @@ function LiveElapsed({ session }: { session: string }) {
  */
 function WorkingIndicator({ session }: { session: string }) {
   const activity = useLiveActivity(session);
-  // Registre (1): when the live tool is a FOREGROUND shell command, show it
-  // terminal-style ("$ command…") rather than the generic "Exécute …" phrase — the
+  // Special case: when the live tool is a FOREGROUND shell command, show it
+  // terminal-style ("$ command…") rather than the generic "Running …" phrase — the
   // bottom-of-terminal feel of the CLI. Any other activity keeps the plain line.
   const bash = useLiveBashCommand(session);
   return (

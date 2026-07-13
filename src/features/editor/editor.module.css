@@ -252,7 +252,7 @@
   color: var(--wf-tx-hi);
   box-shadow: inset 0 -2px 0 var(--wf-accent);
 }
-/* Preview (temporary) tab — italic, à la VS Code. A double-click or an edit pins it. */
+/* Preview (temporary) tab — italic, like VS Code. A double-click or an edit pins it. */
 .tabPreview .tabName {
   font-style: italic;
 }

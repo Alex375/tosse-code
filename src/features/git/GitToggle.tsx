@@ -17,8 +17,8 @@ export function GitToggle() {
       className={"wf-icon-btn" + (gitOpen ? " on" : "")}
       data-on={gitOpen ? "" : undefined}
       onClick={toggleGit}
-      title={gitOpen ? "Fermer le panneau Git" : "Ouvrir le panneau Git"}
-      aria-label="Basculer le panneau Git"
+      title={gitOpen ? "Close the Git panel" : "Open the Git panel"}
+      aria-label="Toggle the Git panel"
     >
       <Ico name="branch" className="sm" />
     </button>

@@ -12,15 +12,15 @@ import { Dot, Ico, Menu, MenuItem, WF_STATUS } from "../../ui/kit";
 
 /**
  * Title-bar control for a conversation's live `claude` stream: shows whether it
- * is on or off (status dot + label) and opens a menu to turn it on ("allumer"),
- * restart it ("relancer"), or turn it off ("éteindre").
+ * is on or off (status dot + label) and opens a menu to turn it on, restart it,
+ * or turn it off.
  *
  * On/off is driven by the conversation's live `handle`: with the lazy policy the
  * process spawns on the first message, so it is normally off until then; turning
  * it on here pre-spawns it without sending anything. The actions are contextual —
- * "allumer" when off, "relancer"/"éteindre" when on.
+ * turn on when off, restart/turn off when on.
  */
-export function StreamControl({ conv }: { conv: Conversation }) {
+export function StreamControl({ conv, portal }: { conv: Conversation; portal?: boolean }) {
   // Rich status keyed by the conversation's stable id; the handle (reactive via
   // the prop) is the source of truth for on/off, folded into the status.
   const status = agentStatusToDot(useAgentStatus(conv.id));
@@ -39,10 +39,10 @@ export function StreamControl({ conv }: { conv: Conversation }) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[stream] action failed:", e);
         // Surface in the title-bar pill (transient) AND in the thread (persistent,
-        // detail not hidden behind a hover) so a failed allumer/relancer/éteindre
+        // detail not hidden behind a hover) so a failed turn-on/restart/turn-off
         // can't be missed.
         setError(msg);
-        useConversationStore.getState().addErrorTurn(conv.id, `Action du stream échouée : ${msg}`);
+        useConversationStore.getState().addErrorTurn(conv.id, `Stream action failed: ${msg}`);
       })
       .finally(() => setPending(false));
   };
@@ -54,15 +54,16 @@ export function StreamControl({ conv }: { conv: Conversation }) {
   return (
     <Menu
       align="right"
+      portal={portal}
       trigger={
         <button
           type="button"
           className="wf-streamctl"
-          title={error ? `Échec : ${error}` : "Contrôle du stream"}
-          aria-label={`Stream ${error ? "échec" : WF_STATUS[status].label}`}
+          title={error ? `Failed: ${error}` : "Stream control"}
+          aria-label={`Stream ${error ? "failed" : WF_STATUS[status].label}`}
         >
           <Dot s={shownStatus} pulse />
-          <span>{error ? "Échec" : WF_STATUS[status].label}</span>
+          <span>{error ? "Failed" : WF_STATUS[status].label}</span>
           <Ico name="chev" className="sm wf-streamctl-chev" />
         </button>
       }
@@ -74,14 +75,14 @@ export function StreamControl({ conv }: { conv: Conversation }) {
             disabled={pending}
             onClick={() => run(() => restartConversationSession(conv.id))}
           >
-            Relancer le stream
+            Restart stream
           </MenuItem>
           <MenuItem
             icon="stop"
             disabled={pending}
             onClick={() => run(() => stopConversationSession(conv.id))}
           >
-            Éteindre le stream
+            Turn off stream
           </MenuItem>
         </>
       ) : (
@@ -90,7 +91,7 @@ export function StreamControl({ conv }: { conv: Conversation }) {
           disabled={pending}
           onClick={() => run(() => startConversationSession(conv.id))}
         >
-          Allumer le stream
+          Turn on stream
         </MenuItem>
       )}
     </Menu>

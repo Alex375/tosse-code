@@ -16,9 +16,13 @@ import { useWorkflowLive } from "../../store/workflowLive";
 import { useStopTask } from "../../ipc/useCommands";
 import { runIdFromResult } from "../../agent/subagentMeta";
 import { Ico, RunDots } from "../../ui/kit";
+import { useIsCodex } from "./ConvMark";
 import { WorkflowDetail } from "./WorkflowDetail";
 
 export function WorkflowBar({ session }: { session: string }) {
+  // Bloc A (Phase 4.5): `Workflow` is a Claude-only background tool (no Codex equivalent
+  // on the wire), so this bar is hidden on Codex — never an empty shell or false green.
+  const isCodex = useIsCodex(session);
   const rows = useBackgroundWorkflowTasks(session);
   // The full task map (running + finished) — so an open modal survives the run finishing (the
   // row is gone from `rows`, but the snapshot lingers here with its status flipped to done →
@@ -35,6 +39,7 @@ export function WorkflowBar({ session }: { session: string }) {
   const openedRunId = opened ? runIdFromResult(openedResult?.content) : null;
   const liveActivity = useWorkflowLive(session, openedId ?? "");
 
+  if (isCodex) return null;
   if (rows.length === 0 && !opened) return null;
 
   return (
@@ -45,7 +50,7 @@ export function WorkflowBar({ session }: { session: string }) {
             type="button"
             className="cv-bashrow-main"
             onClick={() => setOpenedId(t.task_id)}
-            title="Ouvrir le détail du workflow"
+            title="Open workflow details"
           >
             <RunDots />
             <Ico name="layers" className="sm cv-monrow-ico" />
@@ -55,8 +60,8 @@ export function WorkflowBar({ session }: { session: string }) {
           <button
             type="button"
             className="cv-bgstop"
-            title="Arrêter le workflow"
-            aria-label="Arrêter le workflow"
+            title="Stop workflow"
+            aria-label="Stop workflow"
             onClick={() => stopTask.mutate(t.task_id)}
           >
             <Ico name="stopc" className="sm" />

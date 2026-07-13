@@ -14,17 +14,19 @@ export function shortModel(m: string): string {
   return m.replace(/^claude-/, "").replace(/-\d{8}$/, "").replace(/\[.*\]$/, "");
 }
 
-/** Canonical display labels for the reasoning-effort levels, folding the
- *  ultracode tier in. The CLI's effort enum is low/medium/high/xhigh/max (2.1.187),
- *  `max` being the deepest pure-effort level above `xhigh` ("Extra"); "Ultra code"
- *  is xhigh + a separate `ultracode` flag (see EffortGauge, which reuses this map so
- *  the gauge and every read-only surface never drift). */
+/** Canonical display labels for the reasoning-effort levels, folding the ultracode
+ *  tier in. Claude's effort enum is low/medium/high/xhigh/max (2.1.187), `max` the
+ *  deepest pure-effort level above `xhigh` ("Extra"); `ultra` is the Codex-only rung
+ *  above `max` (gpt-5.6). "Ultra code" is xhigh + a separate `ultracode` flag (see
+ *  EffortGauge, which reuses this map so the gauge and every read-only surface never
+ *  drift). */
 export const EFFORT_LABELS = {
   low: "Low",
   medium: "Medium",
   high: "High",
   xhigh: "Extra",
   max: "Max",
+  ultra: "Ultra",
   ultracode: "Ultra code",
 } as const;
 

@@ -78,7 +78,7 @@ export function clearComposerDraft(convId: string): void {
   useComposerDrafts.getState().setDraft(convId, "");
 }
 
-/** Drop every stored draft — call on a full data wipe ("Tout supprimer").
+/** Drop every stored draft — call on a full data wipe ("Delete all").
  *  Mirrors clearAllTodoBarOpen. */
 export function clearAllComposerDrafts(): void {
   try {

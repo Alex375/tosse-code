@@ -6,6 +6,7 @@
 export { commands, events, isTauri } from "./provider";
 
 export type {
+  AccountLoginEvent,
   AgentInfo,
   BackgroundTask,
   BackgroundTaskKind,
@@ -16,6 +17,11 @@ export type {
   ConversationItem,
   ConversationRecord,
   DiskConversation,
+  ClaudeAccountStatus,
+  CodexAccountStatus,
+  CodexHooksSnapshot,
+  CodexLoginStart,
+  CodexPluginsLive,
   ExtScope,
   ExtensionsSnapshot,
   FileContent,
@@ -46,7 +52,9 @@ export type {
   Result,
   RewindOutcome,
   SearchHit,
+  SessionCodexPlanUsageEvent,
   SessionCommandsEvent,
+  SessionExtensionsChangedEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionRemoteControlEvent,

@@ -15,9 +15,13 @@ import { useState } from "react";
 import { useBackgroundMonitorTasks, useSessionTasks } from "../../store/backgroundTasksStore";
 import { useStopTask } from "../../ipc/useCommands";
 import { Ico, RunDots } from "../../ui/kit";
+import { useIsCodex } from "./ConvMark";
 import { TaskOutputPopover } from "./TaskOutputPopover";
 
 export function MonitorBar({ session }: { session: string }) {
+  // Bloc A (Phase 4.5): `Monitor` is a Claude-only background tool — Codex has no
+  // equivalent, so this bar is hidden on Codex (never a fake empty shell / false green).
+  const isCodex = useIsCodex(session);
   // The bar lists only RUNNING watches; a finished one drops out.
   const rows = useBackgroundMonitorTasks(session);
   // The full task map (running + finished) — so an open popover survives its watch ending
@@ -28,6 +32,7 @@ export function MonitorBar({ session }: { session: string }) {
 
   const opened = openedId ? allTasks[openedId] ?? null : null;
 
+  if (isCodex) return null;
   if (rows.length === 0 && !opened) return null;
 
   return (
@@ -38,18 +43,18 @@ export function MonitorBar({ session }: { session: string }) {
             type="button"
             className="cv-bashrow-main"
             onClick={() => setOpenedId(t.task_id)}
-            title="Voir le flux d'événements de la surveillance"
+            title="View the watch's event stream"
           >
             <RunDots />
             <Ico name="pulse" className="sm cv-monrow-ico" />
-            <span className="cv-bashrow-cmd">{t.label ?? "surveillance"}</span>
-            <span className="cv-monrow-tag">surveillance</span>
+            <span className="cv-bashrow-cmd">{t.label ?? "watch"}</span>
+            <span className="cv-monrow-tag">watch</span>
           </button>
           <button
             type="button"
             className="cv-bgstop"
-            title="Arrêter la surveillance"
-            aria-label="Arrêter la surveillance"
+            title="Stop the watch"
+            aria-label="Stop the watch"
             onClick={() => stopTask.mutate(t.task_id)}
           >
             <Ico name="stopc" className="sm" />
@@ -62,16 +67,16 @@ export function MonitorBar({ session }: { session: string }) {
         outputFile={opened?.output_file ?? null}
         running={opened?.status === "running"}
         icon="pulse"
-        title={opened?.label ?? "surveillance"}
+        title={opened?.label ?? "watch"}
         subtitle={
-          opened?.status === "running" ? "Surveillance active…" : opened?.summary ?? "Surveillance terminée"
+          opened?.status === "running" ? "Watch active…" : opened?.summary ?? "Watch finished"
         }
-        loadingText="Chargement du flux d'événements…"
-        unreadableText={(e) => `Flux illisible : ${e}`}
-        unavailableText="Flux indisponible (conversation rouverte)."
-        emptyRunningText="La surveillance tourne — aucun événement pour l'instant…"
-        emptyDoneText="Aucun événement capté."
-        unloadedText="Flux indisponible (impossible de le charger)."
+        loadingText="Loading event stream…"
+        unreadableText={(e) => `Unreadable stream: ${e}`}
+        unavailableText="Stream unavailable (conversation reopened)."
+        emptyRunningText="Watch running — no events yet…"
+        emptyDoneText="No events captured."
+        unloadedText="Stream unavailable (couldn't load it)."
         onClose={() => setOpenedId(null)}
       />
     </div>

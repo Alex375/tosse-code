@@ -173,7 +173,7 @@ fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
             // partially-restored conversation is never silently incomplete.
             if skipped > 0 {
                 items.push(history_notice(format!(
-                    "{skipped} ligne(s) de l'historique étaient illisibles — des messages peuvent manquer."
+                    "{skipped} history line(s) were unreadable — some messages may be missing."
                 )));
             }
             items
@@ -186,7 +186,7 @@ fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
         Err(e) => {
             eprintln!("[history] cannot read transcript {}: {e}", path.display());
             vec![history_notice(format!(
-                "Impossible de lire l'historique de cette conversation : {e}"
+                "Unable to read this conversation's history: {e}"
             ))]
         }
     }
@@ -344,13 +344,15 @@ fn push_assistant(entry: &Value, items: &mut Vec<ConversationItem>) {
         id,
         blocks,
         parent_tool_use_id: None,
+        // Claude targets rewind/fork by prompt text — no Codex turn id.
+        turn_id: None,
     });
 }
 
 // ============================================================================
 // Rewind — truncate a conversation's transcript at a chosen message.
 //
-// "Reprendre à partir d'ici" cuts the on-disk transcript so the conversation ends
+// "Resume from here" cuts the on-disk transcript so the conversation ends
 // just before a genuine human-prompt boundary, then the app re-spawns
 // `claude --resume` on the shortened file. VERIFIED (live probe, binary 2.1.187):
 // resume HONOURS a truncated transcript — the dropped turns do not survive in the
@@ -365,7 +367,7 @@ fn push_assistant(entry: &Value, items: &mut Vec<ConversationItem>) {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RewindOutcome {
     /// For a USER-message rewind, the text of the removed prompt so the composer can be
-    /// re-seeded with it ("revenir à ce prompt"). `None` for an assistant-message rewind
+    /// re-seeded with it ("go back to this prompt"). `None` for an assistant-message rewind
     /// (its response is kept; the user just continues with a new message).
     pub removed_prompt: Option<String>,
     /// How many transcript lines were dropped. `0` means nothing followed the target —
@@ -373,7 +375,7 @@ pub struct RewindOutcome {
     pub removed_lines: usize,
 }
 
-/// The result of a fork ("brancher une nouvelle conversation ici"): the freshly-written
+/// The result of a fork ("branch a new conversation here"): the freshly-written
 /// branch conversation (ready to bring into the app via `reactivateDiskConversation`) and,
 /// for a USER-message fork, the removed prompt text to seed the new conversation's composer.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -482,11 +484,11 @@ fn resolve_cut(
                     .or_else(|| matches.last().copied());
             }
         }
-        let ti = ti.ok_or_else(|| "message ciblé introuvable dans le transcript".to_string())?;
+        let ti = ti.ok_or_else(|| "target message not found in the transcript".to_string())?;
         let has_prior_turn = (0..ti).any(|i| human_prompt_at(parsed, i).is_some());
         if !has_prior_turn {
             return Err(
-                "Impossible de reprendre avant le premier message de la conversation.".to_string(),
+                "Cannot resume before the first message of the conversation.".to_string(),
             );
         }
         let removed = human_prompt_at(parsed, ti).and_then(|t| clean_prompt_for_composer(&t));
@@ -505,7 +507,7 @@ fn resolve_cut(
                 break;
             }
         }
-        let ai = ai.ok_or_else(|| "réponse ciblée introuvable dans le transcript".to_string())?;
+        let ai = ai.ok_or_else(|| "target response not found in the transcript".to_string())?;
         let next_human = (ai + 1..raw.len()).find(|&i| human_prompt_at(parsed, i).is_some());
         Ok((next_human.unwrap_or(raw.len()), None))
     }
@@ -515,7 +517,7 @@ fn resolve_cut(
 /// index-aligned. Shared by rewind and fork.
 fn read_transcript_lines(path: &Path) -> Result<(String, Vec<Option<Value>>), String> {
     let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("lecture du transcript impossible : {e}"))?;
+        .map_err(|e| format!("could not read the transcript: {e}"))?;
     let parsed: Vec<Option<Value>> =
         content.lines().map(|l| serde_json::from_str::<Value>(l.trim()).ok()).collect();
     Ok((content, parsed))
@@ -531,7 +533,7 @@ pub fn rewind_transcript(
     occurrence: Option<usize>,
 ) -> Result<RewindOutcome, String> {
     let config_dir = claude_config_dir()
-        .ok_or_else(|| "répertoire de configuration Claude introuvable".to_string())?;
+        .ok_or_else(|| "Claude config directory not found".to_string())?;
     rewind_transcript_in(&config_dir, session_id, target_id, target_is_user, target_text, occurrence)
 }
 
@@ -544,7 +546,7 @@ fn rewind_transcript_in(
     occurrence: Option<usize>,
 ) -> Result<RewindOutcome, String> {
     let path = find_transcript(config_dir, session_id)
-        .ok_or_else(|| "transcript de la conversation introuvable".to_string())?;
+        .ok_or_else(|| "conversation transcript not found".to_string())?;
     let (content, parsed) = read_transcript_lines(&path)?;
     let raw: Vec<&str> = content.lines().collect();
 
@@ -554,7 +556,7 @@ fn rewind_transcript_in(
     let removed_lines = raw.len() - cut_index;
     if removed_lines == 0 {
         // Nothing after the target — the conversation already ends here. Leave the file
-        // untouched (a no-op the UI can surface as "rien à rembobiner").
+        // untouched (a no-op the UI can surface as "nothing to rewind").
         return Ok(RewindOutcome { removed_prompt, removed_lines: 0 });
     }
 
@@ -565,9 +567,9 @@ fn rewind_transcript_in(
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("transcript");
     let tmp = path.with_file_name(format!(".{file_name}.rewind-tmp"));
     std::fs::write(&tmp, &body)
-        .map_err(|e| format!("écriture du transcript tronqué impossible : {e}"))?;
+        .map_err(|e| format!("could not write the truncated transcript: {e}"))?;
     std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("remplacement du transcript impossible : {e}"))?;
+        .map_err(|e| format!("could not replace the transcript: {e}"))?;
 
     Ok(RewindOutcome { removed_prompt, removed_lines })
 }
@@ -585,7 +587,7 @@ pub fn fork_transcript(
     occurrence: Option<usize>,
 ) -> Result<ForkOutcome, String> {
     let config_dir = claude_config_dir()
-        .ok_or_else(|| "répertoire de configuration Claude introuvable".to_string())?;
+        .ok_or_else(|| "Claude config directory not found".to_string())?;
     fork_transcript_in(&config_dir, session_id, target_id, target_is_user, target_text, occurrence)
 }
 
@@ -598,7 +600,7 @@ fn fork_transcript_in(
     occurrence: Option<usize>,
 ) -> Result<ForkOutcome, String> {
     let path = find_transcript(config_dir, session_id)
-        .ok_or_else(|| "transcript de la conversation introuvable".to_string())?;
+        .ok_or_else(|| "conversation transcript not found".to_string())?;
     let (content, parsed) = read_transcript_lines(&path)?;
     let raw: Vec<&str> = content.lines().collect();
 
@@ -630,11 +632,11 @@ fn fork_transcript_in(
         }
     }
     std::fs::write(&new_path, &out)
-        .map_err(|e| format!("écriture de la conversation forkée impossible : {e}"))?;
+        .map_err(|e| format!("could not write the forked conversation: {e}"))?;
 
     // Head-read the new file back into the same row shape the history panel uses.
     let conversation = scan_disk_conversation(&new_path)
-        .ok_or_else(|| "la conversation forkée n'a pas pu être relue".to_string())?;
+        .ok_or_else(|| "the forked conversation could not be re-read".to_string())?;
     Ok(ForkOutcome { conversation, removed_prompt })
 }
 
@@ -654,11 +656,13 @@ fn fork_transcript_in(
 /// optional `ai-title`. The cwd and first human message sit in the first lines and
 /// trigger an early break; this only bounds the worst case of a title-less file, so
 /// we never read a whole (possibly huge) transcript just to LIST it.
-const HEAD_SCAN_LINES: usize = 256;
+/// Shared with the Codex rollout scanner ([`super::codex::history`]).
+pub(crate) const HEAD_SCAN_LINES: usize = 256;
 
 /// The identifying excerpt (first human message) is flattened to one line and capped
-/// at this many chars.
-const EXCERPT_CHARS: usize = 120;
+/// at this many chars. Shared with the Codex rollout scanner so both backends' rows
+/// truncate identically.
+pub(crate) const EXCERPT_CHARS: usize = 120;
 
 /// Once the cwd + first human message are known, how many more lines to read looking
 /// for the optional `ai-title` before stopping. The title line sits right after the
@@ -669,8 +673,8 @@ const TITLE_GRACE_LINES: usize = 24;
 
 /// Per-conversation searchable-body cap (bytes). Bounds the index's memory and
 /// per-query scan on a very long conversation; the overflow is dropped (logged once
-/// per build — never a silent truncation).
-const INDEX_BODY_CAP: usize = 200_000;
+/// per build — never a silent truncation). Shared with the Codex rollout indexer.
+pub(crate) const INDEX_BODY_CAP: usize = 200_000;
 
 /// One conversation discovered on disk — the cheap "head-read" row the history panel
 /// lists. NO full parse here (that's [`load_history`], used by the preview). Field
@@ -696,6 +700,11 @@ pub struct DiskConversation {
     pub excerpt: String,
     /// Transcript mtime (Unix ms) ≈ time of the last message. Recency sort key.
     pub mtime_ms: i64,
+    /// Agent backend this conversation ran on (`"claude"` | `"codex"`). Drives the
+    /// panel's backend badge and — on reactivation — which conversation `kind` (and
+    /// which cold-history reader) the front creates. Claude rows read from `~/.claude`
+    /// transcripts; Codex rows from `~/.codex` rollouts.
+    pub backend: String,
 }
 
 /// App convention: a worktree lives at `<repo>/.claude/worktrees/<branch>` (see the
@@ -709,13 +718,19 @@ pub fn repo_root_from_cwd(cwd: &str) -> String {
     }
 }
 
-/// List every conversation found on disk, most-recent-first. Env wrapper around
-/// [`list_disk_conversations_in`] (the testable core).
+/// List every conversation found on disk, most-recent-first — BOTH backends: Claude's
+/// transcripts (`~/.claude/projects`) and Codex's rollouts (`~/.codex/sessions`), merged
+/// and re-sorted so a mixed history reads as one recency-ordered list.
 pub fn list_disk_conversations() -> Vec<DiskConversation> {
-    match claude_config_dir() {
+    let mut out = match claude_config_dir() {
         Some(dir) => list_disk_conversations_in(&dir),
         None => Vec::new(),
-    }
+    };
+    out.extend(super::codex::list_codex_disk_conversations());
+    // Re-sort the merged set: each backend's scan is internally ordered, but the two
+    // interleave by time (a recent Codex thread must sit above an older Claude one).
+    out.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    out
 }
 
 fn list_disk_conversations_in(config_dir: &Path) -> Vec<DiskConversation> {
@@ -744,7 +759,7 @@ fn list_disk_conversations_in(config_dir: &Path) -> Vec<DiskConversation> {
 /// recency key shared by the disk listing ([`scan_disk_conversation`]) and the search
 /// index ([`index_one`]) — kept in one place so the two always order conversations the
 /// same way.
-fn file_mtime_ms(meta: &std::fs::Metadata) -> i64 {
+pub(crate) fn file_mtime_ms(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
         .ok()
         .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
@@ -840,6 +855,7 @@ fn scan_disk_conversation(path: &Path) -> Option<DiskConversation> {
         title,
         excerpt,
         mtime_ms,
+        backend: "claude".to_string(),
     })
 }
 
@@ -911,7 +927,7 @@ fn assistant_text(entry: &Value) -> String {
 }
 
 /// Collapse all whitespace to single spaces and cap at `max` chars (… elided).
-fn flatten_truncate(s: &str, max: usize) -> String {
+pub(crate) fn flatten_truncate(s: &str, max: usize) -> String {
     let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max {
         flat
@@ -938,6 +954,29 @@ pub struct IndexedConversation {
     mtime_ms: i64,
 }
 
+impl IndexedConversation {
+    /// Build an index row from raw (unfolded) `title`/`excerpt`/`body`. Used by the Codex
+    /// backend, which derives the same searchable shape from a rollout — keeping the
+    /// folding + field layout in ONE place so Claude and Codex rows score identically
+    /// (and the [`fold`] 1-char→1-char snippet invariant holds for both).
+    pub(crate) fn from_text(
+        session_id: String,
+        title: &str,
+        excerpt: &str,
+        body: String,
+        mtime_ms: i64,
+    ) -> Self {
+        IndexedConversation {
+            session_id,
+            title_fold: fold(title),
+            excerpt_fold: fold(excerpt),
+            body_fold: fold(&body),
+            body,
+            mtime_ms,
+        }
+    }
+}
+
 /// A search result: which conversation matched, its relevance score, and a short
 /// snippet around the first body hit (empty when only title/excerpt matched).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -947,13 +986,16 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
-/// Build the full-text index over every main-thread transcript. Heavy (reads each
-/// file in full) — callers run it once, off the panel-open path, and cache it.
+/// Build the full-text index over every main-thread transcript of BOTH backends
+/// (Claude transcripts + Codex rollouts). Heavy (reads each file in full) — callers run
+/// it once, off the panel-open path, and cache it.
 pub fn build_search_index() -> Vec<IndexedConversation> {
-    match claude_config_dir() {
+    let mut out = match claude_config_dir() {
         Some(dir) => build_search_index_in(&dir),
         None => Vec::new(),
-    }
+    };
+    out.extend(super::codex::build_codex_search_index());
+    out
 }
 
 fn build_search_index_in(config_dir: &Path) -> Vec<IndexedConversation> {
@@ -1048,8 +1090,9 @@ fn index_one(path: &Path) -> Option<IndexedConversation> {
 }
 
 /// Append `add` to `body` (space-separated) unless already at the byte cap. Caps at
-/// `cap` + at most one message — bounds memory without an O(n²) char recount.
-fn append_capped(body: &mut String, add: &str, cap: usize, truncated: &mut bool) {
+/// `cap` + at most one message — bounds memory without an O(n²) char recount. Shared
+/// with the Codex rollout indexer so both backends' bodies grow the same way.
+pub(crate) fn append_capped(body: &mut String, add: &str, cap: usize, truncated: &mut bool) {
     if body.len() >= cap {
         *truncated = true;
         return;
@@ -1600,7 +1643,7 @@ mod tests {
         rewind_fixture(&base, sid);
         let err = rewind_transcript_in(&base, sid, "u1", true, None, None).unwrap_err();
         std::fs::remove_dir_all(&base).ok();
-        assert!(err.contains("premier message"), "got: {err}");
+        assert!(err.contains("first message"), "got: {err}");
     }
 
     /// A rewind whose target has nothing after it is a no-op: 0 lines removed and the
@@ -1631,7 +1674,7 @@ mod tests {
         rewind_fixture(&base, sid);
         let err = rewind_transcript_in(&base, sid, "does-not-exist", true, None, None).unwrap_err();
         std::fs::remove_dir_all(&base).ok();
-        assert!(err.contains("introuvable"), "got: {err}");
+        assert!(err.contains("not found"), "got: {err}");
     }
 
     /// A LIVE user turn carries a synthetic front id (`user_N`) that is NOT on disk, so the

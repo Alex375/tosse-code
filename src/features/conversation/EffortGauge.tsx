@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { ChipBtn, Menu } from "../../ui/kit";
 import { EFFORT_LABELS } from "../../agent/subagentMeta";
+import { backendOfModel } from "./models";
 
 /**
  * Claude Code reasoning-effort levels (low → max), plus the top "Ultra code" tier.
@@ -9,20 +10,25 @@ import { EFFORT_LABELS } from "../../agent/subagentMeta";
  * describes as "just below maximum". It was a phantom up to 2.1.186 (a `--effort`
  * spawn alias the runtime control swallowed), promoted to a real runtime level in
  * 2.1.187 — verified live (set it on Opus 4.8 / Sonnet 4.6, read back via
- * get_settings). "Ultra code" is NOT an effort value: it is xhigh + a separate
- * `ultracode` flag, handled by the composer. Which levels a model supports is
- * per-model (see effortLevelsForModel); Ultra code only on xhigh-capable models.
+ * get_settings). `ultra` is a Codex-only pure-effort rung ABOVE `max`, reported by
+ * gpt-5.6's `model/list` (do NOT confuse it with the Claude `ultracode` app tier).
+ * "Ultra code" is NOT an effort value: it is xhigh + a separate `ultracode` flag,
+ * handled by the composer. Which levels a model supports is per-model (see
+ * effortLevelsForModel); Ultra code only on xhigh-capable Claude models.
  */
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode";
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | "ultracode";
 
 // Display labels are shared with the read-only effort surfaces (FlightDeck card,
 // agent meta) via subagentMeta.EFFORT_LABELS so they can never drift.
 const LABELS: Record<EffortLevel, string> = EFFORT_LABELS;
-// max sits between xhigh and ultracode: it is the top *pure-effort* rung, while
-// ultracode (xhigh + workflows) stays the app's special top step. The ordering also
-// drives clampEffort — keeping max AFTER xhigh means clamping an xhigh request on a
-// max-but-not-xhigh model (Sonnet 4.6) lands on `high`, never jumps UP to max.
-const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultracode"];
+// max/ultra sit between xhigh and ultracode: `max` is the top pure-effort rung for
+// Claude, `ultra` the deeper Codex-only rung above it (gpt-5.6); `ultracode` (xhigh +
+// workflows) stays the app's special top step. The ordering also drives clampEffort —
+// keeping max AFTER xhigh means clamping an xhigh request on a max-but-not-xhigh model
+// (Sonnet 4.6) lands on `high`, never jumps UP to max; ultra ranks above max so a
+// Codex `ultra` clamps down to `max` on a Claude model, and `ultracode` clamps down to
+// `ultra` on a gpt-5.6 Codex model.
+const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"];
 
 /** Effort levels a model supports (mirrors the binary's per-model table — `yUe`
  *  gates `max`, `eve` gates `xhigh`; both verified live against 2.1.187). `[]` = no
@@ -31,6 +37,13 @@ const ORDER: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultracod
  *  if reality ever differs. NOTE: Sonnet 4.6 accepts `max` but NOT `xhigh`. */
 export function effortLevelsForModel(model: string | null | undefined): EffortLevel[] {
   const m = (model || "").toLowerCase();
+  // Codex models: gpt-5.x top out at xhigh; the gpt-5.6 family (sol/terra/luna) adds the
+  // deeper `max` + `ultra` pure-effort rungs (reported by `model/list`). `ultra` is a
+  // Codex effort, NOT the Claude `ultracode` app tier.
+  if (backendOfModel(model) === "codex") {
+    if (m.includes("gpt-5.6")) return ["low", "medium", "high", "xhigh", "max", "ultra"];
+    return ["low", "medium", "high", "xhigh"];
+  }
   if (m.includes("haiku")) return []; // Haiku 4.5 has no effort support → slider hidden
   if (m.includes("opus")) return ["low", "medium", "high", "xhigh", "max"]; // xhigh + max
   if (m.includes("fable")) return ["low", "medium", "high", "xhigh", "max"]; // same tier as Opus
@@ -38,15 +51,24 @@ export function effortLevelsForModel(model: string | null | undefined): EffortLe
   return ["low", "medium", "high"]; // safe fallback
 }
 
-/** Slider steps for a model: its levels, plus an Ultra code step if xhigh-capable. */
+/** Slider steps for a model: its levels, plus an Ultra code step if xhigh-capable —
+ *  but "Ultra code" (xhigh + standing workflows) is Claude-only, never offered on Codex. */
 function stepsForModel(model: string | null | undefined): EffortLevel[] {
   const levels = effortLevelsForModel(model);
-  return levels.includes("xhigh") ? [...levels, "ultracode"] : levels;
+  const ultraCapable = backendOfModel(model) === "claude" && levels.includes("xhigh");
+  return ultraCapable ? [...levels, "ultracode"] : levels;
 }
 
-/** Clamp an effort to what a model supports (highest supported ≤ requested). */
-export function clampEffort(effort: EffortLevel, model: string | null | undefined): EffortLevel {
-  const steps = stepsForModel(model);
+/** Clamp an effort to what a model supports (highest supported ≤ requested). `steps`
+ *  overrides the derived ladder — pass a Codex model's data-driven
+ *  `supportedReasoningEfforts` so the clamp matches EXACTLY what the gauge renders (a
+ *  Claude-only `max`/Ultra code then clamps down to the model's real top, e.g. xhigh). */
+export function clampEffort(
+  effort: EffortLevel,
+  model: string | null | undefined,
+  explicitSteps?: EffortLevel[],
+): EffortLevel {
+  const steps = explicitSteps && explicitSteps.length ? explicitSteps : stepsForModel(model);
   if (steps.length === 0 || steps.includes(effort)) return effort;
   const reqIdx = ORDER.indexOf(effort);
   let best: EffortLevel | null = null;
@@ -76,6 +98,7 @@ export function EffortGauge({
   value,
   onChange,
   portal,
+  efforts,
 }: {
   model: string | null | undefined;
   value: EffortLevel;
@@ -83,17 +106,27 @@ export function EffortGauge({
   /** Render the popover in a portal — for triggers inside an `overflow`-clipping
    *  container (e.g. a FlightDeck card). See {@link Menu}. */
   portal?: boolean;
+  /** Explicit effort steps (Codex: the selected model's real `supportedReasoningEfforts`
+   *  from `model/list`, which for gpt-5.6 includes `max`/`ultra`). When omitted, derived
+   *  from the model id (`stepsForModel`). Never gets an Ultra code (`ultracode`) step —
+   *  that app tier is Claude-only. */
+  efforts?: EffortLevel[];
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
-  const steps = stepsForModel(model);
+  const steps = efforts && efforts.length ? efforts : stepsForModel(model);
   if (steps.length === 0) return null;
 
   const last = steps.length - 1;
   const sel = Math.max(0, steps.indexOf(value));
   const current = steps[sel];
-  const isUltra = current === "ultracode";
+  const isUltracode = current === "ultracode";
+  // The SLIDER's ultra visual (multicolor fill + pulse + thumb glow) fires for BOTH the Claude
+  // `ultracode` tier AND the Codex `ultra` effort — the same small in-slider animation. Only the
+  // composer chip's violet tint / the full-screen ultracode blast stay ultracode-only
+  // (`isUltracode`); those live outside this component.
+  const ultraFx = current === "ultra" || isUltracode;
   const t = last === 0 ? 0 : sel / last;
 
   const pickFromX = (clientX: number) => {
@@ -106,7 +139,7 @@ export function EffortGauge({
   };
 
   const chip = (
-    <ChipBtn icon="bolt" {...(sel > 0 ? { "data-eff-on": "" } : {})} {...(isUltra ? { "data-ultra": "" } : {})}>
+    <ChipBtn icon="bolt" {...(sel > 0 ? { "data-eff-on": "" } : {})} {...(isUltracode ? { "data-ultra": "" } : {})}>
       {LABELS[current]}
     </ChipBtn>
   );
@@ -115,15 +148,15 @@ export function EffortGauge({
     <Menu up portal={portal} trigger={chip}>
       <div className="wf-eff" onClick={(e) => e.stopPropagation()}>
         <div className="wf-eff-top">
-          <span className="wf-eff-lbl">Effort de réflexion</span>
-          <span className={"wf-eff-cur" + (isUltra ? " ultra" : "")}>{LABELS[current]}</span>
+          <span className="wf-eff-lbl">Thinking effort</span>
+          <span className={"wf-eff-cur" + (ultraFx ? " ultra" : "")}>{LABELS[current]}</span>
         </div>
 
         <div
           ref={trackRef}
-          className={"wf-eff-track" + (isUltra ? " ultra" : "")}
+          className={"wf-eff-track" + (ultraFx ? " ultra" : "")}
           role="slider"
-          aria-label="Effort de réflexion"
+          aria-label="Thinking effort"
           aria-valuemin={0}
           aria-valuemax={last}
           aria-valuenow={sel}
@@ -148,15 +181,15 @@ export function EffortGauge({
             else if (e.key === "ArrowRight" && sel < last) onChange(steps[sel + 1]);
           }}
         >
-          <div className={"wf-eff-fill" + (isUltra ? " ultra" : "")} style={{ width: fillAt(t) }} />
+          <div className={"wf-eff-fill" + (ultraFx ? " ultra" : "")} style={{ width: fillAt(t) }} />
           {steps.map((lvl, i) => (
             <span
               key={lvl}
-              className={"wf-eff-notch" + (i <= sel ? " on" : "") + (lvl === "ultracode" ? " ultra" : "")}
+              className={"wf-eff-notch" + (i <= sel ? " on" : "") + (lvl === "ultracode" || lvl === "ultra" ? " ultra" : "")}
               style={{ left: posAt(i / last) }}
             />
           ))}
-          <span className={"wf-eff-thumb" + (isUltra ? " ultra" : "")} style={{ left: thumbAt(t) }} />
+          <span className={"wf-eff-thumb" + (ultraFx ? " ultra" : "")} style={{ left: thumbAt(t) }} />
         </div>
       </div>
     </Menu>

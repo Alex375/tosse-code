@@ -92,15 +92,15 @@ pub enum GitError {
 impl std::fmt::Display for GitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GitError::Spawn(e) => write!(f, "impossible de lancer git : {e}"),
+            GitError::Spawn(e) => write!(f, "could not launch git: {e}"),
             GitError::Command { args, stderr } => {
                 if stderr.is_empty() {
-                    write!(f, "git {args} a échoué")
+                    write!(f, "git {args} failed")
                 } else {
-                    write!(f, "git {args} : {stderr}")
+                    write!(f, "git {args}: {stderr}")
                 }
             }
-            GitError::Parse(msg) => write!(f, "sortie git inattendue : {msg}"),
+            GitError::Parse(msg) => write!(f, "unexpected git output: {msg}"),
         }
     }
 }
@@ -325,13 +325,13 @@ pub fn create_worktree(
 ) -> Result<WorktreeInfo, GitError> {
     let branch = branch.trim();
     if branch.is_empty() {
-        return Err(GitError::Parse("le nom de branche est vide".into()));
+        return Err(GitError::Parse("branch name is empty".into()));
     }
     let worktrees = list_worktrees(repo_path)?;
     let main = worktrees
         .iter()
         .find(|w| w.is_main)
-        .ok_or_else(|| GitError::Parse("aucun worktree principal trouvé".into()))?;
+        .ok_or_else(|| GitError::Parse("no main worktree found".into()))?;
     let dest = worktree_dest(&main.path, branch);
     let dest = dest.to_string_lossy().into_owned();
 
@@ -352,7 +352,7 @@ pub fn create_worktree(
     list_worktrees(repo_path)?
         .into_iter()
         .find(|w| same_path(&w.path, &dest))
-        .ok_or_else(|| GitError::Parse("worktree créé introuvable dans la liste".into()))
+        .ok_or_else(|| GitError::Parse("created worktree not found in the list".into()))
 }
 
 /// Remove a worktree. Without `force`, `git` refuses to remove a worktree that

@@ -1,49 +1,57 @@
 # Changelog
 
-Nouveautés de chaque version, **affichées dans l'app** au moment de la mise à jour.
+What's new in each version, **shown in the app** when it updates.
 
-Convention : une section `## vX.Y.Z` par version (la plus récente en haut), avec des
-puces courtes orientées **utilisateur** — pas de détails techniques internes. Le skill
-`/release` ajoute automatiquement la section de la nouvelle version à partir des
-commits ; `release.yml` lit cette section et la met en description de la release
-GitHub, que l'app affiche telle quelle. Le bloc d'instructions d'installation (après
-le marqueur `<!-- gh-only -->`) est ajouté par `release.yml` et reste **seulement**
-sur la page GitHub — il n'apparaît pas dans l'app.
+Convention: one `## vX.Y.Z` section per version (most recent on top), with short,
+**user-oriented** bullets — no internal technical details. The `/release` skill
+automatically adds the new version's section from the commits; `release.yml` reads
+that section and uses it as the GitHub release description, which the app displays
+as-is. The install instructions block (after the `<!-- gh-only -->` marker) is added
+by `release.yml` and stays **only** on the GitHub page — it does not appear in the app.
+
+## v1.0.0
+
+Flight Deck reaches 1.0 — the headline is Codex.
+
+- Codex (OpenAI) is now supported. When you create a conversation you pick the model between Claude and Codex; the conversation stays on that backend, with its background tasks, sub-agents, and History panel entries all handled just like Claude.
+- The whole app is now in English.
+- New on Flight Deck cards: delete a conversation straight from its card, stream controls (clean output, start/restart/stop) in the reply modal, and an importance rail that surfaces the cards needing a look.
+- AI provider account management: sign in to your OpenAI and Claude accounts from the app and see each one's connection status at a glance.
 
 ## v0.28.0
 
-- Nouveau visualiseur de PDF intégré à l'éditeur : zoom, ajustement à la largeur, ouverture en lecture seule.
-- Les liens web et markdown sont désormais cliquables dans l'aperçu du Flight Deck.
-- Dans la conversation, une capture lue par l'agent s'affiche en aperçu d'image au lieu de son code base64.
-- Nouveau réglage « chemins de fichiers cliquables » (activé par défaut).
-- Le réglage des tâches de fond est déplacé dans l'onglet Général des Réglages.
+- New PDF viewer built into the editor: zoom, fit-to-width, open in read-only mode.
+- Web and markdown links are now clickable in the Flight Deck preview.
+- In the conversation, a screenshot read by the agent shows as an image preview instead of its base64 code.
+- New "clickable file paths" setting (on by default).
+- The background-tasks setting has moved to the General tab of Settings.
 
 ## v0.27.0
 
-- Durée des tours affichée dans la conversation, avec un compteur en direct pendant que l'agent travaille et le détail par poste (modèle, réflexion, outils).
-- Cartes du Flight Deck interactives : liste des tâches, contexte, effort et piles de to-do consultables directement.
-- Les plugins et slash-commands des conversations actives se rechargent automatiquement quand vous les activez/désactivez.
-- Un agent qui termine pendant qu'une tâche de fond tourne passe désormais en vert (« tâche de fond en cours ») au lieu d'un état « à relire » trompeur.
-- Correction : les prompts internes des sous-agents ne s'affichent plus comme vos propres messages dans le fil.
+- Turn duration shown in the conversation, with a live counter while the agent works and a per-item breakdown (model, thinking, tools).
+- Interactive Flight Deck cards: task list, context, effort, and to-do stacks viewable directly.
+- Plugins and slash-commands of active conversations reload automatically when you enable/disable them.
+- An agent that finishes while a background task is running now turns green ("background task running") instead of a misleading "to review" state.
+- Fix: sub-agents' internal prompts no longer show up as your own messages in the thread.
 
 ## v0.26.0
 
-- Notifications sonores plus fiables : le son de fin d'agent se déclenche à nouveau même après avoir regardé une vidéo ou changé la sortie audio du Mac.
-- Un nouvel installeur renomme le bundle en **Flight Deck.app** au premier lancement.
+- More reliable sound notifications: the agent-finished chime fires again even after watching a video or changing the Mac's audio output.
+- A new installer renames the bundle to **Flight Deck.app** on first launch.
 
 ## v0.25.0
 
-- L'app s'appelle désormais **Flight Deck** et arbore un nouveau logo.
-- Nouveaux contrôles au survol des messages : reprendre la conversation à partir d'un message (rewind) ou repartir dans une nouvelle branche (fork).
-- Un pin flottant affiche votre dernier message envoyé en haut du fil.
-- Les messages conservent leurs retours à la ligne, et l'aperçu du dernier message ignore les notifications internes.
-- Correction : un jeton d'usage périmé ne masque plus le solde issu du Keychain.
+- The app is now called **Flight Deck** and sports a new logo.
+- New on-hover message controls: rewind the conversation from a message, or branch off into a new one (fork).
+- A floating pin shows your last sent message at the top of the thread.
+- Messages keep their line breaks, and the last-message preview ignores internal notifications.
+- Fix: a stale usage token no longer hides the balance from the Keychain.
 
 ## v0.24.0
 
-- Flight Deck : cartes cliquables avec pop-ups (conversation, dernier message, to-do) et vue d'ensemble enrichie de la flotte d'agents.
-- Alerte quand un agent a terminé, même s'il tournait en tâche de fond ; les notifications de tâches internes n'encombrent plus le fil.
-- Bouton « + » du composer : joindre des fichiers et des images à un message.
-- Page Réglages repensée, avec un récapitulatif des raccourcis clavier (et de nouveaux raccourcis).
-- Confirmation avant de supprimer une conversation **en cours d'exécution** (les conversations inactives se suppriment toujours en un clic, annulable avec ⌘Z).
-- Refonte de la page de mise à jour : nouveautés de version lisibles, et avertissement clair avant le redémarrage — avec le nombre de conversations en cours qui seront interrompues.
+- Flight Deck: clickable cards with pop-ups (conversation, last message, to-do) and an enriched overview of the agent fleet.
+- Alert when an agent has finished, even if it was running in the background; internal task notifications no longer clutter the thread.
+- Composer "+" button: attach files and images to a message.
+- Redesigned Settings page, with a keyboard-shortcuts summary (and new shortcuts).
+- Confirmation before deleting a **running** conversation (inactive conversations still delete in one click, undoable with ⌘Z).
+- Reworked update page: readable version highlights, and a clear warning before restart — including the number of running conversations that will be interrupted.

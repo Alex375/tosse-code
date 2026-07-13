@@ -221,7 +221,7 @@ impl Assembler {
         out
     }
 
-    /// Emit a "Modèle : X → Y" notice if the confirmed model moved (compared by
+    /// Emit a "Model: X → Y" notice if the confirmed model moved (compared by
     /// friendly label, so an alias vs the resolved id never false-positives and a
     /// per-turn re-report of the same model is silent). The first sighting only
     /// records the baseline.
@@ -230,14 +230,14 @@ impl Assembler {
         match self.announced.model.clone() {
             Some(from) if from == to => {}
             Some(from) => {
-                out.push(change_notice("Modèle", "diamond", &from, &to));
+                out.push(change_notice("Model", "diamond", &from, &to));
                 self.announced.model = Some(to);
             }
             None => self.announced.model = Some(to),
         }
     }
 
-    /// Emit an "Effort de réflexion : X → Y" notice if the confirmed effort/ultracode
+    /// Emit a "Thinking effort: X → Y" notice if the confirmed effort/ultracode
     /// moved (the Ultra code tier folds in as its own label).
     fn announce_effort(&mut self, out: &mut Vec<SessionEvent>) {
         let Some(to) = effort_label(self.state.effort.as_deref(), self.state.ultracode) else {
@@ -246,20 +246,20 @@ impl Assembler {
         match self.announced.effort.clone() {
             Some(from) if from == to => {}
             Some(from) => {
-                out.push(change_notice("Effort de réflexion", "bolt", &from, &to));
+                out.push(change_notice("Thinking effort", "bolt", &from, &to));
                 self.announced.effort = Some(to);
             }
             None => self.announced.effort = Some(to),
         }
     }
 
-    /// Emit a "Mode de permission : X → Y" notice if the confirmed mode moved.
+    /// Emit a "Permission mode: X → Y" notice if the confirmed mode moved.
     fn announce_permission(&mut self, mode: &str, out: &mut Vec<SessionEvent>) {
         let to = permission_label(mode);
         match self.announced.permission.clone() {
             Some(from) if from == to => {}
             Some(from) => {
-                out.push(change_notice("Mode de permission", "shield", &from, &to));
+                out.push(change_notice("Permission mode", "shield", &from, &to));
                 self.announced.permission = Some(to);
             }
             None => self.announced.permission = Some(to),
@@ -361,8 +361,8 @@ impl Assembler {
                 };
                 out.push(SessionEvent::RemoteControl(RemoteControlState {
                     status: status.to_string(),
-                    session_url: None,
                     error: if status == "error" { detail.clone() } else { None },
+                    ..RemoteControlState::default()
                 }));
             }
             // Other subtypes are discarded by the protocol layer's catch-all; we
@@ -784,6 +784,8 @@ impl Assembler {
             id,
             blocks,
             parent_tool_use_id: a.parent_tool_use_id.clone(),
+            // Claude has no Codex turn id — it targets rewind/fork by prompt text.
+            turn_id: None,
         }));
         // A sub-agent's assistant message carries the model it ran on — the wire's only
         // place a sub-agent's model appears (absent from every `task_*` event). Correlate
@@ -956,7 +958,7 @@ impl Assembler {
             is_error: r.is_error,
             result: r.result.clone(),
             // Present on the wire (often null); surface it only when it's a real string
-            // so an errored turn can show a typed "Erreur d'API : <status>" heading.
+            // so an errored turn can show a typed "API error: <status>" heading.
             api_error_status: r.api_error_status.as_str().map(str::to_string),
             total_cost_usd: r.total_cost_usd,
             num_turns: r.num_turns,
@@ -992,7 +994,7 @@ impl Assembler {
     }
 }
 
-/// Build a "control changed" timeline notice (`{control} : {from} → {to}`) — the
+/// Build a "control changed" timeline notice (`{control}: {from} → {to}`) — the
 /// model-felt signal that a control actually moved. The front renders it as a subtle
 /// inline line (mirrors the VS Code extension's settings lines).
 fn change_notice(control: &str, icon: &str, from: &str, to: &str) -> SessionEvent {
@@ -2037,7 +2039,7 @@ mod tests {
         let (subtype, detail) = first_notice(asm.apply_settings(None, Some("high".into()), Some(false)))
             .expect("a control_change notice");
         assert_eq!(subtype, "control_change");
-        assert_eq!(detail["control"], serde_json::json!("Effort de réflexion"));
+        assert_eq!(detail["control"], serde_json::json!("Thinking effort"));
         assert_eq!(detail["from"], serde_json::json!("Extra high"));
         assert_eq!(detail["to"], serde_json::json!("High"));
         // Re-reading the same value is silent (idempotent).
@@ -2059,7 +2061,7 @@ mod tests {
     fn permission_confirm_announces_then_is_idempotent() {
         let mut asm = seeded();
         let (_, detail) = first_notice(asm.confirm_permission_mode("plan")).expect("a notice");
-        assert_eq!(detail["control"], serde_json::json!("Mode de permission"));
+        assert_eq!(detail["control"], serde_json::json!("Permission mode"));
         assert_eq!(detail["from"], serde_json::json!("Default"));
         assert_eq!(detail["to"], serde_json::json!("Plan mode"));
         assert!(first_notice(asm.confirm_permission_mode("plan")).is_none());
@@ -2078,7 +2080,7 @@ mod tests {
         }))
         .unwrap();
         let (_, detail) = first_notice(asm.ingest(&init)).expect("a model change notice");
-        assert_eq!(detail["control"], serde_json::json!("Modèle"));
+        assert_eq!(detail["control"], serde_json::json!("Model"));
         assert_eq!(detail["from"], serde_json::json!("Opus 4.8"));
         assert_eq!(detail["to"], serde_json::json!("Sonnet 4.6"));
     }

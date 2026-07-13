@@ -119,7 +119,7 @@ describe("attachmentFromBlob", () => {
     // A stub blob past the cap — attachmentFromBlob must bail on size before FileReader.
     const huge = { type: "image/png", size: MAX_ATTACH_BYTES + 1 } as unknown as Blob;
     const res = await attachmentFromBlob(huge, "big.png");
-    expect(res && "error" in res ? res.error : null).toMatch(/trop volumineuse/);
+    expect(res && "error" in res ? res.error : null).toMatch(/too large/i);
   });
 
   it("reads a small supported image into a wire-ready base64 draft", async () => {

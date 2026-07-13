@@ -11,15 +11,15 @@ use super::{run_git, GitError};
 pub fn commit(cwd: &str, message: &str) -> Result<String, GitError> {
     let message = message.trim();
     if message.is_empty() {
-        return Err(GitError::Parse("le message de commit est vide".into()));
+        return Err(GitError::Parse("the commit message is empty".into()));
     }
     run_git(cwd, &["add", "-A"])?;
     // With nothing staged, `git commit` exits non-zero but prints its reason to
-    // STDOUT (which run_git discards) — surfacing a useless "git commit … a
-    // échoué". Detect the empty index first and give a clear message. `git diff
+    // STDOUT (which run_git discards) — surfacing a useless "git commit … failed".
+    // Detect the empty index first and give a clear message. `git diff
     // --cached --quiet` exits 0 when there is NOTHING staged, non-zero otherwise.
     if run_git(cwd, &["diff", "--cached", "--quiet"]).is_ok() {
-        return Err(GitError::Parse("rien à committer".into()));
+        return Err(GitError::Parse("nothing to commit".into()));
     }
     run_git(cwd, &["commit", "-m", message])?;
     let oid = run_git(cwd, &["rev-parse", "--short", "HEAD"])?;

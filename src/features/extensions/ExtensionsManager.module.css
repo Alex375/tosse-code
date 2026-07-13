@@ -189,9 +189,93 @@
   font-weight: 600;
 }
 
+/* ---- Backend tabs (Claude | Codex) ---- */
+.tabBar {
+  display: flex;
+  gap: 7px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--wf-line);
+  flex: 0 0 auto;
+}
+.tabBtn {
+  height: 28px;
+  padding: 0 13px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--wf-line-2);
+  background: transparent;
+  color: var(--wf-tx-lo);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.tabBtn:hover {
+  color: var(--wf-tx-hi);
+  background: var(--wf-panel-3);
+}
+/* Selected backend tab — a clear coral-tinted highlight. Defined AFTER .tabBtn so its
+   background/border/color win the source-order cascade (equal specificity). */
+.tabOn {
+  background: var(--wf-accent-dim);
+  border-color: var(--wf-accent);
+  color: var(--wf-tx-hi);
+  font-weight: 600;
+}
+.tabOn:hover {
+  background: var(--wf-accent-dim);
+}
+/* Brand-coloured backend logos in the tabs (the marks fill with currentColor). The colour
+   is set on the mark itself so it stays visible in both the selected and unselected states
+   (the selected tab's coral-tinted bg keeps both readable). */
+.tabMarkClaude {
+  color: var(--wf-accent);
+}
+.tabMarkCodex {
+  color: var(--wf-codex-accent);
+}
+
 .body {
   padding: 16px 18px 20px;
   overflow-y: auto;
+}
+
+/* Muted footer note (e.g. the Codex read-only / deferred hint). */
+.codexHint {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--wf-line);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--wf-tx-lo);
+}
+.codexHint em {
+  font-style: normal;
+  color: var(--wf-tx-hi);
+}
+
+/* Codex marketplaces — the add-by-source form under the marketplace rows. */
+.mktAddRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mktAddInput {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--wf-tx-hi);
+  background: var(--wf-bg-2, transparent);
+  border: 1px solid var(--wf-line);
+  border-radius: 8px;
+  outline: none;
+}
+.mktAddInput:focus {
+  border-color: var(--wf-accent, #ff6b57);
 }
 
 /* ---- Sections ---- */
@@ -234,7 +318,7 @@
   color: var(--wf-tx-xlo);
 }
 
-/* ---- MCP buckets (dépôt / plugin / connecteurs cloud) ---- */
+/* ---- MCP buckets (repo / plugin / cloud connectors) ---- */
 .bucket {
   margin-bottom: 12px;
 }
@@ -1020,7 +1104,7 @@
   background: rgba(240, 177, 90, 0.08);
   white-space: nowrap;
 }
-/* "Mettre à jour" — an amber-tinted action, sitting between the row body and toggle. */
+/* "Update" — an amber-tinted action, sitting between the row body and toggle. */
 .updateBtn {
   flex: 0 0 auto;
   display: inline-flex;

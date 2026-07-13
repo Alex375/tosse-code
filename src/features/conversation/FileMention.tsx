@@ -177,7 +177,7 @@ function ClickableFile({
       role="button"
       tabIndex={0}
       data-filelink=""
-      title={`Ouvrir ${target.abs}${suffix}`}
+      title={`Open ${target.abs}${suffix}`}
       onClick={activate}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") activate(e);

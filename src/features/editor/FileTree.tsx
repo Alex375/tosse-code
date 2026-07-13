@@ -64,7 +64,7 @@ function EditRow({
     const el = inputRef.current;
     if (!el) return;
     el.focus();
-    // Select the stem (everything before the extension) à la VS Code, so typing
+    // Select the stem (everything before the extension) like VS Code, so typing
     // replaces the name but keeps the extension; a new/extensionless entry selects all.
     const dot = initial.lastIndexOf(".");
     if (dot > 0) el.setSelectionRange(0, dot);
@@ -186,7 +186,7 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
     try {
       await navigator.clipboard.writeText(text);
     } catch (err) {
-      useAppErrors.getState().pushError("Copie dans le presse-papier impossible.", String(err));
+      useAppErrors.getState().pushError("Could not copy to clipboard.", String(err));
     }
   }
 
@@ -198,10 +198,10 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
       .revealInFinder(path)
       .then((res) => {
         if (res.status !== "ok")
-          useAppErrors.getState().pushError(`« Révéler dans le Finder » a échoué : ${baseName(path)}`, res.error);
+          useAppErrors.getState().pushError(`"Reveal in Finder" failed: ${baseName(path)}`, res.error);
       })
       .catch((e) =>
-        useAppErrors.getState().pushError(`« Révéler dans le Finder » a échoué : ${baseName(path)}`, String(e)),
+        useAppErrors.getState().pushError(`"Reveal in Finder" failed: ${baseName(path)}`, String(e)),
       );
   }
 
@@ -216,32 +216,32 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
     const hasClip = !!clipboard && clipboard.paths.length > 0;
     if (!target) {
       return [
-        { label: "Nouveau fichier", icon: "file", onClick: () => startCreate(convId, root, "newFile") },
-        { label: "Nouveau dossier", icon: "folder", onClick: () => startCreate(convId, root, "newDir") },
+        { label: "New file", icon: "file", onClick: () => startCreate(convId, root, "newFile") },
+        { label: "New folder", icon: "folder", onClick: () => startCreate(convId, root, "newDir") },
         "sep",
-        { label: "Coller", icon: "clipboard", disabled: !hasClip, onClick: () => void pasteInto(convId, root) },
+        { label: "Paste", icon: "clipboard", disabled: !hasClip, onClick: () => void pasteInto(convId, root) },
         "sep",
-        { label: "Copier le chemin", icon: "link", onClick: () => void copyText(root) },
-        { label: "Révéler dans le Finder", icon: "external", onClick: () => reveal(root) },
+        { label: "Copy path", icon: "link", onClick: () => void copyText(root) },
+        { label: "Reveal in Finder", icon: "external", onClick: () => reveal(root) },
       ];
     }
     // New entries land inside a folder, or beside a file (in its parent dir).
     const dir = target.is_dir ? target.path : dirName(target.path);
     return [
-      { label: "Nouveau fichier", icon: "file", onClick: () => startCreate(convId, dir, "newFile") },
-      { label: "Nouveau dossier", icon: "folder", onClick: () => startCreate(convId, dir, "newDir") },
+      { label: "New file", icon: "file", onClick: () => startCreate(convId, dir, "newFile") },
+      { label: "New folder", icon: "folder", onClick: () => startCreate(convId, dir, "newDir") },
       "sep",
-      { label: "Couper", icon: "scissors", onClick: () => setClipboard([target.path], "cut") },
-      { label: "Copier", icon: "copy", onClick: () => setClipboard([target.path], "copy") },
-      { label: "Coller", icon: "clipboard", disabled: !hasClip, onClick: () => void pasteInto(convId, dir) },
+      { label: "Cut", icon: "scissors", onClick: () => setClipboard([target.path], "cut") },
+      { label: "Copy", icon: "copy", onClick: () => setClipboard([target.path], "copy") },
+      { label: "Paste", icon: "clipboard", disabled: !hasClip, onClick: () => void pasteInto(convId, dir) },
       "sep",
-      { label: "Copier le chemin", icon: "link", onClick: () => void copyText(target.path) },
-      { label: "Copier le chemin relatif", icon: "link", onClick: () => void copyText(relPath(target.path)) },
+      { label: "Copy path", icon: "link", onClick: () => void copyText(target.path) },
+      { label: "Copy relative path", icon: "link", onClick: () => void copyText(relPath(target.path)) },
       "sep",
-      { label: "Renommer", icon: "pencil", onClick: () => startRename(convId, target.path) },
-      { label: "Supprimer", icon: "trash", danger: true, onClick: () => setConfirmDelete(target) },
+      { label: "Rename", icon: "pencil", onClick: () => startRename(convId, target.path) },
+      { label: "Delete", icon: "trash", danger: true, onClick: () => setConfirmDelete(target) },
       "sep",
-      { label: "Révéler dans le Finder", icon: "external", onClick: () => reveal(target.path) },
+      { label: "Reveal in Finder", icon: "external", onClick: () => reveal(target.path) },
     ];
   }
 
@@ -260,8 +260,8 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
           type="button"
           className={styles.treeClose}
           onClick={() => setTreeCollapsed(true)}
-          title="Masquer l'arborescence"
-          aria-label="Masquer l'arborescence"
+          title="Hide file tree"
+          aria-label="Hide file tree"
         >
           <Ico name="x" className="sm" />
         </button>
@@ -270,13 +270,13 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
         {dirErrors[root] ? (
           <div className={styles.treeError} title={dirErrors[root]}>
             <Ico name="alert" className="sm" />
-            Impossible de lire ce dossier.
+            Unable to read this folder.
             <button type="button" className={styles.treeRetry} onClick={() => void toggleDir(convId, root)}>
-              Réessayer
+              Retry
             </button>
           </div>
         ) : rootEntries === undefined ? (
-          <div className={styles.treeLoading}>Chargement…</div>
+          <div className={styles.treeLoading}>Loading…</div>
         ) : (
           <>
             {editingNewAtRoot ? (
@@ -289,7 +289,7 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
               />
             ) : null}
             {rootEntries.length === 0 && !editingNewAtRoot ? (
-              <div className={styles.treeEmpty}>Dossier vide</div>
+              <div className={styles.treeEmpty}>Empty folder</div>
             ) : (
               rootEntries.map((e) => (
                 <TreeNode
@@ -325,8 +325,8 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
         open={confirmDelete !== null}
         danger
         busy={deleting}
-        title={confirmDelete ? `Supprimer « ${confirmDelete.name} » ?` : ""}
-        confirmLabel="Déplacer vers la corbeille"
+        title={confirmDelete ? `Delete "${confirmDelete.name}"?` : ""}
+        confirmLabel="Move to Trash"
         onCancel={() => {
           if (!deleting) setConfirmDelete(null);
         }}
@@ -340,8 +340,8 @@ export function FileTree({ convId, root, width }: { convId: string; root: string
         }}
       >
         {confirmDelete?.is_dir
-          ? "Le dossier et tout son contenu seront déplacés vers la corbeille (récupérables depuis le Finder)."
-          : "Le fichier sera déplacé vers la corbeille (récupérable depuis le Finder)."}
+          ? "The folder and all its contents will be moved to the Trash (recoverable from the Finder)."
+          : "The file will be moved to the Trash (recoverable from the Finder)."}
       </ConfirmDialog>
     </div>
   );
@@ -434,7 +434,7 @@ function TreeNode({
           title={err}
         >
           <Ico name="alert" className="sm" />
-          Lecture impossible.
+          Unable to read.
         </div>
       ) : null}
       {newHere ? (

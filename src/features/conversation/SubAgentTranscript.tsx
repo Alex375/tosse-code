@@ -5,7 +5,7 @@
 // It renders the SAME "clean output" shape as the live thread: each user message is its own
 // row, and every assistant turn until the next user message is concatenated into ONE
 // response whose intermediate work (tool runs, thinking, in-between prose, sub-agents) folds
-// behind a single "Travail de Claude" block, leaving only the concluding message in clear.
+// behind a single "Claude's work" block, leaving only the concluding message in clear.
 // Tool results arrive as their own `tool_result` items; we join them to their `tool_use` by
 // id locally. The grouped sections + the fold are shared VERBATIM with the live thread
 // (<ToolSection> / <StaticToolStep> / <ClaudeWorkBlock>), so disk and live never diverge.
@@ -26,6 +26,7 @@ import { ClaudeWorkBlock, StaticToolStep, ToolSection } from "./ToolSection";
 import { SkillChip, UserText } from "./userText";
 import { parseSpecialMessage } from "./specialMessage";
 import { SpecialMessageCard } from "./SpecialMessageCard";
+import { NoticeBlock } from "./noticeView";
 
 interface JoinedResult {
   content: JsonValue;
@@ -62,7 +63,7 @@ function renderSegments(segments: Segment[], results: Map<string, JoinedResult>)
 }
 
 /** One Claude response (everything between two user messages): intermediate work folds into a
- *  single "Travail de Claude" block, leaving only the concluding message in clear. A response
+ *  single "Claude's work" block, leaving only the concluding message in clear. A response
  *  that ends on tools (no concluding prose) renders unfolded, so something always stays in
  *  clear — mirrors the live thread's settled clean-output behaviour. */
 function ClaudeResponse({
@@ -95,14 +96,16 @@ function ClaudeResponse({
   );
 }
 
-type Row =
+export type Row =
   | { kind: "user"; key: string; text: string }
-  | { kind: "assistant"; key: string; blocks: NormalizedBlock[] };
+  | { kind: "assistant"; key: string; blocks: NormalizedBlock[] }
+  | { kind: "notice"; key: string; subtype: string; detail: JsonValue };
 
 /** Collapse the flat item list into display rows: each user message is its own row; every
  *  assistant turn until the next user message is concatenated into ONE response (mirrors the
- *  live thread's MsgAIGroup), so the clean-output fold spans a whole multi-turn response. */
-function toRows(items: ConversationItem[]): Row[] {
+ *  live thread's MsgAIGroup), so the clean-output fold spans a whole multi-turn response.
+ *  Exported for unit tests (the "notices are never dropped" contract). */
+export function toRows(items: ConversationItem[]): Row[] {
   const rows: Row[] = [];
   let cur: NormalizedBlock[] | null = null;
   items.forEach((it, i) => {
@@ -116,9 +119,15 @@ function toRows(items: ConversationItem[]): Row[] {
         rows.push({ kind: "assistant", key: it.id || `a-${i}`, blocks: cur });
       }
       cur.push(...it.blocks);
+    } else if (it.kind === "notice") {
+      // An error notice embedded in the transcript (e.g. `history_error` from a corrupt /
+      // unreadable rollout or transcript) MUST surface — the history restore emits it
+      // precisely so a partial/failed load is never silent. Break the assistant run so it
+      // renders in place, mirroring the live thread's NoticeRow.
+      cur = null;
+      rows.push({ kind: "notice", key: `n-${i}`, subtype: it.subtype, detail: it.detail });
     }
-    // tool_result joins via the results map; notice / streaming kinds aren't part of a
-    // settled transcript view.
+    // tool_result joins via the results map; streaming kinds aren't part of a settled view.
   });
   return rows;
 }
@@ -141,7 +150,9 @@ export function SubAgentTranscript({ items }: { items: ConversationItem[] }) {
   return (
     <div className="cv-subtranscript">
       {rows.map((r) => {
-        if (r.kind !== "user")
+        if (r.kind === "notice")
+          return <NoticeBlock key={r.key} subtype={r.subtype} detail={r.detail} />;
+        if (r.kind === "assistant")
           return <ClaudeResponse key={r.key} blocks={r.blocks} results={results} />;
         // Same routing as the live thread: an injected `<task-notification>` renders as
         // the clean card, not a raw user bubble — so history matches the conversation.

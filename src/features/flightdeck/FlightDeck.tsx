@@ -1,4 +1,4 @@
-// FlightDeck — the agent dashboard view ("Vue Gestion d'agents"). A grid of stream
+// FlightDeck — the agent dashboard view (the "Agent management" view). A grid of stream
 // cards grouped by repo, with the fleet readout banner on top. Uses `useFleetLanes`,
 // which shares the repo-grouping skeleton with the sidebar but orders STATUS-first
 // (action-required/error → review → running → idle → off, recency as tiebreak)
@@ -35,8 +35,8 @@ export function FlightDeck({ onOpen }: { onOpen: (id: string) => void }) {
       <div className="ag-page wf-col">
         <div className="ag-empty">
           <Ico name="grid" />
-          <div className="ag-empty-title">Aucun agent</div>
-          <div>Ajoute un dépôt et démarre une conversation pour piloter tes agents ici.</div>
+          <div className="ag-empty-title">No agents</div>
+          <div>Add a repository and start a conversation to steer your agents here.</div>
         </div>
       </div>
     );
@@ -59,7 +59,7 @@ export function FlightDeck({ onOpen }: { onOpen: (id: string) => void }) {
               <span className="ag-repo-counts">
                 <button
                   className="wf-icon-btn"
-                  title="Nouvelle conversation dans ce dépôt"
+                  title="New conversation in this repository"
                   onClick={() => void createConversationInRepo(repo.path)}
                 >
                   <Ico name="plus" className="sm" />
@@ -70,7 +70,7 @@ export function FlightDeck({ onOpen }: { onOpen: (id: string) => void }) {
               </span>
             </div>
             {conversations.length === 0 ? (
-              <div className="ag-repo-empty">Aucune conversation</div>
+              <div className="ag-repo-empty">No conversations</div>
             ) : (
               <div className="ag-grid">
                 {conversations.map((c) => (

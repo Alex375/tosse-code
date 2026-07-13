@@ -8,10 +8,11 @@ import type { Conversation, Repo } from "../../store/conversationsStore";
 import type { ExtensionsTarget } from "./extensionsUiStore";
 
 export interface ReloadTargets {
-  /** Every conversation of the target's repo whose stream is live (handle bound). */
+  /** Every CLAUDE conversation of the target's repo whose stream is live (handle
+   *  bound). Codex conversations are out of scope — see resolveReloadTargets. */
   liveConvs: Conversation[];
-  /** The lens's own conversation, only when it is live (conversation lens). Null in
-   *  the repo lens or when that conversation's process is off. */
+  /** The lens's own conversation, only when it is live (conversation lens) AND runs on
+   *  Claude. Null in the repo lens or when that conversation's process is off. */
   currentConv: Conversation | null;
 }
 
@@ -23,7 +24,14 @@ export interface ReloadTargets {
  * - Project (repo) lens: the repo is matched by `target.path`; there is no current
  *   conversation.
  *
- * "Live/allumée" means a live Rust session handle is bound (`handle != null`).
+ * "Live" means a live Rust session handle is bound (`handle != null`).
+ *
+ * CLAUDE conversations only: the bar hot-applies a Claude plugin toggle — a
+ * settings.json write plus the `reload_plugins` control request, which the Codex actor
+ * ignores as a no-op — and refetches the `/` menu by spawning an ephemeral `claude`.
+ * A live Codex conversation neither reads settings.json nor answers the request, so
+ * counting it would inflate "All live conversations (N)" and claim an
+ * application that never happens.
  */
 export function resolveReloadTargets(
   target: ExtensionsTarget | null,
@@ -35,10 +43,12 @@ export function resolveReloadTargets(
     target.kind === "conversation" && target.session
       ? (conversations.find((c) => c.id === target.session) ?? null)
       : null;
-  const currentConv = current?.handle ? current : null;
+  const currentConv = current?.handle && current.kind === "claude" ? current : null;
   const repoId = current?.repoId ?? repos.find((r) => r.path === target.path)?.id ?? null;
   const liveConvs = repoId
-    ? conversations.filter((c) => c.repoId === repoId && c.handle != null)
+    ? conversations.filter(
+        (c) => c.repoId === repoId && c.handle != null && c.kind === "claude",
+      )
     : [];
   return { liveConvs, currentConv };
 }

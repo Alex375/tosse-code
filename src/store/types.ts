@@ -66,7 +66,7 @@ export type TurnRole = "assistant" | "user";
 export interface UserTurnImage {
   mediaType: string;
   dataBase64: string;
-  /** Display name (filename, or "Image collée") — optional, for the chip/title. */
+  /** Display name (filename, or "Pasted image") — optional, for the chip/title. */
   name?: string;
 }
 
@@ -91,7 +91,7 @@ export interface Turn {
   /**
    * User turn only: true when the message was sent WHILE the agent was busy, so
    * the CLI queues it and injects it mid-turn rather than starting a fresh turn.
-   * Drives the "en attente" badge on the bubble. Cleared once the message has been
+   * Drives the "pending" badge on the bubble. Cleared once the message has been
    * delivered to the agent — at the next ROOT `message_started` (the model call
    * past the injection boundary), with `turn_result` / stop / send-error as safety
    * nets so the badge can never linger.
@@ -107,6 +107,13 @@ export interface Turn {
    * rounds instead of collapsing into one fold.
    */
   injectedMidTurn?: boolean;
+  /**
+   * Codex only: the backend turn id this assistant turn belongs to (the app-server's
+   * `turn/start` id, live; the rollout's `turn_context.turn_id`, cold). Lets the thread
+   * target a Codex turn boundary by id for native rewind/fork (`thread/fork{lastTurnId}`)
+   * instead of Claude's prompt-text locator. Absent on Claude turns and on user turns.
+   */
+  codexTurnId?: string;
 }
 
 /** A tool result, joined to its tool_use by id. */
@@ -128,7 +135,7 @@ export interface TurnResultMeta {
   totalCostUsd: number | null;
   numTurns: number | null;
   durationMs: number | null;
-  /** Cumulative model/API time this turn (the "N s de modèle" breakdown of durationMs). */
+  /** Cumulative model/API time this turn (the "N s of model" breakdown of durationMs). */
   durationApiMs: number | null;
   /** Time-to-first-token this turn. Captured but not surfaced in the UI yet. */
   ttftMs: number | null;
@@ -150,7 +157,7 @@ export interface ErrorItem {
   id: string;
   message: string;
   /** Optional raw technical detail (stderr / stack / raw line), shown behind a
-   *  collapsed "Détails techniques" disclosure. */
+   *  collapsed "Technical details" disclosure. */
   detail?: string | null;
 }
 
@@ -241,7 +248,7 @@ export interface SessionEntry {
    * Wall-clock start (`Date.now()`) of the turn currently in flight, or `null` when no
    * turn is running. Stamped when `state.busy` goes false→true and cleared on true→false
    * (and on `clearState`). Drives the LIVE elapsed counter in the working indicator (shown
-   * once a turn runs past a threshold, à la CLI). NOT the finished turn's duration — that
+   * once a turn runs past a threshold, like the CLI). NOT the finished turn's duration — that
    * is `TurnResultMeta.durationMs`, measured by the binary and delivered in `turn_result`.
    */
   turnStartedAt: number | null;

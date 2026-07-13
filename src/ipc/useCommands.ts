@@ -16,6 +16,7 @@ import { noteInterrupt } from "../notifications/notify";
 import { worktreesKey } from "./useWorktrees";
 import { useRemoteControlStore } from "../store/remoteControl";
 import { triggerLastMessageSummary } from "../store/lastMessageSummary";
+import { buildCodexControls } from "../features/conversation/codexControls";
 
 // These hooks are keyed by a conversation's STABLE id, not its live session
 // handle. Reads (the message store) key by the stable id; commands target the
@@ -39,7 +40,7 @@ export function useSendMessage(convId: string) {
     // `worktree` (first send only): spawn this conversation inside a freshly
     // created git worktree instead of the repo's main checkout. `queued`: the
     // agent was busy at send time, so the CLI will inject this mid-turn — flag the
-    // optimistic turn so the UI shows it as "en attente". `images`: files joined via
+    // optimistic turn so the UI shows it as "pending". `images`: files joined via
     // the composer's "+" / paste, sent as `image` blocks and shown as thumbnails.
     mutationFn: async ({
       text,
@@ -68,7 +69,12 @@ export function useSendMessage(convId: string) {
       // Map the UI's image shape to the wire's `ImageAttachment` (media_type + raw
       // base64). Empty array for a plain text turn.
       const wireImages = (images ?? []).map((i) => ({ media_type: i.mediaType, data: i.dataBase64 }));
-      const res = await unwrap(commands.sendMessage(handle, text, wireImages));
+      // For a Codex conversation, fold its composer controls (model / effort / preset /
+      // network / summary / personality) into the per-turn override object; `null` for
+      // Claude (which pushes each control live instead).
+      const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
+      const codexControls = conv?.kind === "codex" ? buildCodexControls(conv) : null;
+      const res = await unwrap(commands.sendMessage(handle, text, wireImages, codexControls));
       // On each of the first few messages of a still-untitled conversation, ask the
       // binary to (re)generate a smart title from the accumulated intent (capped, then
       // frozen; no-op once renamed / over the cap / no live session). Like the VS Code
@@ -122,7 +128,7 @@ export function useAnswerPermission(convId: string) {
     // the agent stays blocked CLI-side with nothing in the thread — surface it.
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Réponse à la demande d'autorisation échouée : ${message}`);
+      addErrorTurn(convId, `Failed to answer the permission request: ${message}`);
     },
   });
 }
@@ -149,7 +155,27 @@ export function useInterrupt(convId: string) {
     // suppressed) — say it didn't take so the user knows the agent is still running.
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Interruption échouée : ${message}`);
+      addErrorTurn(convId, `Interrupt failed: ${message}`);
+    },
+  });
+}
+
+/** Compact a Codex conversation's context via the native `thread/compact/start` RPC.
+ *  Claude compacts via the `/compact` text turn instead, so the composer only calls this
+ *  for a Codex conversation. A no-op if nothing is running (the ring is only interactive
+ *  after the first turn). A failure is already surfaced as a thread notice by the actor,
+ *  so here we only guard the transport path. */
+export function useCodexCompact(convId: string) {
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
+  return useMutation({
+    mutationFn: async () => {
+      const handle = liveHandle(convId);
+      if (!handle) return; // no live thread → nothing to compact
+      return unwrap(commands.codexCompact(handle));
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      addErrorTurn(convId, `Couldn't compact: ${message}`);
     },
   });
 }
@@ -164,7 +190,7 @@ export function useStop(convId: string) {
     },
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Arrêt de la session échoué : ${message}`);
+      addErrorTurn(convId, `Failed to stop the session: ${message}`);
     },
   });
 }
@@ -194,11 +220,11 @@ export function useSetRemoteControl(convId: string) {
       // Disabling with nothing live: the bridge is already gone with the process.
       const handle = enabled ? await ensureConversationSession(convId, { worktree }) : liveHandle(convId);
       if (!handle) {
-        rc.set(convId, { status: "disconnected", session_url: null, error: null });
+        rc.set(convId, { status: "disconnected", session_url: null, error: null, pairing_code: null });
         return;
       }
       // Optimistic "connecting" so the chip reacts instantly during the handshake.
-      if (enabled) rc.set(convId, { status: "connecting", session_url: null, error: null });
+      if (enabled) rc.set(convId, { status: "connecting", session_url: null, error: null, pairing_code: null });
       const state = await unwrap(commands.setRemoteControl(handle, enabled, name ?? null));
       rc.set(convId, state);
       // An IN-BAND rejection (e.g. the binary answers success-with-status:"error" — a
@@ -206,7 +232,12 @@ export function useSetRemoteControl(convId: string) {
       // throw, so `onError` never runs. Surface it in the thread too (not only the chip
       // dot) — every error stays visible, per the project's no-silent-failure rule.
       if (state.status === "error") {
-        addErrorTurn(convId, `Remote control échoué : ${state.error ?? "erreur inconnue"}`);
+        addErrorTurn(convId, `Remote control failed: ${state.error ?? "unknown error"}`);
+      } else if (state.error) {
+        // The bridge came UP but a secondary step failed (e.g. Codex enable succeeded yet
+        // the pairing-code fetch failed): still surface it — the bridge is on but a device
+        // can't be paired, and the user must know rather than see a silent no-code state.
+        addErrorTurn(convId, `Remote control: ${state.error}`);
       }
       return state;
     },
@@ -216,8 +247,8 @@ export function useSetRemoteControl(convId: string) {
       const message = err instanceof Error ? err.message : String(err);
       useRemoteControlStore
         .getState()
-        .set(convId, { status: "error", session_url: null, error: message });
-      addErrorTurn(convId, `Remote control échoué : ${message}`);
+        .set(convId, { status: "error", session_url: null, error: message, pairing_code: null });
+      addErrorTurn(convId, `Remote control failed: ${message}`);
     },
   });
 }
@@ -237,7 +268,7 @@ export function useStopTask(convId: string) {
     // background command is still running.
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      addErrorTurn(convId, `Arrêt de la tâche de fond échoué : ${message}`);
+      addErrorTurn(convId, `Failed to stop the background task: ${message}`);
     },
   });
 }

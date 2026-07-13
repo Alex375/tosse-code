@@ -5,6 +5,7 @@ import { ConductorThread } from "./ConductorThread";
 import { LastMessagePin } from "./LastMessagePin";
 import { FileMentionProvider } from "./FileMention";
 import { ReviewBar } from "./ReviewBar";
+import { AuthWarningBar } from "./AuthWarningBar";
 import { AgentBar } from "./AgentBar";
 import { BashBar } from "./BashBar";
 import { MonitorBar } from "./MonitorBar";
@@ -77,6 +78,7 @@ export function ConversationPane({
       <MonitorBar session={session} />
       <TodoBar session={session} />
       <ReviewBar session={session} />
+      <AuthWarningBar session={session} />
       <ConductorComposer ref={composerRef} session={session} onSent={scrollToBottom} />
     </div>
   );

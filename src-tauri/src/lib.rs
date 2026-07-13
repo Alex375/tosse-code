@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod extensions;
 pub mod fs;
 pub mod git;
@@ -19,7 +20,18 @@ use ipc::commands::{
     list_worktrees, load_persisted_state, load_session_context, load_session_history,
     load_subagent_transcript, load_workflow_journal, load_workflow_phases, load_workflow_run,
     mcp_authenticate, mcp_clear_auth, mcp_reconnect, mcp_status, mcp_toggle, open_in_terminal,
-    path_exists, ping, prime_history_index, read_dir, read_file, read_image, read_task_output_file,
+    account_claude_login_cancel, account_claude_login_code, account_claude_login_start,
+    account_claude_logout, account_claude_status, account_codex_login_cancel,
+    account_codex_login_start, account_codex_logout, account_codex_status,
+    claude_available,
+    codex_available, codex_archive, codex_compact, codex_fork, codex_list_extensions,
+    codex_list_hooks, codex_list_models, codex_list_plugins, codex_list_skills,
+    codex_load_history, codex_marketplace_add, codex_marketplace_remove,
+    codex_marketplace_upgrade, codex_plugin_contents,
+    codex_set_mcp_enabled, codex_set_plugin_enabled, codex_set_skill_enabled,
+    path_exists, ping, prime_history_index,
+    read_dir, read_file, read_image,
+    read_task_output_file,
     refresh_plugin_marketplaces, reload_plugins,
     fork_conversation, remove_worktree, rename_entry, reveal_in_finder, request_user_attention,
     rewind_conversation, search_conversations,
@@ -31,7 +43,8 @@ use ipc::commands::{
     upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file, HistoryIndex, Sessions,
 };
 use ipc::events::{
-    FsChangeEvent, FsWatchErrorEvent, SessionCommandsEvent, SessionMessageEvent,
+    AccountLoginEvent, FsChangeEvent, FsWatchErrorEvent, SessionCodexPlanUsageEvent,
+    SessionCommandsEvent, SessionExtensionsChangedEvent, SessionMessageEvent,
     SessionPermissionEvent, SessionRemoteControlEvent, SessionStateEvent, SessionSummaryEvent,
     SessionTaskEvent, SessionTitleEvent, TerminalExitEvent, TerminalOutputEvent, TickEvent,
 };
@@ -44,6 +57,33 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         .commands(collect_commands![
             ping,
             spawn_session,
+            claude_available,
+            codex_available,
+            codex_list_models,
+            codex_list_skills,
+            codex_compact,
+            codex_list_extensions,
+            codex_fork,
+            codex_archive,
+            codex_load_history,
+            codex_set_skill_enabled,
+            codex_set_mcp_enabled,
+            codex_set_plugin_enabled,
+            codex_list_plugins,
+            codex_plugin_contents,
+            codex_list_hooks,
+            codex_marketplace_add,
+            codex_marketplace_remove,
+            codex_marketplace_upgrade,
+            account_claude_status,
+            account_claude_login_start,
+            account_claude_login_code,
+            account_claude_login_cancel,
+            account_claude_logout,
+            account_codex_status,
+            account_codex_login_start,
+            account_codex_login_cancel,
+            account_codex_logout,
             fetch_slash_commands,
             load_session_history,
             load_session_context,
@@ -135,6 +175,9 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             SessionTitleEvent,
             SessionSummaryEvent,
             SessionRemoteControlEvent,
+            SessionCodexPlanUsageEvent,
+            SessionExtensionsChangedEvent,
+            AccountLoginEvent,
             FsChangeEvent,
             FsWatchErrorEvent,
             TerminalOutputEvent,
@@ -377,6 +420,10 @@ pub fn run() {
         .manage(fs::FsWatcher::new())
         // The live integrated terminals (one PTY-backed shell per conversation).
         .manage(terminal::Terminals::new())
+        // The shared Codex app-server: lazy (spawned on the first Codex conversation),
+        // one process multiplexing every Codex thread. An Arc so a conversation actor
+        // can hold it beyond the spawning command's lifetime.
+        .manage(std::sync::Arc::new(supervisor::codex::CodexServer::new()))
         .setup(move |app| {
             use tauri::Manager;
 
@@ -489,6 +536,21 @@ pub fn run() {
                         }
                     });
                 }
+                // Belt: tear the shared Codex app-server down so its MCP children are
+                // never orphaned. The per-session shutdowns above already trigger this
+                // when the last Codex thread closes (its actor's `close_thread`), but a
+                // leaked server is reaped here too. Bounded so quit never hangs. NB the
+                // group-SIGKILL sweep can't reach `setsid` MCP children — only this
+                // graceful path (stdin EOF) does (see `supervisor::codex::transport`).
+                let codex_server =
+                    app_handle.state::<std::sync::Arc<supervisor::codex::CodexServer>>();
+                tauri::async_runtime::block_on(async {
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(6),
+                        codex_server.shutdown_all(),
+                    )
+                    .await;
+                });
             }
         });
 }

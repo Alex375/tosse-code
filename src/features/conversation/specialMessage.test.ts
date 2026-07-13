@@ -78,7 +78,7 @@ The routes are **multi-user** (devis, qonto) with a \`currentUserId\` check.</re
     // The exact shape of a real prompt that discusses the feature — must NOT parse.
     expect(
       parseSpecialMessage(
-        "Explique comment rendre proprement les blocs <task-notification> injectés dans le fil.",
+        "Explain how to cleanly render the <task-notification> blocks injected into the thread.",
       ),
     ).toBeNull();
     expect(
@@ -126,11 +126,11 @@ The routes are **multi-user** (devis, qonto) with a \`currentUserId\` check.</re
 });
 
 describe("taskNotificationStyle", () => {
-  it("maps known statuses to tone / icon / French label", () => {
-    expect(taskNotificationStyle("completed")).toEqual({ icon: "check", tone: "ok", label: "Terminé" });
-    expect(taskNotificationStyle("failed")).toEqual({ icon: "alert", tone: "err", label: "Échec" });
-    expect(taskNotificationStyle("killed")).toEqual({ icon: "x", tone: "err", label: "Tué" });
-    expect(taskNotificationStyle("stopped")).toEqual({ icon: "stopc", tone: "warn", label: "Arrêté" });
+  it("maps known statuses to tone / icon / label", () => {
+    expect(taskNotificationStyle("completed")).toEqual({ icon: "check", tone: "ok", label: "Completed" });
+    expect(taskNotificationStyle("failed")).toEqual({ icon: "alert", tone: "err", label: "Failed" });
+    expect(taskNotificationStyle("killed")).toEqual({ icon: "x", tone: "err", label: "Killed" });
+    expect(taskNotificationStyle("stopped")).toEqual({ icon: "stopc", tone: "warn", label: "Stopped" });
   });
 
   it("is case-insensitive and falls back to the raw status for unknown values", () => {

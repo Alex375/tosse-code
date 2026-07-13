@@ -44,22 +44,22 @@ export function buildRejectionMessage(
   const note = generalNote.trim();
   const withComments = annotations.filter((a) => a.comment.trim() !== "");
   if (withComments.length === 0 && note === "")
-    return "L'utilisateur a refusé le plan. Retravaille ta proposition.";
+    return "The user rejected the plan. Rework your proposal.";
 
   const lines: string[] = [
-    "L'utilisateur a refusé le plan et laissé des retours à intégrer avant de reproposer un plan :",
+    "The user rejected the plan and left feedback to incorporate before proposing a new plan:",
     "",
   ];
   if (note !== "") {
-    lines.push(`Retour général : ${note}`, "");
+    lines.push(`General feedback: ${note}`, "");
   }
   if (withComments.length > 0) {
-    lines.push("Commentaires sur des passages précis du plan :", "");
+    lines.push("Comments on specific parts of the plan:", "");
     for (const a of withComments) {
       const quote = a.quote.trim().replace(/\s+/g, " ");
       lines.push(`> ${quote}`, `  → ${a.comment.trim()}`, "");
     }
   }
-  lines.push("Reprends le plan en tenant compte de ces retours.");
+  lines.push("Revise the plan taking this feedback into account.");
   return lines.join("\n").trim();
 }

@@ -17,6 +17,7 @@ import { useToolResult } from "../../store/conversationStore";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { useWorkflowLive } from "../../store/workflowLive";
 import { Dot, Ico, RunDots } from "../../ui/kit";
+import { useIsCodex } from "./ConvMark";
 import { WorkflowDetail } from "./WorkflowDetail";
 
 export function WorkflowCard({
@@ -35,6 +36,11 @@ export function WorkflowCard({
   );
   const liveActivity = useWorkflowLive(session, task?.task_id ?? "");
   const [open, setOpen] = useState(false);
+  // Bloc A (Phase 4.5): defensive — `Workflow` is a Claude-only tool, so a Codex thread
+  // never yields a workflow segment; guard anyway so a drifting classification can never
+  // render a Claude-only workflow card on Codex.
+  const isCodex = useIsCodex(session);
+  if (isCodex) return null;
 
   const name = field(input, "description") ?? task?.label ?? "Workflow";
   const runId = runIdFromResult(result?.content);
@@ -49,7 +55,7 @@ export function WorkflowCard({
         onClick={() => setOpen(true)}
         role="button"
         style={{ cursor: "pointer" }}
-        title="Ouvrir le détail du workflow"
+        title="Open workflow details"
       >
         <Ico name="layers" className="sm" />
         <span className="cv-tool-t">Workflow</span>

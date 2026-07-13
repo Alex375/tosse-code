@@ -18,7 +18,7 @@ describe("planResultDecision", () => {
   });
 
   it("treats an error result (denied permission carrying our message) as rejected", () => {
-    expect(planResultDecision("L'utilisateur a refusé le plan.", true)).toBe("rejected");
+    expect(planResultDecision("The user rejected the plan.", true)).toBe("rejected");
   });
 
   it("reads explicit rejection phrasing as rejected even without the error flag", () => {
@@ -38,29 +38,29 @@ describe("planResultDecision", () => {
 describe("buildRejectionMessage", () => {
   it("returns a generic refusal when there is nothing to say", () => {
     const msg = buildRejectionMessage([], "   ");
-    expect(msg).toMatch(/refusé le plan/i);
-    expect(msg).not.toMatch(/Retour général/);
-    expect(msg).not.toMatch(/Commentaires/);
+    expect(msg).toMatch(/rejected the plan/i);
+    expect(msg).not.toMatch(/General feedback/);
+    expect(msg).not.toMatch(/Comments/);
   });
 
   it("bundles the general note", () => {
-    const msg = buildRejectionMessage([], "trop ambitieux");
-    expect(msg).toMatch(/Retour général : trop ambitieux/);
+    const msg = buildRejectionMessage([], "too ambitious");
+    expect(msg).toMatch(/General feedback: too ambitious/);
   });
 
   it("bundles per-passage comments as quote → note, skipping empty comments", () => {
     const msg = buildRejectionMessage(
-      [ann("Refactorer l'auth", "trop risqué"), ann("Étape 3", "   ")],
+      [ann("Refactor the auth", "too risky"), ann("Step 3", "   ")],
       "",
     );
-    expect(msg).toMatch(/> Refactorer l'auth/);
-    expect(msg).toMatch(/→ trop risqué/);
+    expect(msg).toMatch(/> Refactor the auth/);
+    expect(msg).toMatch(/→ too risky/);
     // The empty-comment annotation is omitted.
-    expect(msg).not.toMatch(/Étape 3/);
+    expect(msg).not.toMatch(/Step 3/);
   });
 
   it("collapses whitespace inside a quoted excerpt", () => {
-    const msg = buildRejectionMessage([ann("ligne un\n  ligne deux", "revois ça")], "");
-    expect(msg).toMatch(/> ligne un ligne deux/);
+    const msg = buildRejectionMessage([ann("line one\n  line two", "revisit this")], "");
+    expect(msg).toMatch(/> line one line two/);
   });
 });

@@ -101,7 +101,7 @@ describe("deriveAgentStatus", () => {
       ).kind,
     ).toBe("needInput");
     // But a CLEAN finish with background work still running is NOT "review" (nothing to
-    // relire yet) — it is the green `backgrounding` state.
+    // review yet) — it is the green `backgrounding` state.
     expect(
       deriveAgentStatus(
         sig({ turnSeen: false, lastTurnSubtype: "success", runningBackgroundTasks: 1 }),
@@ -141,7 +141,7 @@ describe("deriveAgentStatus", () => {
 
   it("falls back to a generic tool label when the tool name is missing", () => {
     const s = deriveAgentStatus(sig({ awaitingPermission: true, pendingToolName: null }));
-    expect(s).toEqual({ kind: "needIntervention", tool: "outil" });
+    expect(s).toEqual({ kind: "needIntervention", tool: "tool" });
   });
 
   describe("when a turn just finished and is unconsumed (turnSeen=false)", () => {
@@ -187,7 +187,7 @@ describe("deriveAgentStatus", () => {
     describe("background work still running behind a just-finished turn", () => {
       it("a CLEAN finish with bg running is 'backgrounding' (green), NOT review", () => {
         // The workflow / sub-agent is still churning and the agent will resume on its own —
-        // there is nothing to relire yet, so this is the calm green running-family state.
+        // there is nothing to review yet, so this is the calm green running-family state.
         const s = deriveAgentStatus(
           sig({ turnSeen: false, lastTurnSubtype: "success", runningBackgroundTasks: 2 }),
         );

@@ -3,7 +3,7 @@
 // reject-and-revise with feedback. The user can select any passage of the plan to attach a
 // comment; those comments are highlighted inline (CSS Custom Highlight API) and, on "reject &
 // revise", bundled into the deny message the agent reads (see buildRejectionMessage) so it
-// reworks the plan. Once resolved, the card shows a persistent Accepté/Refusé badge derived
+// reworks the plan. Once resolved, the card shows a persistent Accepted/Rejected badge derived
 // from the tool_result (so a reloaded/historical plan reads correctly).
 //
 // It replaces the generic tool card AND the generic permission prompt for ExitPlanMode: the
@@ -258,7 +258,7 @@ export function PlanCard({
 
   // Dismiss the in-progress draft: drop the composer, reset its text, and clear our own passage's
   // selection so it stops looking highlighted (the draft highlight is keyed off `draft`; the OS
-  // selection tint would linger otherwise — the "Annuler left it highlighted" bug).
+  // selection tint would linger otherwise — the "Cancel left it highlighted" bug).
   const clearDraft = () => {
     setDraft(null);
     setDraftText("");
@@ -390,7 +390,7 @@ export function PlanCard({
     <div className={"cv-plan" + (decision !== "none" ? ` is-${decision}` : "")}>
       <div className="cv-plan-h">
         <Ico name="clipboard" className="sm cv-plan-ico" />
-        <span className="cv-plan-t">Plan proposé</span>
+        <span className="cv-plan-t">Proposed plan</span>
         <PlanBadge decision={decision} />
       </div>
 
@@ -408,7 +408,7 @@ export function PlanCard({
         <div className="cv-plan-notes">
           <div className="cv-plan-notes-h">
             <Ico name="chat" className="sm" />
-            {commentCount} commentaire{commentCount > 1 ? "s" : ""}
+            {commentCount} comment{commentCount > 1 ? "s" : ""}
           </div>
           {annotations.map((a) => (
             <div key={a.id} className="cv-plan-note">
@@ -416,12 +416,12 @@ export function PlanCard({
                 {a.quote}
               </span>
               <span className="cv-plan-note-c">
-                {a.comment.trim() ? a.comment : <em className="cv-plan-note-empty">sans note</em>}
+                {a.comment.trim() ? a.comment : <em className="cv-plan-note-empty">no note</em>}
               </span>
               {interactive && (
                 <button
                   className="cv-plan-note-del"
-                  title="Supprimer ce commentaire"
+                  title="Delete this comment"
                   onClick={() => removeAnn(session, toolUseId, a.id)}
                 >
                   <Ico name="trash" className="sm" />
@@ -436,7 +436,7 @@ export function PlanCard({
         <div className="cv-plan-foot">
           <textarea
             className="cv-plan-noteinput"
-            placeholder="Retour général sur le plan (optionnel)…"
+            placeholder="General feedback on the plan (optional)…"
             value={note}
             rows={2}
             onChange={(e) => setNote(session, toolUseId, e.target.value)}
@@ -450,11 +450,11 @@ export function PlanCard({
               <>
                 <button className="wf-btn ghost sm" onClick={accept}>
                   <Ico name="check" className="sm" />
-                  Accepter quand même
+                  Accept anyway
                 </button>
                 <button className="wf-btn prim sm" onClick={rejectAndRevise}>
                   <Ico name="reply" className="sm" />
-                  Envoyer les retours
+                  Send feedback
                   {commentCount > 0 ? ` (${commentCount})` : ""}
                 </button>
               </>
@@ -462,19 +462,19 @@ export function PlanCard({
               <>
                 <button className="wf-btn ghost sm" onClick={rejectAndRevise}>
                   <Ico name="x" className="sm" />
-                  Refuser
+                  Reject
                 </button>
                 <button className="wf-btn prim sm" onClick={accept}>
                   <Ico name="check" className="sm" />
-                  Accepter le plan
+                  Accept the plan
                 </button>
               </>
             )}
           </div>
           <div className="cv-plan-hint">
             {hasFeedback
-              ? "« Envoyer les retours » renvoie tes commentaires à l'agent pour qu'il révise le plan."
-              : "Sélectionne un passage du plan pour le commenter, puis envoie tes retours à l'agent."}
+              ? '"Send feedback" sends your comments back to the agent so it revises the plan.'
+              : "Select a passage of the plan to comment on it, then send your feedback to the agent."}
           </div>
         </div>
       )}
@@ -490,7 +490,7 @@ export function PlanCard({
           <textarea
             autoFocus
             className="cv-plan-composer-input"
-            placeholder="Ton commentaire…"
+            placeholder="Your comment…"
             rows={2}
             value={draftText}
             onChange={(e) => setDraftText(e.target.value)}
@@ -498,7 +498,7 @@ export function PlanCard({
               if (e.key === "Escape") {
                 // stopPropagation so this Escape only cancels the comment draft — it
                 // must not also bubble to a window-level closer (e.g. the Flight Deck
-                // reply modal), per the "une touche = une couche" convention.
+                // reply modal), per the "one key = one layer" convention.
                 e.preventDefault();
                 e.stopPropagation();
                 clearDraft();
@@ -511,17 +511,17 @@ export function PlanCard({
             }}
           />
           <div className="cv-plan-composer-foot">
-            <span className="cv-plan-composer-hint">⌘⏎ pour ajouter</span>
+            <span className="cv-plan-composer-hint">⌘⏎ to add</span>
             <span className="cv-plan-composer-btns">
               <button className="wf-btn ghost sm" onClick={clearDraft}>
-                Annuler
+                Cancel
               </button>
               <button
                 className="wf-btn prim sm"
                 disabled={draftText.trim() === ""}
                 onClick={commitDraft}
               >
-                Ajouter
+                Add
               </button>
             </span>
           </div>
@@ -540,21 +540,21 @@ function PlanBadge({ decision }: { decision: Decision }) {
     return (
       <span className="cv-plan-badge is-approved">
         <Ico name="check" className="sm" />
-        Accepté
+        Accepted
       </span>
     );
   if (decision === "rejected")
     return (
       <span className="cv-plan-badge is-rejected">
         <Ico name="x" className="sm" />
-        Refusé
+        Rejected
       </span>
     );
   if (decision === "pending")
     return (
       <span className="cv-plan-badge is-pending">
         <Ico name="clock" className="sm" />
-        En attente
+        Pending
       </span>
     );
   return null;

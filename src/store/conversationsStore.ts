@@ -27,7 +27,12 @@ import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
 import { useWorkflowLiveStore } from "./workflowLive";
 import { useRemoteControlStore } from "./remoteControl";
+import { useCodexPlanUsageStore } from "./codexPlanUsage";
 import { useLastMessageSummaryStore } from "./lastMessageSummary";
+// The Codex default model — seeds a Codex conversation so its persisted `model` is
+// always a real Codex wire id. models.ts only imports `BackendKind` as a TYPE from
+// here (erased at runtime), so this value edge is acyclic.
+import { DEFAULT_CODEX_MODEL } from "../features/conversation/models";
 import { useAppErrors } from "./appErrors";
 import { getCachedWindow, clearCachedWindow, clearAllCachedWindows } from "./contextWindowCache";
 import { clearTodoBarOpen, clearAllTodoBarOpen } from "./todoBarUi";
@@ -36,6 +41,11 @@ import {
   clearComposerAttachments,
   clearAllComposerAttachments,
 } from "../features/conversation/composerAttachments";
+import {
+  clearCodexControls,
+  clearAllCodexControls,
+  DEFAULT_CODEX_EFFORT,
+} from "../features/conversation/codexControls";
 import { clearWorkFold, clearAllWorkFold } from "./workFold";
 import {
   clearPlanAnnotations,
@@ -51,7 +61,7 @@ import { clearMentionCache } from "../features/conversation/mentionCache";
 import { worktreeCwdFromTranscript } from "../features/git/worktree";
 import { useMemo } from "react";
 
-export const DEFAULT_CONV_NAME = "Nouvelle conversation";
+export const DEFAULT_CONV_NAME = "New conversation";
 
 // Product defaults for a conversation's controls — also the spawn defaults the
 // Rust core falls back to. A conversation seeds these at creation; the composer
@@ -70,6 +80,12 @@ export interface Repo {
   addedAt: number;
 }
 
+/** Which agent backend drives a conversation. Chosen at creation, immutable after
+ *  — every per-conversation behaviour (transport, message rendering, composer
+ *  controls, usage ring) branches on it. Mirrors the persisted
+ *  `ConversationRecord.backend`; pre-existing rows decode as "claude". */
+export type BackendKind = "claude" | "codex";
+
 export interface Conversation {
   /** Stable uuid — the identity everything keys off. Persisted, never changes. */
   id: string;
@@ -86,6 +102,12 @@ export interface Conversation {
   lastActivityAt: number;
   /** Claude's own session_id from system/init — used for --resume on restart. */
   sessionId: string | null;
+  /**
+   * Agent backend driving this conversation ("claude" | "codex"). PERSISTED,
+   * chosen at creation, immutable after — the single discriminant every
+   * backend-aware surface reads (transport, rendering, composer controls, usage).
+   */
+  kind: BackendKind;
   /**
    * Live Rust session handle (`session-N`) for IPC and live-state lookups.
    * In-memory ONLY — never persisted; set on spawn/resume, changes each launch.
@@ -127,7 +149,7 @@ export interface Conversation {
    * `"review"` / `"error"` / `"openQuestion"`, or null when nothing is pending.
    * Persisted because a settled state is otherwise live-only — when the process is
    * off (`handle === null`), `deriveAgentStatus` falls back to this to re-display
-   * the reminder. Armed by the event router on a finished turn; cleared by "Vu"
+   * the reminder. Armed by the event router on a finished turn; cleared by "Seen"
    * (`acknowledgeConversation`) or the next message. NOT for blocking states
    * (permission / questionnaire) — those exist only while live.
    */
@@ -220,6 +242,7 @@ const convToRecord = (c: Conversation): ConversationRecord => ({
   permission_mode: c.permissionMode,
   pending_reminder: c.pendingReminder,
   clean_output: c.cleanOutput,
+  backend: c.kind,
 });
 
 const recordToRepo = (r: RepoRecord): Repo => ({
@@ -244,12 +267,14 @@ const recordToConv = (c: ConversationRecord): Conversation => ({
   permissionMode: c.permission_mode,
   pendingReminder: asReminderKind(c.pending_reminder),
   cleanOutput: c.clean_output,
+  // Defensive: any unexpected/legacy value decodes to "claude" (the default backend).
+  kind: c.backend === "codex" ? "codex" : "claude",
 });
 
 // The one user-facing message for any persistence failure (deduped in the banner),
 // so a broken DB shows ONE clear warning, not a flood of per-write errors.
 const PERSIST_FAILURE_MSG =
-  "Impossible d'enregistrer les modifications de la conversation — elles risquent de ne pas survivre au redémarrage.";
+  "Couldn't save the conversation changes — they may not survive a restart.";
 
 /** Fire a persistence command, logging AND surfacing (never throwing) on failure.
  *  Persistence is best-effort and off the hot path — a failed write must not break
@@ -345,6 +370,14 @@ interface ConversationsState {
   // read-back then re-aligns the indicator with reality, so the UI can't lie.
   /** Set this conversation's model (the clamp of effort is the composer's job). */
   setConvModel: (id: string, model: string) => void;
+  /**
+   * Flip a FRESH conversation's backend AND model in one shot — how the composer's
+   * unified model picker selects the backend (picking a Codex model ⇒ a Codex
+   * conversation). The backend is immutable once the session exists (incompatible
+   * formats), so this is a NO-OP unless the conversation is still unspawned
+   * (`sessionId` and `handle` both null). Nothing to push live — there is no handle.
+   */
+  setConvBackend: (id: string, kind: BackendKind, model: string) => void;
   /** Set a plain effort level — clears the ultracode tier. */
   setConvEffort: (id: string, effort: string) => void;
   /** Enable the ultracode tier (effort xhigh + the separate flag). */
@@ -362,7 +395,7 @@ interface ConversationsState {
    * Set (or clear with null) the conversation's persisted status reminder and
    * mirror it to the core. Idempotent: a no-op when the value is unchanged, so the
    * event router can call it freely on every settling edge without redundant writes.
-   * Armed from the live status on a finished turn; cleared on "Vu" / next message.
+   * Armed from the live status on a finished turn; cleared on "Seen" / next message.
    */
   setReminder: (id: string, reminder: ReminderKind | null) => void;
 }
@@ -405,6 +438,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       clearTodoBarOpen(c.id);
       clearComposerDraft(c.id);
       clearComposerAttachments(c.id);
+      clearCodexControls(c.id);
       clearWorkFold(c.id);
       clearPlanAnnotations(c.id);
       useGitViewStore.getState().clear(c.id);
@@ -474,6 +508,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     clearTodoBarOpen(id);
     clearComposerDraft(id);
     clearComposerAttachments(id);
+    clearCodexControls(id);
     clearWorkFold(id);
     clearPlanAnnotations(id);
     autoTitlePending.delete(id);
@@ -662,7 +697,32 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     const updated = { ...conv, model };
     set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
     syncToCore("upsertConversation(model)", () => commands.upsertConversation(convToRecord(updated)));
-    if (conv.handle) syncToCore("setModel(live)", () => commands.setModel(conv.handle!, model));
+    // Claude pushes the model live (set_model); Codex has no such channel — the model
+    // rides the next turn as an override (see codexControls.buildCodexControls), so only
+    // the persisted record matters here.
+    if (conv.handle && conv.kind === "claude")
+      syncToCore("setModel(live)", () => commands.setModel(conv.handle!, model));
+  },
+
+  setConvBackend: (id, kind, model) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv) return;
+    // Backend is fixed at creation: once a session exists (or ever existed), the
+    // transport + message format are engaged and cannot switch. Only a pristine,
+    // never-spawned conversation may flip. This guard is the safety net behind the
+    // composer already hiding the other backend once the conversation is locked.
+    if (conv.sessionId || conv.handle) return;
+    // A spawn IN FLIGHT is engaged too: sessionId/handle only land at its end, but the
+    // actor being started already reads the kind captured at send time. Flipping now
+    // would persist kind=X with a session of backend Y — history invisible on reload,
+    // resume permanently broken (review HIGH). The pick is refused, not queued.
+    if (isSpawning(id)) return;
+    if (conv.kind === kind && conv.model === model) return;
+    const updated = { ...conv, kind, model };
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
+    // No live push (guarded above → no handle): persist the pick so the eventual
+    // spawn starts on the chosen backend + model.
+    syncToCore("upsertConversation(backend)", () => commands.upsertConversation(convToRecord(updated)));
   },
 
   setConvEffort: (id, effort) => {
@@ -671,7 +731,9 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     const updated = { ...conv, effort, ultracode: false };
     set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? updated : c)) }));
     syncToCore("upsertConversation(effort)", () => commands.upsertConversation(convToRecord(updated)));
-    if (conv.handle) syncToCore("setEffortLevel(live)", () => commands.setEffortLevel(conv.handle!, effort));
+    // Codex effort rides the next turn as an override, not a live command (see setConvModel).
+    if (conv.handle && conv.kind === "claude")
+      syncToCore("setEffortLevel(live)", () => commands.setEffortLevel(conv.handle!, effort));
   },
 
   setConvUltracode: (id) => {
@@ -722,7 +784,12 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
  * created. The live session is spawned on the first message (see
  * [`ensureConversationSession`]).
  */
-export function createConversationInRepo(repoPath: string): string {
+export function createConversationInRepo(
+  repoPath: string,
+  // The backend is chosen HERE (the "+" selector) and immutable afterwards. Defaults
+  // to Claude, so every existing caller and the no-Codex case are unchanged.
+  kind: BackendKind = "claude",
+): string {
   const repo = useConversationsStore.getState().addRepo(repoPath);
   const id = uid();
   const now = Date.now();
@@ -737,14 +804,18 @@ export function createConversationInRepo(repoPath: string): string {
     sessionId: null,
     handle: null, // no live process until the first message
     liveCwd: null,
-    model: DEFAULT_MODEL,
-    effort: DEFAULT_EFFORT,
+    // Seed the backend's own default model so a Codex conversation never carries a
+    // Claude alias (which its binary would reject at thread/start).
+    model: kind === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL,
+    // Seed the backend's own default effort (Codex "medium" vs Claude "xhigh").
+    effort: kind === "codex" ? DEFAULT_CODEX_EFFORT : DEFAULT_EFFORT,
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
     // null = inherit the global "clean output" default; the composer chip sets an
     // explicit per-conversation override.
     cleanOutput: null,
+    kind,
   });
   return id;
 }
@@ -759,7 +830,11 @@ export function createConversationInRepo(repoPath: string): string {
  * a different working directory. The worktree indicator/badge resolve that cwd
  * and light up accordingly. Lazy as ever — no process is spawned here.
  */
-export function createConversationInWorktree(repoId: string, cwd: string): string {
+export function createConversationInWorktree(
+  repoId: string,
+  cwd: string,
+  kind: BackendKind = "claude",
+): string {
   const id = uid();
   const now = Date.now();
   useConversationsStore.getState().addConversation({
@@ -772,14 +847,18 @@ export function createConversationInWorktree(repoId: string, cwd: string): strin
     sessionId: null,
     handle: null, // no live process until the first message
     liveCwd: null,
-    model: DEFAULT_MODEL,
-    effort: DEFAULT_EFFORT,
+    // Seed the backend's own default model so a Codex conversation never carries a
+    // Claude alias (which its binary would reject at thread/start).
+    model: kind === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL,
+    // Seed the backend's own default effort (Codex "medium" vs Claude "xhigh").
+    effort: kind === "codex" ? DEFAULT_CODEX_EFFORT : DEFAULT_EFFORT,
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
     // null = inherit the global "clean output" default; the composer chip sets an
     // explicit per-conversation override.
     cleanOutput: null,
+    kind,
   });
   return id;
 }
@@ -830,6 +909,12 @@ export function reactivateDiskConversation(d: DiskConversation): string {
   // `--resume` fail silently (the fallback's `cwd` guard wouldn't trigger), so don't.
   const cwd = d.cwd;
   const id = uid();
+  // Reactivate onto the SAME backend the conversation ran on (the disk row carries it),
+  // so a Codex thread comes back as a Codex conversation — its cold history reads from the
+  // rollout and the next message resumes via `thread/resume`, not `claude --resume`. Seed
+  // the backend's own default model/effort so a Codex conversation never carries a Claude
+  // alias its binary would reject at thread/start.
+  const kind: BackendKind = d.backend === "codex" ? "codex" : "claude";
   useConversationsStore.getState().addConversation({
     id,
     name: (d.title ?? "").trim() || d.excerpt.trim() || DEFAULT_CONV_NAME,
@@ -842,14 +927,54 @@ export function reactivateDiskConversation(d: DiskConversation): string {
     sessionId: d.session_id,
     handle: null, // no live process until the first message (lazy)
     liveCwd: null,
-    model: DEFAULT_MODEL,
-    effort: DEFAULT_EFFORT,
+    model: kind === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL,
+    effort: kind === "codex" ? DEFAULT_CODEX_EFFORT : DEFAULT_EFFORT,
     ultracode: false,
     permissionMode: DEFAULT_PERMISSION_MODE,
     pendingReminder: null,
     // null = inherit the global "clean output" default; the composer chip sets an
     // explicit per-conversation override.
     cleanOutput: null,
+    kind,
+  });
+  return id;
+}
+
+/**
+ * Materialize a native Codex fork (a `thread/fork` result) as a real conversation. The Claude
+ * fork path (`reactivateDiskConversation`) hardcodes `kind:"claude"` and takes a transcript
+ * file, whereas a Codex branch is just a new thread id + resolved model — so it needs its own
+ * inserter. Lands in the SOURCE conversation's repo + cwd, with the forked thread as its
+ * `sessionId` (the resume key), so selecting it loads the branch's history via the
+ * `conv.kind==="codex"` cold-load path. `addConversation` auto-selects it. Returns the new id.
+ */
+export function materializeCodexBranch(
+  source: Conversation,
+  forkThreadId: string,
+  forkModel: string | null,
+  name: string,
+): string {
+  const id = uid();
+  const now = Date.now();
+  useConversationsStore.getState().addConversation({
+    id,
+    name,
+    repoId: source.repoId,
+    cwd: source.liveCwd ?? source.cwd,
+    createdAt: now,
+    lastActivityAt: now,
+    // The forked thread id IS the conversation's resume key (like Claude's session_id).
+    sessionId: forkThreadId,
+    handle: null,
+    liveCwd: null,
+    // The forked thread's resolved Codex model (fall back to the source's, then the default).
+    model: forkModel ?? source.model ?? DEFAULT_CODEX_MODEL,
+    effort: source.effort ?? DEFAULT_CODEX_EFFORT,
+    ultracode: false,
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    pendingReminder: null,
+    cleanOutput: null,
+    kind: "codex",
   });
   return id;
 }
@@ -880,7 +1005,7 @@ export async function bootConversations(): Promise<void> {
     useAppErrors
       .getState()
       .pushError(
-        "Impossible de charger vos conversations — la base de données est peut-être corrompue ou verrouillée. Vos données ne sont pas perdues ; redémarre l'application.",
+        "Couldn't load your conversations — the database may be corrupted or locked. Your data is not lost; restart the app.",
         res.error,
       );
   }
@@ -894,9 +1019,9 @@ export function liveHandle(convId: string): string | null {
 }
 
 /**
- * Acknowledge ("Vu") a conversation's reminder: mark the last turn seen in the
+ * Acknowledge ("Seen") a conversation's reminder: mark the last turn seen in the
  * LIVE message store (so it drops to idle now) AND clear the PERSISTED reminder
- * (so the acknowledgement survives a restart). This is the single "Vu" entry point
+ * (so the acknowledgement survives a restart). This is the single "Seen" entry point
  * the UI calls — distinct from the raw `markSeen`, which the history loaders use to
  * silence a replayed PAST completion WITHOUT touching the persisted reminder: an
  * unopened reminder must survive a restart, so merely OPENING a conversation can't
@@ -908,11 +1033,19 @@ export function acknowledgeConversation(convId: string): void {
 }
 
 // In-flight spawns keyed by conversation id. Spawning is async (a round-trip to
-// the core), so two concurrent callers — e.g. the "allumer" button and a message
+// the core), so two concurrent callers — e.g. the "turn on" button and a message
 // send firing at once — could both see a null handle and spawn TWO processes,
 // leaking one as an orphan. Sharing the in-flight promise makes the spawn
 // idempotent per conversation: concurrent callers await the same one.
 const spawning = new Map<string, Promise<string>>();
+
+/** Whether `convId` has a session spawn IN FLIGHT (worktree creation + process start).
+ *  Consulted by the backend guard (`setConvBackend`) and the composer's picker lock:
+ *  during this window the conversation has no sessionId/handle yet but is already
+ *  engaged on the kind captured at send time. */
+export function isSpawning(convId: string): boolean {
+  return spawning.has(convId);
+}
 
 /**
  * Ensure a conversation has a LIVE `claude` session, spawning it lazily if not.
@@ -929,13 +1062,13 @@ export async function ensureConversationSession(
   opts?: { worktree?: boolean },
 ): Promise<string> {
   let conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
-  if (!conv) throw new Error(`conversation ${convId} introuvable`);
+  if (!conv) throw new Error(`conversation ${convId} not found`);
   if (conv.handle) return conv.handle;
   const inflight = spawning.get(convId);
   if (inflight) return inflight;
   const promise = (async () => {
     const before = useConversationsStore.getState().conversations.find((c) => c.id === convId);
-    if (!before) throw new Error(`conversation ${convId} introuvable`);
+    if (!before) throw new Error(`conversation ${convId} not found`);
     let cwd = before.cwd;
     // First spawn requested in a fresh worktree: create one (app-managed, under
     // .claude/worktrees) and repoint the conversation's cwd into it BEFORE
@@ -945,22 +1078,30 @@ export async function ensureConversationSession(
     // creates a second worktree. A failure throws so the send surfaces it.
     if (opts?.worktree && !before.sessionId) {
       const repo = useConversationsStore.getState().repos.find((r) => r.id === before.repoId);
-      if (!repo) throw new Error("dépôt introuvable pour cette conversation");
+      if (!repo) throw new Error("repository not found for this conversation");
       const wt = await commands.createWorktree(repo.path, autoWorktreeBranch(), null, true);
-      if (wt.status !== "ok") throw new Error(`création du worktree impossible : ${wt.error}`);
+      if (wt.status !== "ok") throw new Error(`could not create worktree: ${wt.error}`);
       useConversationsStore.getState().repointCwd(convId, wt.data.path);
       cwd = wt.data.path;
     }
     // Apply this conversation's persisted controls at spawn, so the live stream
     // starts in EXACTLY the model/effort/permission/ultracode the UI shows — never
     // the old hardcoded defaults. A pre-first-message pick is honored here too.
+    // RE-READ the record here (not the `before` captured above): the worktree
+    // creation can take seconds, and a control changed during that window must
+    // reach the actor being started — most critically `kind` (belt to the
+    // setConvBackend spawning guard: whatever kind spawns is the kind persisted).
+    const atSpawn =
+      useConversationsStore.getState().conversations.find((c) => c.id === convId) ?? before;
     let res = await commands.spawnSession(
       cwd,
-      before.sessionId ?? null,
-      before.model,
-      before.effort,
-      before.permissionMode,
-      before.ultracode,
+      atSpawn.sessionId ?? null,
+      atSpawn.model,
+      atSpawn.effort,
+      atSpawn.permissionMode,
+      atSpawn.ultracode,
+      // The backend is fixed at creation; the spawn routes to the Claude or Codex actor.
+      atSpawn.kind,
     );
     if (res.status !== "ok") {
       // The spawn may have failed because the conversation's cwd is GONE — its
@@ -983,16 +1124,18 @@ export async function ensureConversationSession(
           .getState()
           .addErrorTurn(
             convId,
-            `⚠️ Le worktree associé à cette conversation a été supprimé. Elle est relancée dans l'arbre de travail principal (${repoName(fallback)}) — nouvelle session.`,
+            `⚠️ The worktree tied to this conversation was deleted. It is being restarted in the main working tree (${repoName(fallback)}) — new session.`,
           );
         useConversationsStore.getState().repointCwd(convId, fallback);
         res = await commands.spawnSession(
           fallback,
           null,
-          before.model,
-          before.effort,
-          before.permissionMode,
-          before.ultracode,
+          atSpawn.model,
+          atSpawn.effort,
+          atSpawn.permissionMode,
+          atSpawn.ultracode,
+          // Same backend on the fresh-worktree re-spawn.
+          atSpawn.kind,
         );
       }
     }
@@ -1009,12 +1152,12 @@ export async function ensureConversationSession(
 }
 
 /**
- * Stop a conversation's live `claude` process (the "éteindre" action). No-op if
+ * Stop a conversation's live `claude` process (the "turn off" action). No-op if
  * it isn't running. The core also clears the handle via the terminal `ended`
  * event, but we drop it here too so the UI flips to "off" without waiting for the
  * round-trip. Distinct from `interrupt` (which only ends the current turn): this
  * kills the process. The on-disk transcript is untouched, so a later send (or
- * "allumer") resumes the same Claude session via `--resume`.
+ * "turn on") resumes the same Claude session via `--resume`.
  */
 export async function stopConversationSession(convId: string): Promise<void> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
@@ -1033,7 +1176,7 @@ export async function stopConversationSession(convId: string): Promise<void> {
 }
 
 /**
- * Turn a conversation's stream ON (the "allumer" action). Before spawning, it
+ * Turn a conversation's stream ON (the "turn on" action). Before spawning, it
  * re-syncs the timeline from Claude's on-disk transcript so any turns added
  * out-of-band — e.g. while the same session was resumed in a terminal
  * (`claude --resume`) — show up. `--resume` does not re-stream past messages, so
@@ -1055,7 +1198,7 @@ export async function startConversationSession(convId: string): Promise<string> 
  * Restart a conversation's stream (off→on): stop the live process if any, then
  * start it again. Clearing the handle in `stopConversationSession` first means
  * `ensureConversationSession` sees no live handle and genuinely re-spawns instead
- * of returning the dead one. Like "allumer", this re-syncs the on-disk transcript
+ * of returning the dead one. Like "turn on", this re-syncs the on-disk transcript
  * (via `startConversationSession`) so externally-added turns appear.
  */
 export async function restartConversationSession(convId: string): Promise<string> {
@@ -1092,15 +1235,21 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   historyLoaded.add(convId); // mark before awaiting to avoid a double-load race
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv || !conv.sessionId) return;
-  const res = await commands.loadSessionHistory(conv.sessionId);
+  // Codex renders LIVE-only (a resumed thread re-streams nothing), so its cold history
+  // comes from its on-disk ROLLOUT via a distinct reader (full tool fidelity); Claude
+  // reads its transcript. Both return the same `ConversationItem[]` result shape.
+  const res =
+    conv.kind === "codex"
+      ? await commands.codexLoadHistory(conv.sessionId)
+      : await commands.loadSessionHistory(conv.sessionId);
   // Distinguish a real failure from "nothing to show": a command-level error
   // (rare — the core itself rarely rejects; a corrupt transcript comes back as an
   // in-band history_error Notice item) is surfaced, an empty history is silent.
   if (res.status !== "ok") {
-    console.error("loadSessionHistory failed:", res.error);
+    console.error("load history failed:", res.error);
     useAppErrors
       .getState()
-      .pushError("Impossible de charger l'historique d'une conversation.", res.error);
+      .pushError("Couldn't load a conversation's history.", res.error);
     return;
   }
   if (res.data.length === 0) return;
@@ -1120,19 +1269,22 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   // Mark the restored history seen: a historical completion is not a fresh "Claude
   // just finished, go look", so only genuine LIVE completions surface as review.
   markSeen(convId);
-  // Seed the context ring from the transcript so it shows immediately on open,
-  // before any new live turn reports usage. A missing/unreadable transcript is NOT
-  // an error (the core returns an empty fill), so a status "error" here is a real
-  // failure worth surfacing rather than swallowing.
-  const ctx = await commands.loadSessionContext(conv.sessionId);
-  if (ctx.status === "ok")
-    // Tokens from the transcript; window from the persisted cache (the only place the
-    // real 200k-vs-1M window is known before the first live turn).
-    applyContextFill(convId, {
-      context_tokens: ctx.data.context_tokens,
-      context_window: getCachedWindow(convId),
-    });
-  else console.error("loadSessionContext failed:", ctx.error);
+  // Seed the context ring from the transcript so it shows immediately on open, before any
+  // new live turn reports usage. CLAUDE only — Codex has no cold context source (its ring
+  // fills from the first live `thread/tokenUsage/updated` push). A missing/unreadable
+  // transcript is NOT an error (the core returns an empty fill), so a status "error" here
+  // is a real failure worth surfacing rather than swallowing.
+  if (conv.kind !== "codex") {
+    const ctx = await commands.loadSessionContext(conv.sessionId);
+    if (ctx.status === "ok")
+      // Tokens from the transcript; window from the persisted cache (the only place the
+      // real 200k-vs-1M window is known before the first live turn).
+      applyContextFill(convId, {
+        context_tokens: ctx.data.context_tokens,
+        context_window: getCachedWindow(convId),
+      });
+    else console.error("loadSessionContext failed:", ctx.error);
+  }
 }
 
 /**
@@ -1149,12 +1301,17 @@ export async function loadConversationHistory(convId: string): Promise<void> {
 export async function reloadConversationHistory(convId: string): Promise<void> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return;
-  const res = await commands.loadSessionHistory(conv.sessionId);
+  // Codex cold history comes from its rollout reader; Claude from its transcript (see
+  // loadConversationHistory). Same result shape either way.
+  const res =
+    conv.kind === "codex"
+      ? await commands.codexLoadHistory(conv.sessionId)
+      : await commands.loadSessionHistory(conv.sessionId);
   if (res.status !== "ok") {
-    console.error("loadSessionHistory (reload) failed:", res.error);
+    console.error("reload history failed:", res.error);
     useAppErrors
       .getState()
-      .pushError("Impossible de recharger l'historique d'une conversation.", res.error);
+      .pushError("Couldn't reload a conversation's history.", res.error);
     return; // keep the current timeline
   }
   if (res.data.length === 0) return; // nothing on disk → keep timeline
@@ -1172,20 +1329,23 @@ export async function reloadConversationHistory(convId: string): Promise<void> {
   // Mark restored history seen so turning the stream on doesn't flash an old
   // conversation as "review" (only fresh LIVE completions should).
   markSeen(convId);
-  // Re-seed the context ring from the transcript (resetSession cleared it); window
-  // from the persisted cache (the real 200k-vs-1M value learned on a prior turn).
-  const ctx = await commands.loadSessionContext(conv.sessionId);
-  if (ctx.status === "ok")
-    applyContextFill(convId, {
-      context_tokens: ctx.data.context_tokens,
-      context_window: getCachedWindow(convId),
-    });
-  else console.error("loadSessionContext failed:", ctx.error);
+  // Re-seed the context ring from the transcript (resetSession cleared it); window from
+  // the persisted cache (the real 200k-vs-1M value learned on a prior turn). CLAUDE only —
+  // Codex re-fills the ring from the first live `thread/tokenUsage/updated`.
+  if (conv.kind !== "codex") {
+    const ctx = await commands.loadSessionContext(conv.sessionId);
+    if (ctx.status === "ok")
+      applyContextFill(convId, {
+        context_tokens: ctx.data.context_tokens,
+        context_window: getCachedWindow(convId),
+      });
+    else console.error("loadSessionContext failed:", ctx.error);
+  }
   historyLoaded.add(convId); // the select-time loader is now satisfied for this run
 }
 
 /**
- * Rewind a conversation IN PLACE to a chosen message ("reprendre à partir d'ici") —
+ * Rewind a conversation IN PLACE to a chosen message ("resume from here") —
  * destructive: everything after the cut is dropped from Claude's on-disk transcript.
  *
  * `targetIsUser` selects the semantics (see `rewind_conversation` in the core):
@@ -1205,9 +1365,39 @@ export async function rewindConversation(
   targetIsUser: boolean,
   targetText: string | null,
   occurrence: number | null,
+  // Codex only: the Codex turn id to fork THROUGH (the new tip, inclusive); the thread
+  // computes it from the boundary's turn ids. Ignored on Claude (which cuts by prompt text).
+  codexLastTurnId: string | null = null,
 ): Promise<RewindOutcome | null> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return null;
+  if (conv.kind === "codex") {
+    // Native Codex rewind: Codex has no in-place truncation, so FORK the thread THROUGH the
+    // chosen turn (thread/fork{lastTurnId}, inclusive) and SWAP this conversation onto the
+    // branch; the stale original thread is archived. ⚠️ Like the Claude rewind, this does NOT
+    // revert on-disk file changes — history only. Stop any live session first so its in-memory
+    // thread can't diverge from the swapped branch.
+    await stopConversationSession(convId);
+    const cwd = conv.liveCwd ?? conv.cwd;
+    const res = await commands.codexFork(conv.sessionId, cwd, conv.model, codexLastTurnId);
+    if (res.status !== "ok") {
+      useAppErrors.getState().pushError("Couldn't rewind the Codex conversation.", res.error);
+      throw new Error(res.error);
+    }
+    const staleThread = conv.sessionId;
+    // Point the conversation at the rewound branch (its new resume key), then rebuild its
+    // (now shorter) timeline from the branch's rollout.
+    useConversationsStore.getState().noteSessionId(convId, res.data.threadId);
+    await reloadConversationHistory(convId);
+    // Best-effort: archive the abandoned original thread so it drops out of Codex's list.
+    // A failure is surfaced (console) but never blocks the rewind (the branch is already live).
+    void commands.codexArchive(staleThread, cwd).then((r) => {
+      if (r.status !== "ok") console.warn("[codex-rewind] archive of stale thread failed:", r.error);
+    });
+    // A user rewind hands the removed prompt back to the composer to edit and re-send.
+    if (targetIsUser && targetText) useComposerDrafts.getState().setDraft(convId, targetText);
+    return { removed_prompt: targetIsUser ? targetText : null, removed_lines: 1 };
+  }
   // 1. Kill the live process AND WAIT for it to be fully reaped (stopConversationSession →
   //    stop_session → shutdown_and_wait) so nothing re-writes the transcript from its
   //    in-memory state while / after we truncate.
@@ -1217,13 +1407,13 @@ export async function rewindConversation(
   //    occurrence disambiguating identical repeated prompts.
   const res = await commands.rewindConversation(conv.sessionId, targetId, targetIsUser, targetText, occurrence);
   if (res.status !== "ok") {
-    useAppErrors.getState().pushError("Impossible de rembobiner la conversation.", res.error);
+    useAppErrors.getState().pushError("Couldn't rewind the conversation.", res.error);
     throw new Error(res.error);
   }
   // 3. Rebuild the timeline from the (now shorter) transcript.
   await reloadConversationHistory(convId);
   // 4. A user rewind hands the removed prompt back to the composer so it can be edited
-  //    and re-sent ("revenir à ce prompt, la main repart à Claude").
+  //    and re-sent ("go back to this prompt, control returns to Claude").
   if (res.data.removed_prompt) {
     useComposerDrafts.getState().setDraft(convId, res.data.removed_prompt);
   }
@@ -1231,7 +1421,7 @@ export async function rewindConversation(
 }
 
 /**
- * Fork a NEW conversation branched at a message ("forker à partir d'ici") — NON-destructive:
+ * Fork a NEW conversation branched at a message ("fork from here") — NON-destructive:
  * the original conversation is left untouched. The core copies the transcript up to the cut
  * into a fresh session file; we bring it into the app as a real conversation (which selects
  * it and loads its history), and seed its composer with the removed prompt for a user fork.
@@ -1243,12 +1433,28 @@ export async function forkConversation(
   targetIsUser: boolean,
   targetText: string | null,
   occurrence: number | null,
+  // Codex only: the Codex turn id to fork THROUGH (the branch tip, inclusive). Ignored on Claude.
+  codexLastTurnId: string | null = null,
 ): Promise<string | null> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return null;
+  if (conv.kind === "codex") {
+    // Native Codex fork: branch the thread THROUGH the chosen turn into a NEW thread, then
+    // materialize it as a fresh Codex conversation (the source is left intact). Non-destructive.
+    const cwd = conv.liveCwd ?? conv.cwd;
+    const res = await commands.codexFork(conv.sessionId, cwd, conv.model, codexLastTurnId);
+    if (res.status !== "ok") {
+      useAppErrors.getState().pushError("Couldn't fork the Codex conversation.", res.error);
+      throw new Error(res.error);
+    }
+    const newId = materializeCodexBranch(conv, res.data.threadId, res.data.model, `${conv.name} (fork)`);
+    // A user fork seeds the new branch's composer with the removed prompt to edit and re-send.
+    if (targetIsUser && targetText) useComposerDrafts.getState().setDraft(newId, targetText);
+    return newId;
+  }
   const res = await commands.forkConversation(conv.sessionId, targetId, targetIsUser, targetText, occurrence);
   if (res.status !== "ok") {
-    useAppErrors.getState().pushError("Impossible de forker la conversation.", res.error);
+    useAppErrors.getState().pushError("Couldn't fork the conversation.", res.error);
     throw new Error(res.error);
   }
   const outcome: ForkOutcome = res.data;
@@ -1287,6 +1493,7 @@ export async function wipeAllData(): Promise<void> {
   clearAllTodoBarOpen();
   clearAllComposerDrafts();
   clearAllComposerAttachments();
+  clearAllCodexControls();
   clearAllWorkFold();
   clearAllPlanAnnotations();
   clearAllSidebarFold();
@@ -1303,6 +1510,7 @@ export async function wipeAllData(): Promise<void> {
   useWorkflowLiveStore.getState().clear();
   useGitViewStore.getState().clearAll();
   useRemoteControlStore.getState().clearAll();
+  useCodexPlanUsageStore.getState().clear();
   useLastMessageSummaryStore.getState().clearAll();
 }
 

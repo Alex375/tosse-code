@@ -21,10 +21,10 @@ export function SoundToggle() {
       onClick={toggleSound}
       title={
         sound
-          ? "Son des notifications activé — couper (⌘⇧M)"
-          : "Son des notifications coupé — activer (⌘⇧M)"
+          ? "Notification sound on — mute (⌘⇧M)"
+          : "Notification sound off — turn on (⌘⇧M)"
       }
-      aria-label="Basculer le son des notifications"
+      aria-label="Toggle notification sound"
       aria-pressed={sound}
     >
       <Ico name={sound ? "volume" : "mute"} className="sm" />

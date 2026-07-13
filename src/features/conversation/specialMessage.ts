@@ -119,22 +119,22 @@ export interface NotifStyle {
   /** `Ico` glyph name. */
   icon: string;
   tone: NotifTone;
-  /** French status label shown in the pill. */
+  /** Status label shown in the pill. */
   label: string;
 }
 
-/** Map a task-notification `status` to its icon glyph, colour tone and French label.
+/** Map a task-notification `status` to its icon glyph, colour tone and label.
  *  Pure so the mapping is testable without rendering the card. */
 export function taskNotificationStyle(status: string | null): NotifStyle {
   switch ((status || "").toLowerCase()) {
     case "completed":
-      return { icon: "check", tone: "ok", label: "Terminé" };
+      return { icon: "check", tone: "ok", label: "Completed" };
     case "failed":
-      return { icon: "alert", tone: "err", label: "Échec" };
+      return { icon: "alert", tone: "err", label: "Failed" };
     case "killed":
-      return { icon: "x", tone: "err", label: "Tué" };
+      return { icon: "x", tone: "err", label: "Killed" };
     case "stopped":
-      return { icon: "stopc", tone: "warn", label: "Arrêté" };
+      return { icon: "stopc", tone: "warn", label: "Stopped" };
     default:
       return { icon: "bolt", tone: "muted", label: status ? status : "Notification" };
   }

@@ -56,6 +56,14 @@ export function toolMeta(name: string, input: JsonValue): ToolMeta {
       return { icon: FilePen, primaryArg: fileArg, suppressed: false, kind: "edit" };
     case "Write":
       return { icon: FilePlus, primaryArg: fileArg, suppressed: false, kind: "write" };
+    case "ApplyPatch": {
+      // Codex's file-edit tool: `changes: [{path, kind, diff}]`. Label with the first file's
+      // basename when a single file is touched; the expanded body shows every file's diff. The
+      // input can be frozen empty (diffs on the result) → no primaryArg then, just "ApplyPatch".
+      const changes = Array.isArray(obj.changes) ? (obj.changes as JsonValue[]) : [];
+      const p = changes.length ? str(asObject(changes[0]).path) : null;
+      return { icon: FilePen, primaryArg: p ? basename(p) : null, suppressed: false, kind: "plain" };
+    }
     case "Bash":
       return {
         icon: TerminalSquare,

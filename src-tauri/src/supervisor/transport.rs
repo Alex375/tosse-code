@@ -103,6 +103,23 @@ pub fn resolved_claude_bin() -> PathBuf {
     resolve_bin(&default_claude_bin())
 }
 
+/// Whether a usable `claude` binary is present on this machine. Powers the proactive
+/// "CLI not detected" surfaces (composer bar + Settings → Accounts) so the user learns
+/// the binary is missing BEFORE the first message fails — the twin of
+/// [`super::codex::codex_available`]. Cheap: a `PATH` / well-known-location file check,
+/// never a process spawn. Mirrors [`resolve_bin`]'s structure: an explicit path (incl.
+/// `$TOSSE_CLAUDE_BIN`) is "available" iff that file exists; a bare `claude` is available
+/// when it resolves on `PATH` or exists at a well-known install location.
+pub fn claude_available() -> bool {
+    let bin = default_claude_bin();
+    let has_dir = bin.parent().map(|p| !p.as_os_str().is_empty()).unwrap_or(false);
+    if has_dir {
+        return bin.is_file();
+    }
+    find_on_path(&bin).is_some()
+        || (bin.as_os_str() == "claude" && known_claude_locations().iter().any(|p| p.is_file()))
+}
+
 /// Resolve the binary actually handed to `Command::new` at spawn time.
 ///
 /// Normally `claude` resolves on `PATH` (the terminal PATH in dev; the PATH
@@ -224,16 +241,16 @@ impl std::fmt::Display for TransportError {
             // for a Finder-launched bundle whose PATH could not be repaired.
             TransportError::Spawn(e) if e.kind() == std::io::ErrorKind::NotFound => write!(
                 f,
-                "Impossible de démarrer « claude » : binaire introuvable. \
-                 Vérifie que Claude Code est installé (essaie « claude --version » \
-                 dans un terminal), ou définis la variable TOSSE_CLAUDE_BIN sur le \
-                 chemin complet du binaire.",
+                "Could not start \"claude\": binary not found. \
+                 Check that Claude Code is installed (try \"claude --version\" \
+                 in a terminal), or set the TOSSE_CLAUDE_BIN variable to the \
+                 binary's full path.",
             ),
-            TransportError::Spawn(e) => write!(f, "Impossible de démarrer « claude » : {e}"),
+            TransportError::Spawn(e) => write!(f, "Could not start \"claude\": {e}"),
             TransportError::CwdMissing(p) => write!(
                 f,
-                "Le dossier de travail de cette conversation n'existe plus : {}. \
-                 Son worktree a peut-être été supprimé, ou le dossier déplacé.",
+                "This conversation's working directory no longer exists: {}. \
+                 Its worktree may have been removed, or the folder moved.",
                 p.display(),
             ),
             TransportError::Closed => write!(f, "claude session transport is closed"),
@@ -581,19 +598,19 @@ async fn writer_loop(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Valu
                 // A message we couldn't serialize is dropped (the session continues);
                 // record it so a lost outbound line is diagnosable, not silent.
                 eprintln!("[transport] dropping unserializable outbound message: {e}");
-                record(format!("message non sérialisable : {e}"));
+                record(format!("unserializable message: {e}"));
                 continue;
             }
         };
         line.push('\n');
         if let Err(e) = stdin.write_all(line.as_bytes()).await {
             eprintln!("[transport] stdin write failed: {e}");
-            record(format!("écriture stdin échouée : {e}"));
+            record(format!("stdin write failed: {e}"));
             break;
         }
         if let Err(e) = stdin.flush().await {
             eprintln!("[transport] stdin flush failed: {e}");
-            record(format!("flush stdin échoué : {e}"));
+            record(format!("stdin flush failed: {e}"));
             break;
         }
     }
@@ -634,13 +651,46 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialises tests that mutate the process-wide `TOSSE_CLAUDE_BIN` env var, so they
+    /// never race under the default parallel test runner.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_config_uses_path_binary() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("TOSSE_CLAUDE_BIN");
         let cfg = SpawnConfig::new("/tmp");
         assert_eq!(cfg.claude_bin, PathBuf::from("claude"));
         assert_eq!(cfg.cwd, PathBuf::from("/tmp"));
+    }
+
+    /// The `PATH` probe that `claude_available` (and `resolve_bin`) rely on: a real
+    /// program on every unix `PATH` resolves; a nonsense name does not. Kept env-race
+    /// free (no `TOSSE_CLAUDE_BIN` mutation) — the twin of the Codex backend's
+    /// `resolves_on_path` test.
+    #[test]
+    fn find_on_path_resolves_real_binaries_and_rejects_fakes() {
+        assert!(find_on_path(Path::new("sh")).is_some(), "sh should resolve on PATH");
+        assert!(
+            find_on_path(Path::new("tosse-definitely-not-a-real-binary-xyz")).is_none(),
+            "a nonsense name must not resolve"
+        );
+    }
+
+    /// `claude_available` honours an explicit `$TOSSE_CLAUDE_BIN` path: available iff the
+    /// file exists. A path with separators is checked as-is (never searched on `PATH`).
+    /// Serialised against `default_config_uses_path_binary` (both touch the shared env var)
+    /// via a process-wide mutex so the two never race.
+    #[test]
+    fn claude_available_honours_explicit_bin_path() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("TOSSE_CLAUDE_BIN", "/bin/sh");
+        assert!(claude_available(), "an existing explicit path is available");
+        std::env::set_var("TOSSE_CLAUDE_BIN", "/tosse/nope/not/here/claude");
+        assert!(!claude_available(), "a missing explicit path is not available");
+        std::env::remove_var("TOSSE_CLAUDE_BIN");
     }
 
     #[test]

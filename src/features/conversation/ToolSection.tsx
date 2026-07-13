@@ -1,5 +1,5 @@
-// Shared rendering for the grouped-steps transcript: a collapsible "Exécuté N
-// étapes" section (<ToolSection>) holding compact, individually-expandable step
+// Shared rendering for the grouped-steps transcript: a collapsible "Executed N
+// steps" section (<ToolSection>) holding compact, individually-expandable step
 // rows (<ToolStepRow>), plus the per-tool detail body (<ToolDetail>). Used VERBATIM
 // by the live thread (ConductorThread) and the off-thread transcript
 // (SubAgentTranscript) so the two never diverge — the live side feeds <LiveToolStep>
@@ -22,6 +22,7 @@ import { useNow } from "../../ui/useNow";
 import { useWorkFold } from "../../store/workFold";
 import { Ico } from "../../ui/kit";
 import { DiffView } from "./DiffView";
+import { applyPatchChanges, parseUnifiedDiff } from "./unifiedDiff";
 import { MentionPathChip } from "./FileMention";
 import { QuestionnaireSummary } from "./QuestionnaireAsk";
 import { resultContentText } from "./resultText";
@@ -76,6 +77,22 @@ export function ToolDetail({
   const meta = toolMeta(name, input);
 
   if (name === "AskUserQuestion") return <QuestionnaireSummary input={input} result={result?.content} />;
+
+  // Codex's file-edit tool: `changes: [{path, kind, diff}]`, each `diff` a per-file unified
+  // diff. Parse each into DiffView's line model (the result is authoritative — the input can
+  // be frozen empty). No structured changes yet (still running) → fall through to the raw body.
+  if (name === "ApplyPatch") {
+    const changes = applyPatchChanges(input, result?.content);
+    if (changes.length > 0)
+      return (
+        <>
+          {changes.map((c, k) => (
+            <DiffView key={k} path={c.path || undefined} lines={parseUnifiedDiff(c.diff)} kind={c.kind} />
+          ))}
+        </>
+      );
+    return result ? <ToolResultBody content={result.content} isError={result.isError} /> : null;
+  }
 
   // The proposed plan (rare in a settled/sub-agent transcript, where the rich <PlanCard> is not
   // used): render the plan markdown so an expanded row isn't empty.
@@ -196,7 +213,7 @@ export function ToolStepRow({
         <span className="cv-step-end">
           {time}
           {running ? (
-            <span className="cv-step-run" aria-label="en cours" />
+            <span className="cv-step-run" aria-label="running" />
           ) : isError ? (
             <Ico name="alert" className="sm cv-step-errico" />
           ) : (
@@ -373,8 +390,9 @@ export function ClaudeWorkBlock({
   const onToggle = persisted
     ? () => toggleStore(foldConv!, foldKey!)
     : () => setLocalOpen((o) => !o);
-  const label =
-    count > 0 ? `Travail de Claude · ${count} étape${count > 1 ? "s" : ""}` : "Travail de Claude";
+  // Backend-neutral label (the fold serves both Claude and Codex conversations),
+  // matching the neighbouring labels ("Executed N steps").
+  const label = count > 0 ? `Work · ${count} step${count > 1 ? "s" : ""}` : "Work";
   return (
     <div className="cv-work">
       <button type="button" className="cv-work-h" onClick={onToggle} aria-expanded={open}>

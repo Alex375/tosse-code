@@ -3,6 +3,7 @@
 // Selected at runtime by provider.ts when window.__TAURI_INTERNALS__ is absent.
 
 import type {
+  Backend,
   BranchInfo,
   CommitFile,
   CommitInfo,
@@ -10,6 +11,12 @@ import type {
   ConversationItem,
   ConversationRecord,
   DiskConversation,
+  ClaudeAccountStatus,
+  CodexAccountStatus,
+  CodexControls,
+  CodexHooksSnapshot,
+  CodexLoginStart,
+  CodexPluginsLive,
   ExtensionsSnapshot,
   FileContent,
   FsChangeEvent,
@@ -18,6 +25,7 @@ import type {
   GitDiff,
   GitFileEntry,
   GitStatus,
+  ImageAttachment,
   ImageContent,
   MarketplaceInfo,
   McpAuthResult,
@@ -34,7 +42,10 @@ import type {
   Result,
   RewindOutcome,
   SearchHit,
+  AccountLoginEvent,
+  SessionCodexPlanUsageEvent,
   SessionCommandsEvent,
+  SessionExtensionsChangedEvent,
   SessionMessageEvent,
   SessionPermissionEvent,
   SessionRemoteControlEvent,
@@ -112,6 +123,12 @@ const sessionSummaryEvent = new MockEmitter<SessionSummaryEvent>();
 // No real bridge in the browser mock — never fires, but must exist so the composer's
 // Remote Control chip / event router can subscribe without crashing.
 const sessionRemoteControlEvent = new MockEmitter<SessionRemoteControlEvent>();
+// No real Codex app-server in the browser mock — never fires, but must exist so the
+// global event router can subscribe without crashing.
+const sessionCodexPlanUsageEvent = new MockEmitter<SessionCodexPlanUsageEvent>();
+// Extensions v2 + accounts: never fire in the mock, but the global router subscribes.
+const sessionExtensionsChangedEvent = new MockEmitter<SessionExtensionsChangedEvent>();
+const accountLoginEvent = new MockEmitter<AccountLoginEvent>();
 const tickEvent = new MockEmitter<TickEvent>();
 // No real filesystem in the browser mock — these never fire, but must exist so
 // the editor's `useFsWatch` can subscribe without crashing.
@@ -131,6 +148,9 @@ export const mockEvents = {
   sessionTitleEvent,
   sessionSummaryEvent,
   sessionRemoteControlEvent,
+  sessionCodexPlanUsageEvent,
+  sessionExtensionsChangedEvent,
+  accountLoginEvent,
   tickEvent,
   fsChangeEvent,
   fsWatchErrorEvent,
@@ -181,6 +201,171 @@ export const mockCommands = {
     return ok(MOCK_COMMANDS);
   },
 
+  // Backend binary detection — stubbed "installed" for the browser mock (dev/Playwright)
+  // so the composer's backend-aware controls render without a real `claude`/`codex`
+  // binary. Both twins MUST exist: `binaryAvailable.probe()` calls `commands.xxx()`
+  // synchronously, so a missing method throws a TypeError before its `.catch` is attached
+  // → the always-mounted AuthWarningBar / Settings → Accounts crash the mock UI.
+  async claudeAvailable(): Promise<boolean> {
+    return true;
+  },
+  async codexAvailable(): Promise<boolean> {
+    return true;
+  },
+  async codexListModels(): Promise<
+    Result<
+      { id: string; displayName: string; efforts: string[]; defaultEffort: string | null; isDefault: boolean }[],
+      string
+    >
+  > {
+    return ok([
+      { id: "gpt-5.5", displayName: "GPT-5.5", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "medium", isDefault: true },
+      { id: "gpt-5.4", displayName: "GPT-5.4", efforts: ["low", "medium", "high", "xhigh"], defaultEffort: "medium", isDefault: false },
+    ]);
+  },
+  async codexListSkills(_cwds: string[]): Promise<Result<{ name: string; description: string }[], string>> {
+    return ok([{ name: "imagegen", description: "Generate an image" }]);
+  },
+  async codexCompact(_session: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexListExtensions(_cwd: string | null): Promise<Result<ExtensionsSnapshot, string>> {
+    return ok({
+      mcp_servers: [
+        { name: "node_repl", scope: "user", transport: "stdio", command: "/opt/node_repl", url: null, source: null, enabled: true },
+        { name: "railway", scope: "user", transport: "stdio", command: "railway", url: null, source: null, enabled: false },
+      ],
+      plugins: [
+        { id: "browser@openai-bundled", name: "browser", marketplace: "openai-bundled", version: null, description: null, enabled: true, scope: "user", update_available: false, latest_version: null, skill_count: 0, agent_count: 0, command_count: 0, mcp_count: 0 },
+      ],
+      skills: [
+        { name: "imagegen", description: "Generate an image", scope: "user", source: null, path: "/Users/x/.codex/skills/.system/imagegen/SKILL.md", enabled: true },
+        { name: "off-skill", description: "A disabled skill (toggle demo)", scope: "user", source: null, path: "/Users/x/.codex/skills/off-skill/SKILL.md", enabled: false },
+      ],
+      agents: [],
+      warnings: [],
+    });
+  },
+  // ---- Extensions v2 (Codex) — toggles + live inventories, demo-shaped ----------
+  async codexSetSkillEnabled(_path: string, enabled: boolean): Promise<Result<boolean, string>> {
+    return ok(enabled);
+  },
+  async codexSetMcpEnabled(_name: string, _enabled: boolean): Promise<Result<boolean, string>> {
+    // true = live sessions picked the change up (mirrors the real command's contract).
+    return ok(true);
+  },
+  async codexSetPluginEnabled(_pluginId: string, _enabled: boolean): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexListPlugins(_cwds: string[]): Promise<Result<CodexPluginsLive, string>> {
+    return ok({
+      plugins: [
+        {
+          id: "documents@openai-primary-runtime",
+          name: "documents",
+          marketplace: "openai-primary-runtime",
+          marketplacePath: "/Users/x/.cache/codex-runtimes/marketplace.json",
+          displayName: "Documents",
+          shortDescription: "Create and edit document artifacts",
+          version: "26.630.12135",
+          installed: true,
+          enabled: true,
+        },
+        {
+          id: "browser@openai-bundled",
+          name: "browser",
+          marketplace: "openai-bundled",
+          marketplacePath: "/Users/x/.codex/plugins/marketplace.json",
+          displayName: "Browser",
+          shortDescription: "Control the in-app browser",
+          version: "26.623.141536",
+          installed: true,
+          enabled: true,
+        },
+      ],
+      marketplaces: [
+        { name: "openai-primary-runtime", displayName: null, path: "/Users/x/.cache/codex-runtimes/marketplace.json", pluginCount: 1 },
+        { name: "openai-bundled", displayName: null, path: "/Users/x/.codex/plugins/marketplace.json", pluginCount: 1 },
+      ],
+      loadErrors: [],
+    });
+  },
+  async codexPluginContents(
+    _pluginName: string,
+    _marketplacePath: string | null,
+    pluginId: string,
+  ): Promise<Result<PluginContents, string>> {
+    return ok({
+      skills: [
+        { name: "documents", description: "Create/edit .docx artifacts", scope: "plugin", source: pluginId, path: "/Users/x/.codex/plugins/cache/documents/SKILL.md", enabled: true },
+      ],
+      agents: [],
+      mcp_servers: [],
+    });
+  },
+  async codexListHooks(_cwds: string[]): Promise<Result<CodexHooksSnapshot, string>> {
+    return ok({
+      hooks: [
+        {
+          key: "user:preToolUse:0",
+          eventName: "preToolUse",
+          handlerType: "command",
+          command: "./scripts/lint-guard.sh",
+          source: "user",
+          sourcePath: "/Users/x/.codex/hooks.toml",
+          pluginId: null,
+          enabled: true,
+          trustStatus: "trusted",
+        },
+      ],
+      warnings: [],
+      errors: [],
+    });
+  },
+  async codexMarketplaceAdd(_source: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexMarketplaceRemove(_name: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async codexMarketplaceUpgrade(_name: string | null): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  // ---- Accounts (Claude & Codex) — demo statuses ----------------------------------
+  async accountClaudeStatus(): Promise<Result<ClaudeAccountStatus, string>> {
+    return ok({
+      loggedIn: true,
+      authMethod: "claude.ai",
+      email: "demo@example.com",
+      orgName: "Demo Org",
+      subscriptionType: "max",
+    });
+  },
+  async accountClaudeLoginStart(): Promise<Result<string, string>> {
+    return ok("https://claude.ai/oauth/demo");
+  },
+  async accountClaudeLoginCode(_code: string): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async accountClaudeLoginCancel(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async accountClaudeLogout(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async accountCodexStatus(): Promise<Result<CodexAccountStatus, string>> {
+    return ok({ loggedIn: true, authMethod: "chatgpt", email: "demo@example.com", planType: "plus" });
+  },
+  async accountCodexLoginStart(): Promise<Result<CodexLoginStart, string>> {
+    return ok({ loginId: "demo-login", authUrl: "https://auth.openai.com/demo" });
+  },
+  async accountCodexLoginCancel(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+  async accountCodexLogout(): Promise<Result<null, string>> {
+    return ok(null);
+  },
+
   async spawnSession(
     _repoPath: string,
     _resume: string | null,
@@ -188,6 +373,7 @@ export const mockCommands = {
     effort: string | null,
     permissionMode: string | null,
     ultracode: boolean,
+    _backend: "claude" | "codex",
   ): Promise<Result<string, string>> {
     // Unique id per spawn so multiple browser conversations don't collide.
     const session = `mock-session-${++mockCounter}`;
@@ -214,8 +400,12 @@ export const mockCommands = {
   async sendMessage(
     session: string,
     _text: string,
-    _images?: { media_type: string; data: string }[],
+    _images: ImageAttachment[],
+    codexControls: CodexControls | null,
   ): Promise<Result<null, string>> {
+    // No actor to apply the per-turn Codex overrides to — log them so a dev/Playwright
+    // run driving the demo Codex conversation can observe they were actually folded in.
+    if (codexControls) console.info("[mock] sendMessage codexControls:", codexControls);
     const demo =
       typeof location !== "undefined"
         ? new URLSearchParams(location.search).get("demo")
@@ -288,8 +478,9 @@ export const mockCommands = {
           status: "connected",
           session_url: `https://claude.ai/code?session=mock-${session}`,
           error: null,
+          pairing_code: null,
         }
-      : { status: "disconnected", session_url: null, error: null };
+      : { status: "disconnected", session_url: null, error: null, pairing_code: null };
     return ok(state);
   },
 
@@ -303,7 +494,7 @@ export const mockCommands = {
     // auto-title behavior is exercised end to end in dev/Playwright.
     setTimeout(() => {
       const words = description.trim().replace(/\s+/g, " ").split(" ").slice(0, 6).join(" ");
-      const title = words ? words.charAt(0).toUpperCase() + words.slice(1) : "Nouvelle conversation";
+      const title = words ? words.charAt(0).toUpperCase() + words.slice(1) : "New conversation";
       sessionTitleEvent.emit({ session, title, seq });
     }, 40);
     return ok(null);
@@ -354,9 +545,12 @@ export const mockCommands = {
     return ok(mockTaskOutput(taskId));
   },
 
-  async openInTerminal(cwd: string, sessionId: string): Promise<Result<null, string>> {
-    // No OS terminal in the browser mock — just log what the real command would run.
-    console.info(`[mock] openInTerminal: cd ${cwd} && claude --resume ${sessionId}`);
+  async openInTerminal(cwd: string, sessionId: string, backend: Backend): Promise<Result<null, string>> {
+    // No OS terminal in the browser mock — log what the real command would run,
+    // backend-aware like the core's resume_invocation (`claude --resume` vs
+    // `codex resume`; same id, different CLI syntax).
+    const resume = backend === "codex" ? `codex resume ${sessionId}` : `claude --resume ${sessionId}`;
+    console.info(`[mock] openInTerminal: cd ${cwd} && ${resume}`);
     return ok(null);
   },
 
@@ -366,6 +560,14 @@ export const mockCommands = {
     // in dev/Playwright; otherwise empty ("nothing to replay" → reload stays a no-op and
     // keeps whatever the live scenario already rendered).
     if (HISTORY_DEMO_SESSION_IDS.has(sessionId)) return ok(DEMO_SUBAGENT_TRANSCRIPT);
+    return ok([]);
+  },
+
+  async codexLoadHistory(threadId: string): Promise<Result<ConversationItem[], string>> {
+    // No real rollout in the browser mock. For the demo Codex conversation return a
+    // representative cold timeline (messages + Bash + ApplyPatch cards) so the reload
+    // rendering is exercisable in dev/Playwright; otherwise empty.
+    if (threadId === "codex-thread-demo") return ok(DEMO_CODEX_HISTORY);
     return ok([]);
   },
 
@@ -439,6 +641,7 @@ export const mockCommands = {
         title: null,
         excerpt: "fork (mock)",
         mtime_ms: 0,
+        backend: "claude",
       },
       removed_prompt: null,
     });
@@ -465,7 +668,7 @@ export const mockCommands = {
   },
 
   async getPlanUsage(): Promise<Result<PlanUsage, UsageError>> {
-    // No real OAuth endpoint in the browser; return plausible fills so the Forfait
+    // No real OAuth endpoint in the browser; return plausible fills so the Plan
     // section of the context popover renders in dev/Playwright. Reset ~2h / ~3d out,
     // as ISO 8601 strings (matching the live endpoint shape).
     const iso = (offsetSec: number) => new Date(Date.now() + offsetSec * 1000).toISOString();
@@ -495,7 +698,7 @@ export const mockCommands = {
       conversations: [
         {
           id: "conv-demo",
-          name: "Démo tâches de fond",
+          name: "Background tasks demo",
           repo_id: "repo-demo",
           cwd: "/Users/dev/demo-repo",
           created_at: now,
@@ -507,6 +710,28 @@ export const mockCommands = {
           permission_mode: "auto",
           pending_reminder: null,
           clean_output: null,
+          backend: "claude",
+        },
+        // A Codex conversation so the mixed-fleet identity (backend badge, neutral avatar,
+        // Codex picker icon) is exercisable in dev/Playwright. Renders live through the same
+        // mock driver; only `backend` drives the brand marks.
+        {
+          id: "conv-demo-codex",
+          name: "Codex demo",
+          repo_id: "repo-demo",
+          cwd: "/Users/dev/demo-repo",
+          created_at: now - 1,
+          last_activity_at: now - 1,
+          // A persisted thread id so selecting it exercises the Codex COLD-load path
+          // (rollout reader) — `codexLoadHistory` returns a representative timeline below.
+          session_id: "codex-thread-demo",
+          model: "gpt-5.5",
+          effort: "high",
+          ultracode: false,
+          permission_mode: "auto",
+          pending_reminder: null,
+          clean_output: null,
+          backend: "codex",
         },
       ],
       active_id: "conv-demo",
@@ -957,9 +1182,10 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     cwd: "/Users/dev/demo-repo",
     repo_root: "/Users/dev/demo-repo",
     git_branch: "main",
-    title: "Refonte de l'authentification",
-    excerpt: "Le déploiement casse au login, il faut revoir l'auth du serveur",
+    title: "Authentication rework",
+    excerpt: "The deployment breaks at login, the server auth needs reworking",
     mtime_ms: Date.now() - 3_600_000,
+    backend: "claude",
   },
   {
     session_id: "demo-orphan-2222",
@@ -967,19 +1193,47 @@ const MOCK_DISK_CONVERSATIONS: DiskConversation[] = [
     repo_root: "/Users/dev/demo-repo",
     git_branch: "feat/dark-mode",
     title: null,
-    excerpt: "Ajoute un toggle de dark mode dans les réglages",
+    excerpt: "Add a dark mode toggle in settings",
     mtime_ms: Date.now() - 4 * 86_400_000,
+    backend: "claude",
   },
   {
     session_id: "demo-other-3333",
     cwd: "/Users/dev/other-project",
     repo_root: "/Users/dev/other-project",
     git_branch: null,
-    title: "Script d'import CSV",
-    excerpt: "Parser le CSV et insérer les lignes en base",
+    title: "CSV import script",
+    excerpt: "Parse the CSV and insert the rows into the database",
     mtime_ms: Date.now() - 20 * 86_400_000,
+    backend: "claude",
+  },
+  {
+    // A Codex thread on disk (backend badge + rollout-backed preview via codexLoadHistory).
+    // Its session_id matches the mock's `codex-thread-demo` cold timeline.
+    session_id: "codex-thread-demo",
+    cwd: "/Users/dev/demo-repo",
+    repo_root: "/Users/dev/demo-repo",
+    git_branch: "main",
+    title: null,
+    excerpt: "Give me a quick tour of the project",
+    mtime_ms: Date.now() - 2 * 3_600_000,
+    backend: "codex",
   },
 ];
 
 // Session ids of the history-panel demo rows — their preview renders a sample transcript.
 const HISTORY_DEMO_SESSION_IDS = new Set(MOCK_DISK_CONVERSATIONS.map((c) => c.session_id));
+
+// A representative Codex COLD-load timeline (what `codex_load_history` reconstructs from a
+// rollout): user turn + agent text + a Bash card and an ApplyPatch card, each paired with
+// its result by `tool_use_id`. Mirrors the real reader's output shape so the reload
+// rendering (tool cards, diff view) is verifiable in dev/Playwright without a real rollout.
+const DEMO_CODEX_HISTORY: ConversationItem[] = [
+  { kind: "user_message", id: "cx-u1", text: "Add a hello.txt file and list the folder", parent_tool_use_id: null, replay: false },
+  { kind: "assistant_message", id: "cx-a1", parent_tool_use_id: null, blocks: [{ type: "text", text: "I'll create the file then list the folder." }] },
+  { kind: "assistant_message", id: "cx-p1", parent_tool_use_id: null, blocks: [{ type: "tool_use", id: "cx-p1", name: "ApplyPatch", input: { changes: [{ path: "/Users/dev/demo-repo/hello.txt", kind: { type: "add" }, diff: "@@ -0,0 +1,2 @@\n+hello\n+world\n" }] } }] },
+  { kind: "tool_result", tool_use_id: "cx-p1", is_error: false, parent_tool_use_id: null, content: { status: "completed", changes: [{ path: "/Users/dev/demo-repo/hello.txt", kind: { type: "add" }, diff: "@@ -0,0 +1,2 @@\n+hello\n+world\n" }] } },
+  { kind: "assistant_message", id: "cx-t1", parent_tool_use_id: null, blocks: [{ type: "tool_use", id: "cx-t1", name: "Bash", input: { command: "ls -la", cwd: "/Users/dev/demo-repo" } }] },
+  { kind: "tool_result", tool_use_id: "cx-t1", is_error: false, parent_tool_use_id: null, content: "total 8\n-rw-r--r--  1 dev  staff  12 hello.txt\n" },
+  { kind: "assistant_message", id: "cx-a2", parent_tool_use_id: null, blocks: [{ type: "text", text: "Done: `hello.txt` created, folder listed." }] },
+];

@@ -119,7 +119,7 @@ function ensureListeners(): void {
     if (!entry || entry.exited) return;
     entry.exited = true;
     // Dim notice; the shell is gone until the panel is reopened (which restarts it).
-    entry.term.write("\r\n\x1b[2m[processus terminé — rouvre le terminal pour en relancer un]\x1b[0m\r\n");
+    entry.term.write("\r\n\x1b[2m[process ended — reopen the terminal to start a new one]\x1b[0m\r\n");
   });
 }
 
@@ -141,7 +141,7 @@ function makeTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>["th
 function spawnPty(id: string, cwd: string, term: Terminal): void {
   void commands.terminalOpen(id, cwd, term.cols || 80, term.rows || 24).then((res) => {
     if (res.status === "error") {
-      term.write(`\r\n\x1b[31mÉchec du démarrage du terminal : ${res.error}\x1b[0m\r\n`);
+      term.write(`\r\n\x1b[31mFailed to start the terminal: ${res.error}\x1b[0m\r\n`);
       const entry = entries.get(id);
       if (entry) entry.exited = true;
     }

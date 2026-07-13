@@ -13,9 +13,15 @@ import { useState } from "react";
 import { useBackgroundBashTasks, useSessionTasks } from "../../store/backgroundTasksStore";
 import { useStopTask } from "../../ipc/useCommands";
 import { Ico, RunDots } from "../../ui/kit";
+import { useIsCodex } from "./ConvMark";
 import { BashOutputPopover } from "./BashOutputPopover";
 
 export function BashBar({ session }: { session: string }) {
+  // Bloc A (Phase 4.5): background shells are a Claude-only primitive — Codex has no
+  // model-facing background terminal (a "backgrounded" Codex command completes within the
+  // turn; the detached OS process is invisible to the protocol). So on Codex this bar has
+  // no source and is hidden, never a fake empty shell.
+  const isCodex = useIsCodex(session);
   // The bar lists only RUNNING commands; a finished one drops out.
   const rows = useBackgroundBashTasks(session);
   // The full task map (running + finished) — so an open popover survives its command
@@ -26,6 +32,7 @@ export function BashBar({ session }: { session: string }) {
 
   const opened = openedId ? allTasks[openedId] ?? null : null;
 
+  if (isCodex) return null;
   if (rows.length === 0 && !opened) return null;
 
   return (
@@ -36,7 +43,7 @@ export function BashBar({ session }: { session: string }) {
             type="button"
             className="cv-bashrow-main"
             onClick={() => setOpenedId(t.task_id)}
-            title="Voir la sortie de la commande"
+            title="View command output"
           >
             <RunDots />
             {t.label ? (
@@ -45,18 +52,18 @@ export function BashBar({ session }: { session: string }) {
               <span className="cv-bashrow-cmd">{t.label}</span>
             ) : (
               // No name → fall back to the raw `$ command` (mono), better than a generic
-              // "commande".
+              // "command".
               <span className="cv-bashrow-cmd wf-mono">
                 <span className="cv-bashrow-p" aria-hidden="true">$</span>
-                {t.command ?? "commande"}
+                {t.command ?? "command"}
               </span>
             )}
           </button>
           <button
             type="button"
             className="cv-bgstop"
-            title="Arrêter la commande"
-            aria-label="Arrêter la commande"
+            title="Stop command"
+            aria-label="Stop command"
             onClick={() => stopTask.mutate(t.task_id)}
           >
             <Ico name="stopc" className="sm" />
