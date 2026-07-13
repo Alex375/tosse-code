@@ -14,7 +14,7 @@
 // Both feed the SAME `PlanUsage` shape the popover renders.
 import { usePlanUsage, PLAN_USAGE_STALE_MS } from "../../store/planUsage";
 import { useCodexPlanUsage } from "../../store/codexPlanUsage";
-import { useCodexAvailable } from "../../store/codexAvailable";
+import { useCodexAvailable } from "../../store/binaryAvailable";
 import { useConversationsStore } from "../../store/conversationsStore";
 import { useCodexCompact, useSendMessage } from "../../ipc/useCommands";
 import type { PlanUsageError, PlanUsageInfo } from "../../ui/kit";

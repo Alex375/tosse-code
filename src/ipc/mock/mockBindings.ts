@@ -201,8 +201,14 @@ export const mockCommands = {
     return ok(MOCK_COMMANDS);
   },
 
-  // Codex backend detection + catalogues — stubbed for the browser mock (dev/Playwright)
-  // so the composer's Codex-aware controls render without a real `codex` binary.
+  // Backend binary detection — stubbed "installed" for the browser mock (dev/Playwright)
+  // so the composer's backend-aware controls render without a real `claude`/`codex`
+  // binary. Both twins MUST exist: `binaryAvailable.probe()` calls `commands.xxx()`
+  // synchronously, so a missing method throws a TypeError before its `.catch` is attached
+  // → the always-mounted AuthWarningBar / Réglages → Comptes crash the mock UI.
+  async claudeAvailable(): Promise<boolean> {
+    return true;
+  },
   async codexAvailable(): Promise<boolean> {
     return true;
   },

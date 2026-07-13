@@ -31,7 +31,7 @@ import { useComposerDraft, useComposerDrafts } from "../../store/composerDrafts"
 import { useEffectiveCleanOutput } from "../../store/display";
 import { useExtensionsUi } from "../extensions/extensionsUiStore";
 import { ChipBtn, ClaudeMark, CodexMark, ContextRing, Ico, Menu, MenuItem, MenuLabel } from "../../ui/kit";
-import { useCodexAvailable } from "../../store/codexAvailable";
+import { useCodexAvailable } from "../../store/binaryAvailable";
 import { backendOfModel, modelFamily, modelLabel, modelsForPicker } from "./models";
 import { useCodexModels } from "./codexModels";
 import { useAccountsLoggedOut } from "../../ipc/useAccounts";

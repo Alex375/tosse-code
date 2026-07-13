@@ -23,6 +23,7 @@ use ipc::commands::{
     account_claude_login_cancel, account_claude_login_code, account_claude_login_start,
     account_claude_logout, account_claude_status, account_codex_login_cancel,
     account_codex_login_start, account_codex_logout, account_codex_status,
+    claude_available,
     codex_available, codex_archive, codex_compact, codex_fork, codex_list_extensions,
     codex_list_hooks, codex_list_models, codex_list_plugins, codex_list_skills,
     codex_load_history, codex_marketplace_add, codex_marketplace_remove,
@@ -56,6 +57,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
         .commands(collect_commands![
             ping,
             spawn_session,
+            claude_available,
             codex_available,
             codex_list_models,
             codex_list_skills,

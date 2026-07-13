@@ -18,7 +18,7 @@
 // modelled on Claude.ai's Customize panel. See memory "extensions-two-distinct-views".
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ClaudeMark, CodexMark, Ico } from "../../ui/kit";
-import { useCodexAvailable } from "../../store/codexAvailable";
+import { useCodexAvailable } from "../../store/binaryAvailable";
 import { Toggle } from "../../ui/Toggle";
 import { commands } from "../../ipc/client";
 import { refetchSlashCommands } from "../../store/commandsStore";

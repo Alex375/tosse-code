@@ -13,7 +13,7 @@ import {
   useCodexAccount,
   useCodexAccountActions,
 } from "../../ipc/useAccounts";
-import { useCodexAvailable } from "../../store/codexAvailable";
+import { useBackendAvailabilityState } from "../../store/binaryAvailable";
 import { useAccountLoginStore } from "../../store/accountLogin";
 import { ClaudeMark, CodexMark } from "../../ui/kit";
 import { PageHead } from "./SettingsKit";
@@ -28,7 +28,12 @@ const BRAND: Record<"claude" | "codex", string> = {
 };
 
 export function AccountsSection() {
-  const codexAvailable = useCodexAvailable();
+  // Tri-state (null while the one-shot probe is in flight): show the alarming
+  // "CLI introuvable" card ONLY on a DEFINITIVE `false`. While still checking (null), render
+  // the normal account group — it has its own "Vérification…" skeleton — so a user who has
+  // the CLI installed never sees a scary "introuvable" flash before the check resolves.
+  const claude = useBackendAvailabilityState("claude");
+  const codex = useBackendAvailabilityState("codex");
   return (
     <div>
       <PageHead
@@ -36,8 +41,8 @@ export function AccountsSection() {
         subtitle="Connexion aux comptes Claude et Codex utilisés par les agents."
       />
       <div className={s.cards}>
-        <ClaudeAccountGroup />
-        {codexAvailable ? <CodexAccountGroup /> : <CodexUnavailableCard />}
+        {claude === false ? <ClaudeUnavailableCard /> : <ClaudeAccountGroup />}
+        {codex === false ? <CodexUnavailableCard /> : <CodexAccountGroup />}
       </div>
     </div>
   );
@@ -420,6 +425,24 @@ function CodexAccountGroup() {
       ) : null}
       {err ? <div className={s.err}>{err}</div> : null}
     </AccountCard>
+  );
+}
+
+/** Claude binary absent: a muted card that points at the install command instead of a
+ *  dead "Se connecter" (login — `claude auth login` — is impossible without the CLI).
+ *  Replaces the confusing "Statut indisponible : <error>" the live card would otherwise
+ *  show when the `claude auth status` probe fails for want of the binary. */
+function ClaudeUnavailableCard() {
+  return (
+    <AccountCard
+      brand="claude"
+      mark={<ClaudeMark />}
+      name="Claude"
+      provider="Anthropic · claude.ai"
+      state="disconnected"
+      invite="CLI Claude introuvable. Installe Claude Code (npm i -g @anthropic-ai/claude-code) pour connecter un compte."
+      actions={<span className={s.spacer} />}
+    />
   );
 }
 

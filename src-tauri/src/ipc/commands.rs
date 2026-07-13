@@ -163,6 +163,16 @@ pub fn codex_available() -> bool {
     crate::supervisor::codex::codex_available()
 }
 
+/// Whether a usable `claude` binary is installed on this machine. Powers the proactive
+/// "CLI Claude introuvable" surfaces (composer bar + Réglages → Comptes) so the absence
+/// is shown BEFORE the first message fails — the twin of [`codex_available`]. Cheap: a
+/// `PATH` / well-known-location file check, never a spawn.
+#[tauri::command]
+#[specta::specta]
+pub fn claude_available() -> bool {
+    crate::supervisor::transport::claude_available()
+}
+
 /// List the Codex models the installed binary offers (`model/list`), for the composer's
 /// unified picker (its Codex section) + the data-driven effort gauge. Runs against a
 /// transient app-server (no conversation needed), so it works before any Codex chat.

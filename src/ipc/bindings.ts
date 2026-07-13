@@ -25,6 +25,15 @@ async spawnSession(repoPath: string, resume: string | null, model: string | null
 }
 },
 /**
+ * Whether a usable `claude` binary is installed on this machine. Powers the proactive
+ * "CLI Claude introuvable" surfaces (composer bar + Réglages → Comptes) so the absence
+ * is shown BEFORE the first message fails — the twin of [`codex_available`]. Cheap: a
+ * `PATH` / well-known-location file check, never a spawn.
+ */
+async claudeAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("claude_available");
+},
+/**
  * Whether a usable `codex` binary is installed on this machine. Gates the Codex
  * backend selector in the UI so "new Codex conversation" is only offered when the
  * CLI is present. Cheap: a `PATH` / well-known-location file check, never a spawn.
