@@ -4,6 +4,7 @@ pub mod fs;
 pub mod git;
 mod ipc;
 pub mod plugins;
+pub mod power;
 pub mod store;
 pub mod supervisor;
 pub mod terminal;
@@ -37,8 +38,8 @@ use ipc::commands::{
     rewind_conversation, search_conversations,
     send_message, set_active_conversation, set_all_marketplaces_auto_update, set_effort_level,
     set_marketplace_auto_update, set_model,
-    set_permission_mode, set_plugin_enabled, set_remote_control, set_ultracode, spawn_session,
-    stop_session, stop_task, update_plugin,
+    set_awake, set_permission_mode, set_plugin_enabled, set_remote_control, set_ultracode,
+    spawn_session, stop_session, stop_task, update_plugin,
     terminal_close, terminal_open, terminal_resize, terminal_write, unwatch_dir, upsert_conversation,
     upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file, HistoryIndex, Sessions,
 };
@@ -164,6 +165,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             delete_conversation,
             set_active_conversation,
             wipe_all_data,
+            set_awake,
         ])
         .events(collect_events![
             TickEvent,
@@ -420,6 +422,8 @@ pub fn run() {
         .manage(fs::FsWatcher::new())
         // The live integrated terminals (one PTY-backed shell per conversation).
         .manage(terminal::Terminals::new())
+        // The single app-wide macOS keep-awake assertion (managed `caffeinate` child).
+        .manage(power::Caffeinate::new())
         // The shared Codex app-server: lazy (spawned on the first Codex conversation),
         // one process multiplexing every Codex thread. An Arc so a conversation actor
         // can hold it beyond the spawning command's lifetime.
@@ -522,6 +526,11 @@ pub fn run() {
                 use tauri::Manager;
                 // Kill every integrated-terminal shell so we never orphan one.
                 app_handle.state::<terminal::Terminals>().kill_all();
+                // Release the macOS keep-awake assertion so we never orphan the
+                // `caffeinate` child holding the Mac awake forever. (Release never fails;
+                // the child also self-terminates via `-w <pid>` if we somehow don't reach
+                // here — see `power::Caffeinate::hold`.)
+                let _ = app_handle.state::<power::Caffeinate>().set_awake(false);
                 let sessions = app_handle.state::<Sessions>();
                 let handles = sessions.handles();
                 if !handles.is_empty() {

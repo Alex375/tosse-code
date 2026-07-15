@@ -8,6 +8,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { wipeAllData } from "../../store/conversationsStore";
 import { useSettingsUi, type SettingsSection } from "../../store/settingsUi";
 import { useDisplay } from "../../store/display";
+import { useCaffeinate, type CaffeinateMode } from "../../store/caffeinate";
 import { Ico } from "../../ui/kit";
 import { TosseMark } from "../../ui/TosseMark";
 import { UpdateSection } from "./UpdateSection";
@@ -15,7 +16,7 @@ import { NotificationsSection } from "./NotificationsSection";
 import { ConversationSection } from "./ConversationSection";
 import { AccountsSection } from "./AccountsSection";
 import { ShortcutsSection } from "./ShortcutsSection";
-import { PageHead, SettingsGroup, ToggleRow } from "./SettingsKit";
+import { OptionCardRail, PageHead, SettingsGroup, ToggleRow } from "./SettingsKit";
 import styles from "./SettingsPanel.module.css";
 
 const TABS: Array<{ id: SettingsSection; label: string; icon: string }> = [
@@ -133,6 +134,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 <TimingPrefs />
                 <FleetBannerPrefs />
                 <BackgroundTaskPrefs />
+                <CaffeinatePrefs />
               </div>
             )}
 
@@ -397,6 +399,61 @@ function BackgroundTaskPrefs() {
         onChange={(v) => set({ alertOnBackgroundBash: v })}
         label="Alert for background shell commands"
       />
+    </SettingsGroup>
+  );
+}
+
+const CAFFEINATE_MODES: Array<{ id: CaffeinateMode; label: string; desc: string }> = [
+  {
+    id: "light",
+    label: "Light — follow the agents",
+    desc: "Keeps the Mac awake only while an agent is working — a running turn or a background task. As soon as the whole fleet is idle, the Mac is free to sleep. The everyday mode: it never keeps the Mac awake needlessly.",
+  },
+  {
+    id: "hard",
+    label: "Hard — always awake",
+    desc: "Keeps the Mac awake permanently while Caffeinate is on, even when nothing is running — for Scheduled Tasks that may fire while the fleet is idle. Released only when you turn Caffeinate off.",
+  },
+];
+
+/** Caffeinate prefs in the General tab: arm/disarm "keep the Mac awake" (same store as the
+ *  title-bar coffee button) and pick the mode. The mode selector spells out what Light vs
+ *  Hard actually do, since the labels alone aren't self-explanatory. */
+function CaffeinatePrefs() {
+  const enabled = useCaffeinate((s) => s.enabled);
+  const mode = useCaffeinate((s) => s.mode);
+  const set = useCaffeinate((s) => s.set);
+  const toggle = useCaffeinate((s) => s.toggleEnabled);
+  return (
+    <SettingsGroup title="Caffeinate" icon="coffee">
+      <ToggleRow
+        title="Keep the Mac awake"
+        hint={
+          <>
+            Prevents the Mac from sleeping while agents work (long or background runs) and for
+            Scheduled Tasks. The screen may still turn off or lock — only the machine stays awake.
+            Same switch as the <strong>coffee button</strong> in the title bar.{" "}
+            <strong>Off by default.</strong>
+          </>
+        }
+        checked={enabled}
+        onChange={() => toggle()}
+        label="Caffeinate"
+      />
+      <div className={styles.modeBlock}>
+        <div className={styles.ttitle}>Mode</div>
+        <OptionCardRail
+          options={CAFFEINATE_MODES}
+          selected={mode}
+          onSelect={(id) => set({ mode: id })}
+          ariaLabel="Caffeinate mode"
+        />
+        <div className={styles.note}>
+          Both modes use the same anti-sleep flag; they differ only in how long it's held.
+          Caffeinate can't keep the Mac awake with the <strong>lid closed</strong> (macOS treats a
+          lid close as sleep), so leave the lid open for overnight Scheduled Tasks.
+        </div>
+      </div>
     </SettingsGroup>
   );
 }

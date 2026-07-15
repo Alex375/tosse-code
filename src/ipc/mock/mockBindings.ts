@@ -762,6 +762,11 @@ export const mockCommands = {
     return ok(null);
   },
 
+  async setAwake(_awake: boolean): Promise<Result<null, string>> {
+    // No real power assertion in the browser/dev mock — the toggle is inert here.
+    return ok(null);
+  },
+
   // ---- Git worktrees: in-memory, no real `git` in the browser. Seeds a single
   // main worktree per repo so the indicator/manager render, and reflects
   // create/remove so the UI can be exercised end to end in dev/Playwright.

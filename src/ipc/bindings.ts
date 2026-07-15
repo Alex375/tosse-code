@@ -1378,6 +1378,23 @@ async wipeAllData() : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Hold or release the app-wide macOS keep-awake assertion. The FRONT owns the policy
+ * (the Caffeinate on/off toggle + the Light/Hard mode + fleet activity) and pushes the
+ * computed desired state here; the core just spawns/kills the single managed `caffeinate`
+ * child. Idempotent. Returns `Err` when asked to hold and the spawn fails, so the front
+ * can surface "the Mac may sleep" rather than the failure being an invisible core-side
+ * log — otherwise the toggle would read "on" while the Mac quietly sleeps. See
+ * [`crate::power`].
+ */
+async setAwake(awake: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_awake", { awake }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 

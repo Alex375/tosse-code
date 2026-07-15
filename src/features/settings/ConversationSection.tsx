@@ -6,8 +6,8 @@
 import { useEffect, useRef } from "react";
 import { StreamMarkdown } from "../conversation/StreamMarkdown";
 import { useDisplay, type MarkdownMode } from "../../store/display";
-import { ClaudeMark, Ico } from "../../ui/kit";
-import { PageHead } from "./SettingsKit";
+import { ClaudeMark } from "../../ui/kit";
+import { OptionCardRail, PageHead } from "./SettingsKit";
 
 const MODES: Array<{ id: MarkdownMode; label: string; desc: string }> = [
   { id: "classic", label: "Classic", desc: "The classic boxed rendering (GitHub)." },
@@ -79,24 +79,13 @@ export function ConversationSection() {
         }
       />
       <div className="mdset-body">
-        <div className="mdset-rail" role="group" aria-label="Markdown rendering mode">
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className="mdset-opt"
-              aria-pressed={mode === m.id}
-              data-on={mode === m.id ? "" : undefined}
-              onClick={() => set({ markdownMode: m.id })}
-            >
-              <span className="mdset-opt-top">
-                <span className="mdset-opt-name">{m.label}</span>
-                {mode === m.id ? <Ico name="check" className="sm mdset-opt-check" /> : null}
-              </span>
-              <span className="mdset-opt-desc">{m.desc}</span>
-            </button>
-          ))}
-        </div>
+        <OptionCardRail
+          className="mdset-rail"
+          options={MODES}
+          selected={mode}
+          onSelect={(id) => set({ markdownMode: id })}
+          ariaLabel="Markdown rendering mode"
+        />
 
         <div className="mdset-stage" aria-label="Conversation preview">
           <div className="mdset-conv" ref={convRef}>
