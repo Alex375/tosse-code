@@ -98,6 +98,24 @@ describe("conflict policy on external change", () => {
     expect(b.diskContent).not.toBeNull();
   });
 
+  it("PROTECTS a dirty buffer even when the on-disk file turned binary (no silent loss)", async () => {
+    const s = useEditorStore.getState();
+    const P = "/repo/__binary__.txt";
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, P);
+    // A dirty text buffer whose on-disk version has meanwhile become binary (the
+    // mock returns binary:true + empty content for a __binary__ path). The dirty
+    // guard must win over the binary branch, or the edits are silently clobbered.
+    patch(P, { binary: false, content: "LOCAL", saved: "OLD", dirty: true, diskChanged: false, diskContent: null });
+
+    await s.onExternalChange(CONV, [P]);
+
+    const b = buffer(P);
+    expect(b.content).toBe("LOCAL"); // edits kept, NOT overwritten by the binary disk read
+    expect(b.dirty).toBe(true);
+    expect(b.diskChanged).toBe(true); // surfaced via the "modified on disk" banner instead
+  });
+
   it("reloadFromDisk applies the pending disk content and clears the flag", async () => {
     const s = useEditorStore.getState();
     s.ensureConv(CONV, ROOT);
@@ -114,6 +132,51 @@ describe("conflict policy on external change", () => {
     expect(b.dirty).toBe(false);
     expect(b.diskChanged).toBe(false);
     expect(b.diskContent).toBeNull();
+  });
+});
+
+describe("resyncOpenBuffers (catch-up when the watch re-points)", () => {
+  it("catches up a CLEAN open buffer that changed while unwatched", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, FILE);
+    // Simulate a disk change we never got an event for (watch was on another cwd):
+    // a stale clean baseline differing from what readFile now returns.
+    patch(FILE, { content: "OLD", saved: "OLD", dirty: false });
+
+    // No path list — the watch just re-pointed here and we re-read everything open.
+    await s.resyncOpenBuffers(CONV);
+
+    const b = buffer();
+    expect(b.content).not.toBe("OLD"); // resynced from disk
+    expect(b.content).toBe(b.saved);
+    expect(b.dirty).toBe(false);
+  });
+
+  it("still PROTECTS a dirty buffer on resync (never clobbers local edits)", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, FILE);
+    patch(FILE, { content: "LOCAL", saved: "OLD", dirty: true });
+
+    await s.resyncOpenBuffers(CONV);
+
+    const b = buffer();
+    expect(b.content).toBe("LOCAL");
+    expect(b.dirty).toBe(true);
+    expect(b.diskChanged).toBe(true);
+  });
+
+  it("SKIPS image/PDF tabs on resync (hot switch path — no full-byte re-read)", async () => {
+    const s = useEditorStore.getState();
+    s.ensureConv(CONV, ROOT);
+    await s.openFile(CONV, "/repo/pic.png");
+    // Sentinel: if resync re-read the image it would be replaced by the mock's PNG.
+    patch("/repo/pic.png", { imageDataUrl: "data:SENTINEL" });
+
+    await s.resyncOpenBuffers(CONV);
+
+    expect(buffer("/repo/pic.png").imageDataUrl).toBe("data:SENTINEL"); // untouched → skipped
   });
 });
 

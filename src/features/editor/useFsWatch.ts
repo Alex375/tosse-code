@@ -43,6 +43,19 @@ export function useFsWatch(convId: string, cwd: string | null, enabled: boolean)
     };
   }, [enabled, cwd]);
 
+  // Catch up on changes missed while this cwd was NOT the watched one. There is a
+  // single OS watch shared across conversations: switching conversation — or the
+  // agent moving cwd (worktree) — re-points it, and it only reports changes from
+  // the moment it (re)starts. So anything the agent wrote to an open file while we
+  // were on another conversation (or the editor was closed) produced no event; its
+  // buffer would stay stale until manually reopened. Re-reading here on every
+  // (re)point closes that gap. Declared AFTER the watch effect so `watchDir` is
+  // issued first — a change landing in the gap then also fires a normal event.
+  useEffect(() => {
+    if (!enabled || !cwd) return;
+    void useEditorStore.getState().resyncOpenBuffers(convId);
+  }, [enabled, cwd, convId]);
+
   // Subscribe once; the handler reads the live target from the ref. A failed
   // listen() registration is logged rather than swallowed.
   useEffect(() => {

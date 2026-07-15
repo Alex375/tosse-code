@@ -239,6 +239,14 @@ interface EditorState {
 
   // ---- Live filesystem changes ----
   onExternalChange: (convId: string, paths: string[]) => Promise<void>;
+  /** Catch-up re-read of the open TEXT tabs for a conversation, applying the same
+   *  conflict policy as a live change. Called when the single OS watch (re)points at
+   *  this conversation's cwd — on a conversation switch, editor reopen, or worktree
+   *  cwd move. The watch only reports changes from the moment it starts, so anything
+   *  the agent wrote while this cwd was NOT the watched one was missed; without this
+   *  resync an open preview stays stale until reopened. Image/PDF tabs and tree dirs
+   *  are intentionally NOT resynced here (hot path — see the implementation note). */
+  resyncOpenBuffers: (convId: string) => Promise<void>;
   /** Apply the pending on-disk content over the local buffer ("reload"). */
   reloadFromDisk: (convId: string, path: string) => void;
   /** Dismiss the "modified on disk" banner, keeping local edits. */
@@ -490,6 +498,75 @@ export const useEditorStore = create<EditorState>()((set, get) => {
       // the app banner so the user knows the view may be out of date and can act.
       reportFsError("Arborescence non rafraîchie — elle peut être périmée.", res.error);
     }
+  }
+
+  /** Re-read one OPEN file from disk and apply the conflict policy: clean buffers
+   *  live-reload in place, dirty ones surface a "modified on disk" banner, images
+   *  and PDFs always refresh their bytes. Shared by the live watch
+   *  (`onExternalChange`) and the catch-up resync (`resyncOpenBuffers`). No-op for
+   *  a path that isn't an open buffer. */
+  async function reloadTab(convId: string, path: string): Promise<void> {
+    const buf = get().byConv[convId]?.buffers[path];
+    if (!buf) return;
+    // Images are never editable (no dirty state) → always live-reload the bytes.
+    // A fresh data URL forces the <img> to repaint the new content.
+    if (buf.isImage) {
+      const res = await safeCmd(() => commands.readImage(path));
+      if (res.status !== "ok") {
+        patchBuffer(convId, path, (b) => ({ ...b, error: "Image indisponible sur le disque." }));
+        return;
+      }
+      const img = res.data;
+      patchBuffer(convId, path, (b) => ({
+        ...b,
+        error: null,
+        tooLarge: img.too_large,
+        imageSize: img.size,
+        imageDataUrl: img.too_large ? null : imageDataUrlFor(path, img.data_base64),
+      }));
+      return;
+    }
+    // PDFs (like images) are never editable → always live-reload the bytes; a fresh
+    // base64 re-triggers the PdfViewer's render effect.
+    if (buf.isPdf) {
+      const res = await safeCmd(() => commands.readImage(path));
+      if (res.status !== "ok") {
+        patchBuffer(convId, path, (b) => ({ ...b, error: "PDF indisponible sur le disque." }));
+        return;
+      }
+      const doc = res.data;
+      patchBuffer(convId, path, (b) => ({
+        ...b,
+        error: null,
+        tooLarge: doc.too_large,
+        imageSize: doc.size,
+        pdfBase64: doc.too_large ? null : doc.data_base64,
+      }));
+      return;
+    }
+    const res = await safeCmd(() => commands.readFile(path));
+    if (res.status !== "ok") {
+      // The file likely vanished — flag it but keep the tab/content.
+      patchBuffer(convId, path, (b) => ({ ...b, error: "Fichier indisponible sur le disque." }));
+      return;
+    }
+    const f = res.data;
+    patchBuffer(convId, path, (b) => {
+      // No real change vs what we already have on disk → ignore (this also
+      // absorbs the echo of our own save).
+      if (f.content === b.saved) return { ...b, diskChanged: false, diskContent: null };
+      // Unsaved local edits: never clobber — surface the on-disk version via the
+      // banner. This MUST be checked before the binary/too-large branch below:
+      // if the on-disk file turned binary or >MAX_FILE_BYTES, that branch would
+      // otherwise overwrite the buffer with the (empty) disk content and drop the
+      // user's edits with no banner and no error — a silent data loss.
+      if (b.dirty) return { ...b, diskChanged: true, diskContent: f.content };
+      if (b.binary || f.binary || f.too_large) {
+        return { ...b, binary: f.binary, tooLarge: f.too_large, saved: f.content, content: f.content };
+      }
+      // Clean buffer: live-reload in place.
+      return { ...b, content: f.content, saved: f.content, dirty: false, error: null };
+    });
   }
 
   /** Drop cached tree state for `path` and everything beneath it (after a delete
@@ -1007,86 +1084,48 @@ export const useEditorStore = create<EditorState>()((set, get) => {
 
       // 1) Refresh any loaded (expanded) directory that a change touched, so new /
       //    deleted files appear in the tree. We re-read the parent dir of each
-      //    changed path that we've loaded, plus the root.
+      //    changed path that we've loaded (refreshDir no-ops on an unloaded dir and
+      //    surfaces a failed re-read on the app banner — zero-silent-error).
       const dirsToRefresh = new Set<string>();
       for (const p of paths) {
         const parent = dirName(p);
         if (conv.dirs[parent] !== undefined) dirsToRefresh.add(parent);
       }
-      for (const dir of dirsToRefresh) {
-        const res = await safeCmd(() => commands.readDir(dir));
-        if (res.status === "ok") {
-          patchConv(convId, (c) =>
-            c.dirs[dir] !== undefined ? { ...c, dirs: { ...c.dirs, [dir]: res.data } } : c,
-          );
-        } else {
-          // A live refresh that fails leaves the tree stale — surface it instead of
-          // swallowing (zero-silent-error). Deduped by message, so a flapping watch
-          // shows one banner, not a flood.
-          reportFsError("Arborescence non rafraîchie — elle peut être périmée.", res.error);
-        }
-      }
+      for (const dir of dirsToRefresh) await refreshDir(convId, dir);
 
       // 2) Reload any OPEN file that changed, applying the conflict policy.
       for (const path of conv.tabs) {
         if (!changed.has(path)) continue;
-        // Images are never editable (no dirty state) → always live-reload the
-        // bytes. A fresh data URL forces the <img> to repaint the new content.
-        if (conv.buffers[path]?.isImage) {
-          const res = await safeCmd(() => commands.readImage(path));
-          if (res.status !== "ok") {
-            patchBuffer(convId, path, (b) => ({ ...b, error: "Image indisponible sur le disque." }));
-            continue;
-          }
-          const img = res.data;
-          patchBuffer(convId, path, (b) => ({
-            ...b,
-            error: null,
-            tooLarge: img.too_large,
-            imageSize: img.size,
-            imageDataUrl: img.too_large ? null : imageDataUrlFor(path, img.data_base64),
-          }));
-          continue;
-        }
-        // PDFs (like images) are never editable → always live-reload the bytes; a
-        // fresh base64 re-triggers the PdfViewer's render effect.
-        if (conv.buffers[path]?.isPdf) {
-          const res = await safeCmd(() => commands.readImage(path));
-          if (res.status !== "ok") {
-            patchBuffer(convId, path, (b) => ({ ...b, error: "PDF indisponible sur le disque." }));
-            continue;
-          }
-          const doc = res.data;
-          patchBuffer(convId, path, (b) => ({
-            ...b,
-            error: null,
-            tooLarge: doc.too_large,
-            imageSize: doc.size,
-            pdfBase64: doc.too_large ? null : doc.data_base64,
-          }));
-          continue;
-        }
-        const res = await safeCmd(() => commands.readFile(path));
-        if (res.status !== "ok") {
-          // The file likely vanished — flag it but keep the tab/content.
-          patchBuffer(convId, path, (b) => ({ ...b, error: "Fichier indisponible sur le disque." }));
-          continue;
-        }
-        const f = res.data;
-        patchBuffer(convId, path, (b) => {
-          // No real change vs what we already have on disk → ignore (this also
-          // absorbs the echo of our own save).
-          if (f.content === b.saved) return { ...b, diskChanged: false, diskContent: null };
-          if (b.binary || f.binary || f.too_large) {
-            return { ...b, binary: f.binary, tooLarge: f.too_large, saved: f.content, content: f.content };
-          }
-          if (b.dirty) {
-            // Unsaved local edits: never clobber. Surface the on-disk version.
-            return { ...b, diskChanged: true, diskContent: f.content };
-          }
-          // Clean buffer: live-reload in place.
-          return { ...b, content: f.content, saved: f.content, dirty: false, error: null };
-        });
+        await reloadTab(convId, path);
+      }
+    },
+
+    resyncOpenBuffers: async (convId) => {
+      const conv = get().byConv[convId];
+      if (!conv) return;
+      // The single OS watch just (re)pointed at this conversation's cwd, so we may
+      // have missed on-disk changes made while it was watching a DIFFERENT cwd (we
+      // were on another conversation, or the editor was closed). Re-read the open
+      // TEXT tabs to catch up — same conflict policy as a live change (clean
+      // reloads, dirty stays + banner). The active tab (what the user is looking at)
+      // goes first.
+      //
+      // Deliberately narrow — this runs on the hot conversation-switch path:
+      //  - Image/PDF tabs are skipped: re-reading their full bytes (up to
+      //    fs::MAX_FILE_BYTES) on every switch is costly, and an agent rewriting a
+      //    binary you have open while you're away is rare. They refresh from a live
+      //    fs event once the watch points here, or on reopen.
+      //  - We do NOT re-list loaded tree dirs here: iterating every loaded dir on
+      //    each switch costs a readDir per dir AND turns an externally-deleted dir
+      //    into a spurious "tree may be stale" banner. The tree refreshes from live
+      //    events while this cwd is watched.
+      const ordered = conv.activeTab
+        ? [conv.activeTab, ...conv.tabs.filter((p) => p !== conv.activeTab)]
+        : conv.tabs;
+      for (const path of ordered) {
+        const b = conv.buffers[path];
+        if (!b || b.isImage || b.isPdf) continue;
+        await reloadTab(convId, path);
       }
     },
 
