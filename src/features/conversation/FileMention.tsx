@@ -150,7 +150,7 @@ function ClickableFile({
   display,
   target,
 }: {
-  element: "code" | "span";
+  element: "code" | "span" | "a";
   className?: string;
   display: ReactNode;
   target: MentionTarget | null;
@@ -267,6 +267,41 @@ export function MentionPathChip({
   const target = useAuthoritativeTarget(path);
   if (!path) return null;
   return <ClickableFile element="span" className={className} display={display} target={target} />;
+}
+
+/**
+ * A Markdown link (`[label](href)`) in prose. Codex references files as real
+ * Markdown links whose href is a filesystem path (`[foo.py:42](/abs/foo.py:42)`),
+ * so a path-shaped href becomes a clickable mention — opening the file in the side
+ * editor at the line, existence-gated exactly like an inline-code path — while a
+ * genuine web URL keeps opening externally. A path that doesn't resolve (or an
+ * inert / pref-off provider) degrades to plain text: a bare filesystem path is
+ * never a usable `<a href>` in the webview (it resolves to a dead
+ * `tauri://localhost/…` URL), so a link-styled dead anchor is the very bug this
+ * removes. See StreamMarkdown's `a` renderer + `urlTransform`.
+ */
+export function MentionLink({
+  href,
+  children,
+}: {
+  href?: string;
+  children?: ReactNode;
+}) {
+  const raw = (href ?? "").trim();
+  const target = useMentionTarget(raw);
+  const isPath = useMemo(() => parseFileMention(raw) != null, [raw]);
+  if (isPath) {
+    return target ? (
+      <ClickableFile element="a" display={children} target={target} />
+    ) : (
+      <>{children}</>
+    );
+  }
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  );
 }
 
 /** Flatten react-markdown's inline-code children into their plain text. */
