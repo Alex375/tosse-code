@@ -763,6 +763,22 @@ pub async fn get_plan_usage() -> Result<PlanUsage, UsageError> {
     crate::usage::fetch_plan_usage().await
 }
 
+/// Hold or release the app-wide macOS keep-awake assertion. The FRONT owns the policy
+/// (the Caffeinate on/off toggle + the Light/Hard mode + fleet activity) and pushes the
+/// computed desired state here; the core just spawns/kills the single managed `caffeinate`
+/// child. Idempotent. Returns `Err` when asked to hold and the spawn fails, so the front
+/// can surface "the Mac may sleep" rather than the failure being an invisible core-side
+/// log — otherwise the toggle would read "on" while the Mac quietly sleeps. See
+/// [`crate::power`].
+#[tauri::command]
+#[specta::specta]
+pub fn set_awake(
+    power: tauri::State<'_, crate::power::Caffeinate>,
+    awake: bool,
+) -> Result<(), String> {
+    power.set_awake(awake)
+}
+
 /// Send a user turn to a session: the typed `text` plus any joined `images`. For Claude
 /// the images are inline `image` blocks; for Codex they become `localImage` file inputs.
 /// `codex_controls` carries this conversation's composer controls (model / effort /

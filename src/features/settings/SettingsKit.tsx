@@ -77,3 +77,46 @@ export function ToggleRow({
     </div>
   );
 }
+
+/** A "pick one" rail of selectable option cards — each shows a label, a description, and a
+ *  check when selected. Shared by the settings tabs that offer a small enumerated choice
+ *  (Markdown rendering mode, Caffeinate mode…) so the pattern lives in ONE place. Pass
+ *  `className` to override the rail layout (e.g. a fixed-width sticky column). */
+export function OptionCardRail<T extends string>({
+  options,
+  selected,
+  onSelect,
+  ariaLabel,
+  className,
+}: {
+  options: ReadonlyArray<{ id: T; label: string; desc: string }>;
+  selected: T;
+  onSelect: (id: T) => void;
+  ariaLabel: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={styles.modeRail + (className ? " " + className : "")}
+      role="group"
+      aria-label={ariaLabel}
+    >
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          className={styles.opt}
+          aria-pressed={selected === o.id}
+          data-on={selected === o.id ? "" : undefined}
+          onClick={() => onSelect(o.id)}
+        >
+          <span className={styles.optTop}>
+            <span className={styles.optName}>{o.label}</span>
+            {selected === o.id ? <Ico name="check" className={"sm " + styles.optCheck} /> : null}
+          </span>
+          <span className={styles.optDesc}>{o.desc}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
