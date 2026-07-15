@@ -25,7 +25,7 @@ export function StateBlock({ convId, status }: { convId: string; status: AgentSt
   const bg = backgroundCount(status);
 
   if (status.kind === "running") {
-    // A live "what it's doing now" line derived from the stream (see useLiveActivity).
+    // A live "what it's doing now" line derived from the stream (see useActivityLabel).
     return <ActivityLine convId={convId} />;
   }
 

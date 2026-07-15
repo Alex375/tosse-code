@@ -253,6 +253,23 @@ export interface SessionEntry {
    */
   turnStartedAt: number | null;
   /**
+   * Number of turns started in this conversation, incremented on each `state.busy` false→true
+   * edge (same edge as {@link turnStartedAt}). `0` before the first turn. Feeds the playful
+   * "Thinking…" word rotation as a per-turn seed (the word re-draws on every new turn); the
+   * TIER is driven by cumulative thinking time, not this count. See `store/thinkingWords.ts`.
+   */
+  turnCount: number;
+  /**
+   * Cumulative wall-clock (ms) the generic "Thinking…" spinner has been shown across the whole
+   * discussion — the measure that drives the playful word's difficulty tier. A global ticker
+   * (`useGlobalSessionEvents`) accrues it on the busy-and-generic-thinking transitions; the live
+   * open spell (since {@link thinkingSince}) is added at display time. In-memory (resets on
+   * reload). We measure the visible spinner, NOT internal reasoning-block time (often ~0).
+   */
+  thinkingMs: number;
+  /** Start (`Date.now()`) of the current "Thinking…" spinner spell, or `null` when not in it. */
+  thinkingSince: number | null;
+  /**
    * Wall-clock start of the thinking block currently streaming, or `null` when no thinking
    * is in flight. Stamped on the `streamingThinking` empty→non-empty edge (a new block —
    * the buffer is reset and this cleared each time a thinking block finalizes), cleared on

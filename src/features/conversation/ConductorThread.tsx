@@ -9,7 +9,8 @@ import type {
 import { commands } from "../../ipc/client";
 import { useAnswerPermission } from "../../ipc/useCommands";
 import { classifyAsk, field } from "../../agent/ask";
-import { useLiveActivity, useLiveBashCommand } from "../../store/activity";
+import { useActivityLabel, useLiveBashCommand } from "../../store/activity";
+import { RollText } from "../../ui/RollText";
 import {
   coalesceCleanRounds,
   useConversationStore,
@@ -1304,13 +1305,14 @@ function LiveElapsed({ session }: { session: string }) {
 
 /**
  * The live "what's happening now" line shown under the timeline while the agent
- * works. Its own leaf so the per-token activity recompute (`useLiveActivity`
- * re-derives on every streamed delta) re-renders only this row, not the message
- * list. Shares `describeActivity` with the FlightDeck card, so the thread and the
- * card never describe the agent differently — instead of the raw protocol hint.
+ * works. Its own leaf so the per-token activity recompute (`useActivityLabel`
+ * re-derives on every streamed delta, and ticks once a second for the playful
+ * word's cumulative-time tier) re-renders only this row, not the message list.
+ * Shares its classification with the FlightDeck card, so the thread and the card
+ * never describe the agent differently — instead of the raw protocol hint.
  */
 function WorkingIndicator({ session }: { session: string }) {
-  const activity = useLiveActivity(session);
+  const activity = useActivityLabel(session);
   // Special case: when the live tool is a FOREGROUND shell command, show it
   // terminal-style ("$ command…") rather than the generic "Running …" phrase — the
   // bottom-of-terminal feel of the CLI. Any other activity keeps the plain line.
@@ -1328,7 +1330,7 @@ function WorkingIndicator({ session }: { session: string }) {
           {bash}
         </code>
       ) : (
-        <span>{activity}</span>
+        <RollText text={activity} />
       )}
       <LiveElapsed session={session} />
     </div>

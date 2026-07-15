@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { describeActivity, liveBashCommand, toolActivityLabel } from "./activity";
+import {
+  describeActivity,
+  isGenericThinking,
+  cumulativeThinkingMs,
+  liveBashCommand,
+  toolActivityLabel,
+} from "./activity";
+import { THINKING_ACCRUAL_CAP_MS } from "./thinkingWords";
 import type { SessionEntry, Turn, TimelineEntry, TodoItem, NormalizedBlock } from "./types";
 
 function toolUse(id: string, name: string, input: unknown): NormalizedBlock {
@@ -222,6 +229,40 @@ describe("describeActivity", () => {
   it("falls back to thinking on an empty turn, and a neutral line with no entry", () => {
     expect(describeActivity(entry({}))).toBe("Thinking…");
     expect(describeActivity(undefined)).toBe("Working…");
+  });
+
+  it("flags the generic thinking state (isGenericThinking) only when nothing concrete is in flight", () => {
+    // The playful word substitution keys off this: true only in the last-resort "Thinking…" state.
+    expect(isGenericThinking(entry({}))).toBe(true);
+    const withTool = entry({
+      timeline: [{ kind: "turn", id: "t1" }],
+      turns: { t1: assistantTurn("t1", [toolUse("tu1", "Read", { file_path: "a.ts" })]) },
+    });
+    expect(isGenericThinking(withTool)).toBe(false);
+    const writing = entry({
+      timeline: [{ kind: "turn", id: "t1" }],
+      turns: { t1: assistantTurn("t1", [], "Voici") },
+    });
+    expect(isGenericThinking(writing)).toBe(false);
+    expect(isGenericThinking(undefined)).toBe(false);
+  });
+});
+
+describe("cumulativeThinkingMs", () => {
+  it("adds the open spinner spell to the sealed total", () => {
+    const e = { ...entry({}), thinkingMs: 8000, thinkingSince: 1000 } as SessionEntry;
+    // now=1500 → open spell adds 1500-1000=500 to the 8000 already sealed.
+    expect(cumulativeThinkingMs(e, 1500)).toBe(8500);
+  });
+
+  it("caps the live spell so a post-wake render can't spike the tier", () => {
+    const e = { ...entry({}), thinkingMs: 5000, thinkingSince: 1000 } as SessionEntry;
+    expect(cumulativeThinkingMs(e, 9_999_999)).toBe(5000 + THINKING_ACCRUAL_CAP_MS);
+  });
+
+  it("returns just the sealed total when no spell is open", () => {
+    const e = { ...entry({}), thinkingMs: 5000, thinkingSince: null } as SessionEntry;
+    expect(cumulativeThinkingMs(e, 9_999_999)).toBe(5000);
   });
 });
 
