@@ -2,14 +2,17 @@
 // always says something concrete even when the agent doesn't use TodoWrite. We
 // read the most recent main-thread tool_use ("Read App.tsx", "Run pnpm test"),
 // fall back to the current to-do, then to "writing"/"thinking". Pure + testable;
-// the React selector `useLiveActivity` wraps it. Reusable by the conversation
-// thread's working indicator too, not just the FlightDeck card.
+// the React hook `useActivityLabel` renders it (and swaps the generic "Thinking…"
+// for the playful word). Shared by the conversation thread's working indicator and
+// the FlightDeck card, so they never describe the agent differently.
 import type { JsonValue, SessionEntry } from "./types";
 import { todoSummary } from "./todos";
 import { field } from "../agent/ask";
 import { mcpStepLabel } from "../agent/toolNames";
 import { hostOf } from "../features/conversation/webResults";
 import { useConversationStore } from "./conversationStore";
+import { useNow } from "../ui/useNow";
+import { thinkingWord, THINKING_ACCRUAL_CAP_MS } from "./thinkingWords";
 
 function basename(p: string): string {
   const parts = p.split("/").filter(Boolean);
@@ -147,28 +150,68 @@ function isStreamingText(entry: SessionEntry): boolean {
 }
 
 /**
- * A live, human "what's happening now" line. Priority: a tool currently in flight
- * (the most concrete signal) → the current to-do's active phrasing → writing a
- * reply → the last tool run → thinking. Never the raw protocol hint ("requesting").
+ * Single classification of "what's happening now", so describeActivity and isGenericThinking
+ * never disagree. Priority: a tool in flight (most concrete) → the current to-do's active
+ * phrasing → writing a reply → the generic "thinking" state (nothing else in flight). Never
+ * the raw protocol hint ("requesting"). `generic` marks the last-resort thinking state — the
+ * ONLY case the playful word ladder substitutes.
+ */
+function classifyActivity(entry: SessionEntry): { generic: boolean; label: string } {
+  const tool = lastInFlightMainToolUse(entry);
+  if (tool) return { generic: false, label: toolActivityLabel(tool.name, tool.input) };
+
+  const current = todoSummary(entry.todos).current;
+  if (current?.activeForm) return { generic: false, label: current.activeForm };
+
+  if (isStreamingText(entry)) return { generic: false, label: "Writing a reply…" };
+
+  return { generic: true, label: "Thinking…" };
+}
+
+/**
+ * A live, human "what's happening now" line — the raw activity WITHOUT the playful word
+ * substitution (that lives in `useActivityLabel`, which needs live time). Pure + testable.
  */
 export function describeActivity(entry: SessionEntry | undefined): string {
   if (!entry) return "Working…";
-
-  // The tool the agent is running right now (current turn, still unresolved).
-  const tool = lastInFlightMainToolUse(entry);
-  if (tool) return toolActivityLabel(tool.name, tool.input);
-
-  const current = todoSummary(entry.todos).current;
-  if (current?.activeForm) return current.activeForm;
-
-  if (isStreamingText(entry)) return "Writing a reply…";
-
-  return "Thinking…";
+  return classifyActivity(entry).label;
 }
 
-/** Reactive "what's happening now" for a conversation (by stable id). */
-export function useLiveActivity(convId: string): string {
-  return useConversationStore((s) => describeActivity(s.sessions[convId]));
+/** True when the activity is the generic "Thinking…" state — where the playful word applies. */
+export function isGenericThinking(entry: SessionEntry | undefined): boolean {
+  return !!entry && classifyActivity(entry).generic;
+}
+
+/**
+ * Cumulative time (ms) the generic "Thinking…" spinner has been shown across the whole
+ * discussion: the sealed total plus the open spell in flight (`now - thinkingSince`). This is
+ * what the user actually watches — NOT internal reasoning-block time, which is often ~0 and left
+ * the word stuck on the anchor. Accrued by the global ticker (see `accrueThinking`); in-memory →
+ * resets on reload. `now` is passed in so callers can tick it via `useNow`.
+ */
+export function cumulativeThinkingMs(entry: SessionEntry, now: number): number {
+  // Cap the live open spell like the ticker does, so a render right after wake (before the next
+  // tick advances thinkingSince) can't briefly spike the tier.
+  const live =
+    entry.thinkingSince != null
+      ? Math.min(Math.max(0, now - entry.thinkingSince), THINKING_ACCRUAL_CAP_MS)
+      : 0;
+  return entry.thinkingMs + live;
+}
+
+/**
+ * The activity label to render: the concrete action (tool/to-do/writing) verbatim, or — in the
+ * generic "Thinking…" state — the playful word for the discussion's cumulative thinking time.
+ * `useNow` re-renders once a second so live cumulative time (and thus the tier / the 40 s word
+ * rotation) advances; it's cheap because the working indicator is mounted only while active.
+ */
+export function useActivityLabel(convId: string): string {
+  const entry = useConversationStore((s) => s.sessions[convId]);
+  const now = useNow(1000);
+  if (!entry) return "Working…";
+  const { generic, label } = classifyActivity(entry);
+  if (!generic) return label;
+  return thinkingWord(cumulativeThinkingMs(entry, now), entry.turnCount, convId) + "…";
 }
 
 /**

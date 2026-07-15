@@ -1,16 +1,17 @@
 // The live "what it's doing now" line for a running agent. Mounted only while the
-// card is in the running state, so the stream-scan derivation (useLiveActivity)
+// card is in the running state, so the stream-scan derivation (useActivityLabel)
 // runs only for active agents.
-import { useLiveActivity } from "../../store/activity";
+import { useActivityLabel } from "../../store/activity";
 import { ConvMark } from "../conversation/ConvMark";
+import { RollText } from "../../ui/RollText";
 
 export function ActivityLine({ convId }: { convId: string }) {
-  const text = useLiveActivity(convId);
+  const text = useActivityLabel(convId);
   return (
     <div className="ag-card-act">
       <span className="wf-act run">
         <ConvMark session={convId} className="wf-spin" />
-        <span className="wf-act-t">{text}</span>
+        <RollText text={text} className="wf-act-t" />
       </span>
     </div>
   );
