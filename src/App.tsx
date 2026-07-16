@@ -11,6 +11,8 @@ import { FlightDeck } from "./features/flightdeck/FlightDeck";
 import { FlightDeckReplyModal } from "./features/flightdeck/FlightDeckReplyModal";
 import { useFlightdeckModal } from "./features/flightdeck/flightdeckModalStore";
 import { SoundToggle } from "./features/notifications/SoundToggle";
+import { CaffeinateToggle } from "./features/power/CaffeinateToggle";
+import { CaffeinateHost } from "./features/power/CaffeinateHost";
 import { ExtensionsManager } from "./features/extensions/ExtensionsManager";
 import { useExtensionsUi } from "./features/extensions/extensionsUiStore";
 import { HistoryPanel } from "./features/history/HistoryPanel";
@@ -274,6 +276,8 @@ export default function App() {
           {/* Always visible (both views): mute/unmute the notification chime on the
               spot, without opening Settings. Also bound to ⌘⇧M. */}
           <SoundToggle />
+          {/* Always visible (both views): arm/disarm Caffeinate (keep the Mac awake). */}
+          <CaffeinateToggle />
           {view === "conversation" && activeRepo ? (
             <>
               {active ? <WorktreeIndicator conv={active} repoPath={activeRepo.path} /> : null}
@@ -313,6 +317,9 @@ export default function App() {
       <HistoryPanel />
       {/* Mounted once, globally: the full-screen "Ultra code" activation blast. */}
       <UltraCodeBlast />
+      {/* Mounted once, globally (render-null): drives the macOS keep-awake assertion from
+          the Caffeinate toggle + mode + live fleet activity. */}
+      <CaffeinateHost />
     </Win>
   );
 }

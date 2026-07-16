@@ -762,6 +762,11 @@ export const mockCommands = {
     return ok(null);
   },
 
+  async setAwake(_awake: boolean): Promise<Result<null, string>> {
+    // No real power assertion in the browser/dev mock — the toggle is inert here.
+    return ok(null);
+  },
+
   // ---- Git worktrees: in-memory, no real `git` in the browser. Seeds a single
   // main worktree per repo so the indicator/manager render, and reflects
   // create/remove so the UI can be exercised end to end in dev/Playwright.
@@ -1047,6 +1052,10 @@ function mockDir(path: string): FsEntry[] {
 /** Synthetic file content for the browser/dev editor. */
 function mockFile(path: string): FileContent {
   const name = path.split("/").pop() ?? path;
+  // Test sentinels: simulate a file that is binary / exceeds the size limit on
+  // disk. Both return empty content, mirroring the Rust read_file guards.
+  if (path.includes("__binary__")) return { path, content: "", too_large: false, binary: true, size: 1024 };
+  if (path.includes("__toolarge__")) return { path, content: "", too_large: true, binary: false, size: 99_000_000 };
   let content = `// ${name}\n// (mock file — browser/dev build, no real filesystem)\n`;
   if (name.endsWith(".md")) {
     content = `# ${name}\n\nMock markdown for the dev build.\n\n- one\n- two\n`;

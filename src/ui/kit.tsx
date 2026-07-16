@@ -75,6 +75,8 @@ const WF_PATHS: Record<string, string> = {
   // X where the arcs were (muted).
   volume: "M4 8.5h3l4-3v11l-4-3H4zM14 8.5a4 4 0 0 1 0 5M16.5 6.5a7 7 0 0 1 0 9",
   mute: "M4 8.5h3l4-3v11l-4-3H4zM14.5 9l4 4M18.5 9l-4 4",
+  // A steaming coffee mug — the "Caffeinate" (keep the Mac awake) toggle.
+  coffee: "M5 9h8v5a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3zM13 11h1.5a2 2 0 0 1 0 4H13M8 4c1 1-1 2 0 3.2M11 4c1 1-1 2 0 3.2",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {

@@ -81,6 +81,39 @@ describe("parseFileMention", () => {
   });
 });
 
+// The gate that routes a Markdown link's href (StreamMarkdown's `a` renderer +
+// `urlTransform`): Codex references files as real Markdown links whose href is a
+// filesystem path — those must classify AS a path (→ preserved through the URL
+// sanitizer, opened in the editor), while genuine web URLs must NOT (→ external
+// anchor / react-markdown's default sanitizer).
+describe("parseFileMention — Codex Markdown-link hrefs", () => {
+  it("detects an absolute path with a :line anchor (Alexandre's real example)", () => {
+    expect(
+      parseFileMention("/Users/alexandrejosien/Repos/wind_get/app/tide_compute.py:232"),
+    ).toEqual({
+      path: "/Users/alexandrejosien/Repos/wind_get/app/tide_compute.py",
+      line: 232,
+    });
+  });
+
+  it("detects a bare filename href (the note.txt capture fixture)", () => {
+    expect(parseFileMention("note.txt")).toEqual({ path: "note.txt" });
+    expect(
+      parseFileMention("/var/folders/2p/tp/T/fd-codex-capture/note.txt"),
+    ).toEqual({ path: "/var/folders/2p/tp/T/fd-codex-capture/note.txt" });
+  });
+
+  it("does NOT classify a web URL as a path (routes to an external anchor)", () => {
+    expect(parseFileMention("https://example.com")).toBeNull();
+    expect(parseFileMention("http://example.com/a.ts")).toBeNull();
+    expect(parseFileMention("mailto:foo@bar.com")).toBeNull();
+  });
+
+  it("does NOT classify a dangerous scheme as a path (left to the sanitizer)", () => {
+    expect(parseFileMention("javascript:alert(1)")).toBeNull();
+  });
+});
+
 describe("resolveMentionAbs", () => {
   it("returns absolute paths untouched", () => {
     expect(resolveMentionAbs("/repo", "/abs/x.ts")).toBe("/abs/x.ts");

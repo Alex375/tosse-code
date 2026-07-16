@@ -41,6 +41,7 @@ import type {
 } from "./types";
 import { isBackgroundAgentInput, isDetachedAgentAck } from "../agent/subagentMeta";
 import { latestTodosInBlocks, todoSummary } from "./todos";
+import { THINKING_ACCRUAL_CAP_MS } from "./thinkingWords";
 import { parseSpecialMessage } from "../features/conversation/specialMessage";
 
 const connectingState: SessionStatePayload = {
@@ -80,6 +81,9 @@ function emptyEntry(session: string): SessionEntry {
     seq: 0,
     replayAnchor: 0,
     turnStartedAt: null,
+    turnCount: 0,
+    thinkingMs: 0,
+    thinkingSince: null,
     thinkingStartedAt: null,
     thinkingDurations: {},
     toolStartedAt: {},
@@ -153,6 +157,11 @@ interface ConversationState {
    *  last live state (e.g. busy=true) would otherwise linger and block the
    *  composer. Clears it so the conversation reads as off/idle (a send re-spawns). */
   clearState: (session: string) => void;
+  /** Accrue the "Thinking…" spinner clock: `isGeneric` = the session is busy AND in the generic
+   *  thinking state right now. Opens a spell (stamps `thinkingSince`) on enter, seals it into
+   *  `thinkingMs` on leave; a no-op (same entry ref → no re-render) between transitions. Driven by
+   *  a single global ticker so it accrues even for conversations not currently rendered. */
+  accrueThinking: (session: string, isGeneric: boolean, now: number) => void;
   /** Apply one normalized item. `hydrating` marks a call that REPLAYS on-disk
    *  history (the `loadConversationHistory`/`reloadConversationHistory` loops) as
    *  opposed to a live stream event: it suppresses the wall-clock timing stamps
@@ -287,14 +296,22 @@ export const useConversationStore = create<ConversationState>((set) => {
         // mid-turn. Left untouched while busy stays the same.
         let turnStartedAt = entry.turnStartedAt;
         let thinkingStartedAt = entry.thinkingStartedAt;
-        if (state.busy && !entry.state.busy) turnStartedAt = Date.now();
-        else if (!state.busy && entry.state.busy) {
+        // The same false→true edge bumps the turn count, which re-seeds the playful
+        // "Thinking…" word so it changes on each new turn (the tier itself is driven by
+        // cumulative thinking time — see thinkingWords.ts). Left untouched on true→false /
+        // mid-turn re-emits.
+        let turnCount = entry.turnCount;
+        if (state.busy && !entry.state.busy) {
+          turnStartedAt = Date.now();
+          turnCount = entry.turnCount + 1;
+        } else if (!state.busy && entry.state.busy) {
           turnStartedAt = null;
           thinkingStartedAt = null; // a turn ending also ends any in-flight thinking
         }
         return {
           ...entry,
           turnStartedAt,
+          turnCount,
           thinkingStartedAt,
           state: {
             ...state,
@@ -324,10 +341,28 @@ export const useConversationStore = create<ConversationState>((set) => {
           ...entry,
           state: { ...connectingState },
           turnStartedAt: null,
+          thinkingSince: null, // seal the open spinner spell (kept thinkingMs = per-discussion total)
           thinkingStartedAt: null,
           toolStartedAt: {},
         }),
       ),
+
+    accrueThinking: (session, isGeneric, now) =>
+      withEntry(session, (entry) => {
+        // Accrue INCREMENTALLY (each sample credits the delta since the last one, capped), not only
+        // on the seal: the busy→false event that ends a turn is itself processed at wake time after
+        // a sleep, so sealing the whole open spell then would still credit the sleep gap. Sampling
+        // frequently + capping each delta bounds any frozen-ticker gap while a genuine long think
+        // still accrues in full.
+        if (isGeneric && entry.thinkingSince == null) return { ...entry, thinkingSince: now }; // open
+        if (entry.thinkingSince == null) return entry; // not thinking, nothing open → no-op
+        const delta = Math.min(Math.max(0, now - entry.thinkingSince), THINKING_ACCRUAL_CAP_MS);
+        return {
+          ...entry,
+          thinkingMs: entry.thinkingMs + delta,
+          thinkingSince: isGeneric ? now : null, // keep sampling while thinking; seal on leave
+        };
+      }),
 
     appendText: (session, messageId, text) =>
       appendBuffer(session, messageId, "streamingText", text),

@@ -1,11 +1,24 @@
 import { memo, useMemo } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeBlock } from "./CodeBlock";
-import { MentionInlineCode } from "./FileMention";
+import { MentionInlineCode, MentionLink } from "./FileMention";
+import { parseFileMention } from "./fileMentions";
 import { MarkdownModeContext, MarkdownDemoContext } from "./markdownMode";
 import { useMarkdownMode, type MarkdownMode } from "../../store/display";
 import styles from "./Markdown.module.css";
+
+/**
+ * Keep filesystem-path hrefs intact through react-markdown's URL sanitizer. Codex
+ * writes file references as Markdown links (`[foo.py:42](/abs/foo.py:42)`); the
+ * default sanitizer blanks out a bare `foo.py:42` (it reads `foo.py` as an unknown
+ * URL protocol). Everything that isn't a path falls through to the default, which
+ * still strips `javascript:` and friends. MentionLink then routes a path href to
+ * the editor and a real URL to an external anchor.
+ */
+function preservePathUrls(url: string): string {
+  return parseFileMention(url) ? url : defaultUrlTransform(url);
+}
 
 /**
  * While a message is still streaming, drop the trailing incomplete block (split on
@@ -32,11 +45,9 @@ const components: Components = {
     // (opens it in the side editor); otherwise it stays plain inline code.
     return <MentionInlineCode className={styles.inlineCode}>{children}</MentionInlineCode>;
   },
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
+  // A path-shaped href (Codex links files as `[foo.py:42](/abs/foo.py:42)`) opens
+  // in the side editor at the line; a real web URL opens externally. See MentionLink.
+  a: ({ href, children }) => <MentionLink href={href}>{children}</MentionLink>,
   // Wrap tables so the rounded/framed table variants (warm/minimal) can clip their
   // corners and so a wide table scrolls horizontally instead of widening the bubble.
   table: ({ children }) => (
@@ -77,7 +88,11 @@ export const StreamMarkdown = memo(function StreamMarkdown({
     <MarkdownModeContext.Provider value={mode}>
       <MarkdownDemoContext.Provider value={demoFilePaths}>
         <div className={`${styles.root} md-body`} data-md-mode={mode}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            urlTransform={preservePathUrls}
+            components={components}
+          >
             {content}
           </ReactMarkdown>
         </div>
