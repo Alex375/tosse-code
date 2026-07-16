@@ -9,6 +9,14 @@ that section and uses it as the GitHub release description, which the app displa
 as-is. The install instructions block (after the `<!-- gh-only -->` marker) is added
 by `release.yml` and stays **only** on the GitHub page — it does not appear in the app.
 
+## v1.1.0
+
+- New anti-sleep control: keep your Mac awake while agents work, with Light and Hard modes, from a toolbar button.
+- The "Thinking…" indicator now uses playful, escalating words the longer an agent thinks.
+- Open files now refresh correctly when you come back to a conversation.
+- Markdown file links from Codex are now clickable.
+- The disabled 5-hour window no longer shows up in Claude usage.
+
 ## v1.0.0
 
 Flight Deck reaches 1.0 — the headline is Codex.
