@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePosix, parseFileMention, resolveMentionAbs } from "./fileMentions";
+import { normalizePosix, parseFileMention, resolveMentionAbs, routeMarkdownLink } from "./fileMentions";
 
 describe("parseFileMention", () => {
   it("detects a relative path with an extension", () => {
@@ -111,6 +111,62 @@ describe("parseFileMention — Codex Markdown-link hrefs", () => {
 
   it("does NOT classify a dangerous scheme as a path (left to the sanitizer)", () => {
     expect(parseFileMention("javascript:alert(1)")).toBeNull();
+  });
+});
+
+// The routing that drives StreamMarkdown's `a` renderer (MentionLink). Codex writes
+// file references as Markdown links; these must be clickable WITHOUT an existence
+// gate (they are authoritative references) — the previous existence-gating rendered
+// real links as dead plain text whenever the pathExists probe didn't confirm the file.
+describe("routeMarkdownLink", () => {
+  const cwd = "/repo";
+
+  it("routes an absolute path (with :line) to a clickable file — no existence check", () => {
+    expect(
+      routeMarkdownLink("/Users/a/wind_get/app/tide_compute.py:232", { cwd, inert: false }),
+    ).toEqual({ kind: "file", abs: "/Users/a/wind_get/app/tide_compute.py", line: 232 });
+  });
+
+  it("routes a NON-EXISTENT path to a clickable file anyway (authoritative, the fix)", () => {
+    // The whole bug: a real Codex link must not degrade to dead text just because a
+    // pathExists probe can't confirm it. Routing never consults the filesystem.
+    expect(routeMarkdownLink("/does/not/exist/foo.ts:9", { cwd, inert: false })).toEqual({
+      kind: "file",
+      abs: "/does/not/exist/foo.ts",
+      line: 9,
+    });
+  });
+
+  it("resolves a relative path against the cwd", () => {
+    expect(routeMarkdownLink("src/foo.ts:5", { cwd, inert: false })).toEqual({
+      kind: "file",
+      abs: "/repo/src/foo.ts",
+      line: 5,
+    });
+  });
+
+  it("keeps an absolute path clickable even without a cwd", () => {
+    expect(routeMarkdownLink("/abs/foo.ts", { cwd: "", inert: false })).toEqual({
+      kind: "file",
+      abs: "/abs/foo.ts",
+    });
+  });
+
+  it("falls back to plain text for a relative path with no cwd to anchor", () => {
+    expect(routeMarkdownLink("src/foo.ts", { cwd: "", inert: false })).toEqual({ kind: "plain" });
+  });
+
+  it("routes an inert provider to plain text (no editor to reveal into)", () => {
+    expect(routeMarkdownLink("/abs/foo.ts", { cwd, inert: true })).toEqual({ kind: "plain" });
+  });
+
+  it("routes a real web URL / mailto to an external anchor", () => {
+    expect(routeMarkdownLink("https://example.com", { cwd, inert: false })).toEqual({
+      kind: "external",
+    });
+    expect(routeMarkdownLink("mailto:foo@bar.com", { cwd, inert: false })).toEqual({
+      kind: "external",
+    });
   });
 });
 
