@@ -496,7 +496,7 @@ export const useEditorStore = create<EditorState>()((set, get) => {
       // The op succeeded but the re-read failed → the tree now shows a STALE
       // listing. Never let that pass silently (zero-silent-error): surface it on
       // the app banner so the user knows the view may be out of date and can act.
-      reportFsError("Arborescence non rafraîchie — elle peut être périmée.", res.error);
+      reportFsError("Tree not refreshed — it may be out of date.", res.error);
     }
   }
 
@@ -513,7 +513,7 @@ export const useEditorStore = create<EditorState>()((set, get) => {
     if (buf.isImage) {
       const res = await safeCmd(() => commands.readImage(path));
       if (res.status !== "ok") {
-        patchBuffer(convId, path, (b) => ({ ...b, error: "Image indisponible sur le disque." }));
+        patchBuffer(convId, path, (b) => ({ ...b, error: "Image unavailable on disk." }));
         return;
       }
       const img = res.data;
@@ -531,7 +531,7 @@ export const useEditorStore = create<EditorState>()((set, get) => {
     if (buf.isPdf) {
       const res = await safeCmd(() => commands.readImage(path));
       if (res.status !== "ok") {
-        patchBuffer(convId, path, (b) => ({ ...b, error: "PDF indisponible sur le disque." }));
+        patchBuffer(convId, path, (b) => ({ ...b, error: "PDF unavailable on disk." }));
         return;
       }
       const doc = res.data;
@@ -547,7 +547,7 @@ export const useEditorStore = create<EditorState>()((set, get) => {
     const res = await safeCmd(() => commands.readFile(path));
     if (res.status !== "ok") {
       // The file likely vanished — flag it but keep the tab/content.
-      patchBuffer(convId, path, (b) => ({ ...b, error: "Fichier indisponible sur le disque." }));
+      patchBuffer(convId, path, (b) => ({ ...b, error: "File unavailable on disk." }));
       return;
     }
     const f = res.data;

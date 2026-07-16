@@ -134,11 +134,13 @@ function notifyTransition(
 export function useGlobalSessionEvents(): void {
   const queryClient = useQueryClient();
 
-  // Accrue the playful-word "Thinking…" spinner clock: once every 500 ms, for every session that
+  // Accrue the playful-word "Thinking…" spinner clock: once a second, for every session that
   // is busy AND in the generic thinking state, add to its cumulative thinking time. A single global
   // ticker (this hook mounts once, never torn down) so it accrues even for conversations not
   // currently rendered; `accrueThinking` is a no-op between transitions (no wasted re-renders).
   // The `state.busy` gate is essential — without it an idle empty session reads as "thinking".
+  // 1 s (not 500 ms) is deliberate: the word only escalates on 40 s tier/rotation boundaries, so
+  // second-resolution is ample and it halves the store churn during otherwise-quiet thinking.
   useEffect(() => {
     const id = setInterval(() => {
       const now = Date.now();
@@ -147,7 +149,7 @@ export function useGlobalSessionEvents(): void {
         const entry = store.sessions[session];
         store.accrueThinking(session, entry.state.busy && isGenericThinking(entry), now);
       }
-    }, 500);
+    }, 1000);
     return () => clearInterval(id);
   }, []);
 

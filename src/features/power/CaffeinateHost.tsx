@@ -5,6 +5,24 @@ import { useRunningCountsByConv } from "../../store/backgroundTasksStore";
 import { useAppErrors } from "../../store/appErrors";
 import { caffeineDesired, useCaffeinate } from "../../store/caffeinate";
 
+/** Slow heartbeat re-asserting the keep-awake hold: if the `caffeinate` child is killed out
+ *  from under us while it should stay held, the next tick calls `set_awake(true)` again and the
+ *  idempotent Rust `hold()` respawns it. Cheap (a no-op while the child is still alive). */
+const REASSERT_MS = 30_000;
+
+// Serialize every `set_awake` IPC so the calls apply in ISSUE ORDER and the last intent wins.
+// The heartbeat above can have an in-flight `setAwake(true)` that — without this — could reach
+// the Rust mutex AFTER a near-simultaneous release's `setAwake(false)` (Tauri does not guarantee
+// cross-invoke ordering) and strand the Mac held awake, with no further heartbeat to self-correct
+// while `desired` is false. Chaining makes a later-issued release always win. Same "serialize the
+// writes to a shared resource" discipline as the CLI-config writers.
+let awakeChain: Promise<unknown> = Promise.resolve();
+function setAwakeSerialized(desired: boolean) {
+  const call = awakeChain.then(() => commands.setAwake(desired));
+  awakeChain = call.catch(() => {}); // keep the chain alive past a rejection
+  return call;
+}
+
 /**
  * The Caffeinate POLICY, mounted once globally (render-null). Watches the on/off toggle,
  * the Light/Hard mode and live fleet activity, computes whether the Mac should be held
@@ -33,8 +51,8 @@ export function CaffeinateHost() {
   const desired = caffeineDesired(enabled, mode, anyAgentActive);
 
   useEffect(() => {
-    void (async () => {
-      const res = await commands.setAwake(desired);
+    const push = async () => {
+      const res = await setAwakeSerialized(desired);
       // Only a hold (desired === true) can fail; a release never does. Surface it so the
       // user knows the Mac may sleep despite the toggle showing "on". Deduped by message.
       if (desired && res.status === "error") {
@@ -42,7 +60,17 @@ export function CaffeinateHost() {
           .getState()
           .pushError("Couldn't keep the Mac awake — it may go to sleep.", res.error);
       }
-    })();
+    };
+    void push();
+    // While the assertion is meant to be HELD, re-assert it on a slow heartbeat. This effect
+    // only re-runs when `desired` flips, so if the `caffeinate` child dies out from under us
+    // while `desired` stays true (killall, an OS reap under pressure) nothing else calls
+    // set_awake again — the Rust-side liveness prune + respawn in `hold()` only runs when
+    // invoked. A cheap idempotent re-assert (a no-op while the child is alive) closes that
+    // self-heal gap. Not needed while releasing (desired === false).
+    if (!desired) return;
+    const id = setInterval(() => void push(), REASSERT_MS);
+    return () => clearInterval(id);
   }, [desired]);
 
   return null;

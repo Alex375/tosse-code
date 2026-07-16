@@ -58,11 +58,11 @@ export const TIER_BOUNDS_MS = [120_000, 360_000, 900_000];
 /** The word re-draws every this-much cumulative thinking (on top of every new turn). */
 export const ROTATE_MS = 40_000; // 40 s
 /**
- * Max thinking time credited per accrual sample. The spinner clock is sampled by a 500 ms ticker
+ * Max thinking time credited per accrual sample. The spinner clock is sampled by a 1 s ticker
  * that FREEZES during system sleep while `Date.now()` keeps advancing; without a cap the first
  * sample after wake would credit the whole sleep gap (hours) and pin the word to the top tier.
  * Capping each sample bounds that to a couple of ticks while a genuine long think — sampled every
- * 500 ms — still accrues in full. NOT turbo-scaled (it's a wall-clock sampling guard, not a tier).
+ * second — still accrues in full. NOT turbo-scaled (it's a wall-clock sampling guard, not a tier).
  */
 export const THINKING_ACCRUAL_CAP_MS = 2_000;
 
