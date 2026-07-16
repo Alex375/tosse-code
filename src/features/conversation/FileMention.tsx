@@ -24,7 +24,13 @@ import {
 } from "react";
 import { useEditorStore } from "../editor/editorStore";
 import { useDisplay } from "../../store/display";
-import { parseFileMention, resolveMentionAbs, SCHEME, type FileMention } from "./fileMentions";
+import {
+  parseFileMention,
+  resolveMentionAbs,
+  routeMarkdownLink,
+  SCHEME,
+  type FileMention,
+} from "./fileMentions";
 import { cachedStatus, ensureMentionChecked, subscribeMention } from "./mentionCache";
 import { useMarkdownDemo } from "./markdownMode";
 import { looksLikeFile, looksLikePath, segmentPath, type PathParts } from "./pathSegments";
@@ -34,10 +40,17 @@ import { looksLikeFile, looksLikePath, segmentPath, type PathParts } from "./pat
 interface MentionCtx {
   convId: string;
   cwd: string;
-  /** When true, mentions render as plain, non-clickable text. Used by the Flight
-   *  Deck reply modal, which mounts the thread WITHOUT an editor host: a click would
-   *  be a dead link AND would silently flip the persisted `editorOpen` layout flag. */
+  /** True when file mentions must render as plain text. Folds TWO things: the host
+   *  has no editor to reveal into (the `inert` prop — Flight Deck reply modal, where a
+   *  click would be a dead link that also flips the persisted `editorOpen` flag) OR the
+   *  user's "make file paths clickable" pref is off. Used by inline-code prose mentions
+   *  and tool-card chips (both respect that pref). */
   inert: boolean;
+  /** True ONLY when the host has no editor to reveal into (the `inert` prop). Does NOT
+   *  fold in the pref. Used by Markdown file LINKS (MentionLink): a file link the model
+   *  wrote in its conversation is clickable regardless of the "clickable file paths"
+   *  setting — that setting is scoped to the Read/Write tool-card chips, not prose links. */
+  hostInert: boolean;
 }
 
 const Ctx = createContext<MentionCtx | null>(null);
@@ -53,13 +66,13 @@ export function FileMentionProvider({
   inert?: boolean;
   children: ReactNode;
 }) {
-  // A global setting can turn OFF clickable file mentions everywhere (default ON);
-  // it folds into `inert`, so an inert prop OR the pref being off → plain text.
+  // The "make file paths clickable" pref gates inline-code mentions + tool-card chips
+  // (folded into `inert`), but NOT Markdown file links (they use `hostInert`, which
+  // reflects only the no-editor-host prop).
   const clickable = useDisplay((s) => s.clickableFileMentions);
-  const effectiveInert = inert || !clickable;
   const value = useMemo(
-    () => ({ convId, cwd, inert: effectiveInert }),
-    [convId, cwd, effectiveInert],
+    () => ({ convId, cwd, inert: inert || !clickable, hostInert: inert }),
+    [convId, cwd, inert, clickable],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -272,13 +285,16 @@ export function MentionPathChip({
 /**
  * A Markdown link (`[label](href)`) in prose. Codex references files as real
  * Markdown links whose href is a filesystem path (`[foo.py:42](/abs/foo.py:42)`),
- * so a path-shaped href becomes a clickable mention — opening the file in the side
- * editor at the line, existence-gated exactly like an inline-code path — while a
- * genuine web URL keeps opening externally. A path that doesn't resolve (or an
- * inert / pref-off provider) degrades to plain text: a bare filesystem path is
- * never a usable `<a href>` in the webview (it resolves to a dead
- * `tauri://localhost/…` URL), so a link-styled dead anchor is the very bug this
- * removes. See StreamMarkdown's `a` renderer + `urlTransform`.
+ * so a path-shaped href opens the file in the side editor at the line, while a
+ * genuine web URL keeps opening externally.
+ *
+ * ⚠️ These links are AUTHORITATIVE (a deliberate reference — Codex just acted on
+ * that file), so — like a tool-card `file_path` chip and UNLIKE an inline-code path
+ * guessed from prose — they are clickable WITHOUT an existence gate. Existence-
+ * gating them made real links render as dead, non-clickable text whenever the
+ * `pathExists` probe didn't confirm the file (a just-created file, a path outside
+ * the checked dir, or a stale/temp path). `revealInEditor` surfaces a read error if
+ * the file is genuinely gone. See routeMarkdownLink + StreamMarkdown's `urlTransform`.
  */
 export function MentionLink({
   href,
@@ -287,21 +303,31 @@ export function MentionLink({
   href?: string;
   children?: ReactNode;
 }) {
-  const raw = (href ?? "").trim();
-  const target = useMentionTarget(raw);
-  const isPath = useMemo(() => parseFileMention(raw) != null, [raw]);
-  if (isPath) {
-    return target ? (
-      <ClickableFile element="a" display={children} target={target} />
-    ) : (
-      <>{children}</>
+  const ctx = useFileMentionCtx();
+  // Uses `hostInert` (not `inert`): a file link the model wrote in its conversation is
+  // clickable regardless of the "make file paths clickable" pref — only a host with no
+  // editor to reveal into (the reply modal) forces plain text.
+  const route = useMemo(
+    () => routeMarkdownLink(href ?? "", { cwd: ctx?.cwd ?? "", inert: ctx?.hostInert ?? true }),
+    [href, ctx?.cwd, ctx?.hostInert],
+  );
+  if (route.kind === "external") {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
     );
   }
-  return (
-    <a href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  );
+  if (route.kind === "file" && ctx) {
+    const target: MentionTarget = {
+      ctx,
+      abs: route.abs,
+      mention: { path: route.abs, line: route.line, column: route.column },
+    };
+    return <ClickableFile element="a" display={children} target={target} />;
+  }
+  // No editor host (reply modal) / relative path with no cwd → plain text.
+  return <>{children}</>;
 }
 
 /** Flatten react-markdown's inline-code children into their plain text. */

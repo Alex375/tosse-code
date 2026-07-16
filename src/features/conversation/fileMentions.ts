@@ -100,3 +100,34 @@ export function resolveMentionAbs(cwd: string, path: string): string {
   const joined = path.startsWith("/") ? path : `${stripTrailingSlash(cwd)}/${path}`;
   return normalizePosix(joined);
 }
+
+/** How a Markdown link's href should be rendered (see routeMarkdownLink). */
+export type LinkRoute =
+  | { kind: "file"; abs: string; line?: number; column?: number }
+  | { kind: "external" }
+  | { kind: "plain" };
+
+/**
+ * Route a Markdown link's href. A Markdown file link is a DELIBERATE reference
+ * (Codex writes `[name](/abs/path:line)`, Claude occasionally `[name](path)`), so —
+ * unlike a bare path guessed from prose — it is treated as AUTHORITATIVE: a
+ * path-shaped href resolves to a `file` route that is clickable WITHOUT an
+ * existence check (the editor surfaces a read error if the file is truly gone).
+ * This is why a real Codex file link never renders as dead, non-clickable text.
+ *
+ * A genuine URL scheme (http(s), mailto, …) → `external`. A path we can't anchor
+ * (a relative path with no cwd, or an inert provider) → `plain` text.
+ */
+export function routeMarkdownLink(href: string, opts: { cwd: string; inert: boolean }): LinkRoute {
+  const mention = parseFileMention(href.trim());
+  if (!mention) return { kind: "external" }; // URL scheme or non-path token
+  if (opts.inert) return { kind: "plain" };
+  const isAbsolute = mention.path.startsWith("/");
+  if (!isAbsolute && !opts.cwd) return { kind: "plain" }; // relative needs a cwd to anchor
+  return {
+    kind: "file",
+    abs: resolveMentionAbs(opts.cwd, mention.path),
+    line: mention.line,
+    column: mention.column,
+  };
+}
