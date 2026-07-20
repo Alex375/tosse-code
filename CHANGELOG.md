@@ -9,6 +9,10 @@ that section and uses it as the GitHub release description, which the app displa
 as-is. The install instructions block (after the `<!-- gh-only -->` marker) is added
 by `release.yml` and stays **only** on the GitHub page — it does not appear in the app.
 
+## v1.1.2
+
+- Fixed: Claude usage now shows both the 5-hour and weekly limits whenever they exist, instead of only one at a time.
+
 ## v1.1.1
 
 - Fixed: file links Codex writes in a conversation are now reliably clickable — a click opens the file at the right line, independent of the "clickable file paths" setting.
