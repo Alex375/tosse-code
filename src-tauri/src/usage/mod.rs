@@ -19,13 +19,14 @@
 //!   already a **percentage 0–100** (e.g. `29.0` = 29%) and `resets_at` an **ISO 8601
 //!   string**. We still tolerate a `rate_limits` wrapper (structural only) and pass
 //!   `resets_at` through as a string for the JS `Date` parser on the frontend.
-//! - **Active windows (2026-07)**: the body ALSO carries a `limits` array
-//!   (`[{ kind, group, is_active, … }]`). As Anthropic retires the per-session (5h) cap
-//!   in favour of a single weekly limit, the legacy top-level `five_hour` object is STILL
-//!   emitted (a stale utilization %) but its limit reads `is_active:false`. We must NOT
-//!   surface a window whose limit is inactive (it would show a misleading "5h · 0%"), so
-//!   we cross-reference `limits`: match `session` → 5h, `weekly_all`/`weekly` → 7d. An
-//!   absent `limits` array (older shape) keeps the legacy "present ⇒ shown" behaviour.
+//! - **`limits` array & `is_active` (2026-07)**: the body ALSO carries a `limits` array
+//!   (`[{ kind, group, is_active, … }]`). The `is_active` flag is NOT "this limit exists":
+//!   it marks which SINGLE limit is currently *binding* and flips between `session` (5h)
+//!   and `weekly_all` (7d) over time (VERIFIED live: `session:false`/`weekly_all:true` on
+//!   2026-07-15, the exact reverse on 2026-07-20). Both the 5h and weekly caps coexist. So
+//!   we surface each window on the PRESENCE of its top-level object and IGNORE `is_active`
+//!   — gating on it would only ever show one window at a time. A limit Anthropic truly
+//!   retires simply drops its object → absent → hidden, needing no special case.
 //!
 //! ## Policy (validated with the user)
 //! - **Token source**: `~/.claude/.credentials.json` FIRST *when its token is still valid*
@@ -361,6 +362,12 @@ fn parse_access_token(blob: &str) -> Option<String> {
 /// TOP LEVEL of the live body; an older/alternate shape nested them under `rate_limits`,
 /// so we fall back to that. `None` when neither window is usable (e.g. an API-key
 /// account with no plan limits).
+///
+/// We show each window on the PRESENCE of its top-level object — both when both are
+/// present, one when only one is. We deliberately do NOT gate on the `limits` array's
+/// `is_active` flag: it marks only which single cap is currently *binding* and flips
+/// between the 5h and weekly windows over time, so filtering on it would hide whichever
+/// cap isn't binding right now (see the module doc's "`limits` array & `is_active`").
 fn parse_usage(body: &str) -> Option<PlanUsage> {
     let v: Value = serde_json::from_str(body).ok()?;
     // Prefer a non-null `rate_limits` wrapper (old shape); otherwise read the root.
@@ -368,15 +375,8 @@ fn parse_usage(body: &str) -> Option<PlanUsage> {
         .get("rate_limits")
         .filter(|r| !r.is_null())
         .unwrap_or(&v);
-    // Newer payloads carry a `limits` array declaring which windows are actually in force.
-    // Drop a window whose limit reads `is_active:false` (e.g. the retired 5h/session cap),
-    // even though its stale top-level object is still present. No `limits` array (or no
-    // matching entry) → keep the legacy "present ⇒ shown" behaviour.
-    let limits = root.get("limits").and_then(Value::as_array);
-    let five_hour = parse_window(root.get("five_hour"))
-        .filter(|_| window_is_active(limits, &["session"]) != Some(false));
-    let seven_day = parse_window(root.get("seven_day"))
-        .filter(|_| window_is_active(limits, &["weekly_all", "weekly"]) != Some(false));
+    let five_hour = parse_window(root.get("five_hour"));
+    let seven_day = parse_window(root.get("seven_day"));
     if five_hour.is_none() && seven_day.is_none() {
         return None;
     }
@@ -384,25 +384,6 @@ fn parse_usage(body: &str) -> Option<PlanUsage> {
         five_hour,
         seven_day,
     })
-}
-
-/// Whether a rate-limit window is currently in force, per the newer `limits` array
-/// (`[{ kind, group, is_active, … }]`). Matched by `kind` (a window may be known under
-/// several kinds, e.g. `weekly_all`/`weekly`); first match wins. Returns:
-/// - `Some(true)`/`Some(false)` when the matching entry states `is_active`;
-/// - `None` when there is no `limits` array, no matching entry, or no `is_active` field
-///   (older API shape) → the caller keeps the legacy "present ⇒ shown" behaviour.
-fn window_is_active(limits: Option<&Vec<Value>>, kinds: &[&str]) -> Option<bool> {
-    limits?
-        .iter()
-        .find(|e| {
-            e.get("kind")
-                .and_then(Value::as_str)
-                .map(|k| kinds.contains(&k))
-                .unwrap_or(false)
-        })?
-        .get("is_active")
-        .and_then(Value::as_bool)
 }
 
 /// One window's `{ utilization, resets_at }` → our `{ used_percentage, resets_at }`.
@@ -504,60 +485,28 @@ mod tests {
     }
 
     #[test]
-    fn hides_window_whose_limit_is_inactive() {
-        // Real 2026-07 shape: Anthropic retiring the 5h/session cap → its legacy top-level
-        // `five_hour` object is still present (utilization 1.0) but `limits[kind=session]`
-        // reads `is_active:false`. Only the active weekly limit must survive.
-        let body = r#"{
-            "five_hour":{"utilization":1.0,"resets_at":"2026-07-15T20:50:00+00:00"},
-            "seven_day":{"utilization":17.0,"resets_at":"2026-07-20T10:00:00+00:00"},
-            "limits":[
-                {"kind":"session","group":"session","percent":1,"is_active":false},
-                {"kind":"weekly_all","group":"weekly","percent":17,"is_active":true},
-                {"kind":"weekly_scoped","group":"weekly","percent":0,"is_active":false}
-            ]
-        }"#;
-        let u = parse_usage(body).expect("weekly window still usable");
-        assert!(u.five_hour.is_none(), "inactive 5h/session window must be hidden");
-        let sd = u.seven_day.expect("active weekly window shown");
-        assert_eq!(sd.used_percentage, 17.0);
-    }
-
-    #[test]
-    fn keeps_active_five_hour_window() {
-        // Accounts still on the old cap (gradual rollout): session limit is_active:true → shown.
-        let body = r#"{
-            "five_hour":{"utilization":40.0},
-            "seven_day":{"utilization":17.0},
-            "limits":[
-                {"kind":"session","is_active":true},
-                {"kind":"weekly_all","is_active":true}
-            ]
-        }"#;
-        let u = parse_usage(body).expect("both usable");
-        assert_eq!(u.five_hour.expect("active 5h shown").used_percentage, 40.0);
-        assert!(u.seven_day.is_some());
-    }
-
-    #[test]
-    fn no_limits_array_keeps_legacy_behavior() {
-        // Older payloads without a `limits` array: both windows shown as before.
-        let body = r#"{"five_hour":{"utilization":29.0},"seven_day":{"utilization":27.0}}"#;
-        let u = parse_usage(body).expect("legacy shape parses");
-        assert!(u.five_hour.is_some());
-        assert!(u.seven_day.is_some());
-    }
-
-    #[test]
-    fn all_windows_inactive_is_none() {
-        // Degenerate case — every plan limit inactive → no usable window → None (same as an
-        // API-key account with no plan limits). Not reachable today: the weekly limit stays
-        // active; the real payload always keeps at least `weekly_all` in force.
-        let body = r#"{
-            "five_hour":{"utilization":1.0},"seven_day":{"utilization":2.0},
-            "limits":[{"kind":"session","is_active":false},{"kind":"weekly_all","is_active":false}]
-        }"#;
-        assert!(parse_usage(body).is_none());
+    fn both_windows_shown_regardless_of_is_active_flag() {
+        // VERIFIED live: both `five_hour` and `seven_day` objects are always present; the
+        // `limits` array's `is_active` flag marks only which cap is currently binding and
+        // FLIPS between them over time (`session:false`/`weekly_all:true` on 2026-07-15,
+        // the exact reverse on 2026-07-20). Both windows must show whenever both objects are
+        // present — whichever one is flagged active — so we never filter on `is_active`.
+        for (session_active, weekly_active) in [(true, false), (false, true)] {
+            let body = format!(
+                r#"{{
+                    "five_hour":{{"utilization":2.0}},
+                    "seven_day":{{"utilization":3.0}},
+                    "limits":[
+                        {{"kind":"session","group":"session","is_active":{session_active}}},
+                        {{"kind":"weekly_all","group":"weekly","is_active":{weekly_active}}},
+                        {{"kind":"weekly_scoped","group":"weekly","is_active":false}}
+                    ]
+                }}"#
+            );
+            let u = parse_usage(&body).expect("both windows usable");
+            assert_eq!(u.five_hour.expect("5h shown").used_percentage, 2.0);
+            assert_eq!(u.seven_day.expect("7d shown").used_percentage, 3.0);
+        }
     }
 
     #[test]
