@@ -685,6 +685,11 @@ export const mockCommands = {
       data: {
         five_hour: { used_percentage: 42, resets_at: iso(2 * 3600) },
         seven_day: { used_percentage: 67, resets_at: iso(3 * 86400) },
+        // A model-scoped weekly cap, as the live endpoint reports it: named after the
+        // model and — when the window has never started — with no reset at all.
+        scoped: [
+          { label: "Fable", group: "weekly", window: { used_percentage: 0, resets_at: null } },
+        ],
       },
     };
   },

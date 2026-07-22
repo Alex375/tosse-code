@@ -460,8 +460,11 @@
 .wf-spin-fast { animation: wf-spin .8s linear infinite; transform-origin:50% 50%; }
 /* Real plan-usage window: label · % · reset on top, fill bar under. */
 .wf-pop-usage { display:flex; flex-direction:column; gap:4px; }
-.wf-pop-usage-top { display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--wf-tx-lo); }
-.wf-pop-usage-top .wf-mono { color:var(--wf-tx-hi); }
+.wf-pop-usage-top { display:flex; align-items:center; gap:8px; justify-content:space-between; font-size:11.5px; color:var(--wf-tx-lo); }
+/* The label is data-driven for model-scoped caps (it carries the model's name), so it must
+   never push the figure out of the popover: it ellipsises, the % + reset never shrinks. */
+.wf-pop-usage-top > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wf-pop-usage-top .wf-mono { color:var(--wf-tx-hi); flex:none; }
 /* Actionable error card when the real % can't be fetched (cause + next step). */
 .wf-pop-err { display:flex; flex-direction:column; gap:4px; }
 .wf-pop-err-msg { font-size:11.5px; font-weight:600; color:var(--wf-tx-hi); }

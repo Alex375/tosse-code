@@ -2151,6 +2151,9 @@ fn rate_limits_to_plan_usage(snap: &RateLimitSnapshot) -> Option<crate::usage::P
     Some(crate::usage::PlanUsage {
         five_hour,
         seven_day,
+        // Codex has no per-model allowance: its snapshot carries exactly two windows
+        // (`primary`/`secondary`), so there is nothing scoped to report.
+        scoped: Vec::new(),
     })
 }
 

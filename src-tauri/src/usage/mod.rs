@@ -20,13 +20,23 @@
 //!   string**. We still tolerate a `rate_limits` wrapper (structural only) and pass
 //!   `resets_at` through as a string for the JS `Date` parser on the frontend.
 //! - **`limits` array & `is_active` (2026-07)**: the body ALSO carries a `limits` array
-//!   (`[{ kind, group, is_active, … }]`). The `is_active` flag is NOT "this limit exists":
-//!   it marks which SINGLE limit is currently *binding* and flips between `session` (5h)
-//!   and `weekly_all` (7d) over time (VERIFIED live: `session:false`/`weekly_all:true` on
-//!   2026-07-15, the exact reverse on 2026-07-20). Both the 5h and weekly caps coexist. So
-//!   we surface each window on the PRESENCE of its top-level object and IGNORE `is_active`
-//!   — gating on it would only ever show one window at a time. A limit Anthropic truly
-//!   retires simply drops its object → absent → hidden, needing no special case.
+//!   (`[{ kind, group, percent, scope, is_active, … }]`). The `is_active` flag is NOT "this
+//!   limit exists": it marks which SINGLE limit is currently *binding* and flips between
+//!   `session` (5h) and `weekly_all` (7d) over time (VERIFIED live: `session:false`/
+//!   `weekly_all:true` on 2026-07-15, the exact reverse on 2026-07-20). Both the 5h and
+//!   weekly caps coexist. So we surface each window on the PRESENCE of its object and IGNORE
+//!   `is_active` — gating on it would only ever show one window at a time. A limit Anthropic
+//!   truly retires simply drops its entry → absent → hidden, needing no special case.
+//! - **Model-scoped caps (2026-07, VERIFIED live)**: a third kind of cap exists — a weekly
+//!   allowance scoped to ONE model (today "Fable"). It has **no top-level key at all**: every
+//!   candidate (`seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, `seven_day_omelette`,
+//!   `tangelo`, `nimbus_quill`, …) is `null`, and no `seven_day_fable` exists. It lives ONLY in
+//!   `limits[]` as `{"kind":"weekly_scoped","group":"weekly","percent":0,"resets_at":null,
+//!   "scope":{"model":{"display_name":"Fable"}}}` — so it is read from there, keyed off the
+//!   presence of a `scope`, and its name comes from `scope.model.display_name` (**data-driven,
+//!   never hard-coded**: a renamed or additional scoped model follows for free). Note its
+//!   percentage field is `percent` (an integer), not `utilization`, and its `resets_at` may be
+//!   `null` when the window has never started — we then show no reset rather than invent one.
 //!
 //! ## Policy (validated with the user)
 //! - **Token source**: `~/.claude/.credentials.json` FIRST *when its token is still valid*
@@ -62,14 +72,36 @@ const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 /// build step catches a stale value here.
 const USER_AGENT: &str = "claude-cli/2.1.186 (external, cli)";
 
-/// Real plan-usage snapshot: the two subscription windows, each with a fill %.
-/// A window is `None` when the endpoint did not report it. `Deserialize` so it can
-/// ride the Codex `session_codex_plan_usage` event (the event bus round-trips its
-/// payload) — the Codex backend reuses this exact shape for its rate-limit push.
+/// Real plan-usage snapshot: the two account-wide subscription windows, each with a fill %,
+/// plus any model-scoped caps. A window is `None` when the endpoint did not report it.
+/// `Deserialize` so it can ride the Codex `session_codex_plan_usage` event (the event bus
+/// round-trips its payload) — the Codex backend reuses this exact shape for its rate-limit push.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct PlanUsage {
     pub five_hour: Option<UsageWindow>,
     pub seven_day: Option<UsageWindow>,
+    /// Caps that apply to ONE model rather than the whole account (e.g. Fable's weekly
+    /// allowance), read from the `limits[]` array — the only place they appear. Empty when
+    /// the plan has none. `serde(default)` so an older/foreign payload (a Codex push, which
+    /// has no such concept) still deserializes.
+    #[serde(default)]
+    pub scoped: Vec<ScopedUsageWindow>,
+}
+
+/// A rate-limit window that applies to a NAMED subset of usage (today: a single model) rather
+/// than the account as a whole. Kept separate from the two flat windows because its label is
+/// data-driven — it comes from the payload, so a renamed or newly added scoped model shows up
+/// without a code change.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ScopedUsageWindow {
+    /// What the cap is scoped to, as the endpoint names it (`scope.model.display_name`,
+    /// e.g. `"Fable"`). Displayed verbatim.
+    pub label: String,
+    /// Which family the cap belongs to (`"weekly"`, `"session"`, …), so the UI can suffix it
+    /// with the matching window ("7d" / "5h"). `None` when the payload omits it — the UI then
+    /// shows the bare label rather than guessing a duration.
+    pub group: Option<String>,
+    pub window: UsageWindow,
 }
 
 /// One rate-limit window's real fill: `used_percentage` (0–100) + optional reset as a
@@ -377,21 +409,73 @@ fn parse_usage(body: &str) -> Option<PlanUsage> {
         .unwrap_or(&v);
     let five_hour = parse_window(root.get("five_hour"));
     let seven_day = parse_window(root.get("seven_day"));
-    if five_hour.is_none() && seven_day.is_none() {
+    // `limits[]` sits at the ROOT even under the legacy wrapper, so look there too.
+    let scoped = parse_scoped_limits(root.get("limits").or_else(|| v.get("limits")));
+    if five_hour.is_none() && seven_day.is_none() && scoped.is_empty() {
         return None;
     }
     Some(PlanUsage {
         five_hour,
         seven_day,
+        scoped,
     })
+}
+
+/// Pull the model-scoped caps out of the `limits[]` array — the ONLY place they appear (their
+/// would-be top-level keys are all null; see the module doc's "Model-scoped caps").
+///
+/// An entry qualifies on the PRESENCE of a `scope` object naming something, never on
+/// `is_active` (that flag only marks which cap is currently binding). Entries whose `kind` is
+/// one of the two account-wide caps are skipped even if they ever gained a scope, since those
+/// are already rendered from their top-level windows — this is what keeps a cap from being
+/// listed twice. An entry with no usable name or no percentage is dropped rather than shown as
+/// an anonymous "0%" row that the user could not act on.
+fn parse_scoped_limits(v: Option<&Value>) -> Vec<ScopedUsageWindow> {
+    let Some(Value::Array(entries)) = v else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e.get("kind").and_then(Value::as_str),
+                Some("session") | Some("weekly_all")
+            )
+        })
+        .filter_map(|e| {
+            let label = scope_label(e.get("scope"))?;
+            Some(ScopedUsageWindow {
+                label,
+                group: e
+                    .get("group")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                window: parse_window(Some(e))?,
+            })
+        })
+        .collect()
+}
+
+/// Name a `scope` object: the model's display name, else the surface it applies to. `None`
+/// when the scope is absent/null or names nothing — an unnamed cap can't be labeled truthfully.
+fn scope_label(scope: Option<&Value>) -> Option<String> {
+    let scope = scope?;
+    scope
+        .pointer("/model/display_name")
+        .and_then(Value::as_str)
+        .or_else(|| scope.get("surface").and_then(Value::as_str))
+        .map(str::to_string)
 }
 
 /// One window's `{ utilization, resets_at }` → our `{ used_percentage, resets_at }`.
 /// On `/api/oauth/usage`, `utilization` is ALREADY a percentage 0–100 (verified against
 /// the live response, e.g. `29.0` = 29%), so we use it as-is (an explicit
-/// `used_percentage`, if ever present, is equivalent). `resets_at` is passed through as
-/// a raw string (ISO 8601, or epoch-seconds digits) for the frontend to parse. `None`
-/// when no percentage field is present (an unusable window). The UI clamps 0–100.
+/// `used_percentage`, if ever present, is equivalent). `percent` is the same figure under the
+/// name the `limits[]` entries use (an integer), so scoped caps parse through here too.
+/// `resets_at` is passed through as a raw string (ISO 8601, or epoch-seconds digits) for the
+/// frontend to parse — it is legitimately absent on a window that has never started, which
+/// only costs that row its reset text. `None` when no percentage field is present (an
+/// unusable window). The UI clamps 0–100.
 fn parse_window(v: Option<&Value>) -> Option<UsageWindow> {
     let v = v?;
     if v.is_null() {
@@ -400,6 +484,7 @@ fn parse_window(v: Option<&Value>) -> Option<UsageWindow> {
     let used_percentage = v
         .get("used_percentage")
         .or_else(|| v.get("utilization"))
+        .or_else(|| v.get("percent"))
         .and_then(Value::as_f64)?;
     let resets_at = v
         .get("resets_at")
@@ -506,7 +591,87 @@ mod tests {
             let u = parse_usage(&body).expect("both windows usable");
             assert_eq!(u.five_hour.expect("5h shown").used_percentage, 2.0);
             assert_eq!(u.seven_day.expect("7d shown").used_percentage, 3.0);
+            // The `weekly_scoped` entry here names nothing (no `scope`) and carries no
+            // percentage — it must be dropped, not surfaced as an anonymous 0% row.
+            assert!(u.scoped.is_empty(), "unnamed scoped cap must not be listed");
         }
+    }
+
+    #[test]
+    fn parses_model_scoped_weekly_cap_from_limits_array() {
+        // Captured from the LIVE response (2026-07-22). The model-scoped cap has NO top-level
+        // key — every candidate is null — and appears ONLY in `limits[]`, with its percentage
+        // under `percent` and a null `resets_at`. Pins that real contract.
+        let body = r#"{
+            "five_hour":{"utilization":9.0,"resets_at":"2026-07-22T15:30:00.378696+00:00"},
+            "seven_day":{"utilization":13.0,"resets_at":"2026-07-27T10:00:00.378747+00:00"},
+            "seven_day_opus":null,"seven_day_sonnet":null,"seven_day_cowork":null,
+            "seven_day_omelette":null,"tangelo":null,"nimbus_quill":null,
+            "limits":[
+                {"kind":"session","group":"session","percent":9,"resets_at":"2026-07-22T15:30:00.378696+00:00","scope":null,"is_active":false},
+                {"kind":"weekly_all","group":"weekly","percent":13,"resets_at":"2026-07-27T10:00:00.378747+00:00","scope":null,"is_active":true},
+                {"kind":"weekly_scoped","group":"weekly","percent":0,"resets_at":null,
+                 "scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},"is_active":false}
+            ]
+        }"#;
+        let u = parse_usage(body).expect("should parse");
+        assert_eq!(u.five_hour.expect("5h").used_percentage, 9.0);
+        assert_eq!(u.seven_day.expect("7d").used_percentage, 13.0);
+        // Exactly ONE scoped cap: the two account-wide entries are already rendered from
+        // their top-level windows and must not be duplicated out of `limits[]`.
+        assert_eq!(u.scoped.len(), 1, "only the model-scoped cap is taken from limits[]");
+        let s = &u.scoped[0];
+        assert_eq!(s.label, "Fable"); // read from scope.model.display_name, never hard-coded
+        assert_eq!(s.group.as_deref(), Some("weekly"));
+        assert_eq!(s.window.used_percentage, 0.0); // `percent`, not `utilization`
+        assert_eq!(s.window.resets_at, None); // never started → no reset invented
+    }
+
+    #[test]
+    fn scoped_cap_is_listed_even_when_not_the_binding_limit() {
+        // Same rule as the two flat windows: presence, not `is_active` (which marks only
+        // which single cap currently binds and flips over time).
+        for active in [true, false] {
+            let body = format!(
+                r#"{{"limits":[{{"kind":"weekly_scoped","group":"weekly","percent":42,
+                     "resets_at":"2026-07-27T10:00:00+00:00",
+                     "scope":{{"model":{{"display_name":"Fable"}}}},"is_active":{active}}}]}}"#
+            );
+            let u = parse_usage(&body).expect("a scoped cap alone is still usable usage");
+            assert!(u.five_hour.is_none() && u.seven_day.is_none());
+            assert_eq!(u.scoped.len(), 1);
+            assert_eq!(u.scoped[0].window.used_percentage, 42.0);
+            assert_eq!(
+                u.scoped[0].window.resets_at.as_deref(),
+                Some("2026-07-27T10:00:00+00:00")
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_cap_falls_back_to_surface_and_drops_the_unusable() {
+        let body = r#"{
+            "five_hour":{"utilization":1.0},
+            "limits":[
+                {"kind":"weekly_scoped","group":"weekly","percent":5,"scope":{"surface":"Claude Code"}},
+                {"kind":"weekly_scoped","group":"weekly","scope":{"model":{"display_name":"NoPct"}}},
+                {"kind":"weekly_scoped","group":"weekly","percent":7,"scope":null}
+            ]
+        }"#;
+        let u = parse_usage(body).expect("should parse");
+        // Only the surface-named one survives: the second has no percentage, the third no name.
+        assert_eq!(u.scoped.len(), 1);
+        assert_eq!(u.scoped[0].label, "Claude Code");
+        assert_eq!(u.scoped[0].window.used_percentage, 5.0);
+    }
+
+    #[test]
+    fn a_malformed_limits_array_is_ignored_not_fatal() {
+        // A non-array (or absent) `limits` must not sink the two real windows.
+        let body = r#"{"five_hour":{"utilization":4.0},"seven_day":{"utilization":6.0},"limits":"nope"}"#;
+        let u = parse_usage(body).expect("windows still parse");
+        assert_eq!(u.five_hour.unwrap().used_percentage, 4.0);
+        assert!(u.scoped.is_empty());
     }
 
     #[test]

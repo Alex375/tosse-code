@@ -414,8 +414,13 @@ async loadSessionContext(sessionId: string) : Promise<Result<ContextFill, string
  * Read a conversation's active `/goal` (Claude Code's native goal feature) from its on-disk
  * transcript. The CLI writes goal state as `attachment` lines that are DISK-ONLY (never on the
  * live stream), so the UI polls this at conversation load and on each turn edge to know whether a
- * goal is active and show its condition. `None` when no goal is active. Pure file IO, off the
- * async runtime via `spawn_blocking`.
+ * goal is active and show its condition. `None` when no goal is active.
+ * 
+ * Reads the transcript in FULL, forward (a goal set early and never terminated is still active
+ * at the end of the file, so no tail slice would do) — but a raw-substring pre-filter rejects
+ * every line that can't carry goal state before it reaches the JSON parser, which is what keeps
+ * a whole Flight Deck fleet seeding its goals affordable. Pure file IO, off the async runtime
+ * via `spawn_blocking`.
  */
 async loadSessionGoal(sessionId: string) : Promise<Result<GoalState | null, string>> {
     try {
@@ -2385,12 +2390,19 @@ export type PersistedState = { repos: RepoRecord[]; conversations: ConversationR
  */
 active_id: string | null }
 /**
- * Real plan-usage snapshot: the two subscription windows, each with a fill %.
- * A window is `None` when the endpoint did not report it. `Deserialize` so it can
- * ride the Codex `session_codex_plan_usage` event (the event bus round-trips its
- * payload) — the Codex backend reuses this exact shape for its rate-limit push.
+ * Real plan-usage snapshot: the two account-wide subscription windows, each with a fill %,
+ * plus any model-scoped caps. A window is `None` when the endpoint did not report it.
+ * `Deserialize` so it can ride the Codex `session_codex_plan_usage` event (the event bus
+ * round-trips its payload) — the Codex backend reuses this exact shape for its rate-limit push.
  */
-export type PlanUsage = { five_hour: UsageWindow | null; seven_day: UsageWindow | null }
+export type PlanUsage = { five_hour: UsageWindow | null; seven_day: UsageWindow | null; 
+/**
+ * Caps that apply to ONE model rather than the whole account (e.g. Fable's weekly
+ * allowance), read from the `limits[]` array — the only place they appear. Empty when
+ * the plan has none. `serde(default)` so an older/foreign payload (a Codex push, which
+ * has no such concept) still deserializes.
+ */
+scoped?: ScopedUsageWindow[] }
 /**
  * Everything ONE plugin provides — for the per-plugin explorer (click a plugin →
  * browse its skills / sub-agents / MCP servers, like Claude.ai's Customize panel).
@@ -2509,6 +2521,24 @@ removed_prompt: string | null;
  * a no-op (the conversation already ended there), and the file is left untouched.
  */
 removed_lines: number }
+/**
+ * A rate-limit window that applies to a NAMED subset of usage (today: a single model) rather
+ * than the account as a whole. Kept separate from the two flat windows because its label is
+ * data-driven — it comes from the payload, so a renamed or newly added scoped model shows up
+ * without a code change.
+ */
+export type ScopedUsageWindow = { 
+/**
+ * What the cap is scoped to, as the endpoint names it (`scope.model.display_name`,
+ * e.g. `"Fable"`). Displayed verbatim.
+ */
+label: string; 
+/**
+ * Which family the cap belongs to (`"weekly"`, `"session"`, …), so the UI can suffix it
+ * with the matching window ("7d" / "5h"). `None` when the payload omits it — the UI then
+ * shows the bare label rather than guessing a duration.
+ */
+group: string | null; window: UsageWindow }
 /**
  * A search result: which conversation matched, its relevance score, and a short
  * snippet around the first body hit (empty when only title/excerpt matched).

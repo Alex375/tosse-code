@@ -568,11 +568,23 @@ function resetToEpochSeconds(s: string | null): number | null {
   return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
 }
 
+/** A rate-limit window scoped to ONE model rather than the whole account (e.g. Fable's
+ *  weekly allowance). Mirrors the core's `ScopedUsageWindow`; the `label` comes straight
+ *  from the endpoint, so a renamed/added scoped model needs no frontend change. */
+export interface PlanUsageScopedWindow {
+  label: string;
+  group: string | null;
+  window: PlanUsageWindow;
+}
+
 /** Real plan-usage %, the precise figure the stream does NOT carry. Each window is
  *  null when the endpoint did not report it. Mirrors the core's `PlanUsage`. */
 export interface PlanUsageInfo {
   five_hour: PlanUsageWindow | null;
   seven_day: PlanUsageWindow | null;
+  /** Model-scoped caps, listed alongside the two account-wide windows. Optional because
+   *  the core marks it `serde(default)` — an absent value reads as "none". */
+  scoped?: PlanUsageScopedWindow[];
 }
 
 /** Why the real plan-usage fetch failed — mirrors the core's `UsageError` union so
@@ -778,6 +790,14 @@ function planStatus(status: string | null): { label: string; color: string } {
   }
 }
 
+/** Label a model-scoped cap: its name plus the window it spans ("Fable · 7d"), so it reads in
+ *  the same idiom as the "5h"/"7d" rows above it. The suffix is derived from the payload's
+ *  `group`, and dropped when that is absent or unknown — a duration is never guessed. */
+function scopedUsageLabel(s: PlanUsageScopedWindow): string {
+  const win = s.group === "weekly" ? "7d" : s.group === "session" ? "5h" : null;
+  return win ? `${s.label} · ${win}` : s.label;
+}
+
 /** Human label for a rate-limit window type. */
 function planWindow(limitType: string | null): string {
   switch (limitType) {
@@ -916,6 +936,18 @@ function ContextUsageBody({
               fallbackReset={plan?.limitType === "seven_day" ? plan.resetsAt : null}
             />
           ) : null}
+          {/* Model-scoped caps (e.g. Fable's weekly allowance), listed after the two
+              account-wide windows. Rendered straight off the payload — no fallback reset,
+              since a scoped window that hasn't started reports none and the coarse `plan`
+              reset belongs to a different (account-wide) cap. */}
+          {(usage?.scoped ?? []).map((s) => (
+            <UsageRow
+              key={`${s.label}:${s.group ?? ""}`}
+              label={scopedUsageLabel(s)}
+              w={s.window}
+              fallbackReset={null}
+            />
+          ))}
           {/* Coarse status pill (warning / rejected) — always informative. */}
           {st && plan ? (
             <div className="wf-pop-row">
