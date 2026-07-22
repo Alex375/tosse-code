@@ -9,6 +9,11 @@ that section and uses it as the GitHub release description, which the app displa
 as-is. The install instructions block (after the `<!-- gh-only -->` marker) is added
 by `release.yml` and stays **only** on the GitHub page — it does not appear in the app.
 
+## v1.2.0
+
+- New: the active goal (`/goal`) is now displayed — on Flight Deck cards and at the top of the conversation — so you always see what an agent is working toward.
+- New: artifacts published by Claude are collected per conversation — an "Artifacts" chip in the composer lists them, and each one shows up inline in the thread.
+
 ## v1.1.2
 
 - Fixed: Claude usage now shows both the 5-hour and weekly limits whenever they exist, instead of only one at a time.
