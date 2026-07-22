@@ -77,6 +77,8 @@ const WF_PATHS: Record<string, string> = {
   mute: "M4 8.5h3l4-3v11l-4-3H4zM14.5 9l4 4M18.5 9l-4 4",
   // A steaming coffee mug — the "Caffeinate" (keep the Mac awake) toggle.
   coffee: "M5 9h8v5a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3zM13 11h1.5a2 2 0 0 1 0 4H13M8 4c1 1-1 2 0 3.2M11 4c1 1-1 2 0 3.2",
+  // A bullseye / target — an active `/goal` (Claude working toward a completion condition).
+  target: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14M11 7.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4M11 11h.01",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {
@@ -312,8 +314,11 @@ const MENU_M = 8;
 
 /** Compute a collision-aware fixed placement from the trigger's rect, honouring
  *  `align`/`up` as the PREFERRED sides and flipping when a side lacks room. Mirrors
- *  CardPopover's approach so portaled menus behave like the other card popovers. */
-function menuPortalPlacement(r: DOMRect, align?: "right", up?: boolean): MenuPortalPos {
+ *  CardPopover's approach so portaled menus behave like the other card popovers.
+ *  `pop` is the popover's own measured rect (once mounted) — used to keep the WHOLE
+ *  popover on-screen for any width, so e.g. a right-aligned menu on a far-left card
+ *  never runs off the left edge. */
+export function menuPortalPlacement(r: DOMRect, align?: "right", up?: boolean, pop?: DOMRect | null): MenuPortalPos {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   // Enough to hold the tallest menu body (the usage card); used only for the flip test.
@@ -331,9 +336,16 @@ function menuPortalPlacement(r: DOMRect, align?: "right", up?: boolean): MenuPor
   };
   if (useUp) pos.bottom = vh - r.top + 6;
   else pos.top = r.bottom + 6;
-  // Anchor horizontally to the trigger's matching edge, clamped on-screen.
-  if (align === "right") pos.right = Math.max(MENU_M, vw - r.right);
-  else pos.left = Math.min(Math.max(MENU_M, r.left), Math.max(MENU_M, vw - 240 - MENU_M));
+  // Horizontal: anchor to the trigger's matching edge (align hint), then clamp so NEITHER edge
+  // leaves the viewport. Positioned via `left` always. The popover is mounted (hidden) BEFORE this
+  // runs, so `pop` carries its real measured width from the first placement pass; the `240` is only
+  // a defensive default for a missing ref. `right`-aligned menus put the popover's right edge at the
+  // trigger's right edge; the clamp then slides it back on-screen if that would overflow the left —
+  // the fix for a far-left card whose menu used to open off-screen.
+  const w = pop?.width || 240;
+  const preferredLeft = align === "right" ? r.right - w : r.left;
+  const maxLeft = Math.max(MENU_M, vw - w - MENU_M);
+  pos.left = Math.min(Math.max(MENU_M, preferredLeft), maxLeft);
   return pos;
 }
 
@@ -404,7 +416,9 @@ export function Menu({
     }
     const measure = () => {
       const r = triggerRef.current?.getBoundingClientRect();
-      if (r) setPos(menuPortalPlacement(r, align, up));
+      // Feed the popover's OWN measured rect so the placement keeps its full width on-screen
+      // (it is already mounted-but-hidden by the time this runs — see the render below).
+      if (r) setPos(menuPortalPlacement(r, align, up, popRef.current?.getBoundingClientRect()));
     };
     measure();
     window.addEventListener("resize", measure);
@@ -430,8 +444,12 @@ export function Menu({
   // Portaled popover: fixed-positioned at `pos`, mounted on document.body so no ancestor
   // `overflow` can clip it. `.up`/`.right` positioning classes are dropped in portal mode
   // (the inline `pos` owns every side); `.portaled` adds z-index + scroll clamp.
-  const popStyle: CSSProperties | undefined =
-    portal && pos
+  // Portaled: mount the popover immediately (so its width can be measured) but keep it
+  // hidden until the first placement lands — `useLayoutEffect` positions it before paint,
+  // so there is no visible flash at the origin.
+  const popStyle: CSSProperties | undefined = !portal
+    ? undefined
+    : pos
       ? {
           position: "fixed",
           left: pos.left,
@@ -440,7 +458,7 @@ export function Menu({
           bottom: pos.bottom,
           maxHeight: pos.maxHeight,
         }
-      : undefined;
+      : { position: "fixed", left: 0, top: 0, visibility: "hidden" };
   const popover = (
     <div
       ref={popRef}
@@ -458,7 +476,7 @@ export function Menu({
   return (
     <span className="wf-menu" ref={triggerRef}>
       {clonedTrigger}
-      {portal ? (pos ? createPortal(popover, document.body) : null) : popover}
+      {portal ? createPortal(popover, document.body) : popover}
     </span>
   );
 }

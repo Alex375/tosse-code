@@ -50,6 +50,8 @@ import { useBackendUsage } from "./backendUsage";
 import { useUltraBlast } from "../../store/ultraBlast";
 import { EffortGauge, clampEffort, effortLevelsForModel, type EffortLevel } from "./EffortGauge";
 import { RemoteControlChip } from "./RemoteControlChip";
+import { GoalChip } from "./GoalChip";
+import { isGoalCommand, markGoalSeen } from "../../store/goalStore";
 import {
   SlashCommandMenu,
   filterSlashCommands,
@@ -540,10 +542,16 @@ export const ConductorComposer = forwardRef<
     // mid-turn injection — the agent must see it in-flight, not only at the end.
     // Sending also (re)starts the stream lazily if the session is off/ended.
     useConversationsStore.getState().noteFirstMessage(session, t);
+    // A `/goal` command (set / clear / status) is plumbing for the goal chip, not conversational
+    // content: send it SILENTLY (no optimistic bubble / title / summary), matching the reloaded
+    // thread which drops it as noise. `markGoalSeen` arms the turn-edge refetch so a freshly set
+    // goal appears without every goalless conversation paying a per-turn transcript read.
+    const goalCmd = isGoalCommand(t);
+    if (goalCmd) markGoalSeen(session);
     // The worktree toggle only applies to the very first spawn of a conversation.
     // `queued`: busy at send time → the CLI will inject this mid-turn, so the
     // bubble shows a "pending" badge until the turn ends.
-    send.mutate({ text: t, images, worktree: useWorktree && isFresh, queued: busy });
+    send.mutate({ text: t, images, worktree: useWorktree && isFresh, queued: busy, silent: goalCmd });
     // `/reload-skills` makes the CLI re-scan on-disk skills; mirror that in the
     // `/` menu by re-fetching this cwd's catalogue (a fresh spawn reads disk
     // afresh), overwriting the once-per-session cache. Fire-and-forget.
@@ -1033,6 +1041,9 @@ export const ConductorComposer = forwardRef<
             `remoteControl/enable` (→ a device-pairing code). The chip adapts its active menu
             to the backend. */}
         <RemoteControlChip session={session} backend={backend} worktreeOnSpawn={useWorktree && isFresh} />
+        {/* Active `/goal` — a target button; click opens a popover with the condition + a clear
+            button. Renders nothing when no goal is active. Claude only (Codex has no `/goal`). */}
+        {!isCodex ? <GoalChip convId={session} /> : null}
         {/* Worktree checkbox — only before the session spawns (first message).
             Explicit empty/checked box so the on/off state is unambiguous. */}
         {isFresh ? (

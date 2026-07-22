@@ -10,6 +10,7 @@ import type {
   ContextFill,
   ConversationItem,
   ConversationRecord,
+  GoalState,
   DiskConversation,
   ClaudeAccountStatus,
   CodexAccountStatus,
@@ -611,6 +612,11 @@ export const mockCommands = {
     // No transcript in the browser mock; the scenario's baseState already carries a
     // context fill, so nothing to seed here.
     return ok({ context_tokens: null, context_window: null });
+  },
+
+  async loadSessionGoal(_sessionId: string): Promise<Result<GoalState | null, string>> {
+    // No transcript in the browser mock; goal-active scenarios seed the goal store directly.
+    return ok(null);
   },
 
   async rewindConversation(

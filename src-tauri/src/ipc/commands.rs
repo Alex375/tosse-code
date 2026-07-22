@@ -13,7 +13,8 @@ use crate::supervisor::codex::{self, CodexServer};
 use crate::supervisor::control::{self, PermissionDecision, PermissionMode};
 use crate::supervisor::history::{self, DiskConversation, IndexedConversation, SearchHit};
 use crate::supervisor::model::{
-    ContextFill, ConversationItem, SlashCommand, WorkflowJournal, WorkflowPhase, WorkflowRun,
+    ContextFill, ConversationItem, GoalState, SlashCommand, WorkflowJournal, WorkflowPhase,
+    WorkflowRun,
 };
 use crate::supervisor::session::{self, InitialControls, SessionHandle};
 use crate::supervisor::transport::{ImageAttachment, SpawnConfig};
@@ -525,6 +526,19 @@ pub async fn load_session_history(session_id: String) -> Result<Vec<Conversation
 #[specta::specta]
 pub async fn load_session_context(session_id: String) -> Result<ContextFill, String> {
     tokio::task::spawn_blocking(move || crate::supervisor::history::load_context_fill(&session_id))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Read a conversation's active `/goal` (Claude Code's native goal feature) from its on-disk
+/// transcript. The CLI writes goal state as `attachment` lines that are DISK-ONLY (never on the
+/// live stream), so the UI polls this at conversation load and on each turn edge to know whether a
+/// goal is active and show its condition. `None` when no goal is active. Pure file IO, off the
+/// async runtime via `spawn_blocking`.
+#[tauri::command]
+#[specta::specta]
+pub async fn load_session_goal(session_id: String) -> Result<Option<GoalState>, String> {
+    tokio::task::spawn_blocking(move || crate::supervisor::history::load_active_goal(&session_id))
         .await
         .map_err(|e| e.to_string())
 }

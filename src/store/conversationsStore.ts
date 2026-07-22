@@ -27,6 +27,7 @@ import { useConversationStore } from "./conversationStore";
 import { useBackgroundTasksStore } from "./backgroundTasksStore";
 import { useWorkflowLiveStore } from "./workflowLive";
 import { useRemoteControlStore } from "./remoteControl";
+import { refreshActiveGoal, useGoalStore } from "./goalStore";
 import { useCodexPlanUsageStore } from "./codexPlanUsage";
 import { useLastMessageSummaryStore } from "./lastMessageSummary";
 // The Codex default model — seeds a Codex conversation so its persisted `model` is
@@ -443,6 +444,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       clearPlanAnnotations(c.id);
       useGitViewStore.getState().clear(c.id);
       useRemoteControlStore.getState().clear(c.id);
+      useGoalStore.getState().clear(c.id);
       useLastMessageSummaryStore.getState().clear(c.id);
       autoTitlePending.delete(c.id);
       titleContext.delete(c.id);
@@ -522,6 +524,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     // Drop the bridge state too — the session was just stopped, so a lingering
     // "connected" chip would be a stale, misleading indicator.
     useRemoteControlStore.getState().clear(id);
+    // Drop its active-goal too — the conversation is gone.
+    useGoalStore.getState().clear(id);
     // Drop its Flight Deck last-message summary — the card is gone.
     useLastMessageSummaryStore.getState().clear(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
@@ -1235,6 +1239,11 @@ export async function loadConversationHistory(convId: string): Promise<void> {
   historyLoaded.add(convId); // mark before awaiting to avoid a double-load race
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv || !conv.sessionId) return;
+  // Seed the active `/goal` (Claude only) from the transcript — INDEPENDENT of the history load
+  // below, so it shows even when the RENDERED thread is empty: a conversation whose only on-disk
+  // content is a goal still has one, since its `/goal` command echo is now dropped as noise. Goal
+  // state is disk-only (not on the live stream).
+  if (conv.kind !== "codex") void refreshActiveGoal(convId, conv.sessionId);
   // Codex renders LIVE-only (a resumed thread re-streams nothing), so its cold history
   // comes from its on-disk ROLLOUT via a distinct reader (full tool fidelity); Claude
   // reads its transcript. Both return the same `ConversationItem[]` result shape.
@@ -1301,6 +1310,10 @@ export async function loadConversationHistory(convId: string): Promise<void> {
 export async function reloadConversationHistory(convId: string): Promise<void> {
   const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
   if (!conv?.sessionId) return;
+  // Re-seed the active `/goal` (Claude only) from the transcript — INDEPENDENT of the history reload
+  // below, so it survives an empty rendered timeline (a conversation whose only on-disk content is
+  // a goal, its command echo dropped as noise). Goal state is disk-only.
+  if (conv.kind !== "codex") void refreshActiveGoal(convId, conv.sessionId);
   // Codex cold history comes from its rollout reader; Claude from its transcript (see
   // loadConversationHistory). Same result shape either way.
   const res =
@@ -1510,6 +1523,7 @@ export async function wipeAllData(): Promise<void> {
   useWorkflowLiveStore.getState().clear();
   useGitViewStore.getState().clearAll();
   useRemoteControlStore.getState().clearAll();
+  useGoalStore.getState().clearAll();
   useCodexPlanUsageStore.getState().clear();
   useLastMessageSummaryStore.getState().clearAll();
 }

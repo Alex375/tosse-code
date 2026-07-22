@@ -411,6 +411,21 @@ async loadSessionContext(sessionId: string) : Promise<Result<ContextFill, string
 }
 },
 /**
+ * Read a conversation's active `/goal` (Claude Code's native goal feature) from its on-disk
+ * transcript. The CLI writes goal state as `attachment` lines that are DISK-ONLY (never on the
+ * live stream), so the UI polls this at conversation load and on each turn edge to know whether a
+ * goal is active and show its condition. `None` when no goal is active. Pure file IO, off the
+ * async runtime via `spawn_blocking`.
+ */
+async loadSessionGoal(sessionId: string) : Promise<Result<GoalState | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_session_goal", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Rewind a conversation IN PLACE by truncating its on-disk transcript at `target_id`,
  * dropping that message (USER target) or everything after its response (ASSISTANT
  * target). Destructive by design ("resume from here"): the removed turns are
@@ -2167,6 +2182,25 @@ unborn: boolean;
  * Changed entries (staged + unstaged + untracked), in git's order.
  */
 files: GitFileEntry[] }
+/**
+ * The active `/goal` of a conversation (Claude Code's native goal feature: Claude keeps
+ * working across turns until a small fast model confirms the condition holds). Reconstructed
+ * from the on-disk transcript — the CLI records goal state as `attachment` lines of
+ * `type:"goal_status"`, which are **DISK-ONLY** (never emitted on the live stream), so this is
+ * the only place to read it. `None` when no goal is active (never set, achieved, or cleared).
+ * Mirrors the CLI's own `restoreGoalFromTranscript`: walk the goal_status snapshots and keep the
+ * last un-terminated one.
+ */
+export type GoalState = { 
+/**
+ * The completion condition the user set (`/goal <condition>`).
+ */
+condition: string; 
+/**
+ * The evaluator's most recent reason (why the condition is / isn't met yet). `None`
+ * before the first post-turn evaluation.
+ */
+reason: string | null }
 /**
  * An image joined to a user turn: base64 bytes + their MIME type. Sent inside the
  * message `content` array as an `image` block (spec §3.10) — verified accepted by

@@ -90,6 +90,12 @@
 .ag-backend .wf-claude, .ag-backend .wf-codex { width:14px; height:14px; }
 .ag-backend .wf-claude { color:var(--wf-accent); }
 .ag-backend.codex .wf-codex { color:var(--wf-tx-hi); }
+/* Active `/goal` — a clickable coral target that opens the goal popover (shown only when a goal
+   is active). Reset button chrome + a subtle hover, matching the card's other clickable bits. */
+.ag-goal { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; font:inherit; padding:3px; margin:-3px 0; border:0; border-radius:6px; background:transparent; color:var(--wf-accent); cursor:pointer; transition:background .12s ease; }
+.ag-goal:hover, .ag-goal[data-open] { background:var(--wf-bg-2); }
+.ag-goal:focus-visible { outline:2px solid var(--wf-accent); outline-offset:1px; }
+.ag-goal .wf-ico { width:15px; height:15px; }
 /* "Last message you sent" — a few-word summary (≤6 words) of the user's latest message,
    under the tags. A small self-hugging box (not full width) with a coral "reply" arrow
    marking it as YOUR voice, distinct from the agent's activity line below. Live-only. */
