@@ -5,10 +5,12 @@
 //
 // Read from the on-disk transcript, NOT the live stream: the CLI records goal state as
 // `attachment` lines of `type:"goal_status"` that are DISK-ONLY (never emitted on stdout), so
-// there is nothing to intercept live. We fetch it from the Rust `load_session_goal` tail-scan at
-// conversation load/reload, once per Flight Deck card, and on turn edges — but ONLY for
-// conversations that have (or recently had) a goal (`goalSeen`), so a fleet of goalless
-// conversations never pays a per-turn transcript read. Kept in memory, keyed by the STABLE
+// there is nothing to intercept live. We fetch it from the Rust `load_session_goal`, which scans
+// the WHOLE transcript forward — NOT a tail read: a goal set early and never terminated is still
+// active at the end of the file, so no suffix would do (a raw-substring pre-filter keeps that
+// affordable; see `history.rs::load_active_goal`). Called at conversation load/reload, once per
+// Flight Deck card, and on turn edges — but ONLY for conversations that have (or recently had) a
+// goal (`goalSeen`), so a fleet of goalless conversations never pays a per-turn transcript read. Kept in memory, keyed by the STABLE
 // conversation id; the transcript is its durable source of truth, so nothing to persist. Unlike
 // Remote Control, a goal SURVIVES session end (the CLI restores it on `--resume`), so its state is
 // only forgotten when the conversation itself is removed (stop/remove/removeRepo/wipe).
@@ -32,6 +34,28 @@ const clearGraceUntil = new Map<string, number>();
 /** Post-send grace: how long after `/goal clear` is accepted we still ignore a "still active" read
  *  (the transcript write can lag the send). */
 const CLEAR_GRACE_MS = 2500;
+// Sequence of the LATEST read started per conversation. Three callers race on the same slice (a
+// Flight Deck card seeding, a history load/reload, the per-turn busy edge) and NOTHING sequences
+// their IPC responses, so a slow older read can land AFTER a newer one and overwrite fresh state
+// with stale (e.g. resurrecting a goal the newer read just saw cleared). Stamped at call start and
+// re-checked before every write — same convention as `lastMessageSummary.currentSeq`. Module-level
+// and non-reactive: it gates writes, it is never rendered.
+const currentSeq = new Map<string, number>();
+// Bounded post-send refresh ladder (delays in ms). `/goal` is a LOCAL command: it may complete
+// without ever producing a model turn, so the busy edge that normally refetches the goal may NEVER
+// fire — and both the thread bubble and the CLI stdout are suppressed, so without this the user
+// gets literally zero feedback until their next message. One immediate read isn't enough either:
+// the `goal_status` transcript write lands asynchronously, and a brand-new conversation has no
+// session id until `system/init` arrives. Hence a few widening attempts that stop as soon as the
+// value actually moves — never a poll loop (perf: a goalless fleet must pay nothing).
+const REFRESH_LADDER_MS = [200, 800, 2000, 4000];
+/** In-flight refresh ladder per conversation: at most one, so a new schedule supersedes the old and
+ *  teardown can cancel it (a leaked `setTimeout` would fire a read for a removed conversation). */
+interface RefreshLadder {
+  timer: ReturnType<typeof setTimeout> | null;
+  cancelled: boolean;
+}
+const refreshLadders = new Map<string, RefreshLadder>();
 
 interface GoalStore {
   /** convId → active goal, or `null` when no goal is active. Absent = not yet fetched. */
@@ -57,6 +81,10 @@ export const useGoalStore = create<GoalStore>((set) => ({
     goalSeen.delete(convId);
     clearingInFlight.delete(convId);
     clearGraceUntil.delete(convId);
+    // Dropping the seq also invalidates any read still in flight for this conversation: its
+    // stamp no longer matches, so it can't resurrect the key we're about to delete.
+    currentSeq.delete(convId);
+    cancelGoalRefresh(convId);
     set((s) => {
       if (!(convId in s.byConv)) return s;
       const next = { ...s.byConv };
@@ -68,6 +96,8 @@ export const useGoalStore = create<GoalStore>((set) => ({
     goalSeen.clear();
     clearingInFlight.clear();
     clearGraceUntil.clear();
+    currentSeq.clear();
+    for (const convId of [...refreshLadders.keys()]) cancelGoalRefresh(convId);
     set({ byConv: {} });
   },
 }));
@@ -123,11 +153,17 @@ export function endGoalClearing(convId: string): void {
  * session id (the transcript key); a conversation that never sent a message has none → no goal.
  * A read failure is non-fatal (the next turn-edge refetch corrects it) and leaves the last known
  * value untouched. Codex conversations have no Claude transcript, so callers gate this off for them.
+ * Concurrency-safe: several callers race, so each call stamps a per-conversation sequence and a
+ * response is DROPPED if a newer call started meanwhile (never overwrite fresh state with stale).
  */
 export async function refreshActiveGoal(convId: string, sessionId: string | null | undefined): Promise<void> {
+  const seq = (currentSeq.get(convId) ?? 0) + 1;
+  currentSeq.set(convId, seq);
   if (!sessionId) {
     if (clearingInFlight.has(convId)) return; // a clear is racing — don't clobber it
-    goalSeen.delete(convId);
+    // Same rule as the empty read below: while a ladder is pending, "no session id yet" is a
+    // transient, not a verdict, so it must not disarm the gate the composer just armed.
+    if (!refreshLadders.has(convId)) goalSeen.delete(convId);
     useGoalStore.getState().set(convId, null);
     return;
   }
@@ -136,6 +172,10 @@ export async function refreshActiveGoal(convId: string, sessionId: string | null
     console.error("loadSessionGoal failed:", res.error);
     return;
   }
+  // Stale response: a newer refresh started while this read was in flight (or the conversation was
+  // removed, dropping the seq). The newer answer is the truthful one, so drop this whole response
+  // — including its goalSeen / grace bookkeeping — instead of writing yesterday's transcript state.
+  if (currentSeq.get(convId) !== seq) return;
   // A clear is still in flight (send not yet accepted): keep the optimistic null, ignore any read.
   if (clearingInFlight.has(convId)) return;
   const grace = clearGraceUntil.get(convId);
@@ -151,8 +191,89 @@ export async function refreshActiveGoal(convId: string, sessionId: string | null
   }
   clearGraceUntil.delete(convId);
   if (res.data != null) goalSeen.add(convId);
-  else goalSeen.delete(convId);
+  // A refresh ladder is pending ⇒ a `/goal` send is still landing, so an empty read means "the
+  // transcript write hasn't caught up", NOT "no goal" — the same call the ladder's missing-session-id
+  // rung already makes, applied to the read itself. Disarming here would strip the gate the composer
+  // armed on the send, and that gate is what makes the per-turn refetch (see `hasSeenGoal` in
+  // useGlobalSessionEvents) the fallback the ladder hands over to when it runs out of rungs: a goal
+  // that lands late would then stay invisible on BOTH surfaces for the rest of the run, with nothing
+  // left to correct it. A genuinely goalless conversation is disarmed by the next ladder-free read,
+  // so the "goalless fleets read nothing per turn" perf gate self-heals within one turn.
+  else if (!refreshLadders.has(convId)) goalSeen.delete(convId);
   useGoalStore.getState().set(convId, res.data);
+}
+
+/** Cancel a conversation's pending refresh ladder, if any. Marks it cancelled as well as clearing
+ *  the timer, because a rung may be awaiting its IPC read right now — its continuation must not
+ *  re-arm the next rung after teardown. */
+function cancelGoalRefresh(convId: string): void {
+  const ladder = refreshLadders.get(convId);
+  if (!ladder) return;
+  ladder.cancelled = true;
+  if (ladder.timer !== null) clearTimeout(ladder.timer);
+  refreshLadders.delete(convId);
+}
+
+/**
+ * Refresh a conversation's goal shortly after a `/goal` command was sent, on a short bounded
+ * ladder (see `REFRESH_LADDER_MS`). Without it a `/goal <condition>` gives NO feedback at all: the
+ * bubble is suppressed, the CLI's stdout is suppressed, and being a local command it may never
+ * produce the model turn whose busy edge normally refetches the goal.
+ *
+ * Stops as soon as the stored value CHANGES relative to the snapshot taken here — which covers both
+ * directions (a goal appearing after `/goal <condition>`, and a goal disappearing after
+ * `/goal clear`) — otherwise runs out of rungs and gives up. Only one ladder per conversation: a
+ * new schedule supersedes the previous one, and `clear`/`clearAll` cancel it.
+ *
+ * `resolveSessionId` is re-invoked on EVERY attempt and supplied by the CALLER: a brand-new
+ * conversation has no session id until `system/init` lands, and this module must not import
+ * `conversationsStore` (which already imports this one — that would be a circular import).
+ */
+export function scheduleGoalRefresh(
+  convId: string,
+  resolveSessionId: () => string | null | undefined,
+): void {
+  cancelGoalRefresh(convId); // one ladder per conversation: the newest send wins
+  // ⚠️ `undefined` (never read) is NOT a value to settle on: to the user it means exactly what
+  // `null` (read, no goal) means — nothing shown. Coercing it here is what makes the ladder work on
+  // a BRAND-NEW conversation, the very case it exists for: ⌘N then `/goal <condition>` as the first
+  // message leaves the slot unseeded (`loadConversationHistory` bails for want of a session id, and
+  // no Flight Deck card is mounted to seed it), so the first rung reads before the `goal_status`
+  // write lands — and an `undefined → null` slot move would read as "the value changed" and settle
+  // the ladder on rung 1, on the exact case it was added for.
+  const before = useGoalStore.getState().byConv[convId] ?? null;
+  const ladder: RefreshLadder = { timer: null, cancelled: false };
+  refreshLadders.set(convId, ladder);
+
+  const settle = () => {
+    if (refreshLadders.get(convId) === ladder) refreshLadders.delete(convId);
+  };
+
+  const step = (rung: number) => {
+    if (ladder.cancelled) return;
+    if (rung >= REFRESH_LADDER_MS.length) return settle(); // out of rungs: the turn edge takes over
+    ladder.timer = setTimeout(() => {
+      ladder.timer = null;
+      if (ladder.cancelled) return;
+      const sessionId = resolveSessionId();
+      if (!sessionId) {
+        // No session id YET (the spawn hasn't reported `system/init`). Deliberately do NOT call
+        // `refreshActiveGoal` here: it treats a missing session id as an authoritative "no goal"
+        // and disarms `goalSeen` — which is exactly the gate the composer just armed for this
+        // send. In the ladder, a missing session id means "not yet", not "no goal" → skip the rung.
+        step(rung + 1);
+        return;
+      }
+      void refreshActiveGoal(convId, sessionId).then(() => {
+        if (ladder.cancelled) return;
+        // The value moved (goal appeared, or cleared) → the write landed, nothing left to wait for.
+        if (!sameGoal(before, useGoalStore.getState().byConv[convId] ?? null)) return settle();
+        step(rung + 1);
+      });
+    }, REFRESH_LADDER_MS[rung]);
+  };
+
+  step(0);
 }
 
 /** Seed a conversation's goal from its transcript the FIRST time it's needed this run (a Flight Deck

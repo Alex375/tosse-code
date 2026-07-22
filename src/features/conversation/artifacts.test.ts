@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { JsonValue, NormalizedBlock } from "../../ipc/client";
 import type { SessionEntry } from "../../store/types";
-import { artifactUrlFromResult, memoizedArtifacts, selectArtifacts } from "./artifacts";
+import {
+  artifactUrlFromResult,
+  clearAllArtifactsCache,
+  clearArtifactsCache,
+  memoizedArtifacts,
+  selectArtifacts,
+} from "./artifacts";
 
 const URL_A = "https://claude.ai/code/artifact/acecfb35-f63b-49c3-b835-d0c856695a94";
 const URL_B = "https://claude.ai/code/artifact/cfabdbd7-3294-4092-9927-80c6e795f0d2";
@@ -225,5 +231,47 @@ describe("memoizedArtifacts — ref stability", () => {
     const b = memoizedArtifacts("s-added", e2);
     expect(b).not.toBe(a);
     expect(b).toHaveLength(2);
+  });
+});
+
+describe("artifacts cache lifecycle", () => {
+  const oneArtifact = () =>
+    entryOf([{ id: "t1", blocks: [tuse("u1", { file_path: "/tmp/x.html", label: "keep" })] }], {
+      u1: SHORT("/tmp/x.html", URL_A),
+    });
+
+  it("clearArtifactsCache drops the memo — the SAME entry recomputes into a fresh array", () => {
+    const e = oneArtifact();
+    const a = memoizedArtifacts("s-clear", e);
+    expect(memoizedArtifacts("s-clear", e)).toBe(a); // memo hit (same timeline/toolResults refs)
+    clearArtifactsCache("s-clear");
+    const b = memoizedArtifacts("s-clear", e);
+    // Recomputed, not the pinned array: nothing of the removed conversation is retained.
+    expect(b).not.toBe(a);
+    expect(b).toEqual(a); // …but the derivation itself is unchanged
+  });
+
+  it("clearArtifactsCache only drops the session asked for", () => {
+    const e1 = oneArtifact();
+    const e2 = oneArtifact();
+    const a = memoizedArtifacts("s-keep-a", e1);
+    const b = memoizedArtifacts("s-keep-b", e2);
+    clearArtifactsCache("s-keep-a");
+    expect(memoizedArtifacts("s-keep-a", e1)).not.toBe(a);
+    expect(memoizedArtifacts("s-keep-b", e2)).toBe(b); // untouched neighbour keeps its memo
+  });
+
+  it("clearAllArtifactsCache drops every session (wipe-all)", () => {
+    const e1 = oneArtifact();
+    const e2 = oneArtifact();
+    const a = memoizedArtifacts("s-wipe-a", e1);
+    const b = memoizedArtifacts("s-wipe-b", e2);
+    clearAllArtifactsCache();
+    expect(memoizedArtifacts("s-wipe-a", e1)).not.toBe(a);
+    expect(memoizedArtifacts("s-wipe-b", e2)).not.toBe(b);
+  });
+
+  it("clearing an unknown session is a harmless no-op", () => {
+    expect(() => clearArtifactsCache("never-cached")).not.toThrow();
   });
 });

@@ -63,8 +63,11 @@ export interface Artifact {
   /** Display title: the most recent non-empty label (last-known-good, consistent with
    *  favicon/description), else the file's basename (the wire carries no HTML <title>). */
   title: string;
-  /** file_path of the newest version — an EPHEMERAL temp scratchpad path, may be deleted;
-   *  never opened locally (open the hosted URL instead). */
+  /** The file_path every version of this artifact was published from — INVARIANT, since it IS
+   *  the grouping key (a different path is a different artifact). Kept under the historical
+   *  `latest…` name for its readers. An EPHEMERAL temp scratchpad path: it may already be gone,
+   *  so it is only ever a best-effort render source, never the artifact's identity (the hosted
+   *  URL is). */
   latestFilePath: string;
   /** Every publish, oldest-first. */
   versions: ArtifactVersion[];
@@ -131,8 +134,9 @@ export function selectArtifacts(entry: SessionEntry | undefined): Artifact[] {
       art.versions.push({ label, toolUseId: b.id, filePath, description, favicon, isError });
       // Header fields = LAST-KNOWN-GOOD (timeline order = oldest→newest): keep the last non-null we
       // see, so a republish that omits a field doesn't blank the header. Any version's URL is the
-      // artifact's URL (stable across republishes).
-      art.latestFilePath = filePath;
+      // artifact's URL (stable across republishes). `latestFilePath` is NOT refreshed here: it is
+      // the grouping key, so every version of this artifact carries the very same path — writing it
+      // per version would only re-assign the identical value and imply, wrongly, that it can drift.
       if (favicon) art.favicon = favicon;
       if (description) art.description = description;
       if (url) art.url = url;
@@ -195,6 +199,23 @@ export function memoizedArtifacts(session: string, entry: SessionEntry | undefin
   }
   cache.set(session, { timeline: entry.timeline, toolResults: entry.toolResults, sig, result });
   return result;
+}
+
+/**
+ * Forget one conversation's memoised artifact list. MUST be called on every conversation-removal
+ * path (see conversationsStore, alongside `useGoalStore.clear`): the cache entry pins the whole
+ * `timeline` AND `toolResults` of a conversation that no longer exists — and tool results carry
+ * full tool output (base64 images among them), so a session's worth of memory would be held for
+ * the rest of the run. It is also a correctness guard: a stale entry keyed by a reused id would
+ * hand back another conversation's artifacts.
+ */
+export function clearArtifactsCache(convId: string): void {
+  cache.delete(convId);
+}
+
+/** Forget EVERY conversation's memoised artifact list (wipe-all). */
+export function clearAllArtifactsCache(): void {
+  cache.clear();
 }
 
 /** The artifacts published in a conversation, oldest-first. Empty when none (Codex conversations

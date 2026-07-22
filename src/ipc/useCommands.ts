@@ -17,7 +17,12 @@ import { worktreesKey } from "./useWorktrees";
 import { useRemoteControlStore } from "../store/remoteControl";
 import { triggerLastMessageSummary } from "../store/lastMessageSummary";
 import { buildCodexControls } from "../features/conversation/codexControls";
-import { endGoalClearing, refreshActiveGoal, settleGoalClearing } from "../store/goalStore";
+import {
+  endGoalClearing,
+  refreshActiveGoal,
+  scheduleGoalRefresh,
+  settleGoalClearing,
+} from "../store/goalStore";
 
 // These hooks are keyed by a conversation's STABLE id, not its live session
 // handle. Reads (the message store) key by the stable id; commands target the
@@ -61,14 +66,21 @@ export function useSendMessage(convId: string) {
     }) => {
       // The core does not echo user turns, so append optimistically (keyed by the
       // stable id) before sending — instant even while the session spawns.
-      if (!silent) addUserTurn(convId, text, queued, images);
-      // Sending the next message consumes any pending reminder: the user has moved
-      // on from the previous result. `addUserTurn` clears the LIVE turnSeen; clear
-      // the PERSISTED reminder too so it doesn't re-surface on the next restart.
-      useConversationsStore.getState().setReminder(convId, null);
-      // Sending IS activity: float the conversation to the top now and persist
-      // the new timestamp so the recency order survives a restart.
-      useConversationsStore.getState().noteActivity(convId, { persist: true });
+      if (!silent) {
+        addUserTurn(convId, text, queued, images);
+        // Sending the next message consumes any pending reminder: the user has moved on from
+        // the previous result. `addUserTurn` clears the LIVE turnSeen, so the PERSISTED reminder
+        // must be cleared under the SAME condition — a silent send does neither. Otherwise a
+        // `/goal` would swallow an unread attention reminder (persisted side cleared) while the
+        // live side still says "unread": the two halves would disagree and the reminder would
+        // vanish without the user ever seeing the result it pointed at.
+        useConversationsStore.getState().setReminder(convId, null);
+        // Sending IS activity: float the conversation to the top now and persist the new
+        // timestamp so the recency order survives a restart. Also skipped when silent: a `/goal`
+        // is plumbing, not work on this conversation, so it must not reshuffle the fleet's
+        // recency order (and must not persist a write for it either).
+        useConversationsStore.getState().noteActivity(convId, { persist: true });
+      }
       // Lazy spawn: a conversation has no live process until its first message
       // (or its first message after being stopped/ended).
       const handle = await ensureConversationSession(convId, { worktree });
@@ -95,6 +107,20 @@ export function useSendMessage(convId: string) {
         // arrives via SessionSummaryEvent. Regenerated on every send (unlike the title,
         // which settles). `handle` is the live session we just sent through.
         triggerLastMessageSummary(convId, handle, text);
+      } else {
+        // The send was a silent `/goal` and it was ACCEPTED. Nothing else will tell the user it
+        // took: no bubble, no stdout, and — `/goal` being a LOCAL command — possibly no model turn
+        // at all, so the busy edge that normally refetches the goal may never fire. Refresh from
+        // the transcript now, on a short bounded ladder because the `goal_status` write lands
+        // asynchronously (and this conversation may not have a session id until `system/init`).
+        // The session id is resolved lazily HERE because `goalStore` must not import
+        // `conversationsStore` (which imports it — circular).
+        scheduleGoalRefresh(
+          convId,
+          () =>
+            useConversationsStore.getState().conversations.find((c) => c.id === convId)?.sessionId ??
+            null,
+        );
       }
       if (worktree) {
         // The first spawn just created a worktree — refresh the repo's list so

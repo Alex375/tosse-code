@@ -8,11 +8,43 @@
 // published; it never issues a publish/list call. The portal escapes the composer's overflow the
 // same way <BackgroundTaskBadge> does.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Dot, Ico } from "../../ui/kit";
 import { useArtifacts, type Artifact } from "./artifacts";
 import { openArtifactView } from "./artifactOpen";
+
+/** Fixed placement of the portaled popover, anchored to the chip. */
+interface ArtifactPopPos {
+  left: number;
+  top?: number;
+  bottom?: number;
+  maxHeight: number;
+}
+
+/** Popover width (kept in sync with `.cv-artpop { max-width }` in conductor-conversation.css) —
+ *  used to clamp the popover inside the viewport before it has been measured. */
+const POP_W = 320;
+
+/**
+ * Pure: where to put the popover given the chip's live rect. Extracted so the placement can be
+ * RE-RUN cheaply from a resize/scroll listener (see the effect below) instead of being frozen at
+ * click time — a frozen `position:fixed` popover visibly detaches from its chip as soon as the
+ * window resizes or an ancestor scrolls.
+ */
+function artifactPopPlacement(r: DOMRect): ArtifactPopPos {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const left = Math.min(Math.max(8, r.left), vw - POP_W - 8);
+  const belowSpace = vh - r.bottom - 12;
+  const aboveSpace = r.top - 12;
+  // The chip lives in the composer near the bottom, so there is usually more room ABOVE:
+  // open upward unless below genuinely has more space.
+  if (belowSpace > aboveSpace && belowSpace >= 220) {
+    return { left, top: r.bottom + 6, maxHeight: belowSpace };
+  }
+  return { left, bottom: vh - r.top + 6, maxHeight: aboveSpace };
+}
 
 /** One artifact in the popover: its favicon + title + description + version count, opening the
  *  artifact in the in-app viewer; its versions expand inline (informational — the wire exposes one
@@ -82,15 +114,15 @@ function ArtifactRow({ art, session, onOpened }: { art: Artifact; session: strin
   );
 }
 
+// ⚠️ Do NOT migrate this popover to the shared <Menu portal> component, tempting as the overlap
+// looks: `Menu` closes on ANY click inside its popover (`onClick={() => setOpen(false)}` on the
+// popover root), which would make the per-artifact "vN" version-expand button close the popover
+// instead of expanding it. This one owns its own portal + placement precisely to keep clicks
+// inside it non-dismissing; only a row click (which navigates away) closes it.
 export function ArtifactsChip({ session }: { session: string }) {
   const artifacts = useArtifacts(session);
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{
-    left: number;
-    top?: number;
-    bottom?: number;
-    maxHeight: number;
-  } | null>(null);
+  const [pos, setPos] = useState<ArtifactPopPos | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
 
   // Close on Escape while open. This popover owns Escape while open, so stopPropagation keeps an
@@ -107,28 +139,33 @@ export function ArtifactsChip({ session }: { session: string }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
 
+  // Place the popover while open, and KEEP IT GLUED to the chip: the placement is `position:fixed`
+  // in a portal, so anything that moves the chip in viewport space (a window resize, an ancestor
+  // scrolling) leaves a stale popover floating away from its trigger. Same treatment as the shared
+  // <Menu portal>: measure on open, then re-measure on resize and on scroll in the CAPTURE phase
+  // (scroll doesn't bubble — a capture listener on `window` is the only way to see an inner
+  // scroller move). Layout effect so the first placement lands BEFORE paint (no flash at 0,0), and
+  // measuring is a single `getBoundingClientRect` + arithmetic, so the scroll path stays cheap.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const measure = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setPos(artifactPopPlacement(r));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [open]);
+
   const n = artifacts.length;
   if (n === 0) return null;
-
-  function toggle() {
-    const r = btnRef.current?.getBoundingClientRect();
-    if (r) {
-      const POP_W = 320;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const left = Math.min(Math.max(8, r.left), vw - POP_W - 8);
-      const belowSpace = vh - r.bottom - 12;
-      const aboveSpace = r.top - 12;
-      // The chip lives in the composer near the bottom, so there is usually more room ABOVE:
-      // open upward unless below genuinely has more space.
-      if (belowSpace > aboveSpace && belowSpace >= 220) {
-        setPos({ left, top: r.bottom + 6, maxHeight: belowSpace });
-      } else {
-        setPos({ left, bottom: vh - r.top + 6, maxHeight: aboveSpace });
-      }
-    }
-    setOpen((o) => !o);
-  }
 
   return (
     <>
@@ -137,7 +174,7 @@ export function ArtifactsChip({ session }: { session: string }) {
         type="button"
         className="wf-chip"
         data-open={open || undefined}
-        onClick={toggle}
+        onClick={() => setOpen((o) => !o)}
         title={`${n} artifact${n === 1 ? "" : "s"} published in this conversation`}
         aria-label="Artifacts"
       >

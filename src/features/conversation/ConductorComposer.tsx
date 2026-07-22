@@ -542,13 +542,18 @@ export const ConductorComposer = forwardRef<
     // message above." Holding it app-side until the turn ends would defeat that
     // mid-turn injection — the agent must see it in-flight, not only at the end.
     // Sending also (re)starts the stream lazily if the session is off/ended.
-    useConversationsStore.getState().noteFirstMessage(session, t);
     // A `/goal` command (set / clear / status) is plumbing for the goal chip, not conversational
     // content: send it SILENTLY (no optimistic bubble / title / summary), matching the reloaded
     // thread which drops it as noise. `markGoalSeen` arms the turn-edge refetch so a freshly set
     // goal appears without every goalless conversation paying a per-turn transcript read.
     const goalCmd = isGoalCommand(t);
     if (goalCmd) markGoalSeen(session);
+    // Same invariant for the optimistic PLACEHOLDER name — hence computed BEFORE this call: a
+    // fresh conversation whose first message is `/goal <condition>` must not end up named after
+    // that command in the sidebar and on its Flight Deck card. Goal plumbing is invisible
+    // everywhere else, so it must not name the conversation either; the conversation stays
+    // auto-title-eligible and gets named by the first REAL message instead.
+    if (!goalCmd) useConversationsStore.getState().noteFirstMessage(session, t);
     // The worktree toggle only applies to the very first spawn of a conversation.
     // `queued`: busy at send time → the CLI will inject this mid-turn, so the
     // bubble shows a "pending" badge until the turn ends.

@@ -533,8 +533,13 @@ pub async fn load_session_context(session_id: String) -> Result<ContextFill, Str
 /// Read a conversation's active `/goal` (Claude Code's native goal feature) from its on-disk
 /// transcript. The CLI writes goal state as `attachment` lines that are DISK-ONLY (never on the
 /// live stream), so the UI polls this at conversation load and on each turn edge to know whether a
-/// goal is active and show its condition. `None` when no goal is active. Pure file IO, off the
-/// async runtime via `spawn_blocking`.
+/// goal is active and show its condition. `None` when no goal is active.
+///
+/// Reads the transcript in FULL, forward (a goal set early and never terminated is still active
+/// at the end of the file, so no tail slice would do) — but a raw-substring pre-filter rejects
+/// every line that can't carry goal state before it reaches the JSON parser, which is what keeps
+/// a whole Flight Deck fleet seeding its goals affordable. Pure file IO, off the async runtime
+/// via `spawn_blocking`.
 #[tauri::command]
 #[specta::specta]
 pub async fn load_session_goal(session_id: String) -> Result<Option<GoalState>, String> {

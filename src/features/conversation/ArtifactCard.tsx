@@ -1,19 +1,19 @@
 // The inline card for ONE `Artifact` publish, rendered in the thread where Claude published
 // it (its own segment — never grouped into a run, never hidden by clean-output). Clicking it
-// opens the hosted artifact on claude.ai in the browser.
+// routes through the shared `openArtifactView`: the in-app viewer when the local temp file is
+// still there, else the hosted page on claude.ai.
 //
 // Like WorkflowCard, it derives its link from the plain-text tool_result (the URL is only there,
 // not in the tool_use input). Until the result lands it shows a "Publishing…" pending state; if
 // the ack is ever reworded past the canonical URL shape it degrades to a non-clickable card
-// (no dead link) rather than guessing. We NEVER open the local file_path — it is an ephemeral
-// temp path (and there is no local HTML renderer); the durable, versioned copy is the hosted URL.
+// (no dead link) rather than guessing. The local file_path is only ever a RENDER source (it is an
+// ephemeral temp path that disappears); the durable, versioned copy is always the hosted URL.
 
 import type { JsonValue } from "../../ipc/client";
 import { field } from "../../agent/ask";
 import { resultText } from "../../agent/subagentMeta";
 import { useToolResult } from "../../store/conversationStore";
 import { Dot, Ico } from "../../ui/kit";
-import { useIsCodex } from "./ConvMark";
 import { artifactUrlFromResult } from "./artifacts";
 import { openArtifactView } from "./artifactOpen";
 import { basename } from "./toolMeta";
@@ -28,11 +28,12 @@ export function ArtifactCard({
   input: JsonValue;
 }) {
   const result = useToolResult(session, toolUseId);
-  // Defensive: `Artifact` is a Claude-only tool, so a Codex thread never yields an artifact
-  // segment — but guard anyway so a drifting classification can never render one on Codex.
-  const isCodex = useIsCodex(session);
-  if (isCodex) return null;
-
+  // NO backend guard on purpose. `Artifact` is a Claude-only tool today, but the card is
+  // backend-agnostic and DEGRADES instead of vanishing: the segment is only ever produced for a
+  // tool literally named `Artifact` carrying a `file_path` (see toolGroup.ts), and with no
+  // parseable URL the card simply renders non-clickable ("Unavailable") — never a dead link.
+  // An earlier `if (isCodex) return null` made the whole tool call DISAPPEAR from the thread,
+  // which is a silent drop: the user would see the model act with no trace of what it did.
   const url = artifactUrlFromResult(result?.content);
   const favicon = field(input, "favicon");
   const label = field(input, "label")?.trim() || null;

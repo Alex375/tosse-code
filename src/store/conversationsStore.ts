@@ -43,6 +43,10 @@ import {
   clearAllComposerAttachments,
 } from "../features/conversation/composerAttachments";
 import {
+  clearArtifactsCache,
+  clearAllArtifactsCache,
+} from "../features/conversation/artifacts";
+import {
   clearCodexControls,
   clearAllCodexControls,
   DEFAULT_CODEX_EFFORT,
@@ -445,6 +449,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
       useGitViewStore.getState().clear(c.id);
       useRemoteControlStore.getState().clear(c.id);
       useGoalStore.getState().clear(c.id);
+      // Drop the derived artifacts memo: it pins this conversation's timeline + tool results.
+      clearArtifactsCache(c.id);
       useLastMessageSummaryStore.getState().clear(c.id);
       autoTitlePending.delete(c.id);
       titleContext.delete(c.id);
@@ -526,6 +532,9 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     useRemoteControlStore.getState().clear(id);
     // Drop its active-goal too — the conversation is gone.
     useGoalStore.getState().clear(id);
+    // Drop the derived artifacts memo, which pins the (now dropped) timeline + tool results —
+    // otherwise the heaviest part of a deleted conversation outlives it for the whole run.
+    clearArtifactsCache(id);
     // Drop its Flight Deck last-message summary — the card is gone.
     useLastMessageSummaryStore.getState().clear(id);
     syncToCore("deleteConversation", () => commands.deleteConversation(id));
@@ -1524,6 +1533,7 @@ export async function wipeAllData(): Promise<void> {
   useGitViewStore.getState().clearAll();
   useRemoteControlStore.getState().clearAll();
   useGoalStore.getState().clearAll();
+  clearAllArtifactsCache();
   useCodexPlanUsageStore.getState().clear();
   useLastMessageSummaryStore.getState().clearAll();
 }
