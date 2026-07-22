@@ -32,6 +32,7 @@ export type {
   GitDiff,
   GitFileEntry,
   GitStatus,
+  GoalState,
   ImageContent,
   JsonValue,
   MarketplaceInfo,

@@ -893,3 +893,13 @@
   background:var(--wf-run-bg);
   border-color:#27513f;
 }
+
+/* Active `/goal` button in the composer foot bar: a small target chip (icon only — goals are
+   long, so the condition lives in the click-popover, not inline). Only mounts when a goal is
+   active (see GoalChip). The target glyph is coral to read as "on". */
+.cv-goal-chip .wf-ico:first-child { color:var(--wf-accent); opacity:.95; }
+/* The goal popover: header + full condition (wraps) + latest reason + a clear action. Reuses
+   the shared .wf-pop-h / .wf-pop-act; sizing mirrors the context popover (.wf-pop-ctx). */
+.cv-goal-pop { min-width:210px; max-width:min(320px, calc(100vw - 24px)); padding:10px 12px; display:flex; flex-direction:column; gap:7px; }
+.cv-goal-pop-cond { font-size:12.5px; line-height:1.4; color:var(--wf-tx-hi); overflow-wrap:break-word; white-space:pre-wrap; }
+.cv-goal-pop-reason { font-size:11px; line-height:1.4; color:var(--wf-tx-lo); overflow-wrap:break-word; }

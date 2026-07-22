@@ -143,6 +143,22 @@ pub struct ContextFill {
     pub context_window: Option<u64>,
 }
 
+/// The active `/goal` of a conversation (Claude Code's native goal feature: Claude keeps
+/// working across turns until a small fast model confirms the condition holds). Reconstructed
+/// from the on-disk transcript — the CLI records goal state as `attachment` lines of
+/// `type:"goal_status"`, which are **DISK-ONLY** (never emitted on the live stream), so this is
+/// the only place to read it. `None` when no goal is active (never set, achieved, or cleared).
+/// Mirrors the CLI's own `restoreGoalFromTranscript`: walk the goal_status snapshots and keep the
+/// last un-terminated one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+pub struct GoalState {
+    /// The completion condition the user set (`/goal <condition>`).
+    pub condition: String,
+    /// The evaluator's most recent reason (why the condition is / isn't met yet). `None`
+    /// before the first post-turn evaluation.
+    pub reason: Option<String>,
+}
+
 /// Subscription rate-limit status, normalized from `rate_limit_event.rate_limit_info`.
 /// Carries only what the stream-json protocol exposes: the coarse `status`, the
 /// reset time, the window type, and whether overage is active. The precise usage

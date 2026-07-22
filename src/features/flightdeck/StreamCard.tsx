@@ -18,6 +18,7 @@ import { LastMessagePeek } from "./LastMessagePeek";
 import { TodoPeek } from "./TodoPeek";
 import { CardEffort } from "./CardEffort";
 import { CardContext } from "./CardContext";
+import { CardGoal } from "./CardGoal";
 import { useFlightdeckModal } from "./flightdeckModalStore";
 
 /** Relative "last activity" stamp — "14 min ago" / "2 h ago". `now` comes from
@@ -136,6 +137,9 @@ export function StreamCard({
       <StateBlock convId={conv.id} status={status} />
 
       <div className="ag-card-foot">
+        {/* Active `/goal` — a clickable target opening the SAME goal popover as the composer
+            (condition + reason + clear). Renders nothing when no goal is active. */}
+        <CardGoal convId={conv.id} />
         {/* Context meter — clickable, opening the same context/usage popover as the
             composer's ContextRing (renders nothing until usage is reported). */}
         <CardContext convId={conv.id} />
