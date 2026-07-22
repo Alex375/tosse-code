@@ -462,8 +462,10 @@
 .wf-pop-usage { display:flex; flex-direction:column; gap:4px; }
 .wf-pop-usage-top { display:flex; align-items:center; gap:8px; justify-content:space-between; font-size:11.5px; color:var(--wf-tx-lo); }
 /* The label is data-driven for model-scoped caps (it carries the model's name), so it must
-   never push the figure out of the popover: it ellipsises, the % + reset never shrinks. */
-.wf-pop-usage-top > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+   never push the figure out of the popover: it ellipsises, the % + reset never shrinks.
+   Targeted by CLASS, not by position: a `:first-child` rule would silently stop applying if
+   this row ever gained a leading element, and the breakage would only surface on a long name. */
+.wf-pop-usage-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .wf-pop-usage-top .wf-mono { color:var(--wf-tx-hi); flex:none; }
 /* Actionable error card when the real % can't be fetched (cause + next step). */
 .wf-pop-err { display:flex; flex-direction:column; gap:4px; }

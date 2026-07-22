@@ -764,7 +764,12 @@ function UsageRow({
   return (
     <div className="wf-pop-usage">
       <div className="wf-pop-usage-top">
-        <span>{label}</span>
+        {/* Explicitly classed, NOT styled via a positional selector: a model-scoped cap's
+            label is data-driven (it carries the model's name), so it is the one label that
+            can be long enough to push the figure out of the popover, and it MUST keep its
+            ellipsis. A `:first-child` rule would stop applying the day this markup gains a
+            leading element — silently, the failure only showing up on a long model name. */}
+        <span className="wf-pop-usage-label">{label}</span>
         <span className="wf-mono">
           {pct}%{reset ? ` · ${fmtReset(reset)}` : ""}
         </span>
