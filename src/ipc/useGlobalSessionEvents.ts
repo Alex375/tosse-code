@@ -36,6 +36,7 @@ import {
 } from "../store/backgroundTasksStore";
 import { useWorkflowLiveStore } from "../store/workflowLive";
 import { useConversationsStore, repoName } from "../store/conversationsStore";
+import { hasSeenGoal, refreshActiveGoal } from "../store/goalStore";
 import { useDisplay } from "../store/display";
 import { agentStatusForEntry } from "../agent/useAgentStatus";
 import { useCommandsStore } from "../store/commandsStore";
@@ -332,6 +333,16 @@ export function useGlobalSessionEvents(): void {
           prev.awaiting_permission !== payload.state.awaiting_permission
         ) {
           syncReminderFromLive(session);
+        }
+        // A `/goal` is achieved/cleared/re-evaluated at turn boundaries, and its state lives ONLY in
+        // the transcript (never on the live stream) — so re-read it on a busy edge. Gated on
+        // `hasSeenGoal`: ONLY conversations that have (or recently had) a goal pay this transcript
+        // read; a conversation that never used `/goal` reads nothing per turn (perf). A freshly set
+        // goal is armed via `markGoalSeen` on the composer send. Claude only.
+        if (prev.busy !== payload.state.busy && hasSeenGoal(session)) {
+          const conv = useConversationsStore.getState().conversations.find((c) => c.id === session);
+          if (conv && conv.kind !== "codex")
+            void refreshActiveGoal(session, payload.state.session_id ?? conv.sessionId);
         }
       }
       // The session reports its current cwd via system/init (re-sent per turn).

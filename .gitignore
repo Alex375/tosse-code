@@ -18,6 +18,9 @@ src-tauri/gen/
 .playwright-mcp/
 *.local.png
 screenshots/
+# Console/network dumps captured while verifying a behaviour in the browser
+# (e.g. proving the artifact CSP blocks an external request). Throwaway by nature.
+*.log
 
 # === IDE / OS ===
 .DS_Store

@@ -17,6 +17,12 @@ import { worktreesKey } from "./useWorktrees";
 import { useRemoteControlStore } from "../store/remoteControl";
 import { triggerLastMessageSummary } from "../store/lastMessageSummary";
 import { buildCodexControls } from "../features/conversation/codexControls";
+import {
+  endGoalClearing,
+  refreshActiveGoal,
+  scheduleGoalRefresh,
+  settleGoalClearing,
+} from "../store/goalStore";
 
 // These hooks are keyed by a conversation's STABLE id, not its live session
 // handle. Reads (the message store) key by the stable id; commands target the
@@ -47,22 +53,34 @@ export function useSendMessage(convId: string) {
       worktree,
       queued,
       images,
+      silent,
     }: {
       text: string;
       worktree?: boolean;
       queued?: boolean;
       images?: UserTurnImage[];
+      // `silent`: send WITHOUT the optimistic bubble / title / summary — for `/goal` commands,
+      // whose plumbing is represented by the goal chip, not a thread turn (keeps live == reload,
+      // since the Rust normalizer also drops the goal echo + stdout on both paths).
+      silent?: boolean;
     }) => {
       // The core does not echo user turns, so append optimistically (keyed by the
       // stable id) before sending — instant even while the session spawns.
-      addUserTurn(convId, text, queued, images);
-      // Sending the next message consumes any pending reminder: the user has moved
-      // on from the previous result. `addUserTurn` clears the LIVE turnSeen; clear
-      // the PERSISTED reminder too so it doesn't re-surface on the next restart.
-      useConversationsStore.getState().setReminder(convId, null);
-      // Sending IS activity: float the conversation to the top now and persist
-      // the new timestamp so the recency order survives a restart.
-      useConversationsStore.getState().noteActivity(convId, { persist: true });
+      if (!silent) {
+        addUserTurn(convId, text, queued, images);
+        // Sending the next message consumes any pending reminder: the user has moved on from
+        // the previous result. `addUserTurn` clears the LIVE turnSeen, so the PERSISTED reminder
+        // must be cleared under the SAME condition — a silent send does neither. Otherwise a
+        // `/goal` would swallow an unread attention reminder (persisted side cleared) while the
+        // live side still says "unread": the two halves would disagree and the reminder would
+        // vanish without the user ever seeing the result it pointed at.
+        useConversationsStore.getState().setReminder(convId, null);
+        // Sending IS activity: float the conversation to the top now and persist the new
+        // timestamp so the recency order survives a restart. Also skipped when silent: a `/goal`
+        // is plumbing, not work on this conversation, so it must not reshuffle the fleet's
+        // recency order (and must not persist a write for it either).
+        useConversationsStore.getState().noteActivity(convId, { persist: true });
+      }
       // Lazy spawn: a conversation has no live process until its first message
       // (or its first message after being stopped/ended).
       const handle = await ensureConversationSession(convId, { worktree });
@@ -75,17 +93,35 @@ export function useSendMessage(convId: string) {
       const conv = useConversationsStore.getState().conversations.find((c) => c.id === convId);
       const codexControls = conv?.kind === "codex" ? buildCodexControls(conv) : null;
       const res = await unwrap(commands.sendMessage(handle, text, wireImages, codexControls));
-      // On each of the first few messages of a still-untitled conversation, ask the
-      // binary to (re)generate a smart title from the accumulated intent (capped, then
-      // frozen; no-op once renamed / over the cap / no live session). Like the VS Code
-      // extension, but tracking the evolving topic. The title arrives via
-      // SessionTitleEvent and replaces the optimistic placeholder name.
-      useConversationsStore.getState().triggerAutoTitle(convId, text);
-      // Also (re)generate the Flight Deck's few-word summary of THIS message (the
-      // "last ask"). Instant truncation now, replaced by a ≤6-word Haiku summary that
-      // arrives via SessionSummaryEvent. Regenerated on every send (unlike the title,
-      // which settles). `handle` is the live session we just sent through.
-      triggerLastMessageSummary(convId, handle, text);
+      // A silent `/goal` command is not conversational content, so it must not drive the title or
+      // the Flight Deck "last ask" peek either — otherwise goal plumbing would leak into those.
+      if (!silent) {
+        // On each of the first few messages of a still-untitled conversation, ask the
+        // binary to (re)generate a smart title from the accumulated intent (capped, then
+        // frozen; no-op once renamed / over the cap / no live session). Like the VS Code
+        // extension, but tracking the evolving topic. The title arrives via
+        // SessionTitleEvent and replaces the optimistic placeholder name.
+        useConversationsStore.getState().triggerAutoTitle(convId, text);
+        // Also (re)generate the Flight Deck's few-word summary of THIS message (the
+        // "last ask"). Instant truncation now, replaced by a ≤6-word Haiku summary that
+        // arrives via SessionSummaryEvent. Regenerated on every send (unlike the title,
+        // which settles). `handle` is the live session we just sent through.
+        triggerLastMessageSummary(convId, handle, text);
+      } else {
+        // The send was a silent `/goal` and it was ACCEPTED. Nothing else will tell the user it
+        // took: no bubble, no stdout, and — `/goal` being a LOCAL command — possibly no model turn
+        // at all, so the busy edge that normally refetches the goal may never fire. Refresh from
+        // the transcript now, on a short bounded ladder because the `goal_status` write lands
+        // asynchronously (and this conversation may not have a session id until `system/init`).
+        // The session id is resolved lazily HERE because `goalStore` must not import
+        // `conversationsStore` (which imports it — circular).
+        scheduleGoalRefresh(
+          convId,
+          () =>
+            useConversationsStore.getState().conversations.find((c) => c.id === convId)?.sessionId ??
+            null,
+        );
+      }
       if (worktree) {
         // The first spawn just created a worktree — refresh the repo's list so
         // the indicator/manager show it.
@@ -176,6 +212,41 @@ export function useCodexCompact(convId: string) {
     onError: (err) => {
       const message = err instanceof Error ? err.message : String(err);
       addErrorTurn(convId, `Couldn't compact: ${message}`);
+    },
+  });
+}
+
+/** Clear a conversation's active `/goal` (Claude Code's native goal feature). Sends the native
+ *  `/goal clear` local command to the session but WITHOUT an optimistic user turn — the goal is
+ *  represented by the dedicated goal UI, so clearing it must not drop `/goal clear` into the thread
+ *  (the Rust normalizer also drops the wire echo + its "No goal set" stdout). The caller arms the
+ *  clear guard (`beginGoalClearing`) and hides the chip optimistically; this hook settles the guard
+ *  once the send is accepted, and on FAILURE rolls the chip back to the still-active goal — never
+ *  leaving it wrongly hidden over a live goal. Resumes a stopped session if needed, since the goal
+ *  lives in the CLI session and only `/goal clear` actually clears it. */
+export function useClearGoal(convId: string) {
+  const addErrorTurn = useConversationStore((s) => s.addErrorTurn);
+  const sessionId = () =>
+    useConversationsStore.getState().conversations.find((c) => c.id === convId)?.sessionId ?? null;
+  return useMutation({
+    mutationFn: async () => {
+      const handle = await ensureConversationSession(convId);
+      // No `addUserTurn`: silent send (Claude → no per-turn codex controls).
+      return unwrap(commands.sendMessage(handle, "/goal clear", [], null));
+    },
+    onSuccess: () => {
+      // The send was accepted: switch to the post-send grace window, then refetch so a confirmed
+      // "no goal" read settles the guard (the optimistic null was correct).
+      settleGoalClearing(convId);
+      void refreshActiveGoal(convId, sessionId());
+    },
+    onError: (err) => {
+      // The clear never reached the CLI (e.g. spawn/resume failed): release the guard and refetch
+      // the TRUE state, restoring the still-active goal — the optimistic null was wrong.
+      endGoalClearing(convId);
+      void refreshActiveGoal(convId, sessionId());
+      const message = err instanceof Error ? err.message : String(err);
+      addErrorTurn(convId, `Couldn't clear the goal: ${message}`);
     },
   });
 }

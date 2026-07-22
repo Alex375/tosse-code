@@ -26,6 +26,15 @@ describe("codexPlanUsage store", () => {
     expect(s.usage?.seven_day?.used_percentage).toBe(20);
   });
 
+  it("keeps model-scoped caps across a push that omits them", () => {
+    // Same sparse rule as the windows: an empty/absent `scoped` is "nothing new to say",
+    // not "the caps are gone" — otherwise a later push would blank a listed cap.
+    const fable = { label: "Fable", group: "weekly", window: win(5) };
+    useCodexPlanUsageStore.getState().set({ five_hour: win(10), seven_day: null, scoped: [fable] });
+    useCodexPlanUsageStore.getState().set({ five_hour: win(12), seven_day: null, scoped: [] });
+    expect(useCodexPlanUsageStore.getState().usage?.scoped).toEqual([fable]);
+  });
+
   it("clear() forgets the snapshot", () => {
     useCodexPlanUsageStore.getState().set({ five_hour: win(10), seven_day: null });
     useCodexPlanUsageStore.getState().clear();

@@ -912,7 +912,14 @@ impl Assembler {
             // the context-meter guard in `ingest_stream_event`. The `tool_result` blocks above
             // are still surfaced (a sub-agent's internal results carry the same parent and are
             // routed to its own card downstream).
-            if !was_ours && !text.trim().is_empty() && u.parent_tool_use_id.is_none() {
+            // `/goal` plumbing is represented by the dedicated goal UI now, so never surface it as
+            // a bubble: the command echo is already dropped as `was_ours`, but the CLI-generated
+            // `<local-command-stdout>` reply ("Goal set/cleared", "No goal set") carries a FRESH
+            // uuid — without this guard, clearing a goal from the chip would leave that stdout in
+            // the thread. Mirrors `history.rs` `push_user_text` on reload.
+            if !was_ours && !text.trim().is_empty() && u.parent_tool_use_id.is_none()
+                && !super::history::is_goal_command_noise(&text)
+            {
                 out.push(SessionEvent::Item(ConversationItem::UserMessage {
                     id: uuid,
                     text,

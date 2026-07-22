@@ -91,6 +91,11 @@ export type Segment =
   // segment that breaks the surrounding run; it is a DECISION artifact, never intermediate
   // work, so it is also peeled out of the clean-output work fold (see splitFinalMessage).
   | { kind: "plan"; key: string; step: ToolStep }
+  // An `Artifact` publish (a hosted claude.ai/code page) renders as its OWN inline card, like a
+  // sub-agent: dedicated segment that breaks the run, never grouped into a step row. It is a
+  // DELIVERABLE, never intermediate work, so it is also peeled out of the clean-output work fold
+  // (see splitFinalMessage) and shown in clear even when buried mid-round (see renderFoldedWork).
+  | { kind: "artifact"; key: string; step: ToolStep }
   // An in-band marker (control-change bar / message injected mid-work) shown inline in the
   // flow. NOT work: it doesn't count as a step and never breaks the clean-output work fold —
   // it just renders at its chronological place (see coalesceCleanRounds / interleaveMarkers).
@@ -180,6 +185,19 @@ export function groupBlocks(
         out.push({ kind: "plan", key: `p-${i}`, step: { id: b.id, name: b.name, input: b.input } });
         return;
       }
+      // An Artifact PUBLISH is its own inline card (a deliverable link) — breaks the run so the
+      // published page stands out instead of hiding in a "Ran N steps" step row (and its .html
+      // file_path never renders as an editor-opening chip pointing at a disposable temp file).
+      // Only a real publish qualifies: the `Artifact` tool also does `action:"list"` (enumerate
+      // the user's artifacts) and bare cross-conversation `url`-updates, which carry NO file_path
+      // and are NOT a local deliverable — those fall through to the normal run/step path so their
+      // result is shown like any other tool. This MUST mirror `selectArtifacts` (the chip's
+      // derivation, which skips file_path-less calls) or the two surfaces disagree.
+      if (b.name === "Artifact" && field(b.input, "file_path")) {
+        run = null;
+        out.push({ kind: "artifact", key: `art-${i}`, step: { id: b.id, name: b.name, input: b.input } });
+        return;
+      }
       if (!run) {
         run = [];
         out.push({ kind: "run", key: `run-${i}`, steps: run });
@@ -238,7 +256,10 @@ export function splitFinalMessage(segments: Segment[]): {
     i > 0 &&
     (segments[i - 1].kind === "text" ||
       segments[i - 1].kind === "marker" ||
-      segments[i - 1].kind === "plan")
+      segments[i - 1].kind === "plan" ||
+      // A trailing `artifact` is peeled too: a just-published artifact is a deliverable, not
+      // intermediate work — it stays in clear under clean output (like a plan).
+      segments[i - 1].kind === "artifact")
   )
     i--;
   return { work: segments.slice(0, i), final: segments.slice(i) };
@@ -258,6 +279,10 @@ export type WorkAtom =
   // but never counts as a step nor holds the live window open (its ack settles instantly).
   | { kind: "skill"; key: string; step: ToolStep }
   | { kind: "plan"; key: string; step: ToolStep }
+  // An artifact card: a non-step atom (like a skill chip) — folds with surrounding work but never
+  // counts as a step nor holds the live window open (its publish settles quickly). It is pulled
+  // back into clear by renderFoldedWork so a published artifact is never hidden.
+  | { kind: "artifact"; key: string; step: ToolStep }
   | { kind: "thinking"; key: string; text: string }
   | { kind: "text"; key: string; text: string }
   // An in-band marker: a non-step atom (like text/thinking) — it folds with the surrounding
@@ -278,6 +303,8 @@ export function flattenWork(segs: Segment[]): WorkAtom[] {
       out.push({ kind: "skill", key: seg.key, step: seg.step });
     } else if (seg.kind === "plan") {
       out.push({ kind: "plan", key: seg.key, step: seg.step });
+    } else if (seg.kind === "artifact") {
+      out.push({ kind: "artifact", key: seg.key, step: seg.step });
     } else if (seg.kind === "thinking") {
       out.push({ kind: "thinking", key: seg.key, text: seg.text });
     } else if (seg.kind === "marker") {
@@ -310,6 +337,7 @@ export function atomsToSegments(atoms: WorkAtom[], keyPrefix: string): Segment[]
     else if (a.kind === "workflow") out.push({ kind: "workflow", key: a.key, step: a.step });
     else if (a.kind === "skill") out.push({ kind: "skill", key: a.key, step: a.step });
     else if (a.kind === "plan") out.push({ kind: "plan", key: a.key, step: a.step });
+    else if (a.kind === "artifact") out.push({ kind: "artifact", key: a.key, step: a.step });
     else if (a.kind === "thinking") out.push({ kind: "thinking", key: a.key, text: a.text });
     else if (a.kind === "marker")
       out.push({ kind: "marker", key: a.key, markerKind: a.markerKind, id: a.id });

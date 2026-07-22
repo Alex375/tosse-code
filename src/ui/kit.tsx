@@ -62,6 +62,9 @@ const WF_PATHS: Record<string, string> = {
   globe: "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM3 11h16M11 3c2.4 2.2 2.4 13.8 0 16M11 3c-2.4 2.2-2.4 13.8 0 16",
   // A magic wand + sparkle — a skill/command invocation.
   wand: "M4 18 13 9M15 3l.9 2.1L18 6l-2.1.9L15 9l-.9-2.1L12 6l2.1-.9z",
+  // A document with a sparkle — a published `Artifact` (a generated, hosted deliverable).
+  // Distinct from `file` (plain doc), `globe` (remote control) and `layers` (extensions).
+  artifact: "M6 3h6l4 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM12 3v4h4M10 10l1 2 2 1-2 1-1 2-1-2-2-1 2-1z",
   // A plug — an MCP server tool call.
   plug: "M7 3v4M13 3v4M5 7h10v2a5 5 0 0 1-10 0V7ZM10 14v5",
   // File-explorer context-menu glyphs (rename / copy / cut / paste / copy-path / reveal).
@@ -77,6 +80,8 @@ const WF_PATHS: Record<string, string> = {
   mute: "M4 8.5h3l4-3v11l-4-3H4zM14.5 9l4 4M18.5 9l-4 4",
   // A steaming coffee mug — the "Caffeinate" (keep the Mac awake) toggle.
   coffee: "M5 9h8v5a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3zM13 11h1.5a2 2 0 0 1 0 4H13M8 4c1 1-1 2 0 3.2M11 4c1 1-1 2 0 3.2",
+  // A bullseye / target — an active `/goal` (Claude working toward a completion condition).
+  target: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14M11 7.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4M11 11h.01",
 };
 
 export function Ico({ name, className }: { name: string; className?: string }) {
@@ -312,8 +317,11 @@ const MENU_M = 8;
 
 /** Compute a collision-aware fixed placement from the trigger's rect, honouring
  *  `align`/`up` as the PREFERRED sides and flipping when a side lacks room. Mirrors
- *  CardPopover's approach so portaled menus behave like the other card popovers. */
-function menuPortalPlacement(r: DOMRect, align?: "right", up?: boolean): MenuPortalPos {
+ *  CardPopover's approach so portaled menus behave like the other card popovers.
+ *  `pop` is the popover's own measured rect (once mounted) — used to keep the WHOLE
+ *  popover on-screen for any width, so e.g. a right-aligned menu on a far-left card
+ *  never runs off the left edge. */
+export function menuPortalPlacement(r: DOMRect, align?: "right", up?: boolean, pop?: DOMRect | null): MenuPortalPos {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   // Enough to hold the tallest menu body (the usage card); used only for the flip test.
@@ -331,9 +339,16 @@ function menuPortalPlacement(r: DOMRect, align?: "right", up?: boolean): MenuPor
   };
   if (useUp) pos.bottom = vh - r.top + 6;
   else pos.top = r.bottom + 6;
-  // Anchor horizontally to the trigger's matching edge, clamped on-screen.
-  if (align === "right") pos.right = Math.max(MENU_M, vw - r.right);
-  else pos.left = Math.min(Math.max(MENU_M, r.left), Math.max(MENU_M, vw - 240 - MENU_M));
+  // Horizontal: anchor to the trigger's matching edge (align hint), then clamp so NEITHER edge
+  // leaves the viewport. Positioned via `left` always. The popover is mounted (hidden) BEFORE this
+  // runs, so `pop` carries its real measured width from the first placement pass; the `240` is only
+  // a defensive default for a missing ref. `right`-aligned menus put the popover's right edge at the
+  // trigger's right edge; the clamp then slides it back on-screen if that would overflow the left —
+  // the fix for a far-left card whose menu used to open off-screen.
+  const w = pop?.width || 240;
+  const preferredLeft = align === "right" ? r.right - w : r.left;
+  const maxLeft = Math.max(MENU_M, vw - w - MENU_M);
+  pos.left = Math.min(Math.max(MENU_M, preferredLeft), maxLeft);
   return pos;
 }
 
@@ -404,7 +419,9 @@ export function Menu({
     }
     const measure = () => {
       const r = triggerRef.current?.getBoundingClientRect();
-      if (r) setPos(menuPortalPlacement(r, align, up));
+      // Feed the popover's OWN measured rect so the placement keeps its full width on-screen
+      // (it is already mounted-but-hidden by the time this runs — see the render below).
+      if (r) setPos(menuPortalPlacement(r, align, up, popRef.current?.getBoundingClientRect()));
     };
     measure();
     window.addEventListener("resize", measure);
@@ -430,8 +447,12 @@ export function Menu({
   // Portaled popover: fixed-positioned at `pos`, mounted on document.body so no ancestor
   // `overflow` can clip it. `.up`/`.right` positioning classes are dropped in portal mode
   // (the inline `pos` owns every side); `.portaled` adds z-index + scroll clamp.
-  const popStyle: CSSProperties | undefined =
-    portal && pos
+  // Portaled: mount the popover immediately (so its width can be measured) but keep it
+  // hidden until the first placement lands — `useLayoutEffect` positions it before paint,
+  // so there is no visible flash at the origin.
+  const popStyle: CSSProperties | undefined = !portal
+    ? undefined
+    : pos
       ? {
           position: "fixed",
           left: pos.left,
@@ -440,7 +461,7 @@ export function Menu({
           bottom: pos.bottom,
           maxHeight: pos.maxHeight,
         }
-      : undefined;
+      : { position: "fixed", left: 0, top: 0, visibility: "hidden" };
   const popover = (
     <div
       ref={popRef}
@@ -458,7 +479,7 @@ export function Menu({
   return (
     <span className="wf-menu" ref={triggerRef}>
       {clonedTrigger}
-      {portal ? (pos ? createPortal(popover, document.body) : null) : popover}
+      {portal ? createPortal(popover, document.body) : popover}
     </span>
   );
 }
@@ -547,11 +568,23 @@ function resetToEpochSeconds(s: string | null): number | null {
   return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
 }
 
+/** A rate-limit window scoped to ONE model rather than the whole account (e.g. Fable's
+ *  weekly allowance). Mirrors the core's `ScopedUsageWindow`; the `label` comes straight
+ *  from the endpoint, so a renamed/added scoped model needs no frontend change. */
+export interface PlanUsageScopedWindow {
+  label: string;
+  group: string | null;
+  window: PlanUsageWindow;
+}
+
 /** Real plan-usage %, the precise figure the stream does NOT carry. Each window is
  *  null when the endpoint did not report it. Mirrors the core's `PlanUsage`. */
 export interface PlanUsageInfo {
   five_hour: PlanUsageWindow | null;
   seven_day: PlanUsageWindow | null;
+  /** Model-scoped caps, listed alongside the two account-wide windows. Optional because
+   *  the core marks it `serde(default)` — an absent value reads as "none". */
+  scoped?: PlanUsageScopedWindow[];
 }
 
 /** Why the real plan-usage fetch failed — mirrors the core's `UsageError` union so
@@ -731,7 +764,12 @@ function UsageRow({
   return (
     <div className="wf-pop-usage">
       <div className="wf-pop-usage-top">
-        <span>{label}</span>
+        {/* Explicitly classed, NOT styled via a positional selector: a model-scoped cap's
+            label is data-driven (it carries the model's name), so it is the one label that
+            can be long enough to push the figure out of the popover, and it MUST keep its
+            ellipsis. A `:first-child` rule would stop applying the day this markup gains a
+            leading element — silently, the failure only showing up on a long model name. */}
+        <span className="wf-pop-usage-label">{label}</span>
         <span className="wf-mono">
           {pct}%{reset ? ` · ${fmtReset(reset)}` : ""}
         </span>
@@ -755,6 +793,14 @@ function planStatus(status: string | null): { label: string; color: string } {
     default:
       return { label: status ?? "—", color: "var(--wf-tx-lo)" };
   }
+}
+
+/** Label a model-scoped cap: its name plus the window it spans ("Fable · 7d"), so it reads in
+ *  the same idiom as the "5h"/"7d" rows above it. The suffix is derived from the payload's
+ *  `group`, and dropped when that is absent or unknown — a duration is never guessed. */
+function scopedUsageLabel(s: PlanUsageScopedWindow): string {
+  const win = s.group === "weekly" ? "7d" : s.group === "session" ? "5h" : null;
+  return win ? `${s.label} · ${win}` : s.label;
 }
 
 /** Human label for a rate-limit window type. */
@@ -895,6 +941,18 @@ function ContextUsageBody({
               fallbackReset={plan?.limitType === "seven_day" ? plan.resetsAt : null}
             />
           ) : null}
+          {/* Model-scoped caps (e.g. Fable's weekly allowance), listed after the two
+              account-wide windows. Rendered straight off the payload — no fallback reset,
+              since a scoped window that hasn't started reports none and the coarse `plan`
+              reset belongs to a different (account-wide) cap. */}
+          {(usage?.scoped ?? []).map((s) => (
+            <UsageRow
+              key={`${s.label}:${s.group ?? ""}`}
+              label={scopedUsageLabel(s)}
+              w={s.window}
+              fallbackReset={null}
+            />
+          ))}
           {/* Coarse status pill (warning / rejected) — always informative. */}
           {st && plan ? (
             <div className="wf-pop-row">

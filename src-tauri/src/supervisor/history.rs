@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use specta::Type;
 
 use super::assembler::{context_used_from_usage, normalize_blocks};
-use super::model::{ContextFill, ConversationItem};
+use super::model::{ContextFill, ConversationItem, GoalState};
 
 /// Claude's config dir: `$CLAUDE_CONFIG_DIR` if set, else `$HOME/.claude`. Shared
 /// with [`super::subagents`], which reads the sibling task-artifact directories.
@@ -159,6 +159,201 @@ fn load_context_fill_in(config_dir: &Path, session_id: &str) -> ContextFill {
         }
     }
     fill
+}
+
+/// Reconstruct a conversation's active `/goal` from its on-disk transcript. The CLI records
+/// goal state as `attachment` lines of `type:"goal_status"` (DISK-ONLY — never on the live
+/// stream), so this is the only way to know a goal is active. Lifecycle snapshots:
+/// - `{met:false, sentinel:true, condition}` → goal SET (now active).
+/// - `{met:false, condition, reason}` (no sentinel) → still active, unmet check (freshest reason).
+/// - `{met:true, condition, reason, …}` (no sentinel) → ACHIEVED → auto-cleared (inactive).
+/// - `{met:true, sentinel:true, condition}` → manually CLEARED (inactive).
+///
+/// This is a FORWARD scan of the WHOLE file (not a tail read): the last un-terminated goal wins,
+/// exactly what the CLI's own `restoreGoalFromTranscript` does — a goal set early and never
+/// terminated is still active thousands of lines later, so no suffix of the file is enough. The
+/// cost is kept off the JSON parser by a raw-substring pre-filter (see the loop). Returns `None`
+/// when no goal is active. An absent/unreadable transcript yields `None` (soft signal, the next
+/// turn-edge refetch corrects it).
+pub fn load_active_goal(session_id: &str) -> Option<GoalState> {
+    let dir = claude_config_dir()?;
+    load_active_goal_in(&dir, session_id)
+}
+
+fn load_active_goal_in(config_dir: &Path, session_id: &str) -> Option<GoalState> {
+    let path = find_transcript(config_dir, session_id)?;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[history] cannot read transcript for goal scan {}: {e}", path.display());
+            }
+            return None;
+        }
+    };
+    let mut active: Option<GoalState> = None;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // PERF — reject a line on RAW BYTES before ever handing it to serde. This scan is not
+        // rare: it runs once per Flight Deck card at mount (`seedActiveGoalOnce` fires for EVERY
+        // conversation in the fleet) and again on every turn edge of a goal-bearing conversation,
+        // on top of the full-file pass `load_context_fill` already makes — over transcripts that
+        // routinely weigh several MB. Parsing every line into a `Value` (allocating a whole tree
+        // per line, tool results and base64 images included) to then drop >99% of them is the
+        // dominant cost of the whole read.
+        // SAFE because only two line shapes can carry goal state, and each one names itself
+        // VERBATIM in the raw JSON text: a `goal_status` attachment spells `goal_status` in its
+        // `type` field, and the `/goal` stdout line spells `local-command-stdout` inside its
+        // content. Both markers are plain ASCII with no character a JSON writer escapes (no
+        // quote, backslash, control char or non-ASCII), so they cannot hide behind `\uXXXX` —
+        // the substring test is exact, not heuristic. It is also a strict SUPERSET filter: a
+        // line that merely mentions the marker still gets parsed and is rejected by the real
+        // checks below, so nothing changes but the work skipped.
+        if !line.contains("goal_status") && !line.contains("local-command-stdout") {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        // Goals are session-scoped on the main thread; a sub-agent's own transcript must not
+        // drive the parent conversation's goal (mirrors the context-fill scan).
+        if entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        match entry.get("type").and_then(Value::as_str) {
+            Some("attachment") => {
+                let Some(att) = entry.get("attachment") else { continue };
+                if att.get("type").and_then(Value::as_str) != Some("goal_status") {
+                    continue;
+                }
+                let met = att.get("met").and_then(Value::as_bool).unwrap_or(false);
+                let sentinel = att.get("sentinel").and_then(Value::as_bool).unwrap_or(false);
+                match (sentinel, met) {
+                    // SET snapshot — a goal is now active. Reason arrives only after the first eval.
+                    (true, false) => {
+                        let condition = att
+                            .get("condition")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        active = Some(GoalState { condition, reason: None });
+                    }
+                    // Terminal snapshots — manual clear (sentinel+met) or achieved (met). Goal gone.
+                    (true, true) | (false, true) => {
+                        active = None;
+                    }
+                    // Unmet check between turns — still active, carry the freshest evaluator reason.
+                    (false, false) => {
+                        if let Some(goal) = active.as_mut() {
+                            if let Some(reason) = att.get("reason").and_then(Value::as_str) {
+                                goal.reason = Some(reason.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            // The `/goal` local command prints a stdout the CLI treats as authoritative when it
+            // announces the end of a goal ("Goal cleared: …", "Goal achieved…", "No goal set").
+            // Honour it so a stale SET sentinel with no goal_status terminal — e.g. the goal was
+            // cleared while our chip was showing it — never keeps the goal alive. Same shape
+            // table as [`is_goal_command_noise`], so what we HIDE and what we ACT ON can't drift.
+            Some("user") => {
+                if let Some(inner) = local_command_stdout(&entry) {
+                    if goal_stdout_head(&inner, &GOAL_STDOUT_TERMINAL) {
+                        active = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    active
+}
+
+/// The inner text of a `user` line whose content is a single `<local-command-stdout>…</…>`
+/// (what a LOCAL slash command like `/goal` prints back). `None` for any other user line.
+fn local_command_stdout(entry: &Value) -> Option<String> {
+    let content = entry.get("message")?.get("content")?;
+    let text = match content {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| {
+                (b.get("type").and_then(Value::as_str) == Some("text"))
+                    .then(|| b.get("text").and_then(Value::as_str))
+                    .flatten()
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    let t = text.trim();
+    let inner = t.strip_prefix("<local-command-stdout>")?;
+    Some(inner.strip_suffix("</local-command-stdout>").unwrap_or(inner).to_string())
+}
+
+/// The `/goal` local-command stdout shapes that announce the goal is GONE. Authoritative for
+/// [`load_active_goal_in`]: seeing one drops the active goal even without a `goal_status` terminal.
+/// `Goal cleared: <condition>` and `No goal set` are the two the CLI's non-interactive `/goal clear`
+/// handler actually returns; `Goal achieved` is an Ink/TUI label kept as belt-and-braces — it can
+/// only ever clear a goal that the matching `goal_status{met:true}` line clears anyway.
+const GOAL_STDOUT_TERMINAL: [&str; 3] = ["Goal cleared", "Goal achieved", "No goal set"];
+
+/// The remaining `/goal` stdout shapes — they REPORT a goal rather than end it: the `Goal set: …`
+/// confirmation and the bare `/goal` status line, whose real shape is
+/// `Goal active: <condition> (<n> turns)` (optionally followed by a `\nLast check: …` line). Read
+/// verbatim out of the CLI's own non-interactive `/goal` handler. ⚠️ There is NO `Goal: …` stdout —
+/// that spelling is an Ink/TUI label only, so a `"Goal:"` head would hide nothing the CLI emits and
+/// could only ever swallow an UNRELATED command's output. Thread noise like the terminal ones, but
+/// they must stay OUT of [`GOAL_STDOUT_TERMINAL`]: a status query that dropped the goal would blank
+/// the chip on the very command that asks what the goal is.
+///
+/// Deliberately ABSENT: `Goal condition is limited to N characters (got M)`. It IS a `/goal` stdout,
+/// but it reports a set that FAILED — and since the `/goal` send itself is silent (no user bubble),
+/// hiding it too would leave the user with zero feedback that their goal never took.
+const GOAL_STDOUT_INFO: [&str; 2] = ["Goal set", "Goal active"];
+
+/// Does this `<local-command-stdout>` text OPEN on one of `heads`?
+///
+/// Deliberately an explicit table instead of the blanket `"Goal "` prefix this used to be: that
+/// broad test claimed EVERY local command whose output happens to start with the word "Goal"
+/// ("Goal oriented review complete", "Goal weights updated", …) and, since a match means the
+/// message is dropped from the thread, it would have made another command's output vanish with no
+/// trace — exactly the silent loss the zero-silent-error rule forbids. A head only matches when
+/// the text ENDS there or continues with punctuation/space, so "Goal settings…" can't pass as
+/// "Goal set" and "Goal activity log" can't pass as "Goal active". Shapes are read verbatim out of
+/// the CLI's non-interactive `/goal` handler (see also memory `goal-feature-wire`).
+fn goal_stdout_head(inner: &str, heads: &[&str]) -> bool {
+    let inner = inner.trim_start();
+    heads.iter().any(|head| match inner.strip_prefix(head) {
+        Some(rest) => {
+            let ends_here = |c: char| c.is_whitespace() || c.is_ascii_punctuation();
+            rest.is_empty() || rest.starts_with(ends_here)
+        }
+        None => false,
+    })
+}
+
+/// Is this user-message text pure `/goal` plumbing — the slash-command echo or its
+/// local-command stdout — that the dedicated goal UI (target icon + composer chip) now
+/// represents? We drop it from the thread so MANAGING a goal, above all clearing it from the
+/// chip, never leaves `/goal clear` / "No goal set" / "Goal set:" noise in the conversation.
+/// Matches the `<command-name>/goal</command-name>` invocation (any args) and the `/goal`
+/// `<local-command-stdout>` responses — the known shapes ONLY (set / cleared / achieved / bare
+/// status / "No goal set"), never any stdout that merely opens on the word "Goal".
+pub(crate) fn is_goal_command_noise(text: &str) -> bool {
+    let t = text.trim_start();
+    if t.starts_with("<command-name>/goal</command-name>") {
+        return true;
+    }
+    if let Some(rest) = t.strip_prefix("<local-command-stdout>") {
+        return goal_stdout_head(rest, &GOAL_STDOUT_TERMINAL)
+            || goal_stdout_head(rest, &GOAL_STDOUT_INFO);
+    }
+    false
 }
 
 fn parse_transcript(path: &Path) -> Vec<ConversationItem> {
@@ -298,6 +493,11 @@ fn push_user(entry: &Value, items: &mut Vec<ConversationItem>) {
 
 fn push_user_text(uuid: &str, text: &str, items: &mut Vec<ConversationItem>) {
     if text.trim().is_empty() {
+        return;
+    }
+    // `/goal` plumbing (the command echo + its "Goal set/cleared" / "No goal set" stdout) is now
+    // shown by the dedicated goal UI — drop it so it never clutters the restored thread.
+    if is_goal_command_noise(text) {
         return;
     }
     items.push(ConversationItem::UserMessage {
@@ -1430,6 +1630,157 @@ mod tests {
         // The window is NEVER inferred from the transcript (name can't tell 200k from
         // 1M) — it's sourced live / from the front cache.
         assert_eq!(fill.context_window, None);
+    }
+
+    #[test]
+    fn active_goal_tracks_set_unmet_achieved_and_clear() {
+        let base = std::env::temp_dir().join(format!("tosse-goal-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+
+        // (1) A goal SET (sentinel + not met) then TWO unmet checks with different reasons → still
+        //     active, and the FRESHEST (last) reason wins (exercises the overwrite across turns).
+        let sid1 = "11111111-1111-1111-1111-111111111111";
+        write_transcript(&base, "-p", sid1, &[
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"all tests pass"}}"#,
+            r#"{"type":"assistant","uuid":"a","message":{"model":"claude-opus-4-8"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"condition":"all tests pass","reason":"5 tests still failing"}}"#,
+            r#"{"type":"assistant","uuid":"b","message":{"model":"claude-opus-4-8"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"condition":"all tests pass","reason":"3 tests still failing"}}"#,
+        ]);
+        let g = load_active_goal_in(&base, sid1).expect("goal active");
+        assert_eq!(g.condition, "all tests pass");
+        assert_eq!(g.reason.as_deref(), Some("3 tests still failing")); // the LAST reason, not "5 tests"
+
+        // (2) Goal ACHIEVED (met, no sentinel) → cleared.
+        let sid2 = "22222222-2222-2222-2222-222222222222";
+        write_transcript(&base, "-p", sid2, &[
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"all tests pass"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":true,"condition":"all tests pass","reason":"all green","iterations":2}}"#,
+        ]);
+        assert_eq!(load_active_goal_in(&base, sid2), None);
+
+        // (3) Goal manually CLEARED (sentinel + met) → cleared.
+        let sid3 = "33333333-3333-3333-3333-333333333333";
+        write_transcript(&base, "-p", sid3, &[
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"ship it"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":true,"sentinel":true,"condition":"ship it"}}"#,
+        ]);
+        assert_eq!(load_active_goal_in(&base, sid3), None);
+
+        // (4) Re-setting after a clear → the NEW goal is active.
+        let sid4 = "44444444-4444-4444-4444-444444444444";
+        write_transcript(&base, "-p", sid4, &[
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":true,"sentinel":true,"condition":"old goal"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"new goal"}}"#,
+        ]);
+        let g4 = load_active_goal_in(&base, sid4).expect("re-set goal active");
+        assert_eq!(g4.condition, "new goal");
+
+        // (5) No goal at all, and a sidechain goal_status must never drive the parent.
+        let sid5 = "55555555-5555-5555-5555-555555555555";
+        write_transcript(&base, "-p", sid5, &[
+            r#"{"type":"assistant","uuid":"a","message":{"model":"claude-opus-4-8"}}"#,
+            r#"{"type":"attachment","isSidechain":true,"attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"subagent goal"}}"#,
+        ]);
+        assert_eq!(load_active_goal_in(&base, sid5), None);
+
+        // (6) A `/goal clear` stdout clears a stale SET sentinel even with no goal_status terminal
+        //     (the CLI's own "Goal cleared:" / "No goal set" is authoritative).
+        let sid6 = "66666666-6666-6666-6666-666666666666";
+        write_transcript(&base, "-p", sid6, &[
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"ship it"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Goal cleared: ship it</local-command-stdout>"}}"#,
+        ]);
+        assert_eq!(load_active_goal_in(&base, sid6), None);
+
+        let sid7 = "77777777-7777-7777-7777-777777777777";
+        write_transcript(&base, "-p", sid7, &[
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"stale"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>No goal set</local-command-stdout>"}}"#,
+        ]);
+        assert_eq!(load_active_goal_in(&base, sid7), None);
+
+        // (8) An "achieved" stdout is terminal too…
+        let sid8 = "88888888-8888-8888-8888-888888888881";
+        write_transcript(&base, "-p", sid8, &[
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"ship it"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Goal achieved: ship it</local-command-stdout>"}}"#,
+        ]);
+        assert_eq!(load_active_goal_in(&base, sid8), None);
+
+        // (9) …but ANOTHER command's stdout must never clear the goal, even when it opens on the
+        //     word "Goal" (the shape table is explicit precisely so this can't happen), and the
+        //     `Goal set:` confirmation of our own goal obviously doesn't end it either.
+        let sid9 = "99999999-9999-9999-9999-999999999999";
+        write_transcript(&base, "-p", sid9, &[
+            r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"ship it"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Goal set: ship it</local-command-stdout>"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Goal oriented review finished</local-command-stdout>"}}"#,
+            // And a bare `/goal` STATUS query reports the goal — asking what the goal is must
+            // never be what drops it (that is why "Goal active" lives in the INFO table only).
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Goal active: ship it (3 turns)\nLast check: still red</local-command-stdout>"}}"#,
+        ]);
+        let g9 = load_active_goal_in(&base, sid9).expect("goal still active");
+        assert_eq!(g9.condition, "ship it");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn goal_command_noise_is_recognized_and_dropped_on_reload() {
+        // The `/goal` echo + its local stdout are recognized as noise — every known shape:
+        // set / cleared / achieved / bare status / "No goal set".
+        assert!(is_goal_command_noise("<command-name>/goal</command-name>\n  <command-args>clear</command-args>"));
+        assert!(is_goal_command_noise("<local-command-stdout>Goal set: all tests pass</local-command-stdout>"));
+        assert!(is_goal_command_noise("<local-command-stdout>Goal cleared: x</local-command-stdout>"));
+        assert!(is_goal_command_noise("<local-command-stdout>Goal achieved: x</local-command-stdout>"));
+        // The bare `/goal` status query, in the CLI's verbatim shape — multi-line when it carries
+        // the evaluator's last check. The old blanket `"Goal "` prefix hid this one; a `"Goal:"`
+        // head (the TUI label, never a stdout) would NOT, leaking it back into the thread.
+        assert!(is_goal_command_noise(
+            "<local-command-stdout>Goal active: all tests pass (3 turns)\nLast check: 2 suites red</local-command-stdout>"
+        ));
+        assert!(is_goal_command_noise("<local-command-stdout>No goal set</local-command-stdout>"));
+        // …but a real user message and another command's stdout are NOT.
+        assert!(!is_goal_command_noise("please set a goal"));
+        assert!(!is_goal_command_noise("<command-name>/compact</command-name>"));
+        assert!(!is_goal_command_noise("<local-command-stdout>Context compacted</local-command-stdout>"));
+        // Above all, an UNRELATED command whose stdout merely opens on the word "Goal" must stay
+        // in the thread — the old blanket `"Goal "` prefix silently swallowed it.
+        assert!(!is_goal_command_noise("<local-command-stdout>Goal-oriented refactor complete</local-command-stdout>"));
+        assert!(!is_goal_command_noise("<local-command-stdout>Goal oriented review finished</local-command-stdout>"));
+        // …and a head only counts when the sentence opener ENDS there ("Goal set" ≠ "Goal settings").
+        assert!(!is_goal_command_noise("<local-command-stdout>Goal settings updated</local-command-stdout>"));
+        assert!(!is_goal_command_noise("<local-command-stdout>Goal activity log written</local-command-stdout>"));
+        // `Goal: …` is NOT a `/goal` output (the status line is `Goal active: …`) — a project
+        // slash command whose result opens that way must stay in the thread.
+        assert!(!is_goal_command_noise("<local-command-stdout>Goal: 120% of quota</local-command-stdout>"));
+        // A `/goal` set that FAILED must stay visible: the send itself is silent, so hiding the
+        // error too would tell the user nothing at all (zero-silent-error).
+        assert!(!is_goal_command_noise(
+            "<local-command-stdout>Goal condition is limited to 500 characters (got 812)</local-command-stdout>"
+        ));
+
+        // On reload, the goal echo + stdout are dropped from the thread, real turns kept.
+        let base = std::env::temp_dir().join(format!("tosse-goalnoise-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let sid = "88888888-8888-8888-8888-888888888888";
+        write_transcript(&base, "-p", sid, &[
+            r#"{"type":"user","message":{"role":"user","content":"hello"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<command-name>/goal</command-name>\n<command-args>clear</command-args>"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>No goal set</local-command-stdout>"}}"#,
+        ]);
+        let path = find_transcript(&base, sid).unwrap();
+        let (items, _) = parse_transcript_str(&std::fs::read_to_string(&path).unwrap(), true);
+        std::fs::remove_dir_all(&base).ok();
+        let users: Vec<_> = items
+            .iter()
+            .filter_map(|i| match i {
+                ConversationItem::UserMessage { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(users, vec!["hello"]);
     }
 
     #[test]

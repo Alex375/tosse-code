@@ -121,6 +121,26 @@ export interface FileClipboard {
   mode: "copy" | "cut";
 }
 
+/**
+ * The artifact currently open in the side-region VIEWER (a rendered preview of a Claude
+ * `Artifact` — HTML in a sandboxed iframe, Markdown via the thread renderer). In-memory /
+ * transient (NOT persisted): it points at an EPHEMERAL temp file, so it must not outlive the
+ * session. Takes over the side region while set, mutually exclusive with Git, and cleared by ANY
+ * side-region toggle (editor / terminal / Git) in EITHER direction — see `clearArtifact` for why
+ * "only when opening" made a toggle press do nothing visible.
+ */
+export interface ArtifactView {
+  /** The conversation this artifact belongs to (the viewer only shows on its own conv). */
+  convId: string;
+  title: string;
+  favicon: string | null;
+  /** Hosted claude.ai URL — the durable copy, for "open in browser" and the missing-file fallback. */
+  url: string | null;
+  /** Local temp file to render, or null (→ the viewer shows the open-in-browser fallback). */
+  filePath: string | null;
+  kind: "html" | "md";
+}
+
 interface EditorState {
   // ---- Global layout (persisted) ----
   // The "side region" (right of, or below, the conversation) holds the editor
@@ -154,6 +174,17 @@ interface EditorState {
   treeWidth: number;
   /** The file tree is hidden (focus-on-files mode); the editor still shows. */
   treeCollapsed: boolean;
+
+  // ---- Artifact viewer (in-memory, transient) ----
+  /** The artifact open in the side-region viewer, or null. Cleared by every side-region toggle
+   *  (`toggleOpen`/`setOpen`, `toggleTerminal`/`setTerminalOpen`, `toggleGit`/`setGitOpen`),
+   *  whichever way they flip. */
+  artifactView: ArtifactView | null;
+  /** Open an artifact in the side-region viewer (closes Git FIRST — see the ordering trap in the
+   *  implementation — then takes over the side region). */
+  openArtifact: (view: ArtifactView) => void;
+  /** Close the artifact viewer (the side region falls back to editor/terminal if open). */
+  closeArtifact: () => void;
 
   // ---- Per conversation ----
   byConv: Record<string, ConvEditor>;
@@ -642,31 +673,63 @@ export const useEditorStore = create<EditorState>()((set, get) => {
     }
   }
 
+  // ANY side-region toggle (editor / terminal / git) clears the transient artifact viewer, in
+  // BOTH directions — closing included. MainArea computes the region's visibility as
+  // `open || terminalOpen || showArtifact`, so the viewer holds the side region open on its own:
+  // a toggle that only cleared it when OPENING made ⌘B (editor) flip `open` to false while the
+  // viewer stayed on screen — the press produced NO visible change and a second one was needed.
+  // Clearing unconditionally keeps the rule "one press = one visible effect".
+  const clearArtifact = () => {
+    if (get().artifactView) set({ artifactView: null });
+  };
+
   return {
     ...layout,
     byConv: {},
     clipboard: null,
+    artifactView: null,
+
+    openArtifact: (view) => {
+      // ⚠️ ORDER MATTERS — close Git BEFORE setting the view, never after. `setGitOpen` clears the
+      // artifact view UNCONDITIONALLY (see clearArtifact), so the old "set, then close Git"
+      // ordering would immediately wipe the artifact we were just asked to open. Do not swap
+      // these two lines back.
+      if (get().gitOpen) get().setGitOpen(false); // viewer and Git are mutually exclusive
+      set({ artifactView: view });
+    },
+    closeArtifact: () => set({ artifactView: null }),
 
     // Git is a mutually-exclusive mode: opening it hides the editor/terminal
     // region, and opening the editor or terminal closes Git — so a lit toggle
     // never contradicts what's actually shown. Editor + terminal still coexist.
+    // Every one of these also drops the artifact viewer (both directions — see clearArtifact).
     toggleOpen: () => {
       const open = !get().open;
+      clearArtifact();
       withLayout(open ? { open: true, gitOpen: false } : { open: false });
     },
-    setOpen: (open) => withLayout(open ? { open: true, gitOpen: false } : { open: false }),
+    setOpen: (open) => {
+      clearArtifact();
+      withLayout(open ? { open: true, gitOpen: false } : { open: false });
+    },
     toggleTerminal: () => {
       const terminalOpen = !get().terminalOpen;
+      clearArtifact();
       withLayout(terminalOpen ? { terminalOpen: true, gitOpen: false } : { terminalOpen: false });
     },
-    setTerminalOpen: (terminalOpen) =>
-      withLayout(terminalOpen ? { terminalOpen: true, gitOpen: false } : { terminalOpen: false }),
+    setTerminalOpen: (terminalOpen) => {
+      clearArtifact();
+      withLayout(terminalOpen ? { terminalOpen: true, gitOpen: false } : { terminalOpen: false });
+    },
     toggleGit: () => {
       const gitOpen = !get().gitOpen;
+      clearArtifact();
       withLayout(gitOpen ? { gitOpen: true, open: false, terminalOpen: false } : { gitOpen: false });
     },
-    setGitOpen: (gitOpen) =>
-      withLayout(gitOpen ? { gitOpen: true, open: false, terminalOpen: false } : { gitOpen: false }),
+    setGitOpen: (gitOpen) => {
+      clearArtifact();
+      withLayout(gitOpen ? { gitOpen: true, open: false, terminalOpen: false } : { gitOpen: false });
+    },
     setOrientation: (orientation) => withLayout({ orientation }),
     setGitOrientation: (gitOrientation) => withLayout({ gitOrientation }),
     setEditorFraction: (f) => withLayout({ editorFraction: clamp(f, 0.15, 0.85) }),

@@ -284,6 +284,89 @@
 .cv-tool-cmd { margin:0 0 10px; padding:8px 10px; background:#0e0e11; border:1px solid var(--wf-line); border-radius:6px; font-size:11.5px; line-height:1.5; color:#f0cd97; white-space:pre-wrap; word-break:break-word; }
 .cv-tool-cmd:last-child { margin-bottom:0; }
 
+/* ── Artifact card (inline `Artifact` publish) ───────────────────────────────
+   A polished, self-standing card (NOT the plain tool-row chrome): a rounded favicon
+   tile, a strong headline + a muted "Artifact · <label>" sub-line, and a trailing
+   "open" glyph that warms to coral on hover. Reads as a deliverable to open, not a
+   tool that ran. */
+.cv-art { display:flex; align-items:center; gap:11px; padding:10px 12px; border:1px solid var(--wf-line); border-radius:10px; background:var(--wf-panel); transition:border-color .14s ease, background .14s ease; }
+.cv-art[data-open] { cursor:pointer; }
+.cv-art[data-open]:hover { border-color:color-mix(in srgb, var(--wf-accent) 45%, var(--wf-line)); background:var(--wf-panel-3, var(--wf-panel)); }
+.cv-art-tile { flex:none; width:34px; height:34px; display:flex; align-items:center; justify-content:center; font-size:18px; line-height:1; border:1px solid var(--wf-line); border-radius:9px; background:var(--wf-bg-2); }
+.cv-art-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.cv-art-title { font-size:12.5px; color:var(--wf-tx-hi); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cv-art-sub { display:flex; align-items:center; min-width:0; font-size:11px; color:var(--wf-tx-lo); }
+.cv-art-kind { flex:none; }
+.cv-art-detail { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cv-art-detail::before { content:"·"; margin:0 5px; opacity:.55; }
+.cv-art-go { flex:none; display:inline-flex; align-items:center; color:var(--wf-tx-lo); transition:color .14s ease; }
+.cv-art[data-open]:hover .cv-art-go { color:var(--wf-accent); }
+.cv-art-go .wf-ico { width:15px; height:15px; }
+/* Failed/refused publish: surface it as an error (not the neutral "Unavailable" degrade) — the
+   reason rides the sub-line, full text on hover (title attr). Zero-silent-error. */
+.cv-art[data-state="error"] { border-color:color-mix(in srgb, var(--wf-err) 40%, var(--wf-line)); background:var(--wf-err-bg); }
+.cv-art[data-state="error"] .cv-art-tile { border-color:color-mix(in srgb, var(--wf-err) 45%, var(--wf-line)); }
+.cv-art[data-state="error"] .cv-art-kind,
+.cv-art[data-state="error"] .cv-art-detail,
+.cv-art[data-state="error"] .cv-art-go { color:var(--wf-err); }
+
+/* ── Artifacts popover (composer "Artifacts (N)" chip) ───────────────────────
+   Portal-rendered under the chip (fixed-positioned, opens upward from the composer).
+   Lists every artifact of the conversation newest-first, each with its version history. */
+.cv-artpop-backdrop { position:fixed; inset:0; z-index:150; }
+.cv-artpop { z-index:151; min-width:260px; max-width:320px; overflow-y:auto; overscroll-behavior:contain; padding:6px; display:flex; flex-direction:column; gap:3px; background:var(--wf-panel-2); border:1px solid var(--wf-line-2); border-radius:10px; box-shadow:0 14px 36px -12px #000, 0 0 0 1px #0006; }
+.cv-artpop-h { display:flex; align-items:center; gap:6px; padding:4px 6px 6px; font-size:10.5px; font-weight:600; letter-spacing:.3px; text-transform:uppercase; color:var(--wf-tx-xlo, var(--wf-tx-lo)); }
+.cv-artpop-h .wf-ico { width:12px; height:12px; }
+.cv-artpop-count { margin-left:auto; font-variant-numeric:tabular-nums; }
+.cv-artpop-item { display:flex; flex-direction:column; }
+.cv-artpop-head { display:flex; align-items:stretch; gap:2px; }
+.cv-artpop-open { flex:1; min-width:0; display:flex; align-items:center; gap:8px; padding:7px 8px; border:0; border-radius:7px; background:transparent; color:var(--wf-tx); font:inherit; text-align:left; cursor:pointer; transition:background .12s ease; }
+.cv-artpop-open:hover:not(:disabled) { background:var(--wf-panel-3, var(--wf-panel)); }
+.cv-artpop-open:disabled { cursor:default; opacity:.7; }
+.cv-artpop-open .wf-ico:last-child { flex:none; width:13px; height:13px; color:var(--wf-tx-lo); }
+.cv-artpop-fav { flex:none; width:20px; text-align:center; font-size:15px; line-height:1; }
+.cv-artpop-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+.cv-artpop-title { font-size:12px; color:var(--wf-tx-hi); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cv-artpop-desc { font-size:11px; color:var(--wf-tx-lo); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cv-artpop-vbtn { flex:none; align-self:center; display:inline-flex; align-items:center; gap:2px; padding:3px 6px; border:1px solid var(--wf-line); border-radius:6px; background:transparent; color:var(--wf-tx-lo); font:inherit; font-size:11px; cursor:pointer; transition:background .12s ease, color .12s ease; }
+.cv-artpop-vbtn:hover { color:var(--wf-tx-hi); background:var(--wf-panel-3, var(--wf-panel)); }
+.cv-artpop-vbtn .wf-ico { width:11px; height:11px; }
+.cv-artpop-vbtn[aria-expanded="true"] .wf-ico { transform:rotate(180deg); }
+.cv-artpop-v1 { flex:none; align-self:center; padding:3px 6px; font-size:11px; color:var(--wf-tx-xlo, var(--wf-tx-lo)); }
+.cv-artpop-versions { display:flex; flex-direction:column; gap:1px; margin:1px 0 4px 30px; padding-left:8px; border-left:1px solid var(--wf-line); }
+.cv-artpop-vrow { display:flex; align-items:center; gap:8px; padding:3px 4px; font-size:11px; color:var(--wf-tx-lo); }
+.cv-artpop-vn { flex:none; color:var(--wf-tx-xlo, var(--wf-tx-lo)); font-variant-numeric:tabular-nums; }
+.cv-artpop-vlabel { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ── Artifact reference card (a hosted-artifact link in Claude's prose) ───────
+   A compact inline pill in place of a plain anchor. Flows inside a paragraph. */
+.cv-artref { display:inline-flex; align-items:center; gap:5px; vertical-align:middle; max-width:100%; margin:0 1px; padding:1px 8px 2px; border:1px solid var(--wf-line); border-radius:7px; background:var(--wf-panel); color:var(--wf-tx-hi); cursor:pointer; line-height:1.3; transition:border-color .14s ease, background .14s ease; }
+.cv-artref:hover { border-color:color-mix(in srgb, var(--wf-accent) 45%, var(--wf-line)); background:var(--wf-panel-3, var(--wf-panel)); }
+.cv-artref-fav { flex:none; font-size:12px; line-height:1; }
+.cv-artref-t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:24ch; }
+.cv-artref .wf-ico { flex:none; width:12px; height:12px; color:var(--wf-tx-lo); }
+.cv-artref:hover .wf-ico { color:var(--wf-accent); }
+
+/* ── Artifact viewer (side-region rendered preview) ──────────────────────────
+   Fills the side region. HTML renders in a sandboxed iframe (white backdrop so a
+   light artifact doesn't flash the dark app bg); Markdown via the thread renderer. */
+.cv-artview { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--wf-bg); border-left:1px solid var(--wf-line); }
+.cv-artview-h { flex:none; display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--wf-line); background:var(--wf-panel); }
+.cv-artview-fav { flex:none; font-size:15px; line-height:1; }
+.cv-artview-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:var(--wf-tx-hi); }
+.cv-artview-btn { flex:none; display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border:0; border-radius:6px; background:transparent; color:var(--wf-tx-lo); cursor:pointer; transition:background .12s ease, color .12s ease; }
+.cv-artview-btn:hover { background:var(--wf-panel-3, var(--wf-panel)); color:var(--wf-tx-hi); }
+.cv-artview-btn .wf-ico { width:15px; height:15px; }
+.cv-artview-body { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.cv-artview-frame { flex:1; width:100%; border:0; background:#fff; }
+.cv-artview-md { flex:1; min-height:0; overflow-y:auto; padding:14px 16px; }
+.cv-artview-msg { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:24px; text-align:center; color:var(--wf-tx-lo); font-size:12.5px; }
+.cv-artview-msg p { margin:0; max-width:34ch; }
+.cv-artview-msgfav { font-size:28px; opacity:.7; }
+.cv-artview-open { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border:1px solid var(--wf-line); border-radius:8px; background:var(--wf-panel); color:var(--wf-tx-hi); cursor:pointer; font:inherit; font-size:12px; }
+.cv-artview-open:hover { border-color:var(--wf-accent); color:var(--wf-accent); }
+.cv-artview-open .wf-ico { width:14px; height:14px; }
+
 /* ── Grouped tool steps ──────────────────────────────────────────────────────
    A run of consecutive tool calls collapses into one "Ran N steps" section
    (claude.ai/code shape). Collapsed by default; the body lists compact step rows,
@@ -810,3 +893,13 @@
   background:var(--wf-run-bg);
   border-color:#27513f;
 }
+
+/* Active `/goal` button in the composer foot bar: a small target chip (icon only — goals are
+   long, so the condition lives in the click-popover, not inline). Only mounts when a goal is
+   active (see GoalChip). The target glyph is coral to read as "on". */
+.cv-goal-chip .wf-ico:first-child { color:var(--wf-accent); opacity:.95; }
+/* The goal popover: header + full condition (wraps) + latest reason + a clear action. Reuses
+   the shared .wf-pop-h / .wf-pop-act; sizing mirrors the context popover (.wf-pop-ctx). */
+.cv-goal-pop { min-width:210px; max-width:min(320px, calc(100vw - 24px)); padding:10px 12px; display:flex; flex-direction:column; gap:7px; }
+.cv-goal-pop-cond { font-size:12.5px; line-height:1.4; color:var(--wf-tx-hi); overflow-wrap:break-word; white-space:pre-wrap; }
+.cv-goal-pop-reason { font-size:11px; line-height:1.4; color:var(--wf-tx-lo); overflow-wrap:break-word; }

@@ -32,6 +32,8 @@ import {
   type FileMention,
 } from "./fileMentions";
 import { cachedStatus, ensureMentionChecked, subscribeMention } from "./mentionCache";
+import { ArtifactRefCard } from "./ArtifactRefCard";
+import { isArtifactUrl } from "./artifactOpen";
 import { useMarkdownDemo } from "./markdownMode";
 import { looksLikeFile, looksLikePath, segmentPath, type PathParts } from "./pathSegments";
 
@@ -311,6 +313,16 @@ export function MentionLink({
     () => routeMarkdownLink(href ?? "", { cwd: ctx?.cwd ?? "", inert: ctx?.hostInert ?? true }),
     [href, ctx?.cwd, ctx?.hostInert],
   );
+  // A hosted-artifact URL renders as a compact artifact card (opens the in-app viewer / browser),
+  // not a plain anchor — regardless of host, so it's recognisable everywhere Claude links one.
+  // Checked AFTER the hook above so hook order stays stable if a streaming href flips.
+  if (isArtifactUrl(href)) {
+    return (
+      <ArtifactRefCard url={href!} convId={ctx?.convId ?? null}>
+        {children}
+      </ArtifactRefCard>
+    );
+  }
   if (route.kind === "external") {
     return (
       <a href={href} target="_blank" rel="noopener noreferrer">

@@ -37,6 +37,10 @@ export const useCodexPlanUsageStore = create<CodexPlanUsageStore>((set) => ({
       usage: {
         five_hour: incoming.five_hour ?? s.usage?.five_hour ?? null,
         seven_day: incoming.seven_day ?? s.usage?.seven_day ?? null,
+        // Codex reports no model-scoped caps today (the core always sends an empty list),
+        // so an empty push keeps whatever was there rather than blanking it — same sparse
+        // rule as the windows above.
+        scoped: incoming.scoped?.length ? incoming.scoped : (s.usage?.scoped ?? []),
       },
       updatedAt: Date.now(),
     })),
