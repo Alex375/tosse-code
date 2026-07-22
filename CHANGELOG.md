@@ -13,6 +13,7 @@ by `release.yml` and stays **only** on the GitHub page — it does not appear in
 
 - New: the active goal (`/goal`) is now displayed — on Flight Deck cards and at the top of the conversation — so you always see what an agent is working toward.
 - New: artifacts published by Claude are collected per conversation — an "Artifacts" chip in the composer lists them, and each one shows up inline in the thread.
+- New: usage limits that apply to a single model (such as Fable's weekly allowance) now appear in the usage popover, next to the 5-hour and weekly limits.
 
 ## v1.1.2
 
