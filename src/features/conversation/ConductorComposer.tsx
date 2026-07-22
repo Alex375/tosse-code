@@ -50,6 +50,7 @@ import { useBackendUsage } from "./backendUsage";
 import { useUltraBlast } from "../../store/ultraBlast";
 import { EffortGauge, clampEffort, effortLevelsForModel, type EffortLevel } from "./EffortGauge";
 import { RemoteControlChip } from "./RemoteControlChip";
+import { ArtifactsChip } from "./ArtifactsChip";
 import {
   SlashCommandMenu,
   filterSlashCommands,
@@ -986,6 +987,10 @@ export const ConductorComposer = forwardRef<
           </>
         )}
         <span style={{ marginLeft: "auto" }} />
+        {/* Artifacts index — every artifact Claude published in THIS conversation, with its
+            versions. Renders only when there is ≥1 (Codex conversations never yield any).
+            Read-only toward claude.ai (surfaces the transcript; never republishes). */}
+        <ArtifactsChip session={session} />
         {/* Extensions panel — what this conversation's Claude sees (MCP + live
             status, plugins, skills, sub-agents), like /mcp. Scans the session's
             current cwd so a worktree shows its own config. */}

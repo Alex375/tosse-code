@@ -216,6 +216,26 @@ describe("groupBlocks — ExitPlanMode (proposed plan)", () => {
   });
 });
 
+describe("groupBlocks — Artifact (publish only)", () => {
+  it("emits an `artifact` segment for a real publish (has file_path), breaking the run", () => {
+    const segs = groupBlocks([
+      tool("a", "Read"),
+      tool("art", "Artifact", { file_path: "/tmp/x.html", favicon: "🎨" }),
+      tool("b", "Read"),
+    ]);
+    expect(segs.map((s) => s.kind)).toEqual(["run", "artifact", "run"]);
+    const a = segs[1];
+    if (a.kind === "artifact") expect(a.step.id).toBe("art");
+  });
+
+  it("does NOT treat a file_path-less Artifact (action:list / bare url-update) as an artifact — it falls through to the run, mirroring selectArtifacts", () => {
+    const list = groupBlocks([tool("l", "Artifact", { action: "list", limit: 25 })]);
+    expect(list.map((s) => s.kind)).toEqual(["run"]);
+    const urlUpdate = groupBlocks([tool("u", "Artifact", { url: "https://claude.ai/code/artifact/abc" })]);
+    expect(urlUpdate.map((s) => s.kind)).toEqual(["run"]);
+  });
+});
+
 describe("groupBlocks — in-band markers (mid-turn separator)", () => {
   it("emits a `marker` segment that breaks the run without being a step", () => {
     const segs = groupBlocks([tool("a", "Read"), mkMarker("cc"), tool("b", "Read")]);

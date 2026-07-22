@@ -15,6 +15,7 @@ import { effectiveCwd } from "../git/worktree";
 import { Splitter } from "../editor/Splitter";
 import { clamp, useEditorLayout, useEditorStore } from "../editor/editorStore";
 import { SidePanel } from "./SidePanel";
+import { ArtifactViewer } from "./ArtifactViewer";
 import { ConversationPane } from "./ConversationPane";
 import { type ComposerHandle } from "./ConductorComposer";
 import { ConductorSidebar } from "./ConductorSidebar";
@@ -110,12 +111,16 @@ function MainArea({
 }) {
   const { open, terminalOpen, gitOpen, orientation, editorFraction } = useEditorLayout();
   const setEditorFraction = useEditorStore((s) => s.setEditorFraction);
+  const artifactView = useEditorStore((s) => s.artifactView);
+  const closeArtifact = useEditorStore((s) => s.closeArtifact);
   const liveState = useSessionState(conv.id);
   const cwd = effectiveCwd(conv, liveState);
   const areaRef = useRef<HTMLDivElement>(null);
   const sideBySide = orientation === "row";
-  // The editor/terminal side region shows when either is open.
-  const sideOpen = open || terminalOpen;
+  // The artifact viewer takes over the side region (for THIS conversation) while set; the side
+  // region otherwise shows when the editor or terminal is open.
+  const showArtifact = !!artifactView && artifactView.convId === conv.id;
+  const sideOpen = open || terminalOpen || showArtifact;
 
   // Git mode takes over the whole area with its own 2x2 workspace (conversation
   // minimized top-left, diff top-right, history + files strip at the bottom),
@@ -189,7 +194,11 @@ function MainArea({
               display: "flex",
             }}
           >
-            <SidePanel convId={conv.id} cwd={cwd} sideBySide={sideBySide} />
+            {showArtifact && artifactView ? (
+              <ArtifactViewer view={artifactView} onClose={closeArtifact} />
+            ) : (
+              <SidePanel convId={conv.id} cwd={cwd} sideBySide={sideBySide} />
+            )}
           </div>
         </>
       ) : null}

@@ -68,6 +68,7 @@ import { ErrorBlock, NoticeBlock } from "./noticeView";
 import { useShallow } from "zustand/react/shallow";
 import { LiveSubThread } from "./LiveSubThread";
 import { WorkflowCard } from "./WorkflowCard";
+import { ArtifactCard } from "./ArtifactCard";
 import { resolveTranscriptSource } from "./transcriptSource";
 import type { StickToBottom } from "./useStickToBottom";
 import styles from "./ConductorThread.module.css";
@@ -599,6 +600,16 @@ function renderSegments(
           input={seg.step.input}
         />
       );
+    if (seg.kind === "artifact")
+      // An `Artifact` publish renders as its own inline card, opening the hosted claude.ai page.
+      return (
+        <ArtifactCard
+          key={seg.key}
+          session={session}
+          toolUseId={seg.step.id}
+          input={seg.step.input}
+        />
+      );
     // A `run` of regular tools. The trailing run of the live turn renders EXPANDED so its
     // steps appear live (spinner → result), then collapses to its header on settle. Past
     // / non-trailing runs render collapsed. `active` gates the spinner so a resultless
@@ -627,7 +638,9 @@ const LIVE_WINDOW = 3;
  *  renders in clear between them, preserving chronology. The common (no-plan) case is byte-for-byte
  *  unchanged and keeps the round's single foldKey, so its remembered open/collapsed state stands. */
 function renderFoldedWork(session: string, folded: Segment[], roundKey: string): ReactNode {
-  if (!folded.some((s) => s.kind === "plan")) {
+  // A `plan` OR an `artifact` is a decision/deliverable that must never hide inside the fold,
+  // even when buried mid-round: split the fold at each so it renders in clear between work runs.
+  if (!folded.some((s) => s.kind === "plan" || s.kind === "artifact")) {
     return (
       <ClaudeWorkBlock count={countWorkSteps(folded)} foldConv={session} foldKey={roundKey}>
         {renderSegments(session, folded, false, -1)}
@@ -654,7 +667,7 @@ function renderFoldedWork(session: string, folded: Segment[], roundKey: string):
     chunk = [];
   };
   for (const seg of folded) {
-    if (seg.kind === "plan") {
+    if (seg.kind === "plan" || seg.kind === "artifact") {
       flush();
       out.push(...renderSegments(session, [seg], false, -1));
     } else {

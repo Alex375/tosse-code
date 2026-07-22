@@ -62,6 +62,9 @@ const WF_PATHS: Record<string, string> = {
   globe: "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM3 11h16M11 3c2.4 2.2 2.4 13.8 0 16M11 3c-2.4 2.2-2.4 13.8 0 16",
   // A magic wand + sparkle — a skill/command invocation.
   wand: "M4 18 13 9M15 3l.9 2.1L18 6l-2.1.9L15 9l-.9-2.1L12 6l2.1-.9z",
+  // A document with a sparkle — a published `Artifact` (a generated, hosted deliverable).
+  // Distinct from `file` (plain doc), `globe` (remote control) and `layers` (extensions).
+  artifact: "M6 3h6l4 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM12 3v4h4M10 10l1 2 2 1-2 1-1 2-1-2-2-1 2-1z",
   // A plug — an MCP server tool call.
   plug: "M7 3v4M13 3v4M5 7h10v2a5 5 0 0 1-10 0V7ZM10 14v5",
   // File-explorer context-menu glyphs (rename / copy / cut / paste / copy-path / reveal).
