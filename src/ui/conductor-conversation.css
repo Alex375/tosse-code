@@ -205,6 +205,13 @@
    fences, long paths) wraps/scrolls internally instead of widening — and overflowing —
    its container. */
 .cv-subtranscript { display:flex; flex-direction:column; gap:18px; min-width:0; }
+/* Claude's opening instruction to a sub-agent. Sits in the first-turn slot of a sub-agent
+   transcript, but it is NOT a human message — the label + assistant mark say who wrote it,
+   so the bubble can keep the same geometry without claiming the user asked for it. */
+.cv-agentprompt .cv-agentprompt-label {
+  font-size:11px; font-weight:600; letter-spacing:.02em; text-transform:uppercase;
+  opacity:.55; margin-bottom:6px;
+}
 /* The user's own messages keep their full-width bubble (as before), but the avatar
    moves to the RIGHT: row-reverse puts the avatar at the far right and the bubble
    (flex:1) fills the rest to its left. */

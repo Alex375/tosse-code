@@ -431,6 +431,20 @@ async loadSessionGoal(sessionId: string) : Promise<Result<GoalState | null, stri
 }
 },
 /**
+ * Can `target_id` be located for a rewind? READ-ONLY probe — truncates nothing, stops
+ * nothing. The front calls this BEFORE killing the live session, so an unresolvable target
+ * costs nothing instead of tearing the session down for a rewind that was always going to
+ * fail. See [`history::check_rewind_target`].
+ */
+async checkRewindTarget(sessionId: string, targetId: string, targetIsUser: boolean, targetText: string | null, occurrence: number | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("check_rewind_target", { sessionId, targetId, targetIsUser, targetText, occurrence }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Rewind a conversation IN PLACE by truncating its on-disk transcript at `target_id`,
  * dropping that message (USER target) or everything after its response (ASSISTANT
  * target). Destructive by design ("resume from here"): the removed turns are
