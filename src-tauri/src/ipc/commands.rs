@@ -1448,6 +1448,16 @@ pub async fn read_image(path: String) -> Result<crate::fs::ImageContent, String>
         .map_err(|e| e.to_string())
 }
 
+/// Stat several paths at once (size + mtime, no bytes) so the editor can tell
+/// which open tabs actually changed on disk before re-reading any of them.
+#[tauri::command]
+#[specta::specta]
+pub async fn stat_files(paths: Vec<String>) -> Result<Vec<crate::fs::FileStat>, String> {
+    tokio::task::spawn_blocking(move || crate::fs::stat_files(&paths))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Write the editor buffer back to disk (save).
 #[tauri::command]
 #[specta::specta]

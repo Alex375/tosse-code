@@ -40,7 +40,7 @@ use ipc::commands::{
     send_message, set_active_conversation, set_all_marketplaces_auto_update, set_effort_level,
     set_marketplace_auto_update, set_model,
     set_awake, set_permission_mode, set_plugin_enabled, set_remote_control, set_ultracode,
-    spawn_session, stop_session, stop_task, update_plugin,
+    spawn_session, stat_files, stop_session, stop_task, update_plugin,
     terminal_close, terminal_open, terminal_resize, terminal_write, unwatch_dir, upsert_conversation,
     upsert_repo, watch_dir, wipe_all_data, worktree_status, write_file, HistoryIndex, Sessions,
 };
@@ -147,6 +147,7 @@ fn ipc_builder() -> Builder<tauri::Wry> {
             read_dir,
             read_file,
             read_image,
+            stat_files,
             write_file,
             watch_dir,
             unwatch_dir,
