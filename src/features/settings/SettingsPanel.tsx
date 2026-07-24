@@ -263,17 +263,19 @@ function DisplayPrefs() {
         label="Show message controls"
       />
       <ToggleRow
-        title="Clickable file paths (Read/Write tools)"
+        title="Clickable filename on Read/Write rows"
         hint={
           <>
-            Makes file paths in <strong>Read/Write</strong> tools and in text clickable: a click{" "}
-            <strong>opens the file</strong> in the side viewer, at the right line.{" "}
-            <strong>On by default.</strong> Off → paths stay plain text.
+            On a <strong>Read/Write/Edit</strong> row, makes the filename{" "}
+            <strong>open the file</strong> instead of just expanding the row.{" "}
+            <strong>On by default.</strong> Off → the row only expands; the file stays one click
+            away from the filename above its snippet. Paths elsewhere (text, links, snippet
+            headers) are always clickable.
           </>
         }
         checked={clickableFileMentions}
         onChange={(v) => set({ clickableFileMentions: v })}
-        label="Make file paths clickable"
+        label="Make the filename on Read/Write rows clickable"
       />
     </SettingsGroup>
   );

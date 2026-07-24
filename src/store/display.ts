@@ -63,9 +63,12 @@ export interface DisplayPrefs {
    *  hover controls. Read by {@link MessageActions} (via the conversation thread). */
   messageControls: boolean;
 
-  /** Render file paths referenced by tools (Read/Write chips) and prose as clickable chips
-   *  that open the file in the side editor. ON by default. Off → paths render as plain,
-   *  non-clickable text. Read by {@link FileMentionProvider} (folded into its `inert`). */
+  /** Make the filename on a tool STEP ROW (the "Edit foo.ts" row that also expands the card)
+   *  clickable. ON by default. Off → that row is a plain expander and its filename is plain
+   *  text. DELIBERATELY NARROW: it gates that one dual-purpose surface and NOTHING else —
+   *  paths in prose, Markdown file links and the filename in the expanded diff/snippet header
+   *  stay clickable everywhere (conversation, Flight Deck…) whatever this pref says. Read by
+   *  {@link FileMentionProvider} (surfaced as its `stepRowInert`). */
   clickableFileMentions: boolean;
 
   /** Show the TURN's own timing in the conversation thread. Gates two surfaces: the total
