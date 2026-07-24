@@ -103,6 +103,32 @@ export interface DisplayPrefs {
    *  derivation ({@link deriveAgentStatus} via {@link AgentSignals.reAlertOnBackgroundBash}) and
    *  the notification suppression. */
   alertOnBackgroundBash: boolean;
+
+  /** Auto-reorder the conversation SIDEBAR's conversations by recency (most-recent first,
+   *  the historical behaviour). ON by default. OFF → the sidebar keeps a MANUAL, drag-and-drop
+   *  order that never reshuffles on its own (new conversations still land on top). Read by
+   *  {@link useConversationsByRepo}. Independent of the repo-level toggle below. */
+  autoOrderSidebarConvs: boolean;
+
+  /** Auto-reorder the conversation SIDEBAR's repositories by recency. ON by default. OFF →
+   *  the repo groups keep a MANUAL, drag-and-drop order. Read by {@link useConversationsByRepo}. */
+  autoOrderSidebarRepos: boolean;
+
+  /** Auto-reorder the FLIGHT DECK's cards by status-then-recency (the historical behaviour —
+   *  action-required/error → review → running → idle → off). ON by default. OFF → the cards in
+   *  each swimlane keep a MANUAL, drag-and-drop order that never reshuffles, so even a card that
+   *  needs attention stays put (new conversations still land at the very start). Read by
+   *  {@link useFleetLanes}. */
+  autoOrderFleetConvs: boolean;
+
+  /** Auto-reorder the FLIGHT DECK's swimlanes (repositories) by status-then-recency. ON by
+   *  default. OFF → the swimlanes keep a MANUAL, drag-and-drop order. Read by {@link useFleetLanes}. */
+  autoOrderFleetRepos: boolean;
+
+  /** Whether the sidebar and the Flight Deck SHARE one manual order (drag in one reorders both)
+   *  or keep independent arrangements. ON by default (one canonical order). Only affects levels
+   *  that are in manual mode. Read via {@link slotFor}. */
+  sharedManualOrder: boolean;
 }
 
 // Off by default: the transcript shows everything inline as before. The user opts in
@@ -123,6 +149,13 @@ const DEFAULTS: DisplayPrefs = {
   showThinkingTime: true,
   showToolTime: true,
   alertOnBackgroundBash: false,
+  // Ordering defaults to today's automatic behaviour (recency / status-first); the user
+  // opts into a frozen, drag-ordered layout per surface+level. Shared order on by default.
+  autoOrderSidebarConvs: true,
+  autoOrderSidebarRepos: true,
+  autoOrderFleetConvs: true,
+  autoOrderFleetRepos: true,
+  sharedManualOrder: true,
 };
 
 function load(): DisplayPrefs {
@@ -168,6 +201,11 @@ export const useDisplay = create<DisplayState>((set) => ({
         showThinkingTime: patch.showThinkingTime ?? s.showThinkingTime,
         showToolTime: patch.showToolTime ?? s.showToolTime,
         alertOnBackgroundBash: patch.alertOnBackgroundBash ?? s.alertOnBackgroundBash,
+        autoOrderSidebarConvs: patch.autoOrderSidebarConvs ?? s.autoOrderSidebarConvs,
+        autoOrderSidebarRepos: patch.autoOrderSidebarRepos ?? s.autoOrderSidebarRepos,
+        autoOrderFleetConvs: patch.autoOrderFleetConvs ?? s.autoOrderFleetConvs,
+        autoOrderFleetRepos: patch.autoOrderFleetRepos ?? s.autoOrderFleetRepos,
+        sharedManualOrder: patch.sharedManualOrder ?? s.sharedManualOrder,
       };
       save(next);
       return next;

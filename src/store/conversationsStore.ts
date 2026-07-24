@@ -61,6 +61,18 @@ import {
   type PlanConvSnapshot,
 } from "./planAnnotations";
 import { clearSidebarFold, clearAllSidebarFold } from "./sidebarFold";
+import {
+  clearManualOrderConversation,
+  clearManualOrderRepo,
+  clearAllManualOrder,
+  useOrderSlot,
+  slotFor,
+  manualIndex,
+  manualConvIndex,
+  manualComparator,
+  type OrderBlob,
+} from "./manualOrder";
+import { useDisplay } from "./display";
 import { disposeTerminal, disposeAllTerminals } from "../features/terminal/cleanup";
 import { useGitViewStore } from "../features/git/gitViewStore";
 import { clearMentionCache } from "../features/conversation/mentionCache";
@@ -425,6 +437,8 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     if (!repo) return;
     // Forget this repo's sidebar collapse state (the group is about to disappear).
     clearSidebarFold(repo.id);
+    // Forget any manual drag order for this repo (and its conversations, in every slot).
+    clearManualOrderRepo(repo.id);
     // Cascade-delete every conversation under this repo. Mirror removeConversation's
     // full per-row teardown: the Rust delete_repo only cascades DB rows, so we must
     // stop each live `claude` process here (no orphan) and drop every per-conversation
@@ -519,6 +533,7 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
     clearComposerAttachments(id);
     clearCodexControls(id);
     clearWorkFold(id);
+    clearManualOrderConversation(id);
     clearPlanAnnotations(id);
     autoTitlePending.delete(id);
     titleContext.delete(id);
@@ -1539,6 +1554,7 @@ export async function wipeAllData(): Promise<void> {
   clearAllWorkFold();
   clearAllPlanAnnotations();
   clearAllSidebarFold();
+  clearAllManualOrder();
   autoTitlePending.clear();
   titleContext.clear();
   titleGenCount.clear();
@@ -1622,11 +1638,49 @@ export function groupConversationsByRepo(
   );
 }
 
-/** Reactive repo-grouped conversations (recency-ordered). */
+/**
+ * Group conversations by repo honouring the sidebar's MANUAL drag order per level. Each
+ * level (conversations within a repo; the repos themselves) is either automatic
+ * (recency, the historical behaviour) or manual, chosen independently via the two
+ * `auto*` flags. In manual mode the order comes from `order`; items missing from it
+ * (brand-new, or never dragged) sort to the top newest-first (see `manualComparator`).
+ * Pure + testable — the sidebar hook and the ⌘⌥↑/↓ nav both call it.
+ */
+export function groupConversationsByRepoOrdered(
+  repos: Repo[],
+  conversations: Conversation[],
+  order: OrderBlob,
+  autoConvs: boolean,
+  autoRepos: boolean,
+): RepoGroup[] {
+  const convIndex = autoConvs ? null : manualConvIndex(order.convOrder);
+  const sortConvs = convIndex
+    ? manualComparator<Conversation>(convIndex, (c) => c.id, (c) => c.createdAt)
+    : (a: Conversation, b: Conversation) => b.lastActivityAt - a.lastActivityAt;
+  // A repo's recency = the max activity across its conversations (order-independent, so
+  // it's correct even when the conversations are in a manual, non-recency order); empty
+  // repos fall back to when they were added.
+  const repoRecency = (g: RepoGroup) =>
+    g.conversations.length ? Math.max(...g.conversations.map((c) => c.lastActivityAt)) : g.repo.addedAt;
+  const sortRepos = autoRepos
+    ? (a: RepoGroup, b: RepoGroup) => repoRecency(b) - repoRecency(a)
+    : manualComparator<RepoGroup>(manualIndex(order.repoOrder), (g) => g.repo.id, (g) => g.repo.addedAt);
+  return groupByRepo(repos, conversations, sortConvs, sortRepos);
+}
+
+/** Reactive repo-grouped conversations, honouring the sidebar's manual drag order (or
+ *  recency when the auto-order toggles are on). */
 export function useConversationsByRepo(): RepoGroup[] {
   const repos = useRepos();
   const conversations = useConversations();
-  return useMemo(() => groupConversationsByRepo(repos, conversations), [repos, conversations]);
+  const autoConvs = useDisplay((s) => s.autoOrderSidebarConvs);
+  const autoRepos = useDisplay((s) => s.autoOrderSidebarRepos);
+  const shared = useDisplay((s) => s.sharedManualOrder);
+  const order = useOrderSlot(slotFor("sidebar", shared));
+  return useMemo(
+    () => groupConversationsByRepoOrdered(repos, conversations, order, autoConvs, autoRepos),
+    [repos, conversations, order, autoConvs, autoRepos],
+  );
 }
 
 // NOTE: the conversation status model now lives in `src/agent/status.ts`
